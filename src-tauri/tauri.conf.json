@@ -13,13 +13,16 @@
     "windows": [
       {
         "title": "voicetypr",
-        "width": 800,
-        "height": 600
+        "width": 400,
+        "height": 600,
+        "resizable": false,
+        "center": true
       }
     ],
     "security": {
       "csp": null
-    }
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,
