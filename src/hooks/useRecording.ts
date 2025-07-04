@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 type RecordingState = 'idle' | 'starting' | 'recording' | 'stopping' | 'transcribing' | 'error';
 
@@ -15,6 +15,38 @@ interface UseRecordingReturn {
 export function useRecording(): UseRecordingReturn {
   const [state, setState] = useState<RecordingState>('idle');
   const [error, setError] = useState<string | null>(null);
+  const transcriptionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Effect to manage transcription timeout based on state
+  useEffect(() => {
+    if (state === 'transcribing') {
+      // Clear any existing timeout
+      if (transcriptionTimeoutRef.current) {
+        clearTimeout(transcriptionTimeoutRef.current);
+      }
+      
+      // Set new timeout
+      transcriptionTimeoutRef.current = setTimeout(() => {
+        console.warn('[Recording Hook] Transcription timeout - resetting to idle');
+        setError('Transcription took too long');
+        setState('idle');
+      }, 30000);
+    } else {
+      // Clear timeout when not transcribing
+      if (transcriptionTimeoutRef.current) {
+        clearTimeout(transcriptionTimeoutRef.current);
+        transcriptionTimeoutRef.current = null;
+      }
+    }
+    
+    // Cleanup on unmount or state change
+    return () => {
+      if (transcriptionTimeoutRef.current) {
+        clearTimeout(transcriptionTimeoutRef.current);
+        transcriptionTimeoutRef.current = null;
+      }
+    };
+  }, [state]);
 
   useEffect(() => {
     const unsubscribers: Array<() => void> = [];
@@ -44,6 +76,21 @@ export function useRecording(): UseRecordingReturn {
       unsubscribers.push(await listen('transcription-started', () => {
         console.log('[Recording Hook] Transcription started');
         setState('transcribing');
+        // Timeout is now managed by the useEffect watching state changes
+      }));
+
+      // Transcription error
+      unsubscribers.push(await listen<string>('transcription-error', (event) => {
+        console.error('[Recording Hook] Transcription error:', event.payload);
+        setError(event.payload);
+        setState('error');
+      }));
+
+      // Recording error
+      unsubscribers.push(await listen<string>('recording-error', (event) => {
+        console.error('[Recording Hook] Recording error:', event.payload);
+        setError(event.payload);
+        setState('error');
       }));
 
       // Global hotkey events
@@ -95,18 +142,6 @@ export function useRecording(): UseRecordingReturn {
       setState('stopping');
       await invoke('stop_recording');
       console.log('[Recording Hook] Backend acknowledged stop, waiting for transcription events');
-
-      // In case backend events fail, start a timeout fallback
-      setTimeout(() => {
-        setState(prev => {
-          if (prev === 'transcribing') {
-            console.warn('[Recording Hook] Transcription timeout - resetting to idle');
-            setError('Transcription took too long');
-            return 'idle';
-          }
-          return prev;
-        });
-      }, 30000); // 30-sec fallback timeout
     } catch (err) {
       console.error('[Recording Hook] Failed to stop recording:', err);
       const errorMessage = String(err);

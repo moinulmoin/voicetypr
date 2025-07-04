@@ -82,7 +82,14 @@ impl Transcriber {
                 // If explicitly set to auto, use English as default
                 "en"
             } else {
-                lang
+                // Validate language code
+                match lang {
+                    "en" | "es" | "fr" | "de" | "it" | "pt" | "ru" | "ja" | "ko" | "zh" => lang,
+                    _ => {
+                        println!("Warning: Invalid language code '{}', defaulting to English", lang);
+                        "en"
+                    }
+                }
             }
         } else {
             // Default to English

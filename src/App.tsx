@@ -1,32 +1,19 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Check, Download, Loader2, Mic, MicOff, Settings } from 'lucide-react';
+import { Loader2, Mic, MicOff, Settings } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useRecording } from './hooks/useRecording';
+import { ModelCard } from './components/ModelCard';
+import { HotkeyInput } from './components/HotkeyInput';
+import { AppSettings, ModelInfo, TranscriptionHistory } from './types';
+import { Button } from './components/ui/button';
+import { Label } from './components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
+import { Switch } from './components/ui/switch';
+import { Card, CardContent } from './components/ui/card';
+import { ScrollArea } from './components/ui/scroll-area';
+import { Separator } from './components/ui/separator';
 
-// Types
-interface ModelInfo {
-  name: string;
-  size: number;
-  url: string;
-  downloaded: boolean;
-}
-
-interface AppSettings {
-  hotkey: string;
-  current_model: string;
-  language: string;
-  auto_insert: boolean;
-  show_window_on_record: boolean;
-  theme: string;
-}
-
-interface TranscriptionHistory {
-  id: string;
-  text: string;
-  timestamp: Date;
-  model: string;
-}
 
 // Main App Component
 export default function App() {
@@ -176,72 +163,38 @@ export default function App() {
   // Onboarding View
   if (currentView === 'onboarding') {
     return (
-      <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900">
+      <div className="flex flex-col h-screen bg-background">
         <div className="flex-1 flex flex-col items-center justify-center p-8">
-          <h1 className="text-4xl font-bold mb-2 text-gray-900 dark:text-white">
+          <h1 className="text-4xl font-bold mb-2">
             Welcome to VoiceType
           </h1>
-          <p className="text-lg text-gray-600 dark:text-gray-400 mb-8">
+          <p className="text-lg text-muted-foreground mb-8">
             Choose a model to get started
           </p>
 
           <div className="space-y-4 w-full max-w-md">
             {Object.entries(models).map(([name, model]) => (
-              <div
+              <ModelCard
                 key={name}
-                className="border rounded-lg p-4 hover:border-blue-500 transition-colors bg-white dark:bg-gray-800"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-semibold text-gray-900 dark:text-white capitalize">
-                      {name} Model
-                    </h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
-                      {(model.size / 1024 / 1024).toFixed(0)} MB
-                      {name.includes('.en') && ' • English only'}
-                      {name === 'tiny' && ' • Fastest, least accurate'}
-                      {name === 'base' && ' • Good balance'}
-                      {name === 'small' && ' • Best accuracy'}
-                    </p>
-                  </div>
+                name={name}
+                model={model}
+                downloadProgress={downloadProgress[name]}
+                onDownload={downloadModel}
+                onSelect={async (modelName) => {
+                  // Create default settings if none exist
+                  const newSettings = settings || {
+                    hotkey: 'CommandOrControl+Shift+Space',
+                    language: 'auto',
+                    auto_insert: true,
+                    show_window_on_record: false,
+                    theme: 'system'
+                  };
 
-                  {model.downloaded ? (
-                    <button
-                      onClick={async () => {
-                        // Create default settings if none exist
-                        const newSettings = settings || {
-                          hotkey: 'CommandOrControl+Shift+Space',
-                          language: 'auto',
-                          auto_insert: true,
-                          show_window_on_record: false,
-                          theme: 'system'
-                        };
-
-                        // Save with selected model
-                        await saveSettings({ ...newSettings, current_model: name });
-                        setCurrentView('recorder');
-                      }}
-                      className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center gap-2"
-                    >
-                      <Check className="w-4 h-4" />
-                      Select
-                    </button>
-                  ) : downloadProgress[name] !== undefined ? (
-                    <div className="flex items-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-sm">{downloadProgress[name].toFixed(0)}%</span>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => downloadModel(name)}
-                      className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-2"
-                    >
-                      <Download className="w-4 h-4" />
-                      Download
-                    </button>
-                  )}
-                </div>
-              </div>
+                  // Save with selected model
+                  await saveSettings({ ...newSettings, current_model: modelName });
+                  setCurrentView('recorder');
+                }}
+              />
             ))}
           </div>
         </div>
@@ -252,130 +205,133 @@ export default function App() {
   // Settings View
   if (currentView === 'settings') {
     return (
-      <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900">
-        <div className="flex items-center justify-between p-4 border-b dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Settings</h2>
-          <button
+      <div className="flex flex-col h-screen bg-background">
+        <div className="flex items-center justify-between p-4 border-b">
+          <h2 className="text-lg font-semibold">Settings</h2>
+          <Button
             onClick={() => setCurrentView('recorder')}
-            className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+            variant="ghost"
+            size="sm"
           >
             ✕
-          </button>
+          </Button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
           {/* Hotkey Setting */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Recording Hotkey
-            </label>
-            <input
-              type="text"
+          <div className="space-y-2">
+            <Label htmlFor="hotkey">Recording Hotkey</Label>
+            <HotkeyInput
               value={settings?.hotkey || ''}
-              onChange={(e) => saveSettings({ ...settings!, hotkey: e.target.value })}
-              className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600"
-              placeholder="CommandOrControl+Shift+Space"
+              onChange={(hotkey) => settings && saveSettings({ ...settings, hotkey })}
+              placeholder="Click to set hotkey"
             />
           </div>
 
           {/* Model Selection */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Whisper Model
-            </label>
-            <select
+          <div className="space-y-2">
+            <Label htmlFor="model">Whisper Model</Label>
+            <Select
               value={settings?.current_model || 'base'}
-              onChange={(e) => saveSettings({ ...settings!, current_model: e.target.value })}
-              className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600"
+              onValueChange={(value) => settings && saveSettings({ ...settings, current_model: value })}
             >
-              {Object.entries(models).filter(([_, m]) => m.downloaded).map(([name]) => (
-                <option key={name} value={name}>{name}</option>
-              ))}
-            </select>
+              <SelectTrigger id="model">
+                <SelectValue placeholder="Select a model" />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(models).filter(([_, m]) => m.downloaded).map(([name]) => (
+                  <SelectItem key={name} value={name}>{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Language Setting */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Language
-            </label>
-            <select
+          <div className="space-y-2">
+            <Label htmlFor="language">Language</Label>
+            <Select
               value={settings?.language || 'auto'}
-              onChange={(e) => saveSettings({ ...settings!, language: e.target.value })}
-              className="w-full px-3 py-2 border rounded-lg dark:bg-gray-800 dark:border-gray-600"
+              onValueChange={(value) => settings && saveSettings({ ...settings, language: value })}
             >
-              <option value="auto">Auto-detect</option>
-              <option value="en">English</option>
-              <option value="es">Spanish</option>
-              <option value="fr">French</option>
-              <option value="de">German</option>
-              <option value="it">Italian</option>
-              <option value="pt">Portuguese</option>
-              <option value="ru">Russian</option>
-              <option value="ja">Japanese</option>
-              <option value="ko">Korean</option>
-              <option value="zh">Chinese</option>
-            </select>
+              <SelectTrigger id="language">
+                <SelectValue placeholder="Select language" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Auto-detect</SelectItem>
+                <SelectItem value="en">English</SelectItem>
+                <SelectItem value="es">Spanish</SelectItem>
+                <SelectItem value="fr">French</SelectItem>
+                <SelectItem value="de">German</SelectItem>
+                <SelectItem value="it">Italian</SelectItem>
+                <SelectItem value="pt">Portuguese</SelectItem>
+                <SelectItem value="ru">Russian</SelectItem>
+                <SelectItem value="ja">Japanese</SelectItem>
+                <SelectItem value="ko">Korean</SelectItem>
+                <SelectItem value="zh">Chinese</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Auto Insert Toggle */}
           <div className="flex items-center justify-between">
-            <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            <Label htmlFor="auto-insert" className="flex-1">
               Auto-insert text at cursor
-            </label>
-            <input
-              type="checkbox"
+            </Label>
+            <Switch
+              id="auto-insert"
               checked={settings?.auto_insert || false}
-              onChange={(e) => saveSettings({ ...settings!, auto_insert: e.target.checked })}
-              className="rounded"
+              onCheckedChange={(checked) => settings && saveSettings({ ...settings, auto_insert: checked })}
             />
           </div>
 
           {/* Show Window on Record Toggle */}
           <div className="flex items-center justify-between">
-            <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            <Label htmlFor="show-window" className="flex-1">
               Show window when recording
-            </label>
-            <input
-              type="checkbox"
+            </Label>
+            <Switch
+              id="show-window"
               checked={settings?.show_window_on_record || false}
-              onChange={(e) => saveSettings({ ...settings!, show_window_on_record: e.target.checked })}
-              className="rounded"
+              onCheckedChange={(checked) => settings && saveSettings({ ...settings, show_window_on_record: checked })}
             />
           </div>
 
           {/* Model Management */}
-          <div>
-            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Manage Models
-            </h3>
-            <div className="space-y-2">
-              {Object.entries(models).map(([name, model]) => (
-                <div key={name} className="flex items-center justify-between p-2 border rounded dark:border-gray-600">
-                  <div>
-                    <span className="capitalize">{name}</span>
-                    <span className="text-sm text-gray-500 ml-2">
-                      ({(model.size / 1024 / 1024).toFixed(0)} MB)
-                    </span>
-                  </div>
-                  {model.downloaded ? (
-                    <span className="text-green-500 text-sm">Downloaded</span>
-                  ) : downloadProgress[name] !== undefined ? (
-                    <div className="flex items-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-sm">{downloadProgress[name].toFixed(0)}%</span>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => downloadModel(name)}
-                      className="text-blue-500 text-sm hover:underline"
-                    >
-                      Download
-                    </button>
-                  )}
-                </div>
-              ))}
+          <Separator />
+          <div className="space-y-4">
+            <div>
+              <h3 className="text-lg font-semibold mb-1">
+                Manage Models
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                Download additional Whisper models for different languages and accuracy levels
+              </p>
             </div>
+            
+            <ScrollArea className="h-[300px] pr-4">
+              <div className="space-y-3">
+                {/* Group downloaded models first */}
+                {Object.entries(models)
+                  .sort(([, a], [, b]) => {
+                    // Downloaded models first
+                    if (a.downloaded && !b.downloaded) return -1;
+                    if (!a.downloaded && b.downloaded) return 1;
+                    return 0;
+                  })
+                  .map(([name, model]) => (
+                    <ModelCard
+                      key={name}
+                      name={name}
+                      model={model}
+                      downloadProgress={downloadProgress[name]}
+                      onDownload={downloadModel}
+                      onSelect={() => {}}
+                      showSelectButton={false}
+                      isSelected={settings?.current_model === name}
+                    />
+                  ))}
+              </div>
+            </ScrollArea>
           </div>
         </div>
       </div>
@@ -384,40 +340,41 @@ export default function App() {
 
   // Main Recorder View
   return (
-    <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="flex flex-col h-screen bg-background">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b dark:border-gray-700">
-        <h1 className="text-lg font-semibold text-gray-900 dark:text-white">VoiceType</h1>
-        <button
+      <div className="flex items-center justify-between p-4 border-b">
+        <h1 className="text-lg font-semibold">VoiceType</h1>
+        <Button
           onClick={() => setCurrentView('settings')}
-          className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg"
+          variant="ghost"
+          size="icon"
         >
           <Settings className="w-5 h-5" />
-        </button>
+        </Button>
       </div>
 
       {/* Recording Status */}
       <div className="flex-1 flex flex-col items-center justify-center p-8">
         <div className={`relative rounded-full p-8 transition-all ${
           recording.state === 'recording' || recording.state === 'starting'
-            ? 'bg-red-100 dark:bg-red-900/30 animate-pulse scale-110'
+            ? 'bg-destructive/10 animate-pulse scale-110'
             : recording.state === 'transcribing'
-            ? 'bg-blue-100 dark:bg-blue-900/30'
-            : 'bg-gray-200 dark:bg-gray-700'
+            ? 'bg-primary/10'
+            : 'bg-muted'
         }`}>
           {recording.state === 'recording' || recording.state === 'starting' ? (
             <>
-              <Mic className="w-16 h-16 text-red-500" />
-              <div className="absolute inset-0 rounded-full border-4 border-red-500 animate-ping" />
+              <Mic className="w-16 h-16 text-destructive" />
+              <div className="absolute inset-0 rounded-full border-4 border-destructive animate-ping" />
             </>
           ) : recording.state === 'transcribing' ? (
-            <Loader2 className="w-16 h-16 text-blue-500 animate-spin" />
+            <Loader2 className="w-16 h-16 text-primary animate-spin" />
           ) : (
-            <MicOff className="w-16 h-16 text-gray-400" />
+            <MicOff className="w-16 h-16 text-muted-foreground" />
           )}
         </div>
 
-        <p className="mt-6 text-lg text-gray-600 dark:text-gray-400">
+        <p className="mt-6 text-lg text-muted-foreground">
           {recording.state === 'idle' && `Press ${settings?.hotkey || 'hotkey'} to record`}
           {recording.state === 'starting' && 'Starting recording...'}
           {recording.state === 'recording' && 'Recording...'}
@@ -428,18 +385,14 @@ export default function App() {
 
         {/* Show detailed state for debugging */}
         {recording.error && (
-          <p className="mt-2 text-sm text-red-500">Error: {recording.error}</p>
+          <p className="mt-2 text-sm text-destructive">Error: {recording.error}</p>
         )}
 
         {/* Manual test button - Toggle recording */}
-        <button
-          className={`mt-4 px-6 py-3 rounded-lg font-medium transition-all ${
-            recording.state === 'recording' || recording.state === 'starting'
-              ? 'bg-red-500 hover:bg-red-600 text-white'
-              : recording.state === 'transcribing' || recording.state === 'stopping'
-              ? 'bg-gray-400 text-white cursor-not-allowed'
-              : 'bg-blue-500 hover:bg-blue-600 text-white'
-          }`}
+        <Button
+          className="mt-4"
+          variant={recording.state === 'recording' || recording.state === 'starting' ? 'destructive' : 'default'}
+          size="lg"
           onClick={async () => {
             if (recording.state === 'recording') {
               await recording.stopRecording();
@@ -456,11 +409,11 @@ export default function App() {
           {recording.state === 'stopping' && 'Stopping...'}
           {recording.state === 'transcribing' && 'Transcribing...'}
           {recording.state === 'error' && 'Try Again'}
-        </button>
+        </Button>
 
         {recording.state === 'recording' && (
-          <div className="mt-4 flex items-center gap-2 text-sm text-red-500">
-            <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+          <div className="mt-4 flex items-center gap-2 text-sm text-destructive">
+            <div className="w-2 h-2 bg-destructive rounded-full animate-pulse" />
             <span>Recording in progress</span>
           </div>
         )}

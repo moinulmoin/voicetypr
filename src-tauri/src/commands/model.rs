@@ -9,6 +9,12 @@ pub async fn download_model(
     model_name: String,
     state: State<'_, Mutex<WhisperManager>>,
 ) -> Result<(), String> {
+    // Validate model name
+    let valid_models = ["tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en", "large"];
+    if !valid_models.contains(&model_name.as_str()) {
+        return Err(format!("Invalid model name: {}", model_name));
+    }
+    
     println!("Starting download for model: {}", model_name);
     let app_handle = app.clone();
 

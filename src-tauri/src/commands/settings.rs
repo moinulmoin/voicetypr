@@ -81,6 +81,10 @@ pub async fn set_global_shortcut(
     app: AppHandle,
     shortcut: String,
 ) -> Result<(), String> {
+    // Validate shortcut format
+    if shortcut.is_empty() || shortcut.len() > 100 {
+        return Err("Invalid shortcut format".to_string());
+    }
     let shortcuts = app.global_shortcut();
 
     // Unregister all existing shortcuts
