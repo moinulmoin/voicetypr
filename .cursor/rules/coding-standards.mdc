@@ -1,0 +1,140 @@
+---
+description: whenever making changes
+alwaysApply: false
+---
+# Coding Standards
+
+## General Principles
+- **Precision**: Implement exactly what is requested, no additional features
+- **Simplicity**: Prefer simple solutions that fulfill all requirements
+- **Consistency**: Follow established patterns in the codebase
+- **Documentation**: Write clear, concise comments for complex logic
+
+## TypeScript/JavaScript Standards
+- Use TypeScript for all new frontend code
+- Define proper interfaces and types
+- Use `const` for immutable values, `let` for mutable
+- Prefer arrow functions for callbacks and short functions
+- Use async/await over Promise chains
+- Always handle errors with try-catch blocks
+
+## React Standards
+- Use functional components with hooks
+- Implement proper cleanup in useEffect
+- Use meaningful component and variable names
+- Keep components focused on single responsibilities
+- Extract custom hooks for reusable logic
+
+## Rust Standards
+- Follow Rust naming conventions (snake_case for functions/variables)
+- Use `Result<T, E>` for error handling
+- Implement proper error messages for user-facing errors
+- Use `async` for I/O operations
+- Prefer `match` over `if let` for complex pattern matching
+- Add proper documentation comments (`///`) for public functions
+
+## File Organization
+- Group related functionality in modules
+- Use clear, descriptive file names
+- Keep files focused on single concerns
+- Update module exports when adding new files
+
+## Error Handling
+- **Frontend**: Display user-friendly error messages
+- **Backend**: Return meaningful error descriptions
+- **Logging**: Use appropriate log levels (error, warn, info, debug)
+- **Recovery**: Implement graceful degradation where possible
+
+## Performance Guidelines
+- Avoid unnecessary re-renders in React
+- Use proper data structures for efficiency
+- Implement proper cleanup for resources
+- Consider memory usage for large datasets
+
+## Security Practices
+- Validate all user inputs
+- Use proper file path handling
+- Implement permission checks
+- Never expose sensitive data in logs
+
+## Testing Considerations
+- Write testable code with clear dependencies
+- Separate business logic from UI logic
+- Use dependency injection where appropriate
+- Consider edge cases and error scenarios
+
+## Code Review Checklist
+- Does the code fulfill all requirements?
+- Are there any unnecessary features added?
+- Is error handling implemented properly?
+- Are types/interfaces defined correctly?
+- Is the code consistent with existing patterns?
+- Are there any potential security issues?
+# Coding Standards
+
+## General Principles
+- **Precision**: Implement exactly what is requested, no additional features
+- **Simplicity**: Prefer simple solutions that fulfill all requirements
+- **Consistency**: Follow established patterns in the codebase
+- **Documentation**: Write clear, concise comments for complex logic
+
+## TypeScript/JavaScript Standards
+- Use TypeScript for all new frontend code
+- Define proper interfaces and types
+- Use `const` for immutable values, `let` for mutable
+- Prefer arrow functions for callbacks and short functions
+- Use async/await over Promise chains
+- Always handle errors with try-catch blocks
+
+## React Standards
+- Use functional components with hooks
+- Implement proper cleanup in useEffect
+- Use meaningful component and variable names
+- Keep components focused on single responsibilities
+- Extract custom hooks for reusable logic
+
+## Rust Standards
+- Follow Rust naming conventions (snake_case for functions/variables)
+- Use `Result<T, E>` for error handling
+- Implement proper error messages for user-facing errors
+- Use `async` for I/O operations
+- Prefer `match` over `if let` for complex pattern matching
+- Add proper documentation comments (`///`) for public functions
+
+## File Organization
+- Group related functionality in modules
+- Use clear, descriptive file names
+- Keep files focused on single concerns
+- Update module exports when adding new files
+
+## Error Handling
+- **Frontend**: Display user-friendly error messages
+- **Backend**: Return meaningful error descriptions
+- **Logging**: Use appropriate log levels (error, warn, info, debug)
+- **Recovery**: Implement graceful degradation where possible
+
+## Performance Guidelines
+- Avoid unnecessary re-renders in React
+- Use proper data structures for efficiency
+- Implement proper cleanup for resources
+- Consider memory usage for large datasets
+
+## Security Practices
+- Validate all user inputs
+- Use proper file path handling
+- Implement permission checks
+- Never expose sensitive data in logs
+
+## Testing Considerations
+- Write testable code with clear dependencies
+- Separate business logic from UI logic
+- Use dependency injection where appropriate
+- Consider edge cases and error scenarios
+
+## Code Review Checklist
+- Does the code fulfill all requirements?
+- Are there any unnecessary features added?
+- Is error handling implemented properly?
+- Are types/interfaces defined correctly?
+- Is the code consistent with existing patterns?
+- Are there any potential security issues?

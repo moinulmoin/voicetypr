@@ -2,7 +2,7 @@
 name = "voicetypr"
 version = "0.1.0"
 description = "A Tauri App"
-authors = ["you"]
+authors = ["moinulmoin"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -28,6 +28,9 @@ hound = "3.5.1"
 futures-util = "0.3.31"
 tokio = { version = "1.46.0", features = ["full"] }
 reqwest = { version = "0.12.22", features = ["json", "stream"] }
+enigo = "0.5.0"
+sha2 = "0.10.9"
+arboard = "3.6.0"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-fs = "2"

@@ -1,0 +1,40 @@
+# VoiceTypr Project Structure
+
+VoiceTypr is a desktop voice-to-text application built with Tauri (Rust backend) and React/TypeScript (frontend).
+
+## Architecture Overview
+
+### Frontend (React/TypeScript)
+- **Entry Point**: [src/main.tsx](mdc:src/main.tsx) - React app initialization
+- **Main App**: [src/App.tsx](mdc:src/App.tsx) - Core application logic with recording, settings, and onboarding views
+- **UI Components**: [src/components/ui/](mdc:src/components/ui/) - shadcn/ui components for consistent design
+- **Styling**: [src/globals.css](mdc:src/globals.css) - Global styles with Tailwind CSS
+- **Hooks**: [src/hooks/](mdc:src/hooks/) - Custom React hooks
+- **Utils**: [src/lib/utils.ts](mdc:src/lib/utils.ts) - Utility functions
+
+### Backend (Rust/Tauri)
+- **Entry Point**: [src-tauri/src/main.rs](mdc:src-tauri/src/main.rs) - Tauri app initialization
+- **Core Library**: [src-tauri/src/lib.rs](mdc:src-tauri/src/lib.rs) - Main application setup with plugins and state management
+- **Commands**: [src-tauri/src/commands/](mdc:src-tauri/src/commands/) - Tauri command handlers
+  - [audio.rs](mdc:src-tauri/src/commands/audio.rs) - Audio recording commands
+  - [model.rs](mdc:src-tauri/src/commands/model.rs) - Whisper model management
+  - [settings.rs](mdc:src-tauri/src/commands/settings.rs) - Application settings
+- **Audio Module**: [src-tauri/src/audio/](mdc:src-tauri/src/audio/) - Audio recording and processing
+- **Whisper Module**: [src-tauri/src/whisper/](mdc:src-tauri/src/whisper/) - AI transcription using whisper-rs
+
+### Configuration
+- **Tauri Config**: [src-tauri/tauri.conf.json](mdc:src-tauri/tauri.conf.json) - App configuration, window settings, and permissions
+- **Cargo.toml**: [src-tauri/Cargo.toml](mdc:src-tauri/Cargo.toml) - Rust dependencies and build configuration
+- **package.json**: [package.json](mdc:package.json) - Frontend dependencies and scripts
+- **Vite Config**: [vite.config.ts](mdc:vite.config.ts) - Frontend build configuration
+- **Components Config**: [components.json](mdc:components.json) - shadcn/ui component configuration
+
+## Key Features
+- Global hotkey recording (default: Cmd/Ctrl+Shift+Space)
+- Multiple Whisper model support with download management
+- System tray integration
+- Real-time transcription with history
+- Cross-platform desktop app (macOS, Windows, Linux)
+
+## Package Manager
+Uses **pnpm** as specified in [package.json](mdc:package.json) and [pnpm-lock.yaml](mdc:pnpm-lock.yaml).

@@ -1,0 +1,7 @@
+{
+  "settings": {
+    "autoSave": true,
+    "saveStrategy": "immediate",
+    "path": "settings.json"
+  }
+}

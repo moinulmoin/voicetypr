@@ -1,0 +1,151 @@
+---
+alwaysApply: false
+---
+# UI Styling Guidelines
+
+## Design System
+- **Component Library**: shadcn/ui with "New York" style variant
+- **Icon Library**: Lucide React icons
+- **CSS Framework**: Tailwind CSS v4 with CSS variables
+- **Base Color**: Zinc color palette
+- **Configuration**: [components.json](mdc:components.json)
+
+## Theme Support
+- Implement dark/light theme switching
+- Use CSS variables defined in [src/globals.css](mdc:src/globals.css)
+- Theme classes: `dark:` prefix for dark mode styles
+- Use `next-themes` for theme management
+
+## Component Aliases
+As defined in [components.json](mdc:components.json):
+- `@/components` → `src/components`
+- `@/components/ui` → `src/components/ui`
+- `@/lib` → `src/lib`
+- `@/hooks` → `src/hooks`
+
+## Color Palette
+- **Primary**: Blue variants for active states
+- **Secondary**: Gray/Zinc variants for neutral elements
+- **Accent**: Red for recording states
+- **Success**: Green for completed actions
+- **Warning**: Yellow/Orange for alerts
+
+## Typography
+- Use Tailwind's default font stack
+- Consistent heading hierarchy (text-lg, text-xl, etc.)
+- Proper font weights (font-medium, font-semibold, font-bold)
+
+## Layout Patterns
+- **Main Layout**: Full height with header, content, and optional footer
+- **Recording UI**: Centered circular recording indicator
+- **Settings**: Modal-style overlay with form elements
+- **History**: Scrollable list with click-to-copy functionality
+
+## Interactive States
+- **Hover**: Subtle background color changes
+- **Focus**: Clear focus rings for accessibility
+- **Active**: Visual feedback for pressed states
+- **Disabled**: Reduced opacity and pointer-events-none
+
+## Responsive Design
+- Mobile-first approach (though primarily desktop app)
+- Use responsive utilities (sm:, md:, lg:)
+- Ensure touch targets are appropriately sized
+
+## Animation Guidelines
+- Use Tailwind's transition utilities
+- Implement smooth state transitions
+- Recording state should have pulse animation
+- Loading states should use spin animation
+
+## Accessibility
+- Maintain WCAG AA color contrast ratios
+- Use semantic HTML elements
+- Implement proper ARIA labels
+- Ensure keyboard navigation works
+- Test with screen readers
+
+## Component Patterns
+- **Buttons**: Use shadcn/ui Button component with variants
+- **Forms**: Use shadcn/ui Form components with react-hook-form
+- **Modals**: Use shadcn/ui Dialog or Sheet components
+- **Icons**: Consistent sizing (w-4 h-4, w-5 h-5, w-6 h-6)
+
+## Spacing System
+- Use Tailwind's spacing scale (p-2, p-4, p-6, p-8)
+- Consistent margins and padding
+- Use gap utilities for flexbox/grid layouts
+# UI Styling Guidelines
+
+## Design System
+- **Component Library**: shadcn/ui with "New York" style variant
+- **Icon Library**: Lucide React icons
+- **CSS Framework**: Tailwind CSS v4 with CSS variables
+- **Base Color**: Zinc color palette
+- **Configuration**: [components.json](mdc:components.json)
+
+## Theme Support
+- Implement dark/light theme switching
+- Use CSS variables defined in [src/globals.css](mdc:src/globals.css)
+- Theme classes: `dark:` prefix for dark mode styles
+- Use `next-themes` for theme management
+
+## Component Aliases
+As defined in [components.json](mdc:components.json):
+- `@/components` → `src/components`
+- `@/components/ui` → `src/components/ui`
+- `@/lib` → `src/lib`
+- `@/hooks` → `src/hooks`
+
+## Color Palette
+- **Primary**: Blue variants for active states
+- **Secondary**: Gray/Zinc variants for neutral elements
+- **Accent**: Red for recording states
+- **Success**: Green for completed actions
+- **Warning**: Yellow/Orange for alerts
+
+## Typography
+- Use Tailwind's default font stack
+- Consistent heading hierarchy (text-lg, text-xl, etc.)
+- Proper font weights (font-medium, font-semibold, font-bold)
+
+## Layout Patterns
+- **Main Layout**: Full height with header, content, and optional footer
+- **Recording UI**: Centered circular recording indicator
+- **Settings**: Modal-style overlay with form elements
+- **History**: Scrollable list with click-to-copy functionality
+
+## Interactive States
+- **Hover**: Subtle background color changes
+- **Focus**: Clear focus rings for accessibility
+- **Active**: Visual feedback for pressed states
+- **Disabled**: Reduced opacity and pointer-events-none
+
+## Responsive Design
+- Mobile-first approach (though primarily desktop app)
+- Use responsive utilities (sm:, md:, lg:)
+- Ensure touch targets are appropriately sized
+
+## Animation Guidelines
+- Use Tailwind's transition utilities
+- Implement smooth state transitions
+- Recording state should have pulse animation
+- Loading states should use spin animation
+
+## Accessibility
+- Maintain WCAG AA color contrast ratios
+- Use semantic HTML elements
+- Implement proper ARIA labels
+- Ensure keyboard navigation works
+- Test with screen readers
+
+## Component Patterns
+- **Buttons**: Use shadcn/ui Button component with variants
+- **Forms**: Use shadcn/ui Form components with react-hook-form
+- **Modals**: Use shadcn/ui Dialog or Sheet components
+- **Icons**: Consistent sizing (w-4 h-4, w-5 h-5, w-6 h-6)
+
+## Spacing System
+- Use Tailwind's spacing scale (p-2, p-4, p-6, p-8)
+- Consistent margins and padding
+- Use gap utilities for flexbox/grid layouts

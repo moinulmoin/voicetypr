@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-VoiceTyper is a native desktop app for macOS that provides offline voice transcription using Whisper. Built with Tauri v2 (Rust) and React with TypeScript.
+VoiceTypr is a native desktop app for macOS that provides offline voice transcription using Whisper. Built with Tauri v2 (Rust) and React with TypeScript.
 
 ## Development Commands
 
@@ -33,3 +33,4 @@ pnpm preview
 - **Capabilities**: Define permissions in `src-tauri/capabilities/`
 
 IMPORTANT: Read `agent-docs` for more details on the project before making any changes.
+IMPORTANT: Read `CLAUDE.local.md` for any local changes.
