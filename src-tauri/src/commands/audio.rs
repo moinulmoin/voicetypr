@@ -7,6 +7,7 @@ use crate::whisper::cache::TranscriberCache;
 use std::sync::Mutex;
 use std::path::PathBuf;
 use tauri::async_runtime::Mutex as AsyncMutex;
+use serde_json;
 
 // Global audio recorder state
 pub struct RecorderState(pub Mutex<AudioRecorder>);
@@ -175,6 +176,8 @@ pub async fn stop_recording(
     let model_path = whisper_manager.lock().await.get_model_path(&model_name)
         .ok_or(format!("Model '{}' path not found", model_name))?;
 
+    let model_name_clone = model_name.clone();
+
     let language = store.get("language")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
 
@@ -208,7 +211,13 @@ pub async fn stop_recording(
 
         match result {
             Ok(text) => {
-                let _ = app_for_task.emit("transcription-complete", &text);
+                let _ = app_for_task.emit(
+                    "transcription-complete",
+                    serde_json::json!({
+                        "text": text,
+                        "model": model_name_clone
+                    })
+                );
             }
             Err(e) => {
                 let _ = app_for_task.emit("transcription-error", e);

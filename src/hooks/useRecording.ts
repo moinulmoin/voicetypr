@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { useCallback, useEffect, useState } from 'react';
 
 type RecordingState = 'idle' | 'starting' | 'recording' | 'stopping' | 'transcribing' | 'error';
 
@@ -38,6 +38,12 @@ export function useRecording(): UseRecordingReturn {
         console.log('[Recording Hook] Transcription complete');
         setState('idle');
         setError(null);
+      }));
+
+      // Transcription started
+      unsubscribers.push(await listen('transcription-started', () => {
+        console.log('[Recording Hook] Transcription started');
+        setState('transcribing');
       }));
 
       // Global hotkey events
@@ -87,36 +93,26 @@ export function useRecording(): UseRecordingReturn {
     try {
       console.log('[Recording Hook] Stopping recording...');
       setState('stopping');
-      const result = await invoke<string>('stop_recording');
-      console.log('[Recording Hook] Stop recording result:', result);
-      
-      if (!result || result === '') {
-        // No recording was active or no audio to transcribe
-        console.log('[Recording Hook] No audio to transcribe, resetting to idle');
-        setState('idle');
-        setError(null);
-      } else {
-        setState('transcribing');
-        console.log('[Recording Hook] Transcription in progress...');
-        
-        // Timeout fallback: If transcription takes too long, reset
-        setTimeout(() => {
-          setState(prevState => {
-            if (prevState === 'transcribing') {
-              console.warn('[Recording Hook] Transcription timeout - resetting to idle');
-              setError('Transcription took too long');
-              return 'idle';
-            }
-            return prevState;
-          });
-        }, 15000); // 15 second timeout for transcription
-      }
+      await invoke('stop_recording');
+      console.log('[Recording Hook] Backend acknowledged stop, waiting for transcription events');
+
+      // In case backend events fail, start a timeout fallback
+      setTimeout(() => {
+        setState(prev => {
+          if (prev === 'transcribing') {
+            console.warn('[Recording Hook] Transcription timeout - resetting to idle');
+            setError('Transcription took too long');
+            return 'idle';
+          }
+          return prev;
+        });
+      }, 30000); // 30-sec fallback timeout
     } catch (err) {
       console.error('[Recording Hook] Failed to stop recording:', err);
       const errorMessage = String(err);
       setError(errorMessage);
       setState('idle'); // Always return to idle on error
-      
+
       // If no models downloaded, we should redirect to onboarding
       if (errorMessage.includes('No models downloaded')) {
         // Emit an event that App.tsx can listen to

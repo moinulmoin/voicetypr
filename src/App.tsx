@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Mic, MicOff, Settings, Download, Check, Loader2 } from 'lucide-react';
+import { Check, Download, Loader2, Mic, MicOff, Settings } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useRecording } from './hooks/useRecording';
 
 // Types
@@ -58,7 +58,7 @@ export default function App() {
         }
 
         // All recording event handling is now managed by the useRecording hook
-        
+
         // Listen for no-models event to redirect to onboarding
         const handleNoModels = () => {
           console.log('No models available - redirecting to onboarding');
@@ -66,31 +66,34 @@ export default function App() {
         };
         window.addEventListener('no-models-available', handleNoModels);
 
-        const unlistenTranscription = await listen<string>('transcription-complete', async (event) => {
+        const unlistenTranscription = await listen<{text:string, model:string}>('transcription-complete', async (event) => {
           console.log('Transcription complete:', event.payload);
-          
+
+          const { text, model } = event.payload;
           const newEntry: TranscriptionHistory = {
             id: Date.now().toString(),
-            text: event.payload,
+            text,
             timestamp: new Date(),
-            model: settings?.current_model || 'base'
+            model
           };
-          setHistory(prev => [newEntry, ...prev].slice(0, 50)); // Keep last 50
+          setHistory(prev => {
+            if (prev.length && prev[0].text === newEntry.text) return prev; // dedup
+            return [newEntry, ...prev].slice(0, 50);
+          });
 
           // Copy to clipboard or insert at cursor
           if (settings?.auto_insert) {
             try {
-              // Use the native text insertion command
-              await invoke('insert_text', { text: event.payload });
+              await invoke('insert_text', { text });
               console.log('Text inserted via native keyboard simulation');
             } catch (e) {
               // Fallback to clipboard
               console.error('Failed to insert text, using clipboard:', e);
-              navigator.clipboard.writeText(event.payload);
+              navigator.clipboard.writeText(text);
             }
           } else {
             // Just copy to clipboard
-            navigator.clipboard.writeText(event.payload);
+            navigator.clipboard.writeText(text);
           }
         });
 
@@ -136,7 +139,7 @@ export default function App() {
         ...prev,
         [modelName]: 0
       }));
-      
+
       // Don't await - let it run async so progress events can update UI
       invoke('download_model', { modelName }).catch((error) => {
         console.error('Failed to download model:', error);
@@ -213,7 +216,7 @@ export default function App() {
                           show_window_on_record: false,
                           theme: 'system'
                         };
-                        
+
                         // Save with selected model
                         await saveSettings({ ...newSettings, current_model: name });
                         setCurrentView('recorder');
@@ -398,7 +401,7 @@ export default function App() {
         <div className={`relative rounded-full p-8 transition-all ${
           recording.state === 'recording' || recording.state === 'starting'
             ? 'bg-red-100 dark:bg-red-900/30 animate-pulse scale-110'
-            : recording.state === 'transcribing' 
+            : recording.state === 'transcribing'
             ? 'bg-blue-100 dark:bg-blue-900/30'
             : 'bg-gray-200 dark:bg-gray-700'
         }`}>
@@ -422,17 +425,17 @@ export default function App() {
           {recording.state === 'transcribing' && 'Transcribing your speech...'}
           {recording.state === 'error' && 'Error occurred'}
         </p>
-        
+
         {/* Show detailed state for debugging */}
         {recording.error && (
           <p className="mt-2 text-sm text-red-500">Error: {recording.error}</p>
         )}
-        
+
         {/* Manual test button - Toggle recording */}
         <button
           className={`mt-4 px-6 py-3 rounded-lg font-medium transition-all ${
             recording.state === 'recording' || recording.state === 'starting'
-              ? 'bg-red-500 hover:bg-red-600 text-white' 
+              ? 'bg-red-500 hover:bg-red-600 text-white'
               : recording.state === 'transcribing' || recording.state === 'stopping'
               ? 'bg-gray-400 text-white cursor-not-allowed'
               : 'bg-blue-500 hover:bg-blue-600 text-white'
@@ -454,7 +457,7 @@ export default function App() {
           {recording.state === 'transcribing' && 'Transcribing...'}
           {recording.state === 'error' && 'Try Again'}
         </button>
-        
+
         {recording.state === 'recording' && (
           <div className="mt-4 flex items-center gap-2 text-sm text-red-500">
             <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
