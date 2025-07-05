@@ -1,4 +1,4 @@
-import { CheckCircle2, Download } from 'lucide-react';
+import { CheckCircle2, Download, Trash2, X } from 'lucide-react';
 import { ModelInfo } from '../types';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -12,6 +12,8 @@ interface ModelCardProps {
   isSelected?: boolean;
   onDownload: (name: string) => void;
   onSelect: (name: string) => void;
+  onDelete?: (name: string) => void;
+  onCancelDownload?: (name: string) => void;
   showSelectButton?: boolean;
 }
 
@@ -22,6 +24,8 @@ export function ModelCard({
   isSelected = false,
   onDownload,
   onSelect,
+  onDelete,
+  onCancelDownload,
   showSelectButton = true
 }: ModelCardProps) {
   const formatModelName = (name: string) => {
@@ -38,18 +42,13 @@ export function ModelCard({
     return nameMap[name] || name;
   };
 
-  const getModelDescription = (name: string) => {
-    const descriptions: Record<string, string> = {
-      'tiny': 'Fastest • 75 MB',
-      'base': 'Balanced • 142 MB',
-      'small': 'Accurate • 466 MB',
-      'medium': 'Very accurate • 1.5 GB',
-      'large-v3': 'Best quality • 2.9 GB',
-      'large-v3-q5_0': 'Large compressed • 1.1 GB',
-      'large-v3-turbo': 'Fast & accurate • 1.5 GB',
-      'large-v3-turbo-q5_0': 'Fast compressed • 547 MB'
-    };
-    return descriptions[name] || '';
+  const getModelDescription = () => {
+    const sizeInMB = model.size / (1024 * 1024);
+    const sizeStr = sizeInMB >= 1024 
+      ? `${(sizeInMB / 1024).toFixed(1)} GB`
+      : `${Math.round(sizeInMB)} MB`;
+    
+    return `Speed: ${model.speed_score}/10 • Accuracy: ${model.accuracy_score}/10 • ${sizeStr}`;
   };
 
   return (
@@ -62,48 +61,64 @@ export function ModelCard({
             <h3 className="font-medium text-base">
               {formatModelName(name)}
             </h3>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {getModelDescription(name)}
+            <p className="text-sm text-muted-foreground mt-1">
+              {getModelDescription()}
             </p>
           </div>
 
-          <div className="flex-shrink-0">
+          <div className="flex-shrink-0 flex items-center gap-1">
             {model.downloaded ? (
-              showSelectButton ? (
-                isSelected ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <CheckCircle2 className="w-4 h-4 text-primary" />
-                    <span>Active</span>
-                  </div>
+              <>
+                {showSelectButton ? (
+                  isSelected ? (
+                    <CheckCircle2 className="w-5 h-5 text-primary" />
+                  ) : (
+                    <Button
+                      onClick={() => onSelect(name)}
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                    >
+                      <CheckCircle2 className="w-5 h-5 text-muted-foreground hover:text-primary" />
+                    </Button>
+                  )
                 ) : (
+                  <CheckCircle2 className="w-5 h-5 text-green-600" />
+                )}
+                {onDelete && !isSelected && (
                   <Button
-                    onClick={() => onSelect(name)}
+                    onClick={() => onDelete(name)}
                     variant="ghost"
-                    size="sm"
-                    className="text-primary hover:text-primary"
+                    size="icon"
+                    className="h-8 w-8 hover:text-destructive"
                   >
-                    Activate
+                    <Trash2 className="w-4 h-4" />
                   </Button>
-                )
-              ) : (
-                <Badge variant="secondary" className="font-normal">
-                  <CheckCircle2 className="w-3 h-3 mr-1" />
-                  Ready
-                </Badge>
-              )
+                )}
+              </>
             ) : downloadProgress !== undefined ? (
-              <div className="flex items-center gap-3">
+              <>
                 <Progress value={downloadProgress} className="w-20 h-2" />
                 <span className="text-sm font-medium w-12 text-right">{downloadProgress.toFixed(0)}%</span>
-              </div>
+                {onCancelDownload && (
+                  <Button
+                    onClick={() => onCancelDownload(name)}
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 hover:text-destructive"
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                )}
+              </>
             ) : (
               <Button
                 onClick={() => onDownload(name)}
-                variant="outline"
-                size="sm"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
               >
-                <Download className="w-4 h-4" />
-                Download
+                <Download className="w-5 h-5" />
               </Button>
             )}
           </div>

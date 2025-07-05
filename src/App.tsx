@@ -19,6 +19,37 @@ import { Switch } from "./components/ui/switch";
 import { useRecording } from "./hooks/useRecording";
 import { AppSettings, ModelInfo, TranscriptionHistory } from "./types";
 
+// Helper function to calculate balanced performance score
+function calculateBalancedScore(model: ModelInfo): number {
+  // Weighted average: 40% speed, 60% accuracy
+  return (model.speed_score * 0.4 + model.accuracy_score * 0.6) / 10 * 100;
+}
+
+// Helper function to sort models by various criteria
+function sortModels(
+  models: [string, ModelInfo][],
+  sortBy: "balanced" | "speed" | "accuracy" | "size" = "balanced"
+): [string, ModelInfo][] {
+  return [...models].sort(([, a], [, b]) => {
+    // Always put downloaded models first
+    if (a.downloaded && !b.downloaded) return -1;
+    if (!a.downloaded && b.downloaded) return 1;
+
+    // Then sort by the specified criteria
+    switch (sortBy) {
+      case "speed":
+        return b.speed_score - a.speed_score;
+      case "accuracy":
+        return b.accuracy_score - a.accuracy_score;
+      case "size":
+        return a.size - b.size;
+      case "balanced":
+      default:
+        return calculateBalancedScore(b) - calculateBalancedScore(a);
+    }
+  });
+}
+
 // Main App Component
 export default function App() {
   const recording = useRecording();
@@ -156,16 +187,61 @@ export default function App() {
     }
   };
 
+  // Delete model
+  const deleteModel = async (modelName: string) => {
+    try {
+      if (!confirm(`Are you sure you want to delete the ${modelName} model?`)) {
+        return;
+      }
+
+      await invoke("delete_model", { modelName });
+
+      // Refresh model status
+      const modelStatus = await invoke<Record<string, ModelInfo>>("get_model_status");
+      setModels(modelStatus);
+
+      // If deleted model was the current one, clear selection
+      if (settings?.current_model === modelName) {
+        await saveSettings({ ...settings, current_model: "" });
+      }
+    } catch (error) {
+      console.error("Failed to delete model:", error);
+      alert(`Failed to delete model: ${error}`);
+    }
+  };
+
+  // Cancel download (placeholder - backend support needed)
+  const cancelDownload = async (modelName: string) => {
+    try {
+      // TODO: Implement backend support for cancelling downloads
+      console.log(`Cancelling download for model: ${modelName}`);
+
+      // For now, just remove from progress
+      setDownloadProgress((prev) => {
+        const newProgress = { ...prev };
+        delete newProgress[modelName];
+        return newProgress;
+      });
+    } catch (error) {
+      console.error("Failed to cancel download:", error);
+    }
+  };
+
   // Save settings
   const saveSettings = async (newSettings: AppSettings) => {
     try {
       await invoke("save_settings", { settings: newSettings });
-
+      
       // Update global shortcut in backend if changed
       if (newSettings.hotkey !== settings?.hotkey) {
-        await invoke("set_global_shortcut", { shortcut: newSettings.hotkey });
+        try {
+          await invoke("set_global_shortcut", { shortcut: newSettings.hotkey });
+        } catch (err) {
+          console.error("Failed to update hotkey:", err);
+          // Still update UI even if hotkey registration fails
+        }
       }
-
+      
       setSettings(newSettings);
     } catch (error) {
       console.error("Failed to save settings:", error);
@@ -181,13 +257,15 @@ export default function App() {
           <p className="text-lg text-muted-foreground mb-8">Choose a model to get started</p>
 
           <div className="space-y-4 w-full max-w-md">
-            {Object.entries(models).map(([name, model]) => (
+            {sortModels(Object.entries(models), "balanced").map(([name, model]) => (
               <ModelCard
                 key={name}
                 name={name}
                 model={model}
                 downloadProgress={downloadProgress[name]}
                 onDownload={downloadModel}
+                onDelete={deleteModel}
+                onCancelDownload={cancelDownload}
                 onSelect={async (modelName) => {
                   // Create default settings if none exist
                   const newSettings = settings || {
@@ -224,7 +302,7 @@ export default function App() {
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
           {/* Hotkey Setting */}
           <div className="space-y-2">
-            <Label htmlFor="hotkey">Recording Hotkey</Label>
+            <Label htmlFor="hotkey">Hotkey</Label>
             <HotkeyInput
               value={settings?.hotkey || ""}
               onChange={(hotkey) => settings && saveSettings({ ...settings, hotkey })}
@@ -298,14 +376,8 @@ export default function App() {
 
             <ScrollArea className="h-[280px]">
               <div className="space-y-2 pr-3">
-                {/* Group downloaded models first */}
-                {Object.entries(models)
-                  .sort(([, a], [, b]) => {
-                    // Downloaded models first
-                    if (a.downloaded && !b.downloaded) return -1;
-                    if (!a.downloaded && b.downloaded) return 1;
-                    return 0;
-                  })
+                {/* Sort by balanced score (downloaded models always first) */}
+                {sortModels(Object.entries(models), "balanced")
                   .map(([name, model]) => (
                     <ModelCard
                       key={name}
@@ -313,6 +385,8 @@ export default function App() {
                       model={model}
                       downloadProgress={downloadProgress[name]}
                       onDownload={downloadModel}
+                      onDelete={deleteModel}
+                      onCancelDownload={cancelDownload}
                       onSelect={async (modelName) => {
                         if (model.downloaded && settings) {
                           await saveSettings({ ...settings, current_model: modelName });

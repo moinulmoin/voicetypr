@@ -109,3 +109,4 @@ pub async fn set_global_shortcut(
 
     Ok(())
 }
+

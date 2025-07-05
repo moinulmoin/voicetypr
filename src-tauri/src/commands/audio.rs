@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::path::PathBuf;
 use tauri::async_runtime::Mutex as AsyncMutex;
 use serde_json;
+use crate::{update_recording_state, RecordingState};
 
 // Global audio recorder state
 pub struct RecorderState(pub Mutex<AudioRecorder>);
@@ -17,6 +18,8 @@ pub async fn start_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
 ) -> Result<(), String> {
+    // Update state to starting
+    update_recording_state(&app, RecordingState::Starting, None);
     // Get temp file path
     let temp_dir = app.path().temp_dir()
         .map_err(|e| e.to_string())?;
@@ -62,9 +65,12 @@ pub async fn start_recording(
         }
     }
 
-    // Emit recording started event
+    // Update state to recording
+    update_recording_state(&app, RecordingState::Recording, None);
+    
+    // Also emit legacy event for compatibility
     app.emit("recording-started", ()).unwrap();
-    println!("Recording started successfully - emitted recording-started event");
+    println!("Recording started successfully");
 
     // Set up 30-second timeout
     let app_clone = app.clone();
@@ -88,6 +94,8 @@ pub async fn stop_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
 ) -> Result<String, String> {
+    // Update state to stopping
+    update_recording_state(&app, RecordingState::Stopping, None);
     // Stop recording (lock only within this scope to stay Send)
     println!("Stopping recording...");
     {
@@ -188,7 +196,9 @@ pub async fn stop_recording(
     // FIRE-AND-FORGET heavy work so the invoke resolves fast
     let app_for_task = app.clone();
     tokio::spawn(async move {
-        // Emit started event so UI can show spinner immediately
+        // Update state to transcribing
+        update_recording_state(&app_for_task, RecordingState::Transcribing, None);
+        // Also emit legacy event
         let _ = app_for_task.emit("transcription-started", ());
 
         // Get (or load) transcriber
@@ -198,6 +208,9 @@ pub async fn stop_recording(
             match cache.get_or_create(&model_path_clone) {
                 Ok(t) => t,
                 Err(e) => {
+                    // Update state to error
+                    update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
+                    // Also emit legacy event
                     let _ = app_for_task.emit("transcription-error", e);
                     return;
                 }
@@ -211,6 +224,9 @@ pub async fn stop_recording(
 
         match result {
             Ok(text) => {
+                // Update state back to idle
+                update_recording_state(&app_for_task, RecordingState::Idle, None);
+                // Also emit legacy event
                 let _ = app_for_task.emit(
                     "transcription-complete",
                     serde_json::json!({
@@ -220,6 +236,9 @@ pub async fn stop_recording(
                 );
             }
             Err(e) => {
+                // Update state to error
+                update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
+                // Also emit legacy event
                 let _ = app_for_task.emit("transcription-error", e);
             }
         }
