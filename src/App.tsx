@@ -1,24 +1,30 @@
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { Loader2, Mic, MicOff, Settings } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { useRecording } from './hooks/useRecording';
-import { ModelCard } from './components/ModelCard';
-import { HotkeyInput } from './components/HotkeyInput';
-import { AppSettings, ModelInfo, TranscriptionHistory } from './types';
-import { Button } from './components/ui/button';
-import { Label } from './components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
-import { Switch } from './components/ui/switch';
-import { Card, CardContent } from './components/ui/card';
-import { ScrollArea } from './components/ui/scroll-area';
-import { Separator } from './components/ui/separator';
-
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { Loader2, Mic, MicOff, Settings } from "lucide-react";
+import { useEffect, useState } from "react";
+import { HotkeyInput } from "./components/HotkeyInput";
+import { ModelCard } from "./components/ModelCard";
+import { Button } from "./components/ui/button";
+import { Label } from "./components/ui/label";
+import { ScrollArea } from "./components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "./components/ui/select";
+import { Separator } from "./components/ui/separator";
+import { Switch } from "./components/ui/switch";
+import { useRecording } from "./hooks/useRecording";
+import { AppSettings, ModelInfo, TranscriptionHistory } from "./types";
 
 // Main App Component
 export default function App() {
   const recording = useRecording();
-  const [currentView, setCurrentView] = useState<'recorder' | 'settings' | 'onboarding'>('recorder');
+  const [currentView, setCurrentView] = useState<"recorder" | "settings" | "onboarding">(
+    "recorder"
+  );
   const [models, setModels] = useState<Record<string, ModelInfo>>({});
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
@@ -29,74 +35,80 @@ export default function App() {
     const init = async () => {
       try {
         // Load settings
-        const appSettings = await invoke<AppSettings>('get_settings');
+        const appSettings = await invoke<AppSettings>("get_settings");
         setSettings(appSettings);
 
         // Load model status
-        const modelStatus = await invoke<Record<string, ModelInfo>>('get_model_status');
-        console.log('Model status from backend:', modelStatus);
+        const modelStatus = await invoke<Record<string, ModelInfo>>("get_model_status");
+        console.log("Model status from backend:", modelStatus);
         setModels(modelStatus);
 
         // Check if any model is downloaded
-        const hasModel = Object.values(modelStatus).some(m => m.downloaded);
-        console.log('Has downloaded model:', hasModel);
+        const hasModel = Object.values(modelStatus).some((m) => m.downloaded);
+        console.log("Has downloaded model:", hasModel);
         if (!hasModel) {
-          setCurrentView('onboarding');
+          setCurrentView("onboarding");
         }
 
         // All recording event handling is now managed by the useRecording hook
 
         // Listen for no-models event to redirect to onboarding
         const handleNoModels = () => {
-          console.log('No models available - redirecting to onboarding');
-          setCurrentView('onboarding');
+          console.log("No models available - redirecting to onboarding");
+          setCurrentView("onboarding");
         };
-        window.addEventListener('no-models-available', handleNoModels);
+        window.addEventListener("no-models-available", handleNoModels);
 
-        const unlistenTranscription = await listen<{text:string, model:string}>('transcription-complete', async (event) => {
-          console.log('Transcription complete:', event.payload);
+        const unlistenTranscription = await listen<{ text: string; model: string }>(
+          "transcription-complete",
+          async (event) => {
+            console.log("Transcription complete:", event.payload);
 
-          const { text, model } = event.payload;
-          const newEntry: TranscriptionHistory = {
-            id: Date.now().toString(),
-            text,
-            timestamp: new Date(),
-            model
-          };
-          setHistory(prev => {
-            if (prev.length && prev[0].text === newEntry.text) return prev; // dedup
-            return [newEntry, ...prev].slice(0, 50);
-          });
+            const { text, model } = event.payload;
+            const newEntry: TranscriptionHistory = {
+              id: Date.now().toString(),
+              text,
+              timestamp: new Date(),
+              model
+            };
+            setHistory((prev) => {
+              if (prev.length && prev[0].text === newEntry.text) return prev; // dedup
+              return [newEntry, ...prev].slice(0, 50);
+            });
 
-          // Copy to clipboard or insert at cursor
-          if (settings?.auto_insert) {
-            try {
-              await invoke('insert_text', { text });
-              console.log('Text inserted via native keyboard simulation');
-            } catch (e) {
-              // Fallback to clipboard
-              console.error('Failed to insert text, using clipboard:', e);
+            // Copy to clipboard or insert at cursor
+            if (settings?.auto_insert) {
+              try {
+                await invoke("insert_text", { text });
+                console.log("Text inserted via native keyboard simulation");
+              } catch (e) {
+                // Fallback to clipboard
+                console.error("Failed to insert text, using clipboard:", e);
+                navigator.clipboard.writeText(text);
+              }
+            } else {
+              // Just copy to clipboard
               navigator.clipboard.writeText(text);
             }
-          } else {
-            // Just copy to clipboard
-            navigator.clipboard.writeText(text);
           }
-        });
+        );
 
-        const unlistenProgress = await listen<{model: string, progress: number}>('download-progress', (event) => {
-          setDownloadProgress(prev => ({
-            ...prev,
-            [event.payload.model]: event.payload.progress
-          }));
-        });
+        const unlistenProgress = await listen<{ model: string; progress: number }>(
+          "download-progress",
+          (event) => {
+            setDownloadProgress((prev) => ({
+              ...prev,
+              [event.payload.model]: event.payload.progress
+            }));
+          }
+        );
 
-        const unlistenDownloaded = await listen<string>('model-downloaded', (event) => {
-          setModels(prev => ({
+        const unlistenDownloaded = await listen<string>("model-downloaded", (event) => {
+          setModels((prev) => ({
             ...prev,
             [event.payload]: { ...prev[event.payload], downloaded: true }
           }));
-          setDownloadProgress(prev => {
+          setDownloadProgress((prev) => {
             const newProgress = { ...prev };
             delete newProgress[event.payload];
             return newProgress;
@@ -107,10 +119,10 @@ export default function App() {
           unlistenTranscription();
           unlistenProgress();
           unlistenDownloaded();
-          window.removeEventListener('no-models-available', handleNoModels);
+          window.removeEventListener("no-models-available", handleNoModels);
         };
       } catch (error) {
-        console.error('Failed to initialize:', error);
+        console.error("Failed to initialize:", error);
       }
     };
 
@@ -122,24 +134,24 @@ export default function App() {
     try {
       console.log(`Starting download for model: ${modelName}`);
       // Set initial progress to show download started
-      setDownloadProgress(prev => ({
+      setDownloadProgress((prev) => ({
         ...prev,
         [modelName]: 0
       }));
 
       // Don't await - let it run async so progress events can update UI
-      invoke('download_model', { modelName }).catch((error) => {
-        console.error('Failed to download model:', error);
+      invoke("download_model", { modelName }).catch((error) => {
+        console.error("Failed to download model:", error);
         alert(`Failed to download model: ${error}`);
         // Remove from progress on error
-        setDownloadProgress(prev => {
+        setDownloadProgress((prev) => {
           const newProgress = { ...prev };
           delete newProgress[modelName];
           return newProgress;
         });
       });
     } catch (error) {
-      console.error('Failed to start download:', error);
+      console.error("Failed to start download:", error);
       alert(`Failed to start download: ${error}`);
     }
   };
@@ -147,30 +159,26 @@ export default function App() {
   // Save settings
   const saveSettings = async (newSettings: AppSettings) => {
     try {
-      await invoke('save_settings', { settings: newSettings });
+      await invoke("save_settings", { settings: newSettings });
 
       // Update global shortcut in backend if changed
       if (newSettings.hotkey !== settings?.hotkey) {
-        await invoke('set_global_shortcut', { shortcut: newSettings.hotkey });
+        await invoke("set_global_shortcut", { shortcut: newSettings.hotkey });
       }
 
       setSettings(newSettings);
     } catch (error) {
-      console.error('Failed to save settings:', error);
+      console.error("Failed to save settings:", error);
     }
   };
 
   // Onboarding View
-  if (currentView === 'onboarding') {
+  if (currentView === "onboarding") {
     return (
       <div className="flex flex-col h-screen bg-background">
         <div className="flex-1 flex flex-col items-center justify-center p-8">
-          <h1 className="text-4xl font-bold mb-2">
-            Welcome to VoiceType
-          </h1>
-          <p className="text-lg text-muted-foreground mb-8">
-            Choose a model to get started
-          </p>
+          <h1 className="text-4xl font-bold mb-2">Welcome to VoiceType</h1>
+          <p className="text-lg text-muted-foreground mb-8">Choose a model to get started</p>
 
           <div className="space-y-4 w-full max-w-md">
             {Object.entries(models).map(([name, model]) => (
@@ -183,16 +191,16 @@ export default function App() {
                 onSelect={async (modelName) => {
                   // Create default settings if none exist
                   const newSettings = settings || {
-                    hotkey: 'CommandOrControl+Shift+Space',
-                    language: 'auto',
+                    hotkey: "CommandOrControl+Shift+Space",
+                    language: "auto",
                     auto_insert: true,
                     show_window_on_record: false,
-                    theme: 'system'
+                    theme: "system"
                   };
 
                   // Save with selected model
                   await saveSettings({ ...newSettings, current_model: modelName });
-                  setCurrentView('recorder');
+                  setCurrentView("recorder");
                 }}
               />
             ))}
@@ -203,16 +211,12 @@ export default function App() {
   }
 
   // Settings View
-  if (currentView === 'settings') {
+  if (currentView === "settings") {
     return (
       <div className="flex flex-col h-screen bg-background">
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-semibold">Settings</h2>
-          <Button
-            onClick={() => setCurrentView('recorder')}
-            variant="ghost"
-            size="sm"
-          >
+          <Button onClick={() => setCurrentView("recorder")} variant="ghost" size="sm">
             ✕
           </Button>
         </div>
@@ -222,35 +226,17 @@ export default function App() {
           <div className="space-y-2">
             <Label htmlFor="hotkey">Recording Hotkey</Label>
             <HotkeyInput
-              value={settings?.hotkey || ''}
+              value={settings?.hotkey || ""}
               onChange={(hotkey) => settings && saveSettings({ ...settings, hotkey })}
               placeholder="Click to set hotkey"
             />
-          </div>
-
-          {/* Model Selection */}
-          <div className="space-y-2">
-            <Label htmlFor="model">Whisper Model</Label>
-            <Select
-              value={settings?.current_model || 'base'}
-              onValueChange={(value) => settings && saveSettings({ ...settings, current_model: value })}
-            >
-              <SelectTrigger id="model">
-                <SelectValue placeholder="Select a model" />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(models).filter(([_, m]) => m.downloaded).map(([name]) => (
-                  <SelectItem key={name} value={name}>{name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
 
           {/* Language Setting */}
           <div className="space-y-2">
             <Label htmlFor="language">Language</Label>
             <Select
-              value={settings?.language || 'auto'}
+              value={settings?.language || "auto"}
               onValueChange={(value) => settings && saveSettings({ ...settings, language: value })}
             >
               <SelectTrigger id="language">
@@ -280,7 +266,9 @@ export default function App() {
             <Switch
               id="auto-insert"
               checked={settings?.auto_insert || false}
-              onCheckedChange={(checked) => settings && saveSettings({ ...settings, auto_insert: checked })}
+              onCheckedChange={(checked) =>
+                settings && saveSettings({ ...settings, auto_insert: checked })
+              }
             />
           </div>
 
@@ -292,24 +280,24 @@ export default function App() {
             <Switch
               id="show-window"
               checked={settings?.show_window_on_record || false}
-              onCheckedChange={(checked) => settings && saveSettings({ ...settings, show_window_on_record: checked })}
+              onCheckedChange={(checked) =>
+                settings && saveSettings({ ...settings, show_window_on_record: checked })
+              }
             />
           </div>
 
           {/* Model Management */}
           <Separator />
-          <div className="space-y-4">
+          <div className="space-y-3">
             <div>
-              <h3 className="text-lg font-semibold mb-1">
-                Manage Models
-              </h3>
-              <p className="text-sm text-muted-foreground">
-                Download additional Whisper models for different languages and accuracy levels
+              <h3 className="text-base font-semibold">Available Models</h3>
+              <p className="text-xs text-muted-foreground mt-1">
+                Select a model based on your needs
               </p>
             </div>
-            
-            <ScrollArea className="h-[300px] pr-4">
-              <div className="space-y-3">
+
+            <ScrollArea className="h-[280px]">
+              <div className="space-y-2 pr-3">
                 {/* Group downloaded models first */}
                 {Object.entries(models)
                   .sort(([, a], [, b]) => {
@@ -325,8 +313,12 @@ export default function App() {
                       model={model}
                       downloadProgress={downloadProgress[name]}
                       onDownload={downloadModel}
-                      onSelect={() => {}}
-                      showSelectButton={false}
+                      onSelect={async (modelName) => {
+                        if (model.downloaded && settings) {
+                          await saveSettings({ ...settings, current_model: modelName });
+                        }
+                      }}
+                      showSelectButton={model.downloaded}
                       isSelected={settings?.current_model === name}
                     />
                   ))}
@@ -344,30 +336,28 @@ export default function App() {
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b">
         <h1 className="text-lg font-semibold">VoiceType</h1>
-        <Button
-          onClick={() => setCurrentView('settings')}
-          variant="ghost"
-          size="icon"
-        >
+        <Button onClick={() => setCurrentView("settings")} variant="ghost" size="icon">
           <Settings className="w-5 h-5" />
         </Button>
       </div>
 
       {/* Recording Status */}
       <div className="flex-1 flex flex-col items-center justify-center p-8">
-        <div className={`relative rounded-full p-8 transition-all ${
-          recording.state === 'recording' || recording.state === 'starting'
-            ? 'bg-destructive/10 animate-pulse scale-110'
-            : recording.state === 'transcribing'
-            ? 'bg-primary/10'
-            : 'bg-muted'
-        }`}>
-          {recording.state === 'recording' || recording.state === 'starting' ? (
+        <div
+          className={`relative rounded-full p-8 transition-all ${
+            recording.state === "recording" || recording.state === "starting"
+              ? "bg-destructive/10 animate-pulse scale-110"
+              : recording.state === "transcribing"
+              ? "bg-primary/10"
+              : "bg-muted"
+          }`}
+        >
+          {recording.state === "recording" || recording.state === "starting" ? (
             <>
               <Mic className="w-16 h-16 text-destructive" />
               <div className="absolute inset-0 rounded-full border-4 border-destructive animate-ping" />
             </>
-          ) : recording.state === 'transcribing' ? (
+          ) : recording.state === "transcribing" ? (
             <Loader2 className="w-16 h-16 text-primary animate-spin" />
           ) : (
             <MicOff className="w-16 h-16 text-muted-foreground" />
@@ -375,12 +365,12 @@ export default function App() {
         </div>
 
         <p className="mt-6 text-lg text-muted-foreground">
-          {recording.state === 'idle' && `Press ${settings?.hotkey || 'hotkey'} to record`}
-          {recording.state === 'starting' && 'Starting recording...'}
-          {recording.state === 'recording' && 'Recording...'}
-          {recording.state === 'stopping' && 'Stopping...'}
-          {recording.state === 'transcribing' && 'Transcribing your speech...'}
-          {recording.state === 'error' && 'Error occurred'}
+          {recording.state === "idle" && `Press ${settings?.hotkey || "hotkey"} to record`}
+          {recording.state === "starting" && "Starting recording..."}
+          {recording.state === "recording" && "Recording..."}
+          {recording.state === "stopping" && "Stopping..."}
+          {recording.state === "transcribing" && "Transcribing your speech..."}
+          {recording.state === "error" && "Error occurred"}
         </p>
 
         {/* Show detailed state for debugging */}
@@ -391,27 +381,35 @@ export default function App() {
         {/* Manual test button - Toggle recording */}
         <Button
           className="mt-4"
-          variant={recording.state === 'recording' || recording.state === 'starting' ? 'destructive' : 'default'}
+          variant={
+            recording.state === "recording" || recording.state === "starting"
+              ? "destructive"
+              : "default"
+          }
           size="lg"
           onClick={async () => {
-            if (recording.state === 'recording') {
+            if (recording.state === "recording") {
               await recording.stopRecording();
-            } else if (recording.state === 'idle' || recording.state === 'error') {
+            } else if (recording.state === "idle" || recording.state === "error") {
               await recording.startRecording();
             }
             // Do nothing if transcribing, stopping, or starting
           }}
-          disabled={recording.state === 'transcribing' || recording.state === 'stopping' || recording.state === 'starting'}
+          disabled={
+            recording.state === "transcribing" ||
+            recording.state === "stopping" ||
+            recording.state === "starting"
+          }
         >
-          {recording.state === 'idle' && 'Start Recording'}
-          {recording.state === 'starting' && 'Starting...'}
-          {recording.state === 'recording' && 'Stop Recording'}
-          {recording.state === 'stopping' && 'Stopping...'}
-          {recording.state === 'transcribing' && 'Transcribing...'}
-          {recording.state === 'error' && 'Try Again'}
+          {recording.state === "idle" && "Start Recording"}
+          {recording.state === "starting" && "Starting..."}
+          {recording.state === "recording" && "Stop Recording"}
+          {recording.state === "stopping" && "Stopping..."}
+          {recording.state === "transcribing" && "Transcribing..."}
+          {recording.state === "error" && "Try Again"}
         </Button>
 
-        {recording.state === 'recording' && (
+        {recording.state === "recording" && (
           <div className="mt-4 flex items-center gap-2 text-sm text-destructive">
             <div className="w-2 h-2 bg-destructive rounded-full animate-pulse" />
             <span>Recording in progress</span>
@@ -421,21 +419,17 @@ export default function App() {
 
       {/* History */}
       {history.length > 0 && (
-        <div className="border-t dark:border-gray-700 p-4">
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            Recent Transcriptions
-          </h3>
+        <div className="border-t p-4">
+          <h3 className="text-sm font-medium text-muted-foreground mb-2">Recent Transcriptions</h3>
           <div className="space-y-2 max-h-48 overflow-y-auto">
             {history.slice(0, 5).map((item) => (
               <div
                 key={item.id}
-                className="p-2 bg-white dark:bg-gray-800 rounded border dark:border-gray-700 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700"
+                className="p-2  rounded border cursor-pointer"
                 onClick={() => navigator.clipboard.writeText(item.text)}
               >
-                <p className="text-sm text-gray-900 dark:text-white truncate">
-                  {item.text}
-                </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-sm text-foreground truncate">{item.text}</p>
+                <p className="text-xs text-muted-foreground">
                   {new Date(item.timestamp).toLocaleTimeString()} • {item.model}
                 </p>
               </div>

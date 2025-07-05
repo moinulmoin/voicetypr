@@ -10,7 +10,7 @@ pub async fn download_model(
     state: State<'_, Mutex<WhisperManager>>,
 ) -> Result<(), String> {
     // Validate model name
-    let valid_models = ["tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en", "large"];
+    let valid_models = ["tiny", "base", "small", "medium", "large-v3", "large-v3-q5_0", "large-v3-turbo", "large-v3-turbo-q5_0"];
     if !valid_models.contains(&model_name.as_str()) {
         return Err(format!("Invalid model name: {}", model_name));
     }

@@ -27,11 +27,69 @@ impl WhisperManager {
 
         // Define available models based on official whisper.cpp download script
         // URLs match https://github.com/ggml-org/whisper.cpp/blob/master/models/download-ggml-model.sh
+        
+        // Multilingual models only (no .en variants)
+        models.insert("tiny".to_string(), ModelInfo {
+            name: "tiny".to_string(),
+            size: 75_000_000, // 75MB
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin".to_string(),
+            sha256: "bd577a113a864445d4c299885e0cb97d4ba92b5f".to_string(),
+            downloaded: false,
+        });
+        
+        models.insert("base".to_string(), ModelInfo {
+            name: "base".to_string(),
+            size: 142_000_000, // 142MB
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin".to_string(),
+            sha256: "465707469ff3a37a2b9b8d8f89f2f99de7299dac".to_string(),
+            downloaded: false,
+        });
+        
+        models.insert("small".to_string(), ModelInfo {
+            name: "small".to_string(),
+            size: 466_000_000, // 466MB
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin".to_string(),
+            sha256: "55356645c2b361a969dfd0ef2c5a50d530afd8d5".to_string(),
+            downloaded: false,
+        });
+        
+        models.insert("medium".to_string(), ModelInfo {
+            name: "medium".to_string(),
+            size: 1_500_000_000, // 1.5GB
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin".to_string(),
+            sha256: "fd9727b6e1217c2f614f9b698455c4ffd82463b4".to_string(),
+            downloaded: false,
+        });
+        
+        models.insert("large-v3".to_string(), ModelInfo {
+            name: "large-v3".to_string(),
+            size: 2_900_000_000, // 2.9GB
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin".to_string(),
+            sha256: "ad82bf6a9043ceed055076d0fd39f5f186ff8062".to_string(),
+            downloaded: false,
+        });
+        
+        models.insert("large-v3-q5_0".to_string(), ModelInfo {
+            name: "large-v3-q5_0".to_string(),
+            size: 1_100_000_000, // 1.1GB
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin".to_string(),
+            sha256: "e6e2ed78495d403bef4b7cff42ef4aaadcfea8de".to_string(),
+            downloaded: false,
+        });
+        
+        models.insert("large-v3-turbo".to_string(), ModelInfo {
+            name: "large-v3-turbo".to_string(),
+            size: 1_500_000_000, // 1.5GB
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".to_string(),
+            sha256: "4af2b29d7ec73d781377bfd1758ca957a807e941".to_string(),
+            downloaded: false,
+        });
+        
         models.insert("large-v3-turbo-q5_0".to_string(), ModelInfo {
             name: "large-v3-turbo-q5_0".to_string(),
-            size: 547_000_000, // ~547MB
+            size: 547_000_000, // 547MB
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin".to_string(),
-            sha256: "".to_string(), // SHA verification disabled per user request
+            sha256: "e050f7970618a659205450ad97eb95a18d69c9ee".to_string(),
             downloaded: false,
         });
 
