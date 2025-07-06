@@ -1,8 +1,9 @@
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+use crate::AppState;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
@@ -95,11 +96,10 @@ pub async fn set_global_shortcut(
         .map_err(|_| "Invalid shortcut format".to_string())?;
     shortcuts.register(shortcut_obj.clone()).map_err(|e| e.to_string())?;
     
-    // Update the global recording shortcut state
-    if let Some(recording_shortcut) = crate::RECORDING_SHORTCUT.get() {
-        if let Ok(mut guard) = recording_shortcut.lock() {
-            *guard = shortcut_obj;
-        }
+    // Update the recording shortcut in managed state
+    let app_state = app.state::<AppState>();
+    if let Ok(mut shortcut_guard) = app_state.recording_shortcut.lock() {
+        *shortcut_guard = Some(shortcut_obj);
     }
 
     // Save to settings

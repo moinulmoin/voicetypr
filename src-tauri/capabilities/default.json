@@ -8,6 +8,7 @@
     "opener:default",
     "store:default",
     "global-shortcut:default",
+    "dialog:default",
     "fs:scope-appdata",
     "fs:default",
     "fs:allow-read-file",

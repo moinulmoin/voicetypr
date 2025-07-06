@@ -22,7 +22,9 @@ impl AudioRecorder {
 
     pub fn start_recording(&mut self, output_path: &str) -> Result<(), String> {
         // Check if already recording
-        if self.recording_handle.lock().unwrap().is_some() {
+        if self.recording_handle.lock()
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?
+            .is_some() {
             return Err("Already recording".to_string());
         }
 
@@ -158,7 +160,8 @@ impl AudioRecorder {
             Ok(())
         });
 
-        *self.recording_handle.lock().unwrap() = Some(RecordingHandle {
+        *self.recording_handle.lock()
+            .map_err(|e| format!("Failed to acquire lock: {}", e))? = Some(RecordingHandle {
             stop_tx,
             thread_handle,
         });
@@ -167,7 +170,9 @@ impl AudioRecorder {
     }
 
     pub fn stop_recording(&mut self) -> Result<String, String> {
-        let handle = self.recording_handle.lock().unwrap().take();
+        let handle = self.recording_handle.lock()
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?
+            .take();
 
         if let Some(handle) = handle {
             // Send stop signal
@@ -185,7 +190,9 @@ impl AudioRecorder {
     }
 
     pub fn is_recording(&self) -> bool {
-        self.recording_handle.lock().unwrap().is_some()
+        self.recording_handle.lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false)
     }
 
     pub fn get_devices() -> Vec<String> {

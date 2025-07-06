@@ -85,9 +85,12 @@ export function ModelCard({
                 ) : (
                   <CheckCircle2 className="w-5 h-5 text-green-600" />
                 )}
-                {onDelete && !isSelected && (
+                {onDelete && (
                   <Button
-                    onClick={() => onDelete(name)}
+                    onClick={() => {
+                      console.log("Delete button clicked for:", name);
+                      onDelete(name);
+                    }}
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 hover:text-destructive"

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { Loader2, Mic, MicOff, Settings } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -31,16 +32,12 @@ function sortModels(
   sortBy: "balanced" | "speed" | "accuracy" | "size" = "balanced"
 ): [string, ModelInfo][] {
   return [...models].sort(([, a], [, b]) => {
-    // Always put downloaded models first
-    if (a.downloaded && !b.downloaded) return -1;
-    if (!a.downloaded && b.downloaded) return 1;
-
-    // Then sort by the specified criteria
+    // Sort by the specified criteria
     switch (sortBy) {
       case "speed":
         return b.speed_score - a.speed_score;
       case "accuracy":
-        return b.accuracy_score - a.accuracy_score;
+        return a.accuracy_score - b.accuracy_score;
       case "size":
         return a.size - b.size;
       case "balanced":
@@ -189,12 +186,20 @@ export default function App() {
 
   // Delete model
   const deleteModel = async (modelName: string) => {
+    console.log("deleteModel called with:", modelName);
     try {
-      if (!confirm(`Are you sure you want to delete the ${modelName} model?`)) {
+      const confirmed = await ask(`Are you sure you want to delete the ${modelName} model?`, {
+        title: "Delete Model",
+        kind: "warning"
+      });
+      
+      if (!confirmed) {
         return;
       }
 
+      console.log("Calling delete_model command...");
       await invoke("delete_model", { modelName });
+      console.log("delete_model command completed");
 
       // Refresh model status
       const modelStatus = await invoke<Record<string, ModelInfo>>("get_model_status");
@@ -257,7 +262,7 @@ export default function App() {
           <p className="text-lg text-muted-foreground mb-8">Choose a model to get started</p>
 
           <div className="space-y-4 w-full max-w-md">
-            {sortModels(Object.entries(models), "balanced").map(([name, model]) => (
+            {sortModels(Object.entries(models), "accuracy").map(([name, model]) => (
               <ModelCard
                 key={name}
                 name={name}
@@ -377,7 +382,7 @@ export default function App() {
             <ScrollArea className="h-[280px]">
               <div className="space-y-2 pr-3">
                 {/* Sort by balanced score (downloaded models always first) */}
-                {sortModels(Object.entries(models), "balanced")
+                {sortModels(Object.entries(models), "accuracy")
                   .map(([name, model]) => (
                     <ModelCard
                       key={name}

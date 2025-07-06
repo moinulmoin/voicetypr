@@ -1,4 +1,4 @@
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_store::StoreExt;
 use std::sync::{Arc, Mutex};
@@ -14,11 +14,8 @@ use commands::{audio::*, model::*, settings::*, text::*};
 use audio::recorder::AudioRecorder;
 use whisper::cache::TranscriberCache;
 
-// Global state for tracking the recording shortcut
-static RECORDING_SHORTCUT: std::sync::OnceLock<Arc<Mutex<tauri_plugin_global_shortcut::Shortcut>>> = std::sync::OnceLock::new();
-
 // Recording state enum matching frontend
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub enum RecordingState {
     Idle,
     Starting,
@@ -28,49 +25,63 @@ pub enum RecordingState {
     Error,
 }
 
-// Global state for tracking recording state (single source of truth)
-static RECORDING_STATE: std::sync::OnceLock<Arc<Mutex<RecordingState>>> = std::sync::OnceLock::new();
+impl Default for RecordingState {
+    fn default() -> Self {
+        RecordingState::Idle
+    }
+}
+
+// Application state - managed by Tauri
+#[derive(Default)]
+pub struct AppState {
+    pub recording_state: Arc<Mutex<RecordingState>>,
+    pub recording_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
+    pub current_recording_path: Arc<Mutex<Option<PathBuf>>>,
+    pub transcription_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        Self {
+            recording_state: Arc::new(Mutex::new(RecordingState::Idle)),
+            recording_shortcut: Arc::new(Mutex::new(None)),
+            current_recording_path: Arc::new(Mutex::new(None)),
+            transcription_task: Arc::new(Mutex::new(None)),
+        }
+    }
+}
 
 // Helper function to update recording state and emit event
 pub fn update_recording_state(app: &tauri::AppHandle, new_state: RecordingState, error: Option<String>) {
-    if let Some(state) = RECORDING_STATE.get() {
-        if let Ok(mut current_state) = state.lock() {
+    {
+        let app_state = app.state::<AppState>();
+        if let Ok(mut current_state) = app_state.recording_state.lock() {
             *current_state = new_state;
-            
-            // Emit state change event
-            let _ = app.emit("recording-state-changed", serde_json::json!({
-                "state": match new_state {
-                    RecordingState::Idle => "idle",
-                    RecordingState::Starting => "starting",
-                    RecordingState::Recording => "recording",
-                    RecordingState::Stopping => "stopping",
-                    RecordingState::Transcribing => "transcribing",
-                    RecordingState::Error => "error",
-                },
-                "error": error
-            }));
-        }
-    }
+        };
+    } // Drop the lock before emitting event
+
+    // Emit state change event with typed payload
+    let _ = app.emit("recording-state-changed", serde_json::json!({
+        "state": match new_state {
+            RecordingState::Idle => "idle",
+            RecordingState::Starting => "starting",
+            RecordingState::Recording => "recording",
+            RecordingState::Stopping => "stopping",
+            RecordingState::Transcribing => "transcribing",
+            RecordingState::Error => "error",
+        },
+        "error": error
+    }));
 }
 
 // Helper function to get current recording state
-pub fn get_recording_state() -> RecordingState {
-    if let Some(state) = RECORDING_STATE.get() {
-        if let Ok(current_state) = state.lock() {
-            return *current_state;
-        }
-    }
-    RecordingState::Idle
+pub fn get_recording_state(app: &tauri::AppHandle) -> RecordingState {
+    let app_state = app.state::<AppState>();
+    app_state.recording_state.lock()
+        .map(|guard| *guard)
+        .unwrap_or(RecordingState::Idle)
 }
 
-// Helper function to reset recording state
-pub fn reset_recording_state() {
-    if let Some(state) = RECORDING_STATE.get() {
-        if let Ok(mut current_state) = state.lock() {
-            *current_state = RecordingState::Idle;
-        }
-    }
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -80,58 +91,70 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
                     println!("Global shortcut triggered: {:?} - State: {:?}", shortcut, event.state());
-                    
+
                     // Only handle key press events, ignore release for toggle behavior
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    
+
                     // Check if this is the recording shortcut
-                    if let Some(recording_shortcut) = RECORDING_SHORTCUT.get() {
-                        if let Ok(guard) = recording_shortcut.lock() {
-                            if shortcut == &*guard {
-                                // Toggle recording based on current state
-                                let current_state = get_recording_state();
-                                match current_state {
-                                    RecordingState::Idle | RecordingState::Error => {
-                                        println!("Toggle: Starting recording via hotkey");
-                                        
-                                        // Use Tauri's command system to start recording
-                                        let app_handle = app.app_handle().clone();
-                                        tauri::async_runtime::spawn(async move {
-                                            // Get the recorder state from app handle
-                                            let recorder_state = app_handle.state::<RecorderState>();
-                                            match start_recording(app_handle.clone(), recorder_state).await {
-                                                Ok(_) => println!("Toggle: Recording started successfully"),
-                                                Err(e) => {
-                                                    println!("Toggle: Error starting recording: {}", e);
-                                                    update_recording_state(&app_handle, RecordingState::Error, Some(e));
-                                                }
-                                            }
-                                        });
+                    let app_handle = app.app_handle();
+                    let is_recording_shortcut = {
+                        let app_state = app_handle.state::<AppState>();
+                        let result = if let Ok(shortcut_guard) = app_state.recording_shortcut.lock() {
+                            if let Some(ref recording_shortcut) = *shortcut_guard {
+                                shortcut == recording_shortcut
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        result
+                    }; // Lock dropped here
+                    
+                    if is_recording_shortcut {
+                        // Toggle recording based on current state
+                        let current_state = get_recording_state(&app_handle);
+                        match current_state {
+                            RecordingState::Idle | RecordingState::Error => {
+                                println!("Toggle: Starting recording via hotkey");
+
+                                // Use Tauri's command system to start recording
+                                let app_handle = app.app_handle().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    // Get the recorder state from app handle
+                                    let recorder_state = app_handle.state::<RecorderState>();
+                                    match start_recording(app_handle.clone(), recorder_state).await {
+                                        Ok(_) => println!("Toggle: Recording started successfully"),
+                                        Err(e) => {
+                                            println!("Toggle: Error starting recording: {}", e);
+                                            update_recording_state(&app_handle, RecordingState::Error, Some(e));
+                                        }
                                     }
-                                    RecordingState::Recording | RecordingState::Starting => {
-                                        println!("Toggle: Stopping recording via hotkey");
-                                        
-                                        // Use Tauri's command system to stop recording
-                                        let app_handle = app.app_handle().clone();
-                                        tauri::async_runtime::spawn(async move {
-                                            // Get the recorder state from app handle
-                                            let recorder_state = app_handle.state::<RecorderState>();
-                                            match stop_recording(app_handle.clone(), recorder_state).await {
-                                                Ok(_) => println!("Toggle: Recording stopped successfully"),
-                                                Err(e) => println!("Toggle: Error stopping recording: {}", e),
-                                            }
-                                        });
+                                });
+                            }
+                            RecordingState::Recording | RecordingState::Starting => {
+                                println!("Toggle: Stopping recording via hotkey");
+
+                                // Use Tauri's command system to stop recording
+                                let app_handle = app.app_handle().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    // Get the recorder state from app handle
+                                    let recorder_state = app_handle.state::<RecorderState>();
+                                    match stop_recording(app_handle.clone(), recorder_state).await {
+                                        Ok(_) => println!("Toggle: Recording stopped successfully"),
+                                        Err(e) => println!("Toggle: Error stopping recording: {}", e),
                                     }
-                                    _ => {
-                                        println!("Toggle: Ignoring hotkey in state {:?}", current_state);
-                                    }
-                                }
+                                });
+                            }
+                            _ => {
+                                println!("Toggle: Ignoring hotkey in state {:?}", current_state);
                             }
                         }
                     }
@@ -153,11 +176,11 @@ pub fn run() {
             // NEW: cache for transcribers (keeps models in memory)
             app.manage(AsyncMutex::new(TranscriberCache::new()));
 
-            // Initialize recorder state
+            // Initialize unified application state
+            app.manage(AppState::new());
+            
+            // Initialize recorder state (kept separate for backwards compatibility)
             app.manage(RecorderState(Mutex::new(AudioRecorder::new())));
-
-            // Initialize audio file path state
-            app.manage(Mutex::new(None::<PathBuf>));
 
             // Create tray icon
             use tauri::menu::{MenuBuilder, MenuItem};
@@ -205,24 +228,22 @@ pub fn run() {
             // Load hotkey from settings store
             let store = app.store("settings")
                 .map_err(|e| e.to_string())?;
-            
+
             let hotkey_str = store.get("hotkey")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| "CommandOrControl+Shift+Space".to_string());
-            
+
             println!("Loading hotkey from store: {}", hotkey_str);
-            
+
             // Register global shortcut from settings
             let shortcut: tauri_plugin_global_shortcut::Shortcut = hotkey_str.parse()
                 .map_err(|_| "Invalid shortcut format")?;
 
-            // Store the recording shortcut in global state
-            RECORDING_SHORTCUT.set(Arc::new(Mutex::new(shortcut.clone())))
-                .map_err(|_| "Failed to set recording shortcut")?;
-            
-            // Initialize recording state (single source of truth)
-            RECORDING_STATE.set(Arc::new(Mutex::new(RecordingState::Idle)))
-                .map_err(|_| "Failed to set recording state")?;
+            // Store the recording shortcut in managed state
+            let app_state = app.state::<AppState>();
+            if let Ok(mut shortcut_guard) = app_state.recording_shortcut.lock() {
+                *shortcut_guard = Some(shortcut.clone());
+            }
 
             app.global_shortcut()
                 .register(shortcut)?;

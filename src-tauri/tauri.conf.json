@@ -13,14 +13,22 @@
     "windows": [
       {
         "title": "voicetypr",
-        "width": 400,
+        "width": 500,
         "height": 600,
         "resizable": false,
         "center": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": "'self' customprotocol: asset:",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' asset: https: http: data:",
+        "font-src": "'self'",
+        "connect-src": "'self' ipc: https: http: asset:",
+        "media-src": "'self'"
+      }
     },
     "macOSPrivateApi": true
   },

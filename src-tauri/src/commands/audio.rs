@@ -5,10 +5,9 @@ use crate::audio::recorder::AudioRecorder;
 use crate::whisper::manager::WhisperManager;
 use crate::whisper::cache::TranscriberCache;
 use std::sync::Mutex;
-use std::path::PathBuf;
 use tauri::async_runtime::Mutex as AsyncMutex;
 use serde_json;
-use crate::{update_recording_state, RecordingState};
+use crate::{update_recording_state, RecordingState, AppState};
 
 // Global audio recorder state
 pub struct RecorderState(pub Mutex<AudioRecorder>);
@@ -25,18 +24,20 @@ pub async fn start_recording(
         .map_err(|e| e.to_string())?;
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .map_err(|e| format!("Time error: {}", e))?
         .as_secs();
     let audio_path = temp_dir.join(format!("recording_{}.wav", timestamp));
 
     // Store path for later use
-    app.state::<Mutex<Option<PathBuf>>>()
+    let app_state = app.state::<AppState>();
+    app_state.current_recording_path
         .lock()
-        .unwrap()
+        .map_err(|e| format!("Failed to acquire path lock: {}", e))?
         .replace(audio_path.clone());
 
     // Start recording
-    let mut recorder = state.inner().0.lock().unwrap();
+    let mut recorder = state.inner().0.lock()
+        .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
 
     // Check if already recording
     if recorder.is_recording() {
@@ -45,7 +46,8 @@ pub async fn start_recording(
     }
 
     println!("Starting recording to: {:?}", audio_path);
-    recorder.start_recording(audio_path.to_str().unwrap())?;
+    recorder.start_recording(audio_path.to_str()
+        .ok_or_else(|| "Invalid path encoding".to_string())?)?;
 
     // Verify recording actually started
     if !recorder.is_recording() {
@@ -69,7 +71,7 @@ pub async fn start_recording(
     update_recording_state(&app, RecordingState::Recording, None);
     
     // Also emit legacy event for compatibility
-    app.emit("recording-started", ()).unwrap();
+    let _ = app.emit("recording-started", ());
     println!("Recording started successfully");
 
     // Set up 30-second timeout
@@ -99,7 +101,8 @@ pub async fn stop_recording(
     // Stop recording (lock only within this scope to stay Send)
     println!("Stopping recording...");
     {
-        let mut recorder = state.inner().0.lock().unwrap();
+        let mut recorder = state.inner().0.lock()
+        .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
 
         // Check if actually recording first
         if !recorder.is_recording() {
@@ -113,9 +116,10 @@ pub async fn stop_recording(
     } // MutexGuard dropped here BEFORE any await
 
     // Get the audio file path
-    let audio_path = app.state::<Mutex<Option<PathBuf>>>()
+    let app_state = app.state::<AppState>();
+    let audio_path = app_state.current_recording_path
         .lock()
-        .unwrap()
+        .map_err(|e| format!("Failed to acquire path lock: {}", e))?
         .take();
 
     // If no audio path, there was no recording
@@ -193,9 +197,9 @@ pub async fn stop_recording(
     let audio_path_clone = audio_path.clone();
     let model_path_clone = model_path.clone();
 
-    // FIRE-AND-FORGET heavy work so the invoke resolves fast
+    // Spawn and track the transcription task
     let app_for_task = app.clone();
-    tokio::spawn(async move {
+    let task_handle = tokio::spawn(async move {
         // Update state to transcribing
         update_recording_state(&app_for_task, RecordingState::Transcribing, None);
         // Also emit legacy event
@@ -243,6 +247,17 @@ pub async fn stop_recording(
             }
         }
     });
+
+    // Track the transcription task
+    let app_state = app.state::<AppState>();
+    if let Ok(mut task_guard) = app_state.transcription_task.lock() {
+        // Cancel any existing task
+        if let Some(existing_task) = task_guard.take() {
+            existing_task.abort();
+        }
+        // Store the new task handle
+        *task_guard = Some(task_handle);
+    }
 
     // Return immediately so front-end promise resolves before timeout
     Ok(String::new())
