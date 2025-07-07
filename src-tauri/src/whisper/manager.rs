@@ -8,6 +8,35 @@ use sha2::{Sha256, Digest};
 use sha1::Sha1;
 use tokio::io::AsyncReadExt;
 
+// Type-safe size validation
+#[derive(Debug, Clone, Copy)]
+pub struct ModelSize(u64);
+
+impl ModelSize {
+    const MAX_MODEL_SIZE: u64 = 2 * 1024 * 1024 * 1024; // 2GB max as per your requirement
+    const MIN_MODEL_SIZE: u64 = 10 * 1024 * 1024; // 10MB min (reasonable for smallest model)
+    
+    pub fn new(size: u64) -> Result<Self, String> {
+        if size < Self::MIN_MODEL_SIZE {
+            return Err(format!(
+                "Model size {} bytes ({:.1}MB) is too small. Minimum size is 10MB",
+                size, size as f64 / 1024.0 / 1024.0
+            ));
+        }
+        if size > Self::MAX_MODEL_SIZE {
+            return Err(format!(
+                "Model size {} bytes ({:.1}GB) exceeds maximum allowed size of 2GB",
+                size, size as f64 / 1024.0 / 1024.0 / 1024.0
+            ));
+        }
+        Ok(ModelSize(size))
+    }
+    
+    pub fn as_bytes(&self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone, serde::Serialize)]
 pub struct ModelInfo {
     pub name: String,
@@ -17,6 +46,13 @@ pub struct ModelInfo {
     pub downloaded: bool,
     pub speed_score: u8,    // 1-10, 10 being fastest
     pub accuracy_score: u8, // 1-10, 10 being most accurate
+}
+
+impl ModelInfo {
+    /// Validate and get size as ModelSize
+    pub fn validated_size(&self) -> Result<ModelSize, String> {
+        ModelSize::new(self.size)
+    }
 }
 
 pub struct WhisperManager {
@@ -143,33 +179,33 @@ impl WhisperManager {
     }
 
     fn check_downloaded_models(&mut self) {
-        println!("Checking models directory: {:?}", self.models_dir);
+        log::debug!("Checking models directory: {:?}", self.models_dir);
         if let Ok(entries) = std::fs::read_dir(&self.models_dir) {
             for entry in entries.flatten() {
                 if let Some(name) = entry.file_name().to_str() {
-                    println!("Found file: {}", name);
+                    log::trace!("Found file: {}", name);
                     if name.ends_with(".bin") {
                         let model_name = name.trim_end_matches(".bin");
-                        println!("Model name from file: {}", model_name);
+                        log::trace!("Model name from file: {}", model_name);
                         if let Some(model) = self.models.get_mut(model_name) {
                             #[cfg(debug_assertions)]
-                            println!("Marking model {} as downloaded", model_name);
+                            log::debug!("Marking model {} as downloaded", model_name);
                             model.downloaded = true;
                         } else {
                             // File present but not in the predefined list—quietly ignore
                             #[cfg(debug_assertions)]
-                            println!("[info] extra model file detected: {}.bin", model_name);
+                            log::info!("Extra model file detected: {}.bin", model_name);
                         }
                     }
                 }
             }
         } else {
-            println!("Failed to read models directory or directory doesn't exist");
+            log::warn!("Failed to read models directory or directory doesn't exist");
         }
 
         // Log final status
         for (name, info) in &self.models {
-            println!("Model {}: downloaded = {}", name, info.downloaded);
+            log::debug!("Model {}: downloaded = {}", name, info.downloaded);
         }
     }
 
@@ -178,15 +214,18 @@ impl WhisperManager {
         model_name: &str,
         progress_callback: impl Fn(u64, u64),
     ) -> Result<(), String> {
-        println!("WhisperManager: Downloading model {}", model_name);
+        log::info!("WhisperManager: Downloading model {}", model_name);
 
         let model = self.models.get(model_name).ok_or(format!(
             "Model '{}' not found in available models",
             model_name
         ))?;
 
-        println!("Model URL: {}", model.url);
-        println!("Model size: {} bytes", model.size);
+        // Validate model size before downloading
+        let validated_size = model.validated_size()?;
+        
+        log::debug!("Model URL: {}", model.url);
+        log::debug!("Model size: {} bytes (validated)", validated_size.as_bytes());
 
         // Create models directory if it doesn't exist
         fs::create_dir_all(&self.models_dir)
@@ -194,7 +233,7 @@ impl WhisperManager {
             .map_err(|e| format!("Failed to create models directory: {}", e))?;
 
         let output_path = self.models_dir.join(format!("{}.bin", model_name));
-        println!("Output path: {:?}", output_path);
+        log::debug!("Output path: {:?}", output_path);
 
         // Download the model
         let client = reqwest::Client::new();
@@ -205,6 +244,18 @@ impl WhisperManager {
             .map_err(|e| e.to_string())?;
 
         let total_size = response.content_length().unwrap_or(model.size);
+        
+        // Validate reported size matches expected size (allow 10% variance for compression)
+        let size_variance = (total_size as f64 - model.size as f64).abs() / model.size as f64;
+        if size_variance > 0.1 {
+            return Err(format!(
+                "Model size mismatch: expected {} bytes, server reports {} bytes ({}% difference)",
+                model.size, total_size, (size_variance * 100.0) as u32
+            ));
+        }
+        
+        // Validate the total size is within our limits
+        let _ = ModelSize::new(total_size)?;
 
         let mut file = fs::File::create(&output_path)
             .await
@@ -217,6 +268,20 @@ impl WhisperManager {
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| e.to_string())?;
+            
+            // Prevent downloading more than expected (with 1% tolerance)
+            if downloaded + chunk.len() as u64 > (total_size as f64 * 1.01) as u64 {
+                // Clean up partial download
+                drop(file);
+                let _ = fs::remove_file(&output_path).await;
+                
+                return Err(format!(
+                    "Download exceeded expected size: downloaded {} bytes, expected {} bytes",
+                    downloaded + chunk.len() as u64,
+                    total_size
+                ));
+            }
+            
             file.write_all(&chunk).await.map_err(|e| e.to_string())?;
 
             downloaded += chunk.len() as u64;
@@ -239,7 +304,7 @@ impl WhisperManager {
 
         // Verify checksum if available
         if !model.sha256.is_empty() {
-            println!("Verifying model checksum...");
+            log::info!("Verifying model checksum...");
             match model.sha256.len() {
                 40 => {
                     // SHA1 checksum (legacy from whisper.cpp)
@@ -250,13 +315,13 @@ impl WhisperManager {
                     self.verify_sha256_checksum(&output_path, &model.sha256).await?;
                 }
                 _ => {
-                    println!("WARNING: Invalid checksum length for {}. Skipping verification.", model_name);
-                    println!("         Expected SHA1 (40 chars) or SHA256 (64 chars), got {} chars.", model.sha256.len());
+                    log::warn!("Invalid checksum length for {}. Skipping verification.", model_name);
+                    log::warn!("Expected SHA1 (40 chars) or SHA256 (64 chars), got {} chars.", model.sha256.len());
                 }
             }
         } else {
-            println!("WARNING: No checksum available for {}. Skipping verification.", model_name);
-            println!("         File integrity cannot be guaranteed without checksum verification.");
+            log::warn!("No checksum available for {}. Skipping verification.", model_name);
+            log::warn!("File integrity cannot be guaranteed without checksum verification.");
         }
 
         Ok(())
@@ -300,7 +365,7 @@ impl WhisperManager {
             ));
         }
 
-        println!("SHA256 checksum verified successfully!");
+        log::info!("SHA256 checksum verified successfully!");
         Ok(())
     }
 
@@ -342,7 +407,7 @@ impl WhisperManager {
             ));
         }
 
-        println!("SHA1 checksum verified successfully!");
+        log::info!("SHA1 checksum verified successfully!");
         Ok(())
     }
 

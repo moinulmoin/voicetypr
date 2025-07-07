@@ -40,6 +40,12 @@ export function useRecording(): UseRecordingReturn {
         setState('stopping');
       }));
 
+      unsubscribers.push(await listen('recording-stopped-silence', () => {
+        console.log('[Recording Hook] Recording stopped due to silence');
+        // You could show a toast or notification here
+        // For now, just log it
+      }));
+
       unsubscribers.push(await listen('transcription-started', () => {
         console.log('[Recording Hook] Transcription started');
         setState('transcribing');

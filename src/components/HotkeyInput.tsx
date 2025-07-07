@@ -1,5 +1,5 @@
 import { Check, Edit2, Keyboard, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 
@@ -9,7 +9,7 @@ interface HotkeyInputProps {
   placeholder?: string;
 }
 
-export function HotkeyInput({ value, onChange, placeholder }: HotkeyInputProps) {
+export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, placeholder }: HotkeyInputProps) {
   const [mode, setMode] = useState<"display" | "edit">("display");
   const [isRecording, setIsRecording] = useState(false);
   const [keys, setKeys] = useState<Set<string>>(new Set());
@@ -143,7 +143,7 @@ export function HotkeyInput({ value, onChange, placeholder }: HotkeyInputProps) 
     };
   }, [isRecording, keys, onChange]);
 
-  const formatShortcutDisplay = (shortcut: string) => {
+  const formatShortcutDisplay = useCallback((shortcut: string) => {
     const isMac = navigator.userAgent.toUpperCase().indexOf("MAC") >= 0;
     return shortcut
       .replace("CommandOrControl", isMac ? "⌘" : "Ctrl")
@@ -151,9 +151,9 @@ export function HotkeyInput({ value, onChange, placeholder }: HotkeyInputProps) 
       .replace("Alt", isMac ? "⌥" : "Alt")
       .replace("Plus", "+")
       .replace("Space", "␣");
-  };
+  }, []);
 
-  const handleSave = () => {
+  const handleSave = useCallback(() => {
     if (pendingHotkey && !validationError) {
       onChange(pendingHotkey);
       setSaveStatus("success");
@@ -163,9 +163,9 @@ export function HotkeyInput({ value, onChange, placeholder }: HotkeyInputProps) 
         setSaveStatus("idle");
       }, 1500);
     }
-  };
+  }, [pendingHotkey, validationError, onChange]);
 
-  const handleCancel = () => {
+  const handleCancel = useCallback(() => {
     setPendingHotkey("");
     setIsRecording(false);
     setKeys(new Set());
@@ -173,9 +173,9 @@ export function HotkeyInput({ value, onChange, placeholder }: HotkeyInputProps) 
     setSaveStatus("idle");
     setValidationError("");
     setCurrentKeysDisplay("");
-  };
+  }, []);
 
-  const handleEdit = () => {
+  const handleEdit = useCallback(() => {
     setPendingHotkey("");
     setMode("edit");
     setSaveStatus("idle");
@@ -186,7 +186,7 @@ export function HotkeyInput({ value, onChange, placeholder }: HotkeyInputProps) 
       inputRef.current?.focus();
       setIsRecording(true);
     }, 100);
-  };
+  }, []);
 
   // Reset save status after showing success
   useEffect(() => {
@@ -292,4 +292,4 @@ export function HotkeyInput({ value, onChange, placeholder }: HotkeyInputProps) 
       )}
     </div>
   );
-}
+});

@@ -15,7 +15,7 @@ pub async fn download_model(
         return Err(format!("Invalid model name: {}", model_name));
     }
     
-    println!("Starting download for model: {}", model_name);
+    log::info!("Starting download for model: {}", model_name);
     let app_handle = app.clone();
 
     let model_name_clone = model_name.clone();
@@ -27,7 +27,7 @@ pub async fn download_model(
     let progress_handle = tokio::spawn(async move {
         while let Some((downloaded, total)) = progress_rx.recv().await {
             let progress = (downloaded as f64 / total as f64) * 100.0;
-            println!("Download progress for {}: {:.1}%", &model_name_clone, progress);
+            log::debug!("Download progress for {}: {:.1}%", &model_name_clone, progress);
 
             app_handle.emit("download-progress", serde_json::json!({
                 "model": &model_name_clone,
@@ -51,7 +51,7 @@ pub async fn download_model(
 
     match download_result {
         Ok(_) => {
-            println!("Download completed for model: {}", model_name);
+            log::info!("Download completed for model: {}", model_name);
 
             // Refresh the downloaded status in WhisperManager
             state.lock().await.refresh_downloaded_status();
@@ -60,7 +60,7 @@ pub async fn download_model(
             Ok(())
         }
         Err(e) => {
-            println!("Download failed for model {}: {}", model_name, e);
+            log::error!("Download failed for model {}: {}", model_name, e);
             Err(e)
         }
     }

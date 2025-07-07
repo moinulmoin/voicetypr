@@ -65,7 +65,7 @@ impl TranscriberCache {
         }
 
         // Load the model
-        println!("Loading model into cache: {}", key);
+        log::info!("Loading model into cache: {}", key);
         let transcriber = Arc::new(Transcriber::new(model_path)?);
         
         // Insert into cache
@@ -86,7 +86,7 @@ impl TranscriberCache {
     /// Evict the least recently used model
     fn evict_lru(&mut self) {
         if let Some(key) = self.lru_order.pop_front() {
-            println!("Evicting model from cache: {}", key);
+            log::info!("Evicting model from cache: {}", key);
             self.map.remove(&key);
         }
     }

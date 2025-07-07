@@ -30,7 +30,7 @@ impl Transcriber {
             .map_err(|e| e.to_string())?;
 
         let spec = reader.spec();
-        println!("WAV spec: channels={}, sample_rate={}, bits={}", spec.channels, spec.sample_rate, spec.bits_per_sample);
+        log::debug!("WAV spec: channels={}, sample_rate={}, bits={}", spec.channels, spec.sample_rate, spec.bits_per_sample);
 
         /* ----------------------------------------------
            1) read raw i16 pcm
@@ -64,7 +64,7 @@ impl Transcriber {
             audio = resample_linear(&audio, spec.sample_rate as usize, 16_000);
         }
 
-        println!(
+        log::debug!(
             "Audio normalised → mono 16 kHz: {} samples ({:.2}s)",
             audio.len(),
             audio.len() as f32 / 16_000_f32
@@ -86,7 +86,7 @@ impl Transcriber {
                 match lang {
                     "en" | "es" | "fr" | "de" | "it" | "pt" | "ru" | "ja" | "ko" | "zh" => lang,
                     _ => {
-                        println!("Warning: Invalid language code '{}', defaulting to English", lang);
+                        log::warn!("Invalid language code '{}', defaulting to English", lang);
                         "en"
                     }
                 }
@@ -96,7 +96,7 @@ impl Transcriber {
             "en"
         };
 
-        println!("Using language for transcription: {}", final_lang);
+        log::info!("Using language for transcription: {}", final_lang);
         params.set_language(Some(final_lang));
 
         // Explicitly set to transcribe mode (not translate)
@@ -112,7 +112,7 @@ impl Transcriber {
         // params.set_suppress_nst(true);
 
         // Run transcription
-        println!("Starting transcription...");
+        log::info!("Starting transcription...");
         let mut state = self.context.create_state()
             .map_err(|e| e.to_string())?;
 
@@ -123,20 +123,20 @@ impl Transcriber {
         let num_segments = state.full_n_segments()
             .map_err(|e| e.to_string())?;
 
-        println!("Transcription complete: {} segments", num_segments);
+        log::info!("Transcription complete: {} segments", num_segments);
 
         let mut text = String::new();
         for i in 0..num_segments {
             let segment = state.full_get_segment_text(i)
                 .map_err(|e| e.to_string())?;
-            println!("Segment {}: {}", i, segment);
+            log::debug!("Segment {}: {}", i, segment);
             text.push_str(&segment);
             text.push(' ');
         }
 
         let result = text.trim().to_string();
         if result.is_empty() || result == "[SOUND]" {
-            println!("Warning: Transcription resulted in empty or [SOUND] output");
+            log::warn!("Transcription resulted in empty or [SOUND] output");
         }
 
         Ok(result)

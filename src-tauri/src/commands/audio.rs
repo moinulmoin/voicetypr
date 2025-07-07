@@ -41,17 +41,17 @@ pub async fn start_recording(
 
     // Check if already recording
     if recorder.is_recording() {
-        println!("Already recording!");
+        log::warn!("Already recording!");
         return Err("Already recording".to_string());
     }
 
-    println!("Starting recording to: {:?}", audio_path);
+    log::info!("Starting recording to: {:?}", audio_path);
     recorder.start_recording(audio_path.to_str()
         .ok_or_else(|| "Invalid path encoding".to_string())?)?;
 
     // Verify recording actually started
     if !recorder.is_recording() {
-        println!("ERROR: Recording failed to start!");
+        log::error!("Recording failed to start!");
         return Err("Failed to start recording".to_string());
     }
 
@@ -72,7 +72,7 @@ pub async fn start_recording(
     
     // Also emit legacy event for compatibility
     let _ = app.emit("recording-started", ());
-    println!("Recording started successfully");
+    log::info!("Recording started successfully");
 
     // Set up 30-second timeout
     let app_clone = app.clone();
@@ -99,20 +99,25 @@ pub async fn stop_recording(
     // Update state to stopping
     update_recording_state(&app, RecordingState::Stopping, None);
     // Stop recording (lock only within this scope to stay Send)
-    println!("Stopping recording...");
+    log::info!("Stopping recording...");
     {
         let mut recorder = state.inner().0.lock()
         .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
 
         // Check if actually recording first
         if !recorder.is_recording() {
-            println!("Warning: stop_recording called but not currently recording");
+            log::warn!("stop_recording called but not currently recording");
             // Don't error - just return empty result
             return Ok("".to_string());
         }
 
-        recorder.stop_recording()?;
-        println!("Recording stopped");
+        let stop_message = recorder.stop_recording()?;
+        log::info!("{}", stop_message);
+        
+        // Emit event if recording was stopped due to silence
+        if stop_message.contains("silence") {
+            let _ = app.emit("recording-stopped-silence", ());
+        }
     } // MutexGuard dropped here BEFORE any await
 
     // Get the audio file path
@@ -126,7 +131,7 @@ pub async fn stop_recording(
     let audio_path = match audio_path {
         Some(path) => path,
         None => {
-            println!("No audio file found - no recording was made");
+            log::warn!("No audio file found - no recording was made");
             return Ok("".to_string());
         }
     };
@@ -144,7 +149,7 @@ pub async fn stop_recording(
         .map(|(name, _)| name.clone())
         .collect();
 
-    println!("Downloaded models: {:?}", downloaded_models);
+    log::debug!("Downloaded models: {:?}", downloaded_models);
 
     // Smart model selection
     let configured_model = store.get("current_model")
@@ -157,33 +162,33 @@ pub async fn stop_recording(
             configured_model
         } else if downloaded_models.len() == 1 {
             // If only one model is downloaded, use it
-            println!("Configured model '{}' not found, using only available model: {}",
-                     configured_model, downloaded_models[0]);
+            log::info!("Configured model '{}' not found, using only available model: {}",
+                      configured_model, downloaded_models[0]);
             downloaded_models[0].clone()
         } else if downloaded_models.is_empty() {
             return Err("No models downloaded. Please download a model first.".to_string());
         } else {
             // Multiple models available but configured one not found
-            println!("Configured model '{}' not found, using first available: {}",
-                     configured_model, downloaded_models[0]);
+            log::info!("Configured model '{}' not found, using first available: {}",
+                      configured_model, downloaded_models[0]);
             downloaded_models[0].clone()
         }
     } else {
         // No configured model or empty string
         if downloaded_models.len() == 1 {
             // If only one model is downloaded, use it
-            println!("No model configured, using only available model: {}", downloaded_models[0]);
+            log::info!("No model configured, using only available model: {}", downloaded_models[0]);
             downloaded_models[0].clone()
         } else if downloaded_models.is_empty() {
             return Err("No models downloaded. Please download a model first.".to_string());
         } else {
             // Multiple models, pick first one
-            println!("No model configured, using first available: {}", downloaded_models[0]);
+            log::info!("No model configured, using first available: {}", downloaded_models[0]);
             downloaded_models[0].clone()
         }
     };
 
-    println!("Using model for transcription: {}", model_name);
+    log::info!("Using model for transcription: {}", model_name);
 
     let model_path = whisper_manager.lock().await.get_model_path(&model_name)
         .ok_or(format!("Model '{}' path not found", model_name))?;

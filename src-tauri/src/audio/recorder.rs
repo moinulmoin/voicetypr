@@ -3,14 +3,59 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::thread;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+// Type-safe recording size limits
+#[derive(Debug, Clone, Copy)]
+pub struct RecordingSize(u64);
+
+impl RecordingSize {
+    const MAX_RECORDING_SIZE: u64 = 500 * 1024 * 1024; // 500MB max for recordings
+    const WARNING_SIZE: u64 = 400 * 1024 * 1024; // 400MB warning threshold
+    
+    pub fn check(size: u64) -> Result<(), String> {
+        if size > Self::MAX_RECORDING_SIZE {
+            return Err(format!(
+                "Recording size {} bytes ({:.1}MB) exceeds maximum of 500MB",
+                size, size as f64 / 1024.0 / 1024.0
+            ));
+        }
+        Ok(())
+    }
+    
+    pub fn is_warning_threshold(size: u64) -> bool {
+        size > Self::WARNING_SIZE
+    }
+}
 
 pub struct AudioRecorder {
     recording_handle: Arc<Mutex<Option<RecordingHandle>>>,
 }
 
 struct RecordingHandle {
-    stop_tx: mpsc::Sender<()>,
-    thread_handle: thread::JoinHandle<Result<(), String>>,
+    stop_tx: mpsc::Sender<RecorderCommand>,
+    thread_handle: thread::JoinHandle<Result<String, String>>,
+}
+
+#[derive(Debug)]
+enum RecorderCommand {
+    Stop,
+    StopSilence,
+}
+
+// Configuration for silence detection
+struct SilenceConfig {
+    threshold: f32,        // RMS threshold for silence (0.01 = 1% of max)
+    duration: Duration,    // How long silence before auto-stop (60 seconds)
+    check_interval: Duration, // How often to check for silence
+}
+
+// Commands that can stop recording
+#[derive(Debug)]
+enum StopReason {
+    User,
+    Silence,
+    SizeLimit,
 }
 
 impl AudioRecorder {
@@ -30,9 +75,17 @@ impl AudioRecorder {
 
         let output_path = PathBuf::from(output_path);
         let (stop_tx, stop_rx) = mpsc::channel();
+        let stop_tx_clone = stop_tx.clone();
+
+        // Default silence detection config
+        let silence_config = SilenceConfig {
+            threshold: 0.01,  // 1% of max amplitude
+            duration: Duration::from_secs(60),  // 60 seconds of silence
+            check_interval: Duration::from_secs(1), // Check every second
+        };
 
         // Spawn recording thread
-        let thread_handle = thread::spawn(move || -> Result<(), String> {
+        let thread_handle = thread::spawn(move || -> Result<String, String> {
             let host = cpal::default_host();
             let device = host.default_input_device()
                 .ok_or("No input device available")?;
@@ -40,8 +93,8 @@ impl AudioRecorder {
             let config = device.default_input_config()
                 .map_err(|e| e.to_string())?;
             
-            println!("Recording with config: sample_rate={}, channels={}", 
-                     config.sample_rate().0, config.channels());
+            log::info!("Recording with config: sample_rate={}, channels={}", 
+                       config.sample_rate().0, config.channels());
 
             // Record with native settings, Whisper will handle resampling
             let spec = hound::WavSpec {
@@ -57,15 +110,46 @@ impl AudioRecorder {
             )));
 
             let writer_clone = writer.clone();
-            let err_fn = |err| eprintln!("Stream error: {}", err);
+            let err_fn = |err| log::error!("Stream error: {}", err);
             let error_occurred = Arc::new(Mutex::new(None::<String>));
 
+            // Shared state for silence detection and size tracking
+            let last_sound_time = Arc::new(Mutex::new(Instant::now()));
+            let bytes_written = Arc::new(Mutex::new(0u64));
+            
             let stream = match config.sample_format() {
                 cpal::SampleFormat::F32 => {
                     let error_clone = error_occurred.clone();
+                    let last_sound_clone = last_sound_time.clone();
+                    let bytes_clone = bytes_written.clone();
+                    let silence_threshold = silence_config.threshold;
+                    let stop_tx_for_size = stop_tx_clone.clone();
+                    
                     device.build_input_stream(
                         &config.config(),
                         move |data: &[f32], _: &_| {
+                            // Calculate RMS for silence detection
+                            let rms = (data.iter().map(|&x| x * x).sum::<f32>() / data.len() as f32).sqrt();
+                            
+                            // Update last sound time if above threshold
+                            if rms > silence_threshold {
+                                if let Ok(mut time_guard) = last_sound_clone.lock() {
+                                    *time_guard = Instant::now();
+                                }
+                            }
+                            
+                            // Check size before writing
+                            let sample_bytes = data.len() * 2; // 2 bytes per i16 sample
+                            if let Ok(mut bytes_guard) = bytes_clone.lock() {
+                                let new_total = *bytes_guard + sample_bytes as u64;
+                                if let Err(_) = RecordingSize::check(new_total) {
+                                    let _ = stop_tx_for_size.send(RecorderCommand::Stop);
+                                    return;
+                                }
+                                *bytes_guard = new_total;
+                            }
+                            
+                            // Write audio data
                             if let Ok(mut guard) = writer_clone.try_lock() {
                                 if let Some(writer) = guard.as_mut() {
                                     for &sample in data {
@@ -87,9 +171,24 @@ impl AudioRecorder {
                 cpal::SampleFormat::I16 => {
                     let writer_clone = writer.clone();
                     let error_clone = error_occurred.clone();
+                    let last_sound_clone = last_sound_time.clone();
+                    let silence_threshold = (silence_config.threshold * i16::MAX as f32) as i16;
+                    
                     device.build_input_stream(
                         &config.config(),
                         move |data: &[i16], _: &_| {
+                            // Calculate RMS for I16 samples
+                            let rms = ((data.iter().map(|&x| (x as i32).pow(2)).sum::<i32>() as f32 
+                                       / data.len() as f32).sqrt()) as i16;
+                            
+                            // Update last sound time if above threshold
+                            if rms.abs() > silence_threshold {
+                                if let Ok(mut time_guard) = last_sound_clone.lock() {
+                                    *time_guard = Instant::now();
+                                }
+                            }
+                            
+                            // Write audio data
                             if let Ok(mut guard) = writer_clone.try_lock() {
                                 if let Some(writer) = guard.as_mut() {
                                     for &sample in data {
@@ -137,8 +236,29 @@ impl AudioRecorder {
 
             stream.play().map_err(|e| e.to_string())?;
 
+            // Spawn silence detection thread
+            let last_sound_clone = last_sound_time.clone();
+            let silence_duration = silence_config.duration;
+            let check_interval = silence_config.check_interval;
+            let silence_thread = thread::spawn(move || {
+                loop {
+                    thread::sleep(check_interval);
+                    
+                    if let Ok(last_sound) = last_sound_clone.lock() {
+                        if last_sound.elapsed() > silence_duration {
+                            log::info!("Silence detected for {:?}, auto-stopping recording", silence_duration);
+                            let _ = stop_tx_clone.send(RecorderCommand::StopSilence);
+                            break;
+                        }
+                    }
+                }
+            });
+
             // Wait for stop signal
-            stop_rx.recv().ok();
+            let stop_reason = stop_rx.recv().ok();
+            
+            // Stop silence detection thread
+            drop(silence_thread);
 
             // Stop and finalize
             drop(stream);
@@ -157,7 +277,12 @@ impl AudioRecorder {
                 }
             }
 
-            Ok(())
+            // Return appropriate message based on stop reason
+            match stop_reason {
+                Some(RecorderCommand::StopSilence) => Ok("Recording stopped due to silence".to_string()),
+                Some(RecorderCommand::Stop) => Ok("Recording stopped by user".to_string()),
+                None => Ok("Recording stopped".to_string()),
+            }
         });
 
         *self.recording_handle.lock()
@@ -176,11 +301,11 @@ impl AudioRecorder {
 
         if let Some(handle) = handle {
             // Send stop signal
-            handle.stop_tx.send(()).ok();
+            handle.stop_tx.send(RecorderCommand::Stop).ok();
 
             // Wait for thread to finish
             match handle.thread_handle.join() {
-                Ok(Ok(())) => Ok("Recording stopped".to_string()),
+                Ok(Ok(msg)) => Ok(msg),
                 Ok(Err(e)) => Err(e),
                 Err(_) => Err("Recording thread panicked".to_string()),
             }

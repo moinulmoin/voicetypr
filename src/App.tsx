@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { Loader2, Mic, MicOff, Settings } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { HotkeyInput } from "./components/HotkeyInput";
 import { ModelCard } from "./components/ModelCard";
 import { Button } from "./components/ui/button";
@@ -19,6 +19,7 @@ import { Separator } from "./components/ui/separator";
 import { Switch } from "./components/ui/switch";
 import { useRecording } from "./hooks/useRecording";
 import { AppSettings, ModelInfo, TranscriptionHistory } from "./types";
+import { AppErrorBoundary, RecordingErrorBoundary, SettingsErrorBoundary, ModelManagementErrorBoundary } from "./components/ErrorBoundary";
 
 // Helper function to calculate balanced performance score
 function calculateBalancedScore(model: ModelInfo): number {
@@ -158,7 +159,7 @@ export default function App() {
   }, []);
 
   // Download model
-  const downloadModel = async (modelName: string) => {
+  const downloadModel = useCallback(async (modelName: string) => {
     try {
       console.log(`Starting download for model: ${modelName}`);
       // Set initial progress to show download started
@@ -182,10 +183,10 @@ export default function App() {
       console.error("Failed to start download:", error);
       alert(`Failed to start download: ${error}`);
     }
-  };
+  }, []);
 
   // Delete model
-  const deleteModel = async (modelName: string) => {
+  const deleteModel = useCallback(async (modelName: string) => {
     console.log("deleteModel called with:", modelName);
     try {
       const confirmed = await ask(`Are you sure you want to delete the ${modelName} model?`, {
@@ -213,10 +214,10 @@ export default function App() {
       console.error("Failed to delete model:", error);
       alert(`Failed to delete model: ${error}`);
     }
-  };
+  }, [settings]);
 
   // Cancel download (placeholder - backend support needed)
-  const cancelDownload = async (modelName: string) => {
+  const cancelDownload = useCallback(async (modelName: string) => {
     try {
       // TODO: Implement backend support for cancelling downloads
       console.log(`Cancelling download for model: ${modelName}`);
@@ -230,10 +231,10 @@ export default function App() {
     } catch (error) {
       console.error("Failed to cancel download:", error);
     }
-  };
+  }, []);
 
   // Save settings
-  const saveSettings = async (newSettings: AppSettings) => {
+  const saveSettings = useCallback(async (newSettings: AppSettings) => {
     try {
       await invoke("save_settings", { settings: newSettings });
       
@@ -251,18 +252,20 @@ export default function App() {
     } catch (error) {
       console.error("Failed to save settings:", error);
     }
-  };
+  }, [settings]);
 
   // Onboarding View
   if (currentView === "onboarding") {
     return (
-      <div className="flex flex-col h-screen bg-background">
-        <div className="flex-1 flex flex-col items-center justify-center p-8">
-          <h1 className="text-4xl font-bold mb-2">Welcome to VoiceType</h1>
-          <p className="text-lg text-muted-foreground mb-8">Choose a model to get started</p>
+      <AppErrorBoundary>
+        <div className="flex flex-col h-screen bg-background">
+          <div className="flex-1 flex flex-col items-center justify-center p-8">
+            <h1 className="text-4xl font-bold mb-2">Welcome to VoiceType</h1>
+            <p className="text-lg text-muted-foreground mb-8">Choose a model to get started</p>
 
-          <div className="space-y-4 w-full max-w-md">
-            {sortModels(Object.entries(models), "accuracy").map(([name, model]) => (
+            <ModelManagementErrorBoundary>
+              <div className="space-y-4 w-full max-w-md">
+                {useMemo(() => sortModels(Object.entries(models), "accuracy"), [models]).map(([name, model]) => (
               <ModelCard
                 key={name}
                 name={name}
@@ -287,24 +290,27 @@ export default function App() {
                 }}
               />
             ))}
+              </div>
+            </ModelManagementErrorBoundary>
           </div>
         </div>
-      </div>
+      </AppErrorBoundary>
     );
   }
 
   // Settings View
   if (currentView === "settings") {
     return (
-      <div className="flex flex-col h-screen bg-background">
-        <div className="flex items-center justify-between p-4 border-b">
-          <h2 className="text-lg font-semibold">Settings</h2>
-          <Button onClick={() => setCurrentView("recorder")} variant="ghost" size="sm">
-            ✕
-          </Button>
-        </div>
+      <SettingsErrorBoundary>
+        <div className="flex flex-col h-screen bg-background">
+          <div className="flex items-center justify-between p-4 border-b">
+            <h2 className="text-lg font-semibold">Settings</h2>
+            <Button onClick={() => setCurrentView("recorder")} variant="ghost" size="sm">
+              ✕
+            </Button>
+          </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          <div className="flex-1 overflow-y-auto p-4 space-y-6">
           {/* Hotkey Setting */}
           <div className="space-y-2">
             <Label htmlFor="hotkey">Hotkey</Label>
@@ -371,19 +377,20 @@ export default function App() {
 
           {/* Model Management */}
           <Separator />
-          <div className="space-y-3">
-            <div>
-              <h3 className="text-base font-semibold">Available Models</h3>
-              <p className="text-xs text-muted-foreground mt-1">
-                Select a model based on your needs
-              </p>
-            </div>
+          <ModelManagementErrorBoundary>
+            <div className="space-y-3">
+              <div>
+                <h3 className="text-base font-semibold">Available Models</h3>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Select a model based on your needs
+                </p>
+              </div>
 
-            <ScrollArea className="h-[280px]">
-              <div className="space-y-2 pr-3">
-                {/* Sort by balanced score (downloaded models always first) */}
-                {sortModels(Object.entries(models), "accuracy")
-                  .map(([name, model]) => (
+              <ScrollArea className="h-[280px]">
+                <div className="space-y-2 pr-3">
+                  {/* Sort by balanced score (downloaded models always first) */}
+                  {useMemo(() => sortModels(Object.entries(models), "accuracy"), [models])
+                    .map(([name, model]) => (
                     <ModelCard
                       key={name}
                       name={name}
@@ -401,27 +408,31 @@ export default function App() {
                       isSelected={settings?.current_model === name}
                     />
                   ))}
-              </div>
-            </ScrollArea>
-          </div>
+                </div>
+              </ScrollArea>
+            </div>
+          </ModelManagementErrorBoundary>
         </div>
       </div>
+      </SettingsErrorBoundary>
     );
   }
 
   // Main Recorder View
   return (
-    <div className="flex flex-col h-screen bg-background">
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b">
-        <h1 className="text-lg font-semibold">VoiceType</h1>
-        <Button onClick={() => setCurrentView("settings")} variant="ghost" size="icon">
-          <Settings className="w-5 h-5" />
-        </Button>
-      </div>
+    <AppErrorBoundary>
+      <div className="flex flex-col h-screen bg-background">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b">
+          <h1 className="text-lg font-semibold">VoiceType</h1>
+          <Button onClick={() => setCurrentView("settings")} variant="ghost" size="icon">
+            <Settings className="w-5 h-5" />
+          </Button>
+        </div>
 
-      {/* Recording Status */}
-      <div className="flex-1 flex flex-col items-center justify-center p-8">
+        <RecordingErrorBoundary>
+          {/* Recording Status */}
+          <div className="flex-1 flex flex-col items-center justify-center p-8">
         <div
           className={`relative rounded-full p-8 transition-all ${
             recording.state === "recording" || recording.state === "starting"
@@ -516,6 +527,8 @@ export default function App() {
           </div>
         </div>
       )}
-    </div>
+        </RecordingErrorBoundary>
+      </div>
+    </AppErrorBoundary>
   );
 }

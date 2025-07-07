@@ -85,6 +85,19 @@ pub fn get_recording_state(app: &tauri::AppHandle) -> RecordingState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize logger with appropriate level based on build type
+    #[cfg(debug_assertions)]
+    {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
+            .init();
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .init();
+    }
+
+    log::info!("Starting VoiceTypr application");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -95,7 +108,7 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    println!("Global shortcut triggered: {:?} - State: {:?}", shortcut, event.state());
+                    log::debug!("Global shortcut triggered: {:?} - State: {:?}", shortcut, event.state());
 
                     // Only handle key press events, ignore release for toggle behavior
                     if event.state() != ShortcutState::Pressed {
@@ -123,7 +136,7 @@ pub fn run() {
                         let current_state = get_recording_state(&app_handle);
                         match current_state {
                             RecordingState::Idle | RecordingState::Error => {
-                                println!("Toggle: Starting recording via hotkey");
+                                log::info!("Toggle: Starting recording via hotkey");
 
                                 // Use Tauri's command system to start recording
                                 let app_handle = app.app_handle().clone();
@@ -131,16 +144,16 @@ pub fn run() {
                                     // Get the recorder state from app handle
                                     let recorder_state = app_handle.state::<RecorderState>();
                                     match start_recording(app_handle.clone(), recorder_state).await {
-                                        Ok(_) => println!("Toggle: Recording started successfully"),
+                                        Ok(_) => log::info!("Toggle: Recording started successfully"),
                                         Err(e) => {
-                                            println!("Toggle: Error starting recording: {}", e);
+                                            log::error!("Toggle: Error starting recording: {}", e);
                                             update_recording_state(&app_handle, RecordingState::Error, Some(e));
                                         }
                                     }
                                 });
                             }
                             RecordingState::Recording | RecordingState::Starting => {
-                                println!("Toggle: Stopping recording via hotkey");
+                                log::info!("Toggle: Stopping recording via hotkey");
 
                                 // Use Tauri's command system to stop recording
                                 let app_handle = app.app_handle().clone();
@@ -148,13 +161,13 @@ pub fn run() {
                                     // Get the recorder state from app handle
                                     let recorder_state = app_handle.state::<RecorderState>();
                                     match stop_recording(app_handle.clone(), recorder_state).await {
-                                        Ok(_) => println!("Toggle: Recording stopped successfully"),
-                                        Err(e) => println!("Toggle: Error stopping recording: {}", e),
+                                        Ok(_) => log::info!("Toggle: Recording stopped successfully"),
+                                        Err(e) => log::error!("Toggle: Error stopping recording: {}", e),
                                     }
                                 });
                             }
                             _ => {
-                                println!("Toggle: Ignoring hotkey in state {:?}", current_state);
+                                log::debug!("Toggle: Ignoring hotkey in state {:?}", current_state);
                             }
                         }
                     }
@@ -164,7 +177,7 @@ pub fn run() {
         .setup(|app| {
             // Initialize whisper manager
             let models_dir = app.path().app_data_dir()?.join("models");
-            println!("Models directory: {:?}", models_dir);
+            log::info!("Models directory: {:?}", models_dir);
 
             // Ensure the models directory exists
             std::fs::create_dir_all(&models_dir)
@@ -233,7 +246,7 @@ pub fn run() {
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| "CommandOrControl+Shift+Space".to_string());
 
-            println!("Loading hotkey from store: {}", hotkey_str);
+            log::info!("Loading hotkey from store: {}", hotkey_str);
 
             // Register global shortcut from settings
             let shortcut: tauri_plugin_global_shortcut::Shortcut = hotkey_str.parse()

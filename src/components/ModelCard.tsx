@@ -1,6 +1,6 @@
 import { CheckCircle2, Download, Trash2, X } from 'lucide-react';
+import React from 'react';
 import { ModelInfo } from '../types';
-import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 import { Progress } from './ui/progress';
@@ -17,7 +17,7 @@ interface ModelCardProps {
   showSelectButton?: boolean;
 }
 
-export function ModelCard({
+export const ModelCard = React.memo(function ModelCard({
   name,
   model,
   downloadProgress,
@@ -129,4 +129,4 @@ export function ModelCard({
       </CardContent>
     </Card>
   );
-}
+});

@@ -32,6 +32,8 @@ enigo = "0.5.0"
 sha2 = "0.10.9"
 sha1 = "0.10.6"
 arboard = "3.6.0"
+log = "0.4"
+env_logger = "0.11"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-fs = "2"
