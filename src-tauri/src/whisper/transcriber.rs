@@ -1,3 +1,4 @@
+use std::path::Path;
 use whisper_rs::{
     convert_integer_to_float_audio,
     convert_stereo_to_mono_audio,
@@ -8,7 +9,6 @@ use whisper_rs::{
     WhisperContext,
     WhisperContextParameters,
 };
-use std::path::Path;
 
 pub struct Transcriber {
     context: WhisperContext,
@@ -18,48 +18,48 @@ impl Transcriber {
     pub fn new(model_path: &Path) -> Result<Self, String> {
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().unwrap(),
-            WhisperContextParameters::default()
-        ).map_err(|e| format!("Failed to load model: {}", e))?;
+            WhisperContextParameters::default(),
+        )
+        .map_err(|e| format!("Failed to load model: {}", e))?;
 
         Ok(Self { context: ctx })
     }
 
     pub fn transcribe(&self, audio_path: &Path, language: Option<&str>) -> Result<String, String> {
         // Read WAV file
-        let mut reader = hound::WavReader::open(audio_path)
-            .map_err(|e| e.to_string())?;
+        let mut reader = hound::WavReader::open(audio_path).map_err(|e| e.to_string())?;
 
         let spec = reader.spec();
-        log::debug!("WAV spec: channels={}, sample_rate={}, bits={}", spec.channels, spec.sample_rate, spec.bits_per_sample);
+        log::debug!(
+            "WAV spec: channels={}, sample_rate={}, bits={}",
+            spec.channels,
+            spec.sample_rate,
+            spec.bits_per_sample
+        );
 
         /* ----------------------------------------------
-           1) read raw i16 pcm
-           ---------------------------------------------- */
-        let samples_i16: Vec<i16> = reader
-            .samples::<i16>()
-            .map(|s| s.unwrap())
-            .collect();
+        1) read raw i16 pcm
+        ---------------------------------------------- */
+        let samples_i16: Vec<i16> = reader.samples::<i16>().map(|s| s.unwrap()).collect();
 
         /* ----------------------------------------------
-           2) i16 → f32  (range -1.0 … 1.0)
-           ---------------------------------------------- */
+        2) i16 → f32  (range -1.0 … 1.0)
+        ---------------------------------------------- */
         let mut audio: Vec<f32> = vec![0.0; samples_i16.len()];
-        convert_integer_to_float_audio(&samples_i16, &mut audio)
-            .map_err(|e| e.to_string())?;
+        convert_integer_to_float_audio(&samples_i16, &mut audio).map_err(|e| e.to_string())?;
 
         /* ----------------------------------------------
-           3) stereo → mono  (Whisper needs mono)
-           ---------------------------------------------- */
+        3) stereo → mono  (Whisper needs mono)
+        ---------------------------------------------- */
         if spec.channels == 2 {
-            audio = convert_stereo_to_mono_audio(&audio)
-                .map_err(|e| e.to_string())?;
+            audio = convert_stereo_to_mono_audio(&audio).map_err(|e| e.to_string())?;
         } else if spec.channels != 1 {
             return Err(format!("Unsupported channel count: {}", spec.channels));
         }
 
         /* ----------------------------------------------
-           4) resample to 16 000 Hz  (model's native rate)
-           ---------------------------------------------- */
+        4) resample to 16 000 Hz  (model's native rate)
+        ---------------------------------------------- */
         if spec.sample_rate != 16_000 {
             audio = resample_linear(&audio, spec.sample_rate as usize, 16_000);
         }
@@ -73,7 +73,7 @@ impl Transcriber {
         // Create transcription parameters - use BeamSearch for better accuracy
         let mut params = FullParams::new(SamplingStrategy::BeamSearch {
             beam_size: 5,
-            patience: -1.0
+            patience: -1.0,
         });
 
         // Set language - default to English instead of auto
@@ -113,22 +113,20 @@ impl Transcriber {
 
         // Run transcription
         log::info!("Starting transcription...");
-        let mut state = self.context.create_state()
-            .map_err(|e| e.to_string())?;
+        let mut state = self.context.create_state().map_err(|e| e.to_string())?;
 
-        state.full(params, &audio)
+        state
+            .full(params, &audio)
             .map_err(|e| format!("Transcription failed: {}", e))?;
 
         // Get text
-        let num_segments = state.full_n_segments()
-            .map_err(|e| e.to_string())?;
+        let num_segments = state.full_n_segments().map_err(|e| e.to_string())?;
 
         log::info!("Transcription complete: {} segments", num_segments);
 
         let mut text = String::new();
         for i in 0..num_segments {
-            let segment = state.full_get_segment_text(i)
-                .map_err(|e| e.to_string())?;
+            let segment = state.full_get_segment_text(i).map_err(|e| e.to_string())?;
             log::debug!("Segment {}: {}", i, segment);
             text.push_str(&segment);
             text.push(' ');

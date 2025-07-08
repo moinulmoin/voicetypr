@@ -35,7 +35,7 @@ impl TranscriberCache {
 
     /// Create a cache with a specific capacity.
     pub fn with_capacity(max_size: usize) -> Self {
-        Self { 
+        Self {
             map: HashMap::new(),
             lru_order: VecDeque::new(),
             max_size: max_size.max(1), // At least 1
@@ -51,7 +51,7 @@ impl TranscriberCache {
         // Check if already cached
         if self.map.contains_key(&key) {
             // Clone the transcriber before updating LRU
-            let transcriber = self.map.get(&key).map(|t| t.clone());
+            let transcriber = self.map.get(&key).cloned();
             // Move to end of LRU order
             self.update_lru(&key);
             if let Some(t) = transcriber {
@@ -67,11 +67,11 @@ impl TranscriberCache {
         // Load the model
         log::info!("Loading model into cache: {}", key);
         let transcriber = Arc::new(Transcriber::new(model_path)?);
-        
+
         // Insert into cache
         self.map.insert(key.clone(), transcriber.clone());
         self.lru_order.push_back(key);
-        
+
         Ok(transcriber)
     }
 
@@ -92,19 +92,20 @@ impl TranscriberCache {
     }
 
     /// Manually clear the cache (e.g. to free RAM or after a model upgrade).
+    #[cfg(test)]
     pub fn clear(&mut self) {
         self.map.clear();
         self.lru_order.clear();
     }
 
     /// Get the current number of cached models
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn size(&self) -> usize {
         self.map.len()
     }
 
     /// Get the maximum cache size
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn capacity(&self) -> usize {
         self.max_size
     }

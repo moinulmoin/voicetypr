@@ -1,9 +1,9 @@
-use tauri::{AppHandle, Manager};
-use tauri_plugin_store::StoreExt;
+use crate::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
-use crate::AppState;
+use tauri_plugin_store::StoreExt;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
@@ -30,26 +30,31 @@ impl Default for Settings {
 
 #[tauri::command]
 pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
-    let store = app.store("settings")
-        .map_err(|e| e.to_string())?;
+    let store = app.store("settings").map_err(|e| e.to_string())?;
 
     let settings = Settings {
-        hotkey: store.get("hotkey")
+        hotkey: store
+            .get("hotkey")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().hotkey),
-        current_model: store.get("current_model")
+        current_model: store
+            .get("current_model")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().current_model),
-        language: store.get("language")
+        language: store
+            .get("language")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().language),
-        auto_insert: store.get("auto_insert")
+        auto_insert: store
+            .get("auto_insert")
             .and_then(|v| v.as_bool())
             .unwrap_or(Settings::default().auto_insert),
-        show_window_on_record: store.get("show_window_on_record")
+        show_window_on_record: store
+            .get("show_window_on_record")
             .and_then(|v| v.as_bool())
             .unwrap_or(Settings::default().show_window_on_record),
-        theme: store.get("theme")
+        theme: store
+            .get("theme")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().theme),
     };
@@ -58,18 +63,17 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
 }
 
 #[tauri::command]
-pub async fn save_settings(
-    app: AppHandle,
-    settings: Settings,
-) -> Result<(), String> {
-    let store = app.store("settings")
-        .map_err(|e| e.to_string())?;
+pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
+    let store = app.store("settings").map_err(|e| e.to_string())?;
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
     store.set("language", json!(settings.language));
     store.set("auto_insert", json!(settings.auto_insert));
-    store.set("show_window_on_record", json!(settings.show_window_on_record));
+    store.set(
+        "show_window_on_record",
+        json!(settings.show_window_on_record),
+    );
     store.set("theme", json!(settings.theme));
 
     store.save().map_err(|e| e.to_string())?;
@@ -78,10 +82,7 @@ pub async fn save_settings(
 }
 
 #[tauri::command]
-pub async fn set_global_shortcut(
-    app: AppHandle,
-    shortcut: String,
-) -> Result<(), String> {
+pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(), String> {
     // Validate shortcut format
     if shortcut.is_empty() || shortcut.len() > 100 {
         return Err("Invalid shortcut format".to_string());
@@ -92,10 +93,13 @@ pub async fn set_global_shortcut(
     shortcuts.unregister_all().map_err(|e| e.to_string())?;
 
     // Register new shortcut
-    let shortcut_obj: Shortcut = shortcut.parse()
+    let shortcut_obj: Shortcut = shortcut
+        .parse()
         .map_err(|_| "Invalid shortcut format".to_string())?;
-    shortcuts.register(shortcut_obj.clone()).map_err(|e| e.to_string())?;
-    
+    shortcuts
+        .register(shortcut_obj.clone())
+        .map_err(|e| e.to_string())?;
+
     // Update the recording shortcut in managed state
     let app_state = app.state::<AppState>();
     if let Ok(mut shortcut_guard) = app_state.recording_shortcut.lock() {
@@ -109,4 +113,3 @@ pub async fn set_global_shortcut(
 
     Ok(())
 }
-

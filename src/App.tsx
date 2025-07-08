@@ -254,6 +254,9 @@ export default function App() {
     }
   }, [settings]);
 
+  // Memoize sorted models to avoid recalculation on every render
+  const sortedModels = useMemo(() => sortModels(Object.entries(models), "accuracy"), [models]);
+
   // Onboarding View
   if (currentView === "onboarding") {
     return (
@@ -265,7 +268,7 @@ export default function App() {
 
             <ModelManagementErrorBoundary>
               <div className="space-y-4 w-full max-w-md">
-                {useMemo(() => sortModels(Object.entries(models), "accuracy"), [models]).map(([name, model]) => (
+                {sortedModels.map(([name, model]) => (
               <ModelCard
                 key={name}
                 name={name}
@@ -389,7 +392,7 @@ export default function App() {
               <ScrollArea className="h-[280px]">
                 <div className="space-y-2 pr-3">
                   {/* Sort by balanced score (downloaded models always first) */}
-                  {useMemo(() => sortModels(Object.entries(models), "accuracy"), [models])
+                  {sortedModels
                     .map(([name, model]) => (
                     <ModelCard
                       key={name}

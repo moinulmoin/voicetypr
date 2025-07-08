@@ -1,12 +1,12 @@
 use futures_util::StreamExt;
 use reqwest;
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
-use sha2::{Sha256, Digest};
-use sha1::Sha1;
 use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 
 // Type-safe size validation
 #[derive(Debug, Clone, Copy)]
@@ -15,23 +15,25 @@ pub struct ModelSize(u64);
 impl ModelSize {
     const MAX_MODEL_SIZE: u64 = 2 * 1024 * 1024 * 1024; // 2GB max as per your requirement
     const MIN_MODEL_SIZE: u64 = 10 * 1024 * 1024; // 10MB min (reasonable for smallest model)
-    
+
     pub fn new(size: u64) -> Result<Self, String> {
         if size < Self::MIN_MODEL_SIZE {
             return Err(format!(
                 "Model size {} bytes ({:.1}MB) is too small. Minimum size is 10MB",
-                size, size as f64 / 1024.0 / 1024.0
+                size,
+                size as f64 / 1024.0 / 1024.0
             ));
         }
         if size > Self::MAX_MODEL_SIZE {
             return Err(format!(
                 "Model size {} bytes ({:.1}GB) exceeds maximum allowed size of 2GB",
-                size, size as f64 / 1024.0 / 1024.0 / 1024.0
+                size,
+                size as f64 / 1024.0 / 1024.0 / 1024.0
             ));
         }
         Ok(ModelSize(size))
     }
-    
+
     pub fn as_bytes(&self) -> u64 {
         self.0
     }
@@ -223,9 +225,12 @@ impl WhisperManager {
 
         // Validate model size before downloading
         let validated_size = model.validated_size()?;
-        
+
         log::debug!("Model URL: {}", model.url);
-        log::debug!("Model size: {} bytes (validated)", validated_size.as_bytes());
+        log::debug!(
+            "Model size: {} bytes (validated)",
+            validated_size.as_bytes()
+        );
 
         // Create models directory if it doesn't exist
         fs::create_dir_all(&self.models_dir)
@@ -244,16 +249,18 @@ impl WhisperManager {
             .map_err(|e| e.to_string())?;
 
         let total_size = response.content_length().unwrap_or(model.size);
-        
+
         // Validate reported size matches expected size (allow 10% variance for compression)
         let size_variance = (total_size as f64 - model.size as f64).abs() / model.size as f64;
         if size_variance > 0.1 {
             return Err(format!(
                 "Model size mismatch: expected {} bytes, server reports {} bytes ({}% difference)",
-                model.size, total_size, (size_variance * 100.0) as u32
+                model.size,
+                total_size,
+                (size_variance * 100.0) as u32
             ));
         }
-        
+
         // Validate the total size is within our limits
         let _ = ModelSize::new(total_size)?;
 
@@ -268,20 +275,20 @@ impl WhisperManager {
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| e.to_string())?;
-            
+
             // Prevent downloading more than expected (with 1% tolerance)
             if downloaded + chunk.len() as u64 > (total_size as f64 * 1.01) as u64 {
                 // Clean up partial download
                 drop(file);
                 let _ = fs::remove_file(&output_path).await;
-                
+
                 return Err(format!(
                     "Download exceeded expected size: downloaded {} bytes, expected {} bytes",
                     downloaded + chunk.len() as u64,
                     total_size
                 ));
             }
-            
+
             file.write_all(&chunk).await.map_err(|e| e.to_string())?;
 
             downloaded += chunk.len() as u64;
@@ -308,19 +315,30 @@ impl WhisperManager {
             match model.sha256.len() {
                 40 => {
                     // SHA1 checksum (legacy from whisper.cpp)
-                    self.verify_sha1_checksum(&output_path, &model.sha256).await?;
+                    self.verify_sha1_checksum(&output_path, &model.sha256)
+                        .await?;
                 }
                 64 => {
                     // SHA256 checksum (preferred)
-                    self.verify_sha256_checksum(&output_path, &model.sha256).await?;
+                    self.verify_sha256_checksum(&output_path, &model.sha256)
+                        .await?;
                 }
                 _ => {
-                    log::warn!("Invalid checksum length for {}. Skipping verification.", model_name);
-                    log::warn!("Expected SHA1 (40 chars) or SHA256 (64 chars), got {} chars.", model.sha256.len());
+                    log::warn!(
+                        "Invalid checksum length for {}. Skipping verification.",
+                        model_name
+                    );
+                    log::warn!(
+                        "Expected SHA1 (40 chars) or SHA256 (64 chars), got {} chars.",
+                        model.sha256.len()
+                    );
                 }
             }
         } else {
-            log::warn!("No checksum available for {}. Skipping verification.", model_name);
+            log::warn!(
+                "No checksum available for {}. Skipping verification.",
+                model_name
+            );
             log::warn!("File integrity cannot be guaranteed without checksum verification.");
         }
 
@@ -328,7 +346,11 @@ impl WhisperManager {
     }
 
     /// Verify the SHA256 checksum of a downloaded file
-    async fn verify_sha256_checksum(&self, file_path: &PathBuf, expected_checksum: &str) -> Result<(), String> {
+    async fn verify_sha256_checksum(
+        &self,
+        file_path: &PathBuf,
+        expected_checksum: &str,
+    ) -> Result<(), String> {
         // Open the file
         let mut file = fs::File::open(file_path)
             .await
@@ -337,16 +359,17 @@ impl WhisperManager {
         // Read file in chunks and calculate hash
         let mut hasher = Sha256::new();
         let mut buffer = vec![0; 8192]; // 8KB buffer
-        
+
         loop {
-            let bytes_read = file.read(&mut buffer)
+            let bytes_read = file
+                .read(&mut buffer)
                 .await
                 .map_err(|e| format!("Failed to read file for checksum: {}", e))?;
-            
+
             if bytes_read == 0 {
                 break;
             }
-            
+
             hasher.update(&buffer[..bytes_read]);
         }
 
@@ -370,7 +393,11 @@ impl WhisperManager {
     }
 
     /// Verify the SHA1 checksum of a downloaded file (legacy support for whisper.cpp models)
-    async fn verify_sha1_checksum(&self, file_path: &PathBuf, expected_checksum: &str) -> Result<(), String> {
+    async fn verify_sha1_checksum(
+        &self,
+        file_path: &PathBuf,
+        expected_checksum: &str,
+    ) -> Result<(), String> {
         // Open the file
         let mut file = fs::File::open(file_path)
             .await
@@ -379,16 +406,17 @@ impl WhisperManager {
         // Read file in chunks and calculate hash
         let mut hasher = Sha1::new();
         let mut buffer = vec![0; 8192]; // 8KB buffer
-        
+
         loop {
-            let bytes_read = file.read(&mut buffer)
+            let bytes_read = file
+                .read(&mut buffer)
                 .await
                 .map_err(|e| format!("Failed to read file for checksum: {}", e))?;
-            
+
             if bytes_read == 0 {
                 break;
             }
-            
+
             hasher.update(&buffer[..bytes_read]);
         }
 

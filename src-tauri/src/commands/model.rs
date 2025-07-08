@@ -1,7 +1,7 @@
-use tauri::{AppHandle, Emitter, State};
-use crate::whisper::manager::{WhisperManager, ModelInfo};
+use crate::whisper::manager::{ModelInfo, WhisperManager};
 use std::collections::HashMap;
 use tauri::async_runtime::Mutex;
+use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
 pub async fn download_model(
@@ -10,11 +10,20 @@ pub async fn download_model(
     state: State<'_, Mutex<WhisperManager>>,
 ) -> Result<(), String> {
     // Validate model name
-    let valid_models = ["tiny", "base", "small", "medium", "large-v3", "large-v3-q5_0", "large-v3-turbo", "large-v3-turbo-q5_0"];
+    let valid_models = [
+        "tiny",
+        "base",
+        "small",
+        "medium",
+        "large-v3",
+        "large-v3-q5_0",
+        "large-v3-turbo",
+        "large-v3-turbo-q5_0",
+    ];
     if !valid_models.contains(&model_name.as_str()) {
         return Err(format!("Invalid model name: {}", model_name));
     }
-    
+
     log::info!("Starting download for model: {}", model_name);
     let app_handle = app.clone();
 
@@ -27,23 +36,34 @@ pub async fn download_model(
     let progress_handle = tokio::spawn(async move {
         while let Some((downloaded, total)) = progress_rx.recv().await {
             let progress = (downloaded as f64 / total as f64) * 100.0;
-            log::debug!("Download progress for {}: {:.1}%", &model_name_clone, progress);
+            log::debug!(
+                "Download progress for {}: {:.1}%",
+                &model_name_clone,
+                progress
+            );
 
-            app_handle.emit("download-progress", serde_json::json!({
-                "model": &model_name_clone,
-                "downloaded": downloaded,
-                "total": total,
-                "progress": progress
-            })).unwrap();
+            app_handle
+                .emit(
+                    "download-progress",
+                    serde_json::json!({
+                        "model": &model_name_clone,
+                        "downloaded": downloaded,
+                        "total": total,
+                        "progress": progress
+                    }),
+                )
+                .unwrap();
         }
     });
 
     // Execute download with async-safe callback
     let download_result = {
         let manager = state.lock().await;
-        manager.download_model(&model_name, move |downloaded, total| {
-            let _ = progress_tx.send((downloaded, total));
-        }).await
+        manager
+            .download_model(&model_name, move |downloaded, total| {
+                let _ = progress_tx.send((downloaded, total));
+            })
+            .await
     };
 
     // Ensure progress handler completes

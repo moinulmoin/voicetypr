@@ -1,17 +1,20 @@
+use serde_json;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use tauri::async_runtime::Mutex as AsyncMutex;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_store::StoreExt;
-use std::sync::{Arc, Mutex};
-use std::path::PathBuf;
-use tauri::async_runtime::Mutex as AsyncMutex;
-use serde_json;
 
 mod audio;
-mod whisper;
 mod commands;
+mod whisper;
 
-use commands::{audio::*, model::*, settings::*, text::*};
+#[cfg(test)]
+mod tests;
+
 use audio::recorder::AudioRecorder;
+use commands::{audio::*, model::*, settings::*, text::*};
 use whisper::cache::TranscriberCache;
 
 // Recording state enum matching frontend
@@ -52,7 +55,11 @@ impl AppState {
 }
 
 // Helper function to update recording state and emit event
-pub fn update_recording_state(app: &tauri::AppHandle, new_state: RecordingState, error: Option<String>) {
+pub fn update_recording_state(
+    app: &tauri::AppHandle,
+    new_state: RecordingState,
+    error: Option<String>,
+) {
     {
         let app_state = app.state::<AppState>();
         if let Ok(mut current_state) = app_state.recording_state.lock() {
@@ -61,40 +68,42 @@ pub fn update_recording_state(app: &tauri::AppHandle, new_state: RecordingState,
     } // Drop the lock before emitting event
 
     // Emit state change event with typed payload
-    let _ = app.emit("recording-state-changed", serde_json::json!({
-        "state": match new_state {
-            RecordingState::Idle => "idle",
-            RecordingState::Starting => "starting",
-            RecordingState::Recording => "recording",
-            RecordingState::Stopping => "stopping",
-            RecordingState::Transcribing => "transcribing",
-            RecordingState::Error => "error",
-        },
-        "error": error
-    }));
+    let _ = app.emit(
+        "recording-state-changed",
+        serde_json::json!({
+            "state": match new_state {
+                RecordingState::Idle => "idle",
+                RecordingState::Starting => "starting",
+                RecordingState::Recording => "recording",
+                RecordingState::Stopping => "stopping",
+                RecordingState::Transcribing => "transcribing",
+                RecordingState::Error => "error",
+            },
+            "error": error
+        }),
+    );
 }
 
 // Helper function to get current recording state
 pub fn get_recording_state(app: &tauri::AppHandle) -> RecordingState {
     let app_state = app.state::<AppState>();
-    app_state.recording_state.lock()
+    app_state
+        .recording_state
+        .lock()
         .map(|guard| *guard)
         .unwrap_or(RecordingState::Idle)
 }
-
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logger with appropriate level based on build type
     #[cfg(debug_assertions)]
     {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
-            .init();
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
     }
     #[cfg(not(debug_assertions))]
     {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-            .init();
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     }
 
     log::info!("Starting VoiceTypr application");
@@ -108,7 +117,11 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    log::debug!("Global shortcut triggered: {:?} - State: {:?}", shortcut, event.state());
+                    log::debug!(
+                        "Global shortcut triggered: {:?} - State: {:?}",
+                        shortcut,
+                        event.state()
+                    );
 
                     // Only handle key press events, ignore release for toggle behavior
                     if event.state() != ShortcutState::Pressed {
@@ -119,7 +132,8 @@ pub fn run() {
                     let app_handle = app.app_handle();
                     let is_recording_shortcut = {
                         let app_state = app_handle.state::<AppState>();
-                        let result = if let Ok(shortcut_guard) = app_state.recording_shortcut.lock() {
+                        let result = if let Ok(shortcut_guard) = app_state.recording_shortcut.lock()
+                        {
                             if let Some(ref recording_shortcut) = *shortcut_guard {
                                 shortcut == recording_shortcut
                             } else {
@@ -130,7 +144,7 @@ pub fn run() {
                         };
                         result
                     }; // Lock dropped here
-                    
+
                     if is_recording_shortcut {
                         // Toggle recording based on current state
                         let current_state = get_recording_state(&app_handle);
@@ -143,11 +157,18 @@ pub fn run() {
                                 tauri::async_runtime::spawn(async move {
                                     // Get the recorder state from app handle
                                     let recorder_state = app_handle.state::<RecorderState>();
-                                    match start_recording(app_handle.clone(), recorder_state).await {
-                                        Ok(_) => log::info!("Toggle: Recording started successfully"),
+                                    match start_recording(app_handle.clone(), recorder_state).await
+                                    {
+                                        Ok(_) => {
+                                            log::info!("Toggle: Recording started successfully")
+                                        }
                                         Err(e) => {
                                             log::error!("Toggle: Error starting recording: {}", e);
-                                            update_recording_state(&app_handle, RecordingState::Error, Some(e));
+                                            update_recording_state(
+                                                &app_handle,
+                                                RecordingState::Error,
+                                                Some(e),
+                                            );
                                         }
                                     }
                                 });
@@ -161,8 +182,12 @@ pub fn run() {
                                     // Get the recorder state from app handle
                                     let recorder_state = app_handle.state::<RecorderState>();
                                     match stop_recording(app_handle.clone(), recorder_state).await {
-                                        Ok(_) => log::info!("Toggle: Recording stopped successfully"),
-                                        Err(e) => log::error!("Toggle: Error stopping recording: {}", e),
+                                        Ok(_) => {
+                                            log::info!("Toggle: Recording stopped successfully")
+                                        }
+                                        Err(e) => {
+                                            log::error!("Toggle: Error stopping recording: {}", e)
+                                        }
                                     }
                                 });
                             }
@@ -191,7 +216,7 @@ pub fn run() {
 
             // Initialize unified application state
             app.manage(AppState::new());
-            
+
             // Initialize recorder state (kept separate for backwards compatibility)
             app.manage(RecorderState(Mutex::new(AudioRecorder::new())));
 
@@ -228,7 +253,8 @@ pub fn run() {
                         button: tauri::tray::MouseButton::Left,
                         button_state: tauri::tray::MouseButtonState::Up,
                         ..
-                    } = event {
+                    } = event
+                    {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
@@ -239,18 +265,18 @@ pub fn run() {
                 .build(app)?;
 
             // Load hotkey from settings store
-            let store = app.store("settings")
-                .map_err(|e| e.to_string())?;
+            let store = app.store("settings").map_err(|e| e.to_string())?;
 
-            let hotkey_str = store.get("hotkey")
+            let hotkey_str = store
+                .get("hotkey")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| "CommandOrControl+Shift+Space".to_string());
 
             log::info!("Loading hotkey from store: {}", hotkey_str);
 
             // Register global shortcut from settings
-            let shortcut: tauri_plugin_global_shortcut::Shortcut = hotkey_str.parse()
-                .map_err(|_| "Invalid shortcut format")?;
+            let shortcut: tauri_plugin_global_shortcut::Shortcut =
+                hotkey_str.parse().map_err(|_| "Invalid shortcut format")?;
 
             // Store the recording shortcut in managed state
             let app_state = app.state::<AppState>();
@@ -258,8 +284,7 @@ pub fn run() {
                 *shortcut_guard = Some(shortcut.clone());
             }
 
-            app.global_shortcut()
-                .register(shortcut)?;
+            app.global_shortcut().register(shortcut)?;
 
             // Hide window on start (menu bar only)
             // TODO: Only hide after successful onboarding

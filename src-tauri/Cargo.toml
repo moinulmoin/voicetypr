@@ -35,6 +35,12 @@ arboard = "3.6.0"
 log = "0.4"
 env_logger = "0.11"
 
+[dev-dependencies]
+tempfile = "3.10"
+mockall = "0.12"
+serial_test = "3.1"
+tokio-test = "0.4"
+
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-fs = "2"
 tauri-plugin-global-shortcut = "2"
