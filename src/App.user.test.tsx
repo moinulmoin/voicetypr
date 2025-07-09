@@ -179,7 +179,7 @@ describe('VoiceTypr User Scenarios', () => {
       await screen.findByText(/Press.*to record/i);
 
       // User navigates to settings
-      const settingsButton = screen.getAllByRole('button')[1];
+      const settingsButton = screen.getByLabelText('Settings');
       await user.click(settingsButton);
 
       // User is in settings (sees close button)
@@ -200,7 +200,7 @@ describe('VoiceTypr User Scenarios', () => {
       await screen.findByText(/Press.*to record/i);
 
       // User opens settings
-      const settingsButton = screen.getAllByRole('button')[1];
+      const settingsButton = screen.getByLabelText('Settings');
       await user.click(settingsButton);
 
       await waitFor(() => {

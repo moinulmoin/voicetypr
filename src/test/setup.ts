@@ -57,6 +57,8 @@ mockIPC((cmd, args) => {
         show_window_on_record: false,
         theme: 'system',
         current_model: 'base',
+        transcription_cleanup_days: null,
+        show_pill_widget: true,
       });
     
     case 'save_settings':
@@ -86,6 +88,12 @@ mockIPC((cmd, args) => {
     
     case 'get_audio_devices':
       return Promise.resolve(['Default Microphone', 'USB Microphone']);
+    
+    case 'cleanup_old_transcriptions':
+      return Promise.resolve();
+    
+    case 'get_transcription_history':
+      return Promise.resolve([]);
     
     default:
       console.warn(`Unmocked IPC call: ${cmd}`, args);

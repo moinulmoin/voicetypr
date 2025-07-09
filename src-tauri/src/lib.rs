@@ -14,7 +14,7 @@ mod whisper;
 mod tests;
 
 use audio::recorder::AudioRecorder;
-use commands::{audio::*, model::*, settings::*, text::*};
+use commands::{audio::*, model::*, settings::*, text::*, window::*};
 use whisper::cache::TranscriberCache;
 
 // Recording state enum matching frontend
@@ -307,6 +307,11 @@ pub fn run() {
             insert_text,
             delete_model,
             list_downloaded_models,
+            cleanup_old_transcriptions,
+            get_transcription_history,
+            show_pill_widget,
+            hide_pill_widget,
+            update_pill_position,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -5658,6 +5658,7 @@ name = "voicetypr"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "chrono",
  "cpal 0.16.0",
  "enigo",
  "env_logger",

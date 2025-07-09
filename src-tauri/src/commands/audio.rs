@@ -35,31 +35,53 @@ pub async fn start_recording(
         .map_err(|e| format!("Failed to acquire path lock: {}", e))?
         .replace(audio_path.clone());
 
-    // Start recording
-    let mut recorder = state
-        .inner()
-        .0
-        .lock()
-        .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
+    // Start recording (scoped to release mutex before async operations)
+    {
+        let mut recorder = state
+            .inner()
+            .0
+            .lock()
+            .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
 
-    // Check if already recording
-    if recorder.is_recording() {
-        log::warn!("Already recording!");
-        return Err("Already recording".to_string());
-    }
+        // Check if already recording
+        if recorder.is_recording() {
+            log::warn!("Already recording!");
+            return Err("Already recording".to_string());
+        }
 
-    log::info!("Starting recording to: {:?}", audio_path);
-    recorder.start_recording(
-        audio_path
-            .to_str()
-            .ok_or_else(|| "Invalid path encoding".to_string())?,
-    )?;
+        log::info!("Starting recording to: {:?}", audio_path);
+        recorder.start_recording(
+            audio_path
+                .to_str()
+                .ok_or_else(|| "Invalid path encoding".to_string())?,
+        )?;
 
-    // Verify recording actually started
-    if !recorder.is_recording() {
-        log::error!("Recording failed to start!");
-        return Err("Failed to start recording".to_string());
-    }
+        // Verify recording actually started
+        if !recorder.is_recording() {
+            log::error!("Recording failed to start!");
+            return Err("Failed to start recording".to_string());
+        }
+        
+        // Start audio level monitoring before releasing the lock
+        if let Some(audio_level_rx) = recorder.take_audio_level_receiver() {
+            let app_for_levels = app.clone();
+            // Use a thread instead of tokio spawn for std::sync::mpsc
+            std::thread::spawn(move || {
+                let mut last_emit = std::time::Instant::now();
+                let emit_interval = std::time::Duration::from_millis(33); // ~30fps
+                
+                while let Ok(level) = audio_level_rx.recv() {
+                    // Throttle events to avoid overwhelming the UI
+                    if last_emit.elapsed() >= emit_interval {
+                        let _ = app_for_levels.emit("audio-level", level);
+                        last_emit = std::time::Instant::now();
+                    }
+                }
+            });
+        }
+    } // MutexGuard dropped here
+    
+    // Now perform async operations after mutex is released
 
     // Show window if configured
     if let Ok(store) = app.store("settings") {
@@ -75,6 +97,20 @@ pub async fn start_recording(
 
     // Update state to recording
     update_recording_state(&app, RecordingState::Recording, None);
+    
+    // Show pill widget if enabled
+    if let Ok(store) = app.store("settings") {
+        let show_pill = store
+            .get("show_pill_widget")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+            
+        if show_pill {
+            if let Err(e) = crate::commands::window::show_pill_widget(app.clone()).await {
+                log::warn!("Failed to show pill widget: {}", e);
+            }
+        }
+    }
 
     // Also emit legacy event for compatibility
     let _ = app.emit("recording-started", ());
@@ -223,6 +259,11 @@ pub async fn stop_recording(
     let language = store
         .get("language")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
+        
+    let auto_insert = store
+        .get("auto_insert")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
 
     // clone for move into task
     let audio_path_clone = audio_path.clone();
@@ -245,6 +286,10 @@ pub async fn stop_recording(
                 Err(e) => {
                     // Update state to error
                     update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
+                    
+                    // Hide pill widget
+                    let _ = crate::commands::window::hide_pill_widget(app_for_task.clone()).await;
+                    
                     // Also emit legacy event
                     let _ = app_for_task.emit("transcription-error", e);
                     return;
@@ -261,6 +306,35 @@ pub async fn stop_recording(
             Ok(text) => {
                 // Update state back to idle
                 update_recording_state(&app_for_task, RecordingState::Idle, None);
+                
+                // Hide pill widget
+                let _ = crate::commands::window::hide_pill_widget(app_for_task.clone()).await;
+                
+                // Save transcription to store
+                if let Ok(store) = app_for_task.store("transcriptions") {
+                    let timestamp = chrono::Utc::now().to_rfc3339();
+                    store.set(
+                        &timestamp,
+                        serde_json::json!({
+                            "text": &text,
+                            "model": &model_name_clone,
+                            "timestamp": &timestamp
+                        })
+                    );
+                    let _ = store.save();
+                }
+                
+                // Auto-insert text if enabled
+                if auto_insert && !text.is_empty() {
+                    if let Err(e) = crate::commands::text::insert_text(text.clone()).await {
+                        log::error!("Failed to auto-insert text: {}", e);
+                        // Still copy to clipboard as fallback
+                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                            let _ = clipboard.set_text(&text);
+                        }
+                    }
+                }
+                
                 // Also emit legacy event
                 let _ = app_for_task.emit(
                     "transcription-complete",
@@ -273,6 +347,10 @@ pub async fn stop_recording(
             Err(e) => {
                 // Update state to error
                 update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
+                
+                // Hide pill widget
+                let _ = crate::commands::window::hide_pill_widget(app_for_task.clone()).await;
+                
                 // Also emit legacy event
                 let _ = app_for_task.emit("transcription-error", e);
             }
@@ -297,6 +375,55 @@ pub async fn stop_recording(
 #[tauri::command]
 pub async fn get_audio_devices() -> Result<Vec<String>, String> {
     Ok(AudioRecorder::get_devices())
+}
+
+#[tauri::command]
+pub async fn cleanup_old_transcriptions(app: AppHandle, days: Option<u32>) -> Result<(), String> {
+    if let Some(days) = days {
+        let store = app.store("transcriptions").map_err(|e| e.to_string())?;
+        
+        let cutoff_date = chrono::Utc::now() - chrono::Duration::days(days as i64);
+        
+        // Get all keys
+        let keys: Vec<String> = store.keys().into_iter().map(|k| k.to_string()).collect();
+        
+        // Remove old entries
+        for key in keys {
+            if let Ok(date) = chrono::DateTime::parse_from_rfc3339(&key) {
+                if date < cutoff_date {
+                    store.delete(&key);
+                }
+            }
+        }
+        
+        store.save().map_err(|e| e.to_string())?;
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_transcription_history(app: AppHandle, limit: Option<usize>) -> Result<Vec<serde_json::Value>, String> {
+    let store = app.store("transcriptions").map_err(|e| e.to_string())?;
+    
+    let mut entries: Vec<(String, serde_json::Value)> = Vec::new();
+    
+    // Collect all entries with their timestamps
+    for key in store.keys() {
+        if let Some(value) = store.get(&key) {
+            entries.push((key.to_string(), value));
+        }
+    }
+    
+    // Sort by timestamp (newest first)
+    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    
+    // Apply limit if specified
+    let limit = limit.unwrap_or(50);
+    entries.truncate(limit);
+    
+    // Return just the values
+    Ok(entries.into_iter().map(|(_, v)| v).collect())
 }
 
 #[tauri::command]

@@ -79,6 +79,27 @@ export default function App() {
           setCurrentView("onboarding");
         }
 
+        // Run cleanup if enabled
+        if (appSettings.transcription_cleanup_days) {
+          await invoke("cleanup_old_transcriptions", { 
+            days: appSettings.transcription_cleanup_days 
+          });
+        }
+
+        // Load transcription history from store
+        try {
+          const storedHistory = await invoke<any[]>("get_transcription_history", { limit: 50 });
+          const formattedHistory: TranscriptionHistory[] = storedHistory.map((item) => ({
+            id: item.timestamp || Date.now().toString(),
+            text: item.text,
+            timestamp: new Date(item.timestamp),
+            model: item.model
+          }));
+          setHistory(formattedHistory);
+        } catch (error) {
+          console.error("Failed to load transcription history:", error);
+        }
+
         // All recording event handling is now managed by the useRecording hook
 
         // Listen for no-models event to redirect to onboarding
@@ -378,6 +399,42 @@ export default function App() {
             />
           </div>
 
+          {/* Show Pill Widget Toggle */}
+          <div className="flex items-center justify-between">
+            <Label htmlFor="show-pill" className="flex-1">
+              Show floating pill when recording
+            </Label>
+            <Switch
+              id="show-pill"
+              checked={settings?.show_pill_widget ?? true}
+              onCheckedChange={(checked) =>
+                settings && saveSettings({ ...settings, show_pill_widget: checked })
+              }
+            />
+          </div>
+
+          {/* Transcription History Cleanup */}
+          <div className="space-y-2">
+            <Label htmlFor="cleanup">Keep transcription history</Label>
+            <Select
+              value={settings?.transcription_cleanup_days?.toString() || "forever"}
+              onValueChange={(value) => {
+                const days = value === "forever" ? null : parseInt(value);
+                settings && saveSettings({ ...settings, transcription_cleanup_days: days });
+              }}
+            >
+              <SelectTrigger id="cleanup">
+                <SelectValue placeholder="Select retention period" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="forever">Forever</SelectItem>
+                <SelectItem value="7">7 days</SelectItem>
+                <SelectItem value="15">15 days</SelectItem>
+                <SelectItem value="30">30 days</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
           {/* Model Management */}
           <Separator />
           <ModelManagementErrorBoundary>
@@ -428,7 +485,7 @@ export default function App() {
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b">
           <h1 className="text-lg font-semibold">VoiceType</h1>
-          <Button onClick={() => setCurrentView("settings")} variant="ghost" size="icon">
+          <Button onClick={() => setCurrentView("settings")} variant="ghost" size="icon" aria-label="Settings">
             <Settings className="w-5 h-5" />
           </Button>
         </div>

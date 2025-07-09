@@ -13,6 +13,8 @@ pub struct Settings {
     pub auto_insert: bool,
     pub show_window_on_record: bool,
     pub theme: String,
+    pub transcription_cleanup_days: Option<u32>,
+    pub show_pill_widget: bool,
 }
 
 impl Default for Settings {
@@ -24,6 +26,8 @@ impl Default for Settings {
             auto_insert: true,
             show_window_on_record: false,
             theme: "system".to_string(),
+            transcription_cleanup_days: None, // None means keep forever
+            show_pill_widget: true, // Show pill widget by default
         }
     }
 }
@@ -57,6 +61,13 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("theme")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().theme),
+        transcription_cleanup_days: store
+            .get("transcription_cleanup_days")
+            .and_then(|v| v.as_u64().map(|n| n as u32)),
+        show_pill_widget: store
+            .get("show_pill_widget")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(Settings::default().show_pill_widget),
     };
 
     Ok(settings)
@@ -75,6 +86,8 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         json!(settings.show_window_on_record),
     );
     store.set("theme", json!(settings.theme));
+    store.set("transcription_cleanup_days", json!(settings.transcription_cleanup_days));
+    store.set("show_pill_widget", json!(settings.show_pill_widget));
 
     store.save().map_err(|e| e.to_string())?;
 

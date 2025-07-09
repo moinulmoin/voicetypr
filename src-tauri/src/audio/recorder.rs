@@ -35,6 +35,7 @@ impl RecordingSize {
 
 pub struct AudioRecorder {
     recording_handle: Arc<Mutex<Option<RecordingHandle>>>,
+    audio_level_receiver: Arc<Mutex<Option<mpsc::Receiver<f32>>>>,
 }
 
 struct RecordingHandle {
@@ -69,6 +70,7 @@ impl AudioRecorder {
     pub fn new() -> Self {
         Self {
             recording_handle: Arc::new(Mutex::new(None)),
+            audio_level_receiver: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -86,6 +88,9 @@ impl AudioRecorder {
         let output_path = PathBuf::from(output_path);
         let (stop_tx, stop_rx) = mpsc::channel();
         let stop_tx_clone = stop_tx.clone();
+        
+        // Create audio level channel
+        let (audio_level_tx, audio_level_rx) = mpsc::channel();
 
         // Default silence detection config
         let silence_config = SilenceConfig {
@@ -136,6 +141,7 @@ impl AudioRecorder {
                     let bytes_clone = bytes_written.clone();
                     let silence_threshold = silence_config.threshold;
                     let stop_tx_for_size = stop_tx_clone.clone();
+                    let audio_level_tx_clone = audio_level_tx.clone();
 
                     device
                         .build_input_stream(
@@ -145,6 +151,9 @@ impl AudioRecorder {
                                 let rms = (data.iter().map(|&x| x * x).sum::<f32>()
                                     / data.len() as f32)
                                     .sqrt();
+                                
+                                // Send audio level (ignore errors if receiver is dropped)
+                                let _ = audio_level_tx_clone.send(rms);
 
                                 // Update last sound time if above threshold
                                 if rms > silence_threshold {
@@ -192,6 +201,7 @@ impl AudioRecorder {
                     let error_clone = error_occurred.clone();
                     let last_sound_clone = last_sound_time.clone();
                     let silence_threshold = (silence_config.threshold * i16::MAX as f32) as i16;
+                    let audio_level_tx_clone = audio_level_tx.clone();
 
                     device
                         .build_input_stream(
@@ -202,6 +212,10 @@ impl AudioRecorder {
                                     as f32
                                     / data.len() as f32)
                                     .sqrt()) as i16;
+                                
+                                // Send normalized audio level (0.0 to 1.0)
+                                let normalized_rms = (rms.abs() as f32) / (i16::MAX as f32);
+                                let _ = audio_level_tx_clone.send(normalized_rms);
 
                                 // Update last sound time if above threshold
                                 if rms.abs() > silence_threshold {
@@ -331,6 +345,12 @@ impl AudioRecorder {
             stop_tx,
             thread_handle,
         });
+        
+        // Store the audio level receiver
+        *self
+            .audio_level_receiver
+            .lock()
+            .map_err(|e| format!("Failed to acquire lock: {}", e))? = Some(audio_level_rx);
 
         Ok(())
     }
@@ -341,6 +361,11 @@ impl AudioRecorder {
             .lock()
             .map_err(|e| format!("Failed to acquire lock: {}", e))?
             .take();
+            
+        // Also clear the audio level receiver
+        if let Ok(mut guard) = self.audio_level_receiver.lock() {
+            guard.take();
+        }
 
         if let Some(handle) = handle {
             // Send stop signal
@@ -362,6 +387,13 @@ impl AudioRecorder {
             .lock()
             .map(|guard| guard.is_some())
             .unwrap_or(false)
+    }
+
+    pub fn take_audio_level_receiver(&mut self) -> Option<mpsc::Receiver<f32>> {
+        self.audio_level_receiver
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
     }
 
     pub fn get_devices() -> Vec<String> {

@@ -113,7 +113,7 @@ describe('Critical User Journeys', () => {
     await screen.findByText(/Press.*to record/i);
 
     // Find and click the settings button (it has the Settings icon)
-    const settingsButton = screen.getAllByRole('button')[1];
+    const settingsButton = screen.getByLabelText('Settings');
     await user.click(settingsButton);
     
     // User should see they're in settings now

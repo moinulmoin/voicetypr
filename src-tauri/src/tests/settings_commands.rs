@@ -13,6 +13,8 @@ mod tests {
         assert_eq!(settings.auto_insert, true);
         assert_eq!(settings.show_window_on_record, false);
         assert_eq!(settings.theme, "system");
+        assert_eq!(settings.transcription_cleanup_days, None);
+        assert_eq!(settings.show_pill_widget, true);
     }
 
     #[test]
@@ -24,6 +26,8 @@ mod tests {
             auto_insert: false,
             show_window_on_record: true,
             theme: "dark".to_string(),
+            transcription_cleanup_days: Some(7),
+            show_pill_widget: false,
         };
 
         // Test serialization
@@ -34,6 +38,8 @@ mod tests {
         assert!(json.contains("\"auto_insert\":false"));
         assert!(json.contains("\"show_window_on_record\":true"));
         assert!(json.contains("\"theme\":\"dark\""));
+        assert!(json.contains("\"transcription_cleanup_days\":7"));
+        assert!(json.contains("\"show_pill_widget\":false"));
 
         // Test deserialization
         let deserialized: Settings = serde_json::from_str(&json).unwrap();
@@ -46,6 +52,8 @@ mod tests {
             settings.show_window_on_record
         );
         assert_eq!(deserialized.theme, settings.theme);
+        assert_eq!(deserialized.transcription_cleanup_days, settings.transcription_cleanup_days);
+        assert_eq!(deserialized.show_pill_widget, settings.show_pill_widget);
     }
 
     #[test]
@@ -73,6 +81,8 @@ mod tests {
             auto_insert: true,
             show_window_on_record: true,
             theme: "light".to_string(),
+            transcription_cleanup_days: Some(30),
+            show_pill_widget: true,
         };
 
         let cloned = settings.clone();
@@ -82,6 +92,8 @@ mod tests {
         assert_eq!(cloned.auto_insert, settings.auto_insert);
         assert_eq!(cloned.show_window_on_record, settings.show_window_on_record);
         assert_eq!(cloned.theme, settings.theme);
+        assert_eq!(cloned.transcription_cleanup_days, settings.transcription_cleanup_days);
+        assert_eq!(cloned.show_pill_widget, settings.show_pill_widget);
     }
 
     #[test]
@@ -175,6 +187,8 @@ mod tests {
             "auto_insert": settings.auto_insert,
             "show_window_on_record": settings.show_window_on_record,
             "theme": settings.theme,
+            "transcription_cleanup_days": settings.transcription_cleanup_days,
+            "show_pill_widget": settings.show_pill_widget,
         });
 
         assert_eq!(value["hotkey"], "CommandOrControl+Shift+Space");
@@ -183,6 +197,8 @@ mod tests {
         assert_eq!(value["auto_insert"], true);
         assert_eq!(value["show_window_on_record"], false);
         assert_eq!(value["theme"], "system");
+        assert_eq!(value["transcription_cleanup_days"], serde_json::Value::Null);
+        assert_eq!(value["show_pill_widget"], true);
     }
 
     #[test]

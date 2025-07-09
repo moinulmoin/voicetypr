@@ -85,7 +85,7 @@ describe('App Integration Tests', () => {
       await screen.findByText('VoiceType');
 
       // User clicks settings icon
-      const settingsButton = screen.getAllByRole('button')[1];
+      const settingsButton = screen.getByLabelText('Settings');
       await user.click(settingsButton);
 
       // User is in settings (sees close button)
@@ -113,7 +113,7 @@ describe('App Integration Tests', () => {
       
       // Navigate to settings
       await screen.findByText('VoiceType');
-      const settingsButton = screen.getAllByRole('button')[1];
+      const settingsButton = screen.getByLabelText('Settings');
       await user.click(settingsButton);
 
       // Wait for settings to load
