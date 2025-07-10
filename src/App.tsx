@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Loader2, Mic, MicOff, Settings } from "lucide-react";
+import { Mic, Settings } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { HotkeyInput } from "./components/HotkeyInput";
 import { ModelCard } from "./components/ModelCard";
@@ -458,116 +458,71 @@ export default function App() {
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b">
           <h1 className="text-lg font-semibold">VoiceType</h1>
-          <Button onClick={() => setCurrentView("settings")} variant="ghost" size="icon" aria-label="Settings">
-            <Settings className="w-5 h-5" />
-          </Button>
+          <div className="flex items-center gap-3">
+            {/* Recording Status Indicator */}
+            {recording.isActive && (
+              <div className="flex items-center gap-2 text-sm">
+                <div className={`w-2 h-2 rounded-full ${
+                  recording.state === "recording" || recording.state === "starting"
+                    ? "bg-destructive animate-pulse"
+                    : recording.state === "transcribing"
+                    ? "bg-yellow-500 animate-pulse"
+                    : "bg-muted"
+                }`} />
+                <span className={`font-medium ${
+                  recording.state === "recording" || recording.state === "starting"
+                    ? "text-destructive"
+                    : recording.state === "transcribing"
+                    ? "text-yellow-600"
+                    : "text-muted-foreground"
+                }`}>
+                  {recording.state === "starting" && "Starting..."}
+                  {recording.state === "recording" && "Recording"}
+                  {recording.state === "stopping" && "Stopping..."}
+                  {recording.state === "transcribing" && "Processing"}
+                </span>
+              </div>
+            )}
+            <Button onClick={() => setCurrentView("settings")} variant="ghost" size="icon" aria-label="Settings">
+              <Settings className="w-5 h-5" />
+            </Button>
+          </div>
         </div>
 
         <RecordingErrorBoundary>
-          {/* Recording Status */}
-          <div className="flex-1 flex flex-col items-center justify-center p-8">
-        <div
-          className={`relative rounded-full p-8 transition-all ${
-            recording.state === "recording" || recording.state === "starting"
-              ? "bg-destructive/10 animate-pulse scale-110"
-              : recording.state === "transcribing"
-              ? "bg-primary/10"
-              : "bg-muted"
-          }`}
-        >
-          {recording.state === "recording" || recording.state === "starting" ? (
-            <>
-              <Mic className="w-16 h-16 text-destructive" />
-              <div className="absolute inset-0 rounded-full border-4 border-destructive animate-ping" />
-            </>
-          ) : recording.state === "transcribing" ? (
-            <Loader2 className="w-16 h-16 text-primary animate-spin" />
-          ) : (
-            <MicOff className="w-16 h-16 text-muted-foreground" />
-          )}
-        </div>
-
-        <p className="mt-6 text-lg text-muted-foreground">
-          {recording.state === "idle" && `Press ${settings?.hotkey || "hotkey"} to record`}
-          {recording.state === "starting" && "Starting recording..."}
-          {recording.state === "recording" && "Recording..."}
-          {recording.state === "stopping" && "Stopping..."}
-          {recording.state === "transcribing" && "Transcribing your speech..."}
-          {recording.state === "error" && "Error occurred"}
-        </p>
-
-        {/* Show detailed state for debugging */}
-        {recording.error && (
-          <p className="mt-2 text-sm text-destructive">Error: {recording.error}</p>
-        )}
-
-        {/* Manual test button - Toggle recording */}
-        <Button
-          className="mt-4"
-          variant={
-            recording.state === "recording" || recording.state === "starting"
-              ? "destructive"
-              : "default"
-          }
-          size="lg"
-          onClick={async () => {
-            if (recording.state === "recording") {
-              await recording.stopRecording();
-            } else if (recording.state === "idle" || recording.state === "error") {
-              await recording.startRecording();
-            }
-            // Do nothing if transcribing, stopping, or starting
-          }}
-          disabled={
-            recording.state === "transcribing" ||
-            recording.state === "stopping" ||
-            recording.state === "starting"
-          }
-        >
-          {recording.state === "idle" && "Start Recording"}
-          {recording.state === "starting" && "Starting..."}
-          {recording.state === "recording" && "Stop Recording"}
-          {recording.state === "stopping" && "Stopping..."}
-          {recording.state === "transcribing" && "Transcribing..."}
-          {recording.state === "error" && "Try Again"}
-        </Button>
-
-        {recording.state === "recording" && (
-          <div className="mt-4 flex items-center gap-2 text-sm text-destructive">
-            <div className="w-2 h-2 bg-destructive rounded-full animate-pulse" />
-            <span>Recording in progress</span>
-          </div>
-        )}
-      </div>
-
-      {/* History */}
-      <div className="border-t p-4">
-        <h3 className="text-sm font-medium text-muted-foreground mb-2">Recent Transcriptions</h3>
-        {history.length > 0 ? (
-          <div className="space-y-2 max-h-48 overflow-y-auto">
-            {history.slice(0, 5).map((item) => (
-              <div
-                key={item.id}
-                className="p-2  rounded border cursor-pointer hover:bg-accent/50 transition-colors"
-                onClick={() => navigator.clipboard.writeText(item.text)}
-                title="Click to copy"
-              >
-                <p className="text-sm text-foreground truncate">{item.text}</p>
-                <p className="text-xs text-muted-foreground">
-                  {new Date(item.timestamp).toLocaleTimeString()} • {item.model}
-                </p>
+          {/* Transcription History - Now the main content */}
+          <div className="flex-1 flex flex-col p-6 overflow-hidden">
+            <h2 className="text-lg font-semibold mb-4">Recent Transcriptions</h2>
+            {history.length > 0 ? (
+              <ScrollArea className="flex-1">
+                <div className="space-y-3 pr-4">
+                  {history.map((item) => (
+                    <div
+                      key={item.id}
+                      className="p-4 rounded-lg border cursor-pointer hover:bg-accent/50 transition-colors"
+                      onClick={() => navigator.clipboard.writeText(item.text)}
+                      title="Click to copy"
+                    >
+                      <p className="text-sm text-foreground leading-relaxed">{item.text}</p>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        {new Date(item.timestamp).toLocaleTimeString()} • {item.model}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            ) : (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center">
+                  <Mic className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
+                  <p className="text-sm text-muted-foreground">No transcriptions yet</p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Press {settings?.hotkey || "Cmd+Shift+Space"} to start recording
+                  </p>
+                </div>
               </div>
-            ))}
+            )}
           </div>
-        ) : (
-          <div className="py-8 text-center">
-            <p className="text-sm text-muted-foreground">No transcriptions yet</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Press {settings?.hotkey || "Cmd+Shift+Space"} to start recording
-            </p>
-          </div>
-        )}
-      </div>
         </RecordingErrorBoundary>
       </div>
     </AppErrorBoundary>

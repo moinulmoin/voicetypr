@@ -1,32 +1,33 @@
-import { useEffect, useState, useRef } from "react";
+import { useEventCoordinator } from "@/hooks/useEventCoordinator";
+import { useRecording } from "@/hooks/useRecording";
+import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import { Mic } from "lucide-react";
-import { useRecording } from "@/hooks/useRecording";
-import { useEventCoordinator } from "@/hooks/useEventCoordinator";
-import { cn } from "@/lib/utils";
-import "../globals.css"; // Ensure CSS is imported
+import { useEffect, useRef, useState } from "react";
 
 export function RecordingPill() {
   const recording = useRecording();
   const [audioLevel, setAudioLevel] = useState(0);
   const [autoInsert, setAutoInsert] = useState(true);
   const { registerEvent } = useEventCoordinator("pill");
-  
+
   // Use ref to always have latest autoInsert value in event handlers
   const autoInsertRef = useRef(autoInsert);
   useEffect(() => {
     autoInsertRef.current = autoInsert;
   }, [autoInsert]);
-  
+
   // Prevent duplicate processing
   const processingRef = useRef(false);
 
   // Load auto-insert setting on mount
   useEffect(() => {
     console.log("RecordingPill mounted");
-    invoke("get_settings").then((settings: any) => {
-      setAutoInsert(settings?.auto_insert ?? true);
-    }).catch(console.error);
+    invoke("get_settings")
+      .then((settings: any) => {
+        setAutoInsert(settings?.auto_insert ?? true);
+      })
+      .catch(console.error);
 
     return () => {
       console.log("RecordingPill unmounted");
@@ -36,7 +37,7 @@ export function RecordingPill() {
   // Register event handlers through coordinator - only once!
   useEffect(() => {
     console.log("[RecordingPill] Registering event handlers...");
-    
+
     // Audio level events
     registerEvent<number>("audio-level", (level) => {
       setAudioLevel(level);
@@ -44,70 +45,75 @@ export function RecordingPill() {
     });
 
     // Transcription complete events
-    registerEvent<{ text: string; model: string }>("transcription-complete", async ({ text, model }) => {
-      // Guard against duplicate processing
-      if (processingRef.current) {
-        console.warn("[RecordingPill] Already processing transcription, skipping duplicate");
-        return;
-      }
-      
-      processingRef.current = true;
-      
-      console.log("[EventCoordinator] Pill window received transcription:", { 
-        text: text.substring(0, 50) + "...",
-        model,
-        timestamp: new Date().toISOString()
-      });
-      
-      try {
-        // Always copy to clipboard first
-        try {
-          await navigator.clipboard.writeText(text);
-          console.log("Text copied to clipboard successfully");
-        } catch (e) {
-          console.error("Failed to copy to clipboard:", e);
+    registerEvent<{ text: string; model: string }>(
+      "transcription-complete",
+      async ({ text, model }) => {
+        // Guard against duplicate processing
+        if (processingRef.current) {
+          console.warn(
+            "[RecordingPill] Already processing transcription, skipping duplicate",
+          );
+          return;
         }
 
-        // Try to insert at cursor if auto-insert is enabled
-        // Use ref to get latest value
-        if (autoInsertRef.current) {
-          console.log("Auto-insert is enabled, inserting text at cursor...");
+        processingRef.current = true;
+
+        console.log("[EventCoordinator] Pill window received transcription:", {
+          text: text.substring(0, 50) + "...",
+          model,
+          timestamp: new Date().toISOString(),
+        });
+
+        try {
+          // Always copy to clipboard first
           try {
-            await invoke("insert_text", { text });
-            console.log("Text inserted at cursor successfully");
+            await navigator.clipboard.writeText(text);
+            console.log("Text copied to clipboard successfully");
           } catch (e) {
-            console.error("Failed to insert text:", e);
+            console.error("Failed to copy to clipboard:", e);
           }
-        } else {
-          console.log("Auto-insert is disabled, skipping cursor insertion");
-        }
-        
-        // Save transcription to backend AFTER paste/clipboard operations
-        // This ensures we save the exact text that was pasted
-        try {
-          console.log("Saving transcription with model:", model);
-          await invoke("save_transcription", { text, model });
-          console.log("Transcription saved to backend");
-        } catch (e) {
-          console.error("Failed to save transcription:", e);
-        }
-      } finally {
-        // Reset processing flag after a delay
-        setTimeout(() => {
-          processingRef.current = false;
-        }, 1000);
-      }
 
-      // Hide the pill widget after handling transcription
-      setTimeout(async () => {
-        try {
-          await invoke("hide_pill_widget");
-          console.log("Pill widget hidden after transcription");
-        } catch (e) {
-          console.error("Failed to hide pill widget:", e);
+          // Try to insert at cursor if auto-insert is enabled
+          // Use ref to get latest value
+          if (autoInsertRef.current) {
+            console.log("Auto-insert is enabled, inserting text at cursor...");
+            try {
+              await invoke("insert_text", { text });
+              console.log("Text inserted at cursor successfully");
+            } catch (e) {
+              console.error("Failed to insert text:", e);
+            }
+          } else {
+            console.log("Auto-insert is disabled, skipping cursor insertion");
+          }
+
+          // Save transcription to backend AFTER paste/clipboard operations
+          // This ensures we save the exact text that was pasted
+          try {
+            console.log("Saving transcription with model:", model);
+            await invoke("save_transcription", { text, model });
+            console.log("Transcription saved to backend");
+          } catch (e) {
+            console.error("Failed to save transcription:", e);
+          }
+        } finally {
+          // Reset processing flag after a delay
+          setTimeout(() => {
+            processingRef.current = false;
+          }, 1000);
         }
-      }, 500); // Small delay to ensure paste completes
-    });
+
+        // Hide the pill widget after handling transcription
+        setTimeout(async () => {
+          try {
+            await invoke("hide_pill_widget");
+            console.log("Pill widget hidden after transcription");
+          } catch (e) {
+            console.error("Failed to hide pill widget:", e);
+          }
+        }, 500); // Small delay to ensure paste completes
+      },
+    );
   }, [registerEvent]); // Only depend on registerEvent which is memoized
 
   // Handle click to stop recording
@@ -121,8 +127,8 @@ export function RecordingPill() {
   // Calculate glow effect based on audio level
   // Make it MUCH more sensitive and visible
   const normalizedLevel = Math.min(audioLevel * 20, 1); // 20x amplification for better sensitivity
-  const glowRadius = normalizedLevel > 0.05 ? 20 + (normalizedLevel * 40) : 0; // 20-60px range
-  const glowOpacity = normalizedLevel > 0.05 ? 0.7 + (normalizedLevel * 0.3) : 0; // 0.7-1.0 opacity
+  const glowRadius = normalizedLevel > 0.05 ? 20 + normalizedLevel * 40 : 0; // 20-60px range
+  const glowOpacity = normalizedLevel > 0.05 ? 0.7 + normalizedLevel * 0.3 : 0; // 0.7-1.0 opacity
 
   // Debug logging
   console.log("RecordingPill Debug:", {
@@ -130,7 +136,7 @@ export function RecordingPill() {
     normalizedLevel,
     glowRadius,
     glowOpacity,
-    recordingState: recording.state
+    recordingState: recording.state,
   });
 
   const isTranscribing = recording.state === "transcribing";
@@ -139,7 +145,7 @@ export function RecordingPill() {
   // Build style objects to ensure they're valid
   const pillStyle = {
     boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)", // Default shadow
-    background: "rgba(0, 0, 0, 0.95)" // Default background
+    background: "rgba(0, 0, 0, 0.95)", // Default background
   };
 
   if (isRecording && normalizedLevel > 0.05) {
@@ -165,7 +171,7 @@ export function RecordingPill() {
           "transition-all duration-200 ease-out",
           "shadow-lg hover:shadow-xl", // Stronger shadow for visibility
           "border border-white/10", // Add border for better visibility
-          isRecording && normalizedLevel > 0.05 && "scale-110" // More noticeable scale when speaking
+          isRecording && normalizedLevel > 0.05 && "scale-110", // More noticeable scale when speaking
         )}
         style={pillStyle}
       >
@@ -174,10 +180,14 @@ export function RecordingPill() {
           <div
             className="absolute inset-0 rounded-full"
             style={{
-              background: normalizedLevel > 0.05
-                ? `radial-gradient(ellipse at center, transparent 40%, rgba(255, 59, 48, ${(normalizedLevel * 0.3).toFixed(2)}) 100%)`
-                : "none",
-              animation: normalizedLevel > 0.05 ? "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite" : "none"
+              background:
+                normalizedLevel > 0.05
+                  ? `radial-gradient(ellipse at center, transparent 40%, rgba(255, 59, 48, ${(normalizedLevel * 0.3).toFixed(2)}) 100%)`
+                  : "none",
+              animation:
+                normalizedLevel > 0.05
+                  ? "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite"
+                  : "none",
             }}
           />
         )}
@@ -207,19 +217,24 @@ export function RecordingPill() {
           <Mic
             className={cn(
               "w-6 h-6 relative z-10",
-              isRecording ? "text-white" : "text-white/70"
+              isRecording ? "text-white" : "text-white/70",
             )}
             style={{
-              filter: isRecording && normalizedLevel > 0.05
-                ? `drop-shadow(0 0 ${normalizedLevel * 8}px rgba(255, 255, 255, 0.8))`
-                : "none"
+              filter:
+                isRecording && normalizedLevel > 0.05
+                  ? `drop-shadow(0 0 ${normalizedLevel * 8}px rgba(255, 255, 255, 0.8))`
+                  : "none",
             }}
           />
         )}
-        
+
         {/* Status text */}
         <span className="text-white text-sm font-medium">
-          {isTranscribing ? "Processing..." : isRecording ? "Recording" : "Ready"}
+          {isTranscribing
+            ? "Processing..."
+            : isRecording
+              ? "Recording"
+              : "Ready"}
         </span>
       </button>
 
