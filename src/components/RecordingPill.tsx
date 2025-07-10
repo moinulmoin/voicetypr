@@ -44,7 +44,7 @@ export function RecordingPill() {
     });
 
     // Transcription complete events
-    registerEvent<{ text: string; model: string }>("transcription-complete", async ({ text }) => {
+    registerEvent<{ text: string; model: string }>("transcription-complete", async ({ text, model }) => {
       // Guard against duplicate processing
       if (processingRef.current) {
         console.warn("[RecordingPill] Already processing transcription, skipping duplicate");
@@ -55,6 +55,7 @@ export function RecordingPill() {
       
       console.log("[EventCoordinator] Pill window received transcription:", { 
         text: text.substring(0, 50) + "...",
+        model,
         timestamp: new Date().toISOString()
       });
       
@@ -79,6 +80,16 @@ export function RecordingPill() {
           }
         } else {
           console.log("Auto-insert is disabled, skipping cursor insertion");
+        }
+        
+        // Save transcription to backend AFTER paste/clipboard operations
+        // This ensures we save the exact text that was pasted
+        try {
+          console.log("Saving transcription with model:", model);
+          await invoke("save_transcription", { text, model });
+          console.log("Transcription saved to backend");
+        } catch (e) {
+          console.error("Failed to save transcription:", e);
         }
       } finally {
         // Reset processing flag after a delay

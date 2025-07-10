@@ -137,8 +137,9 @@ export class EventCoordinator {
   private shouldWindowHandleEvent(windowId: WindowId, eventName: string): boolean {
     // Event routing rules
     const routingRules: Record<string, WindowId | "all"> = {
-      // Transcription events should only go to pill window
-      "transcription-complete": "pill",
+      // Transcription events
+      "transcription-complete": "pill",  // Pill window handles paste/clipboard/save
+      "history-updated": "main",         // Main window reloads history
       "audio-level": "pill",
       "recording-state-changed": "all",
       

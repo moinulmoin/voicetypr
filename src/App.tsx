@@ -115,24 +115,10 @@ export default function App() {
         };
         window.addEventListener("no-models-available", handleNoModels);
         
-        // Register event handler for updating history only
-        // The pill window handles the actual text insertion
-        registerEvent<{ text: string; model: string }>("transcription-complete", async ({ text, model }) => {
-          console.log("[EventCoordinator] Main window: updating history after transcription", { 
-            text: text.substring(0, 50) + "...", 
-            model 
-          });
-          
-          // Add to history immediately (in addition to loading from backend)
-          const newEntry: TranscriptionHistory = {
-            id: Date.now().toString(),
-            text,
-            timestamp: new Date(),
-            model
-          };
-          setHistory(prev => [newEntry, ...prev]);
-          
-          // Also reload from backend to ensure consistency
+        // Listen for history updates from backend
+        // Backend is the single source of truth for transcription history
+        registerEvent("history-updated", async () => {
+          console.log("[EventCoordinator] Main window: reloading history after update");
           await loadHistory();
         });
 

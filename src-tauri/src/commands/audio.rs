@@ -295,22 +295,11 @@ pub async fn stop_recording(
                 // Update state back to idle
                 update_recording_state(&app_for_task, RecordingState::Idle, None);
 
-                // Save transcription to store
-                if let Ok(store) = app_for_task.store("transcriptions") {
-                    let timestamp = chrono::Utc::now().to_rfc3339();
-                    store.set(
-                        &timestamp,
-                        serde_json::json!({
-                            "text": &text,
-                            "model": &model_name_clone,
-                            "timestamp": &timestamp
-                        })
-                    );
-                    let _ = store.save();
-                }
+                // Don't save here - let the pill window save after paste/clipboard
+                // This ensures we save the exact text that was pasted
 
                 // Emit transcription complete event
-                // The pill window will handle auto-insert and clipboard
+                // The pill window will handle auto-insert, clipboard, and saving
                 let _ = app_for_task.emit(
                     "transcription-complete",
                     serde_json::json!({
@@ -371,6 +360,32 @@ pub async fn cleanup_old_transcriptions(app: AppHandle, days: Option<u32>) -> Re
         store.save().map_err(|e| e.to_string())?;
     }
 
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn save_transcription(app: AppHandle, text: String, model: String) -> Result<(), String> {
+    // Save transcription to store with current timestamp
+    let store = app.store("transcriptions")
+        .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
+    
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    store.set(
+        &timestamp,
+        serde_json::json!({
+            "text": text,
+            "model": model,
+            "timestamp": timestamp
+        })
+    );
+    
+    store.save()
+        .map_err(|e| format!("Failed to save transcription: {}", e))?;
+    
+    // Emit event to notify that history was updated
+    let _ = app.emit("history-updated", ());
+    
+    log::info!("Saved transcription with {} characters", text.len());
     Ok(())
 }
 
