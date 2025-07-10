@@ -286,11 +286,20 @@ impl AudioRecorder {
 
             stream.play().map_err(|e| e.to_string())?;
 
+            // Create a channel to stop the silence detection thread
+            let (silence_stop_tx, silence_stop_rx) = mpsc::channel();
+            
             // Spawn silence detection thread
             let last_sound_clone = last_sound_time.clone();
             let silence_duration = silence_config.duration;
             let check_interval = silence_config.check_interval;
             let silence_thread = thread::spawn(move || loop {
+                // Check for stop signal
+                if silence_stop_rx.try_recv().is_ok() {
+                    log::debug!("Silence detection thread received stop signal");
+                    break;
+                }
+                
                 thread::sleep(check_interval);
 
                 if let Ok(last_sound) = last_sound_clone.lock() {
@@ -309,7 +318,8 @@ impl AudioRecorder {
             let stop_reason = stop_rx.recv().ok();
 
             // Stop silence detection thread
-            drop(silence_thread);
+            let _ = silence_stop_tx.send(());
+            let _ = silence_thread.join();
 
             // Stop and finalize
             drop(stream);
