@@ -32,19 +32,52 @@ impl WindowManager {
 
     /// Show the pill window, creating it if necessary
     pub async fn show_pill_window(&self) -> Result<(), String> {
-        let mut pill_guard = self.pill_window.lock().unwrap();
-        
-        // Check if window exists and is still valid
-        if let Some(window) = &*pill_guard {
-            // Try to show the window - if it fails, we'll create a new one
-            if window.show().is_ok() {
-                log::info!("Showing existing pill window");
-                return Ok(());
+        // First check if Tauri has a window with the "pill" label
+        if let Some(existing_window) = self.app_handle.get_webview_window("pill") {
+            // Window exists in Tauri, update our reference and show it
+            {
+                let mut pill_guard = self.pill_window.lock().unwrap();
+                *pill_guard = Some(existing_window.clone());
             }
+            
+            existing_window.show().map_err(|e| e.to_string())?;
+            existing_window.center().map_err(|e| e.to_string())?;
+            
+            // Debug: Check if window is actually visible
+            let is_visible = existing_window.is_visible().unwrap_or(false);
+            log::info!("Found and showing existing pill window from Tauri - visible: {}", is_visible);
+            
+            // If not visible after show, try set_focus as a workaround
+            if !is_visible {
+                log::warn!("Window not visible after show(), trying set_focus()");
+                let _ = existing_window.set_focus();
+            }
+            
+            return Ok(());
         }
 
-        // Create new pill window
+        // No window exists, create new one
         log::info!("Creating new pill window");
+        
+        // Get screen dimensions to center the pill
+        let (center_x, center_y) = if let Some(main_window) = self.get_main_window() {
+            if let Ok(Some(monitor)) = main_window.current_monitor() {
+                let size = monitor.size();
+                let scale = monitor.scale_factor();
+                let width = size.width as f64 / scale;
+                let height = size.height as f64 / scale;
+                
+                // Center position (accounting for pill size)
+                let pill_width = 200.0;
+                let pill_height = 60.0;
+                ((width - pill_width) / 2.0, (height - pill_height) / 2.0)
+            } else {
+                (640.0, 360.0)
+            }
+        } else {
+            (640.0, 360.0)
+        };
+        
         let pill_window = WebviewWindowBuilder::new(
             &self.app_handle,
             "pill",
@@ -59,12 +92,19 @@ impl WindowManager {
         .content_protected(true)
         .decorations(false)
         .transparent(true)
-        .shadow(false)
+        .shadow(true)
         .skip_taskbar(true)
         .inner_size(200.0, 60.0)
+        .position(center_x, center_y)
+        .visible(true)  // Start visible
+        .focused(false)  // Don't steal focus
         .build()
         .map_err(|e| e.to_string())?;
 
+        // Show the window first (before NSPanel conversion)
+        pill_window.show().map_err(|e| e.to_string())?;
+        pill_window.center().map_err(|e| e.to_string())?;
+        
         // Convert to NSPanel on macOS
         #[cfg(target_os = "macos")]
         {
@@ -74,19 +114,22 @@ impl WindowManager {
                 .map_err(|e| format!("Failed to convert to NSPanel: {:?}", e))?;
             
             log::info!("Converted pill window to NSPanel");
+            
+            // Show again after NSPanel conversion
+            pill_window.show().map_err(|e| e.to_string())?;
         }
-
-        // Show the window
-        pill_window.show().map_err(|e| e.to_string())?;
         
         // Store the window reference
-        *pill_guard = Some(pill_window);
+        {
+            let mut pill_guard = self.pill_window.lock().unwrap();
+            *pill_guard = Some(pill_window);
+        }
         
-        log::info!("Pill window created and shown successfully");
+        log::info!("Pill window created and shown at ({}, {})", center_x, center_y);
         Ok(())
     }
 
-    /// Hide the pill window
+    /// Hide the pill window (don't close it)
     pub async fn hide_pill_window(&self) -> Result<(), String> {
         if let Some(window) = self.get_pill_window() {
             window.hide().map_err(|e| e.to_string())?;
@@ -95,22 +138,19 @@ impl WindowManager {
         Ok(())
     }
 
-    /// Close the pill window
+    /// Close the pill window (actually destroy it)
     pub async fn close_pill_window(&self) -> Result<(), String> {
-        // Take the window out of the mutex to avoid holding lock across await
+        // Take the window out of the mutex
         let window = {
             let mut pill_guard = self.pill_window.lock().unwrap();
             pill_guard.take()
         };
         
         if let Some(window) = window {
-            // First hide to prevent focus issues
-            window.hide().map_err(|e| e.to_string())?;
+            // Hide first
+            let _ = window.hide();
             
-            // Small delay before closing
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            
-            // Close the window
+            // Then close
             window.close().map_err(|e| e.to_string())?;
             log::info!("Pill window closed");
         }

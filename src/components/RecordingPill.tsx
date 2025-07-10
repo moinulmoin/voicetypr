@@ -87,22 +87,15 @@ export function RecordingPill() {
         }, 1000);
       }
 
-      // Close the pill widget after handling transcription
+      // Hide the pill widget after handling transcription
       setTimeout(async () => {
         try {
-          // First ensure the pill window loses focus
           await invoke("hide_pill_widget");
-          console.log("Pill widget hidden");
-
-          // Small delay before closing
-          setTimeout(async () => {
-            await invoke("close_pill_widget");
-            console.log("Pill widget closed after transcription");
-          }, 100);
+          console.log("Pill widget hidden after transcription");
         } catch (e) {
-          console.error("Failed to close pill widget:", e);
+          console.error("Failed to hide pill widget:", e);
         }
-      }, 1000); // Increased delay to ensure paste completes
+      }, 500); // Small delay to ensure paste completes
     });
   }, [registerEvent]); // Only depend on registerEvent which is memoized
 
@@ -155,11 +148,12 @@ export function RecordingPill() {
         onClick={handleClick}
         className={cn(
           "pointer-events-auto",
-          "relative w-16 h-10 rounded-full",
+          "relative w-48 h-14 rounded-full", // Increased size to match window
           "bg-black/95",
-          "flex items-center justify-center",
+          "flex items-center justify-center gap-2", // Added gap for spacing
           "transition-all duration-200 ease-out",
-          "shadow-md hover:shadow-lg",
+          "shadow-lg hover:shadow-xl", // Stronger shadow for visibility
+          "border border-white/10", // Add border for better visibility
           isRecording && normalizedLevel > 0.05 && "scale-110" // More noticeable scale when speaking
         )}
         style={pillStyle}
@@ -178,7 +172,7 @@ export function RecordingPill() {
         )}
 
         {isTranscribing ? (
-          <div className="w-4 h-4 relative z-10">
+          <div className="w-6 h-6 relative z-10">
             {/* macOS-style spinner */}
             <svg className="animate-spin" viewBox="0 0 24 24">
               <circle
@@ -201,7 +195,7 @@ export function RecordingPill() {
         ) : (
           <Mic
             className={cn(
-              "w-4 h-4 relative z-10",
+              "w-6 h-6 relative z-10",
               isRecording ? "text-white" : "text-white/70"
             )}
             style={{
@@ -211,6 +205,11 @@ export function RecordingPill() {
             }}
           />
         )}
+        
+        {/* Status text */}
+        <span className="text-white text-sm font-medium">
+          {isTranscribing ? "Processing..." : isRecording ? "Recording" : "Ready"}
+        </span>
       </button>
 
       {/* Debug info - remove in production */}
