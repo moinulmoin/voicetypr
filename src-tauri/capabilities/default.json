@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "VoiceTyper permissions",
-  "windows": ["main"],
+  "windows": ["main", "pill"],
   "permissions": [
     "core:default",
     "opener:default",

@@ -141,6 +141,30 @@ describe('VoiceTypr User Scenarios', () => {
         expect(screen.getByText('Transcribing your speech...')).toBeInTheDocument();
       });
 
+      // Mock the transcription history to include the new transcription
+      vi.mocked(invoke).mockImplementation((cmd) => {
+        if (cmd === 'get_transcription_history') {
+          return Promise.resolve([{
+            text: 'Hello world, this is my transcription',
+            model: 'base',
+            timestamp: new Date().toISOString()
+          }]);
+        }
+        // Keep other command mocks as default
+        if (cmd === 'stop_recording') return Promise.resolve();
+        if (cmd === 'get_settings') return Promise.resolve({
+          hotkey: 'CommandOrControl+Shift+Space',
+          language: 'auto',
+          auto_insert: true,
+          show_window_on_record: false,
+          theme: 'system',
+          current_model: 'base',
+          transcription_cleanup_days: null,
+          show_pill_widget: true,
+        });
+        return Promise.resolve();
+      });
+
       // Transcription completes
       emitMockEvent('transcription-complete', { 
         text: 'Hello world, this is my transcription',
@@ -149,7 +173,9 @@ describe('VoiceTypr User Scenarios', () => {
 
       // User sees the transcribed text in history
       await waitFor(() => {
-        expect(screen.getByText('Hello world, this is my transcription')).toBeInTheDocument();
+        // Look for the truncated text (the component uses truncate class)
+        const transcriptionElement = screen.getByText('Hello world, this is my transcription');
+        expect(transcriptionElement).toBeInTheDocument();
       });
     });
 

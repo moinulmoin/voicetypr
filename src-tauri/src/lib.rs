@@ -9,6 +9,8 @@ use tauri_plugin_store::StoreExt;
 mod audio;
 mod commands;
 mod whisper;
+mod window_manager;
+mod state_machine;
 
 #[cfg(test)]
 mod tests;
@@ -16,6 +18,8 @@ mod tests;
 use audio::recorder::AudioRecorder;
 use commands::{audio::*, model::*, settings::*, text::*, window::*};
 use whisper::cache::TranscriberCache;
+use window_manager::WindowManager;
+use state_machine::RecordingStateMachine;
 
 // Recording state enum matching frontend
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
@@ -35,22 +39,57 @@ impl Default for RecordingState {
 }
 
 // Application state - managed by Tauri
-#[derive(Default)]
 pub struct AppState {
     pub recording_state: Arc<Mutex<RecordingState>>,
+    pub recording_state_machine: Arc<Mutex<RecordingStateMachine>>,
     pub recording_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
     pub current_recording_path: Arc<Mutex<Option<PathBuf>>>,
     pub transcription_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub window_manager: Arc<Mutex<Option<WindowManager>>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             recording_state: Arc::new(Mutex::new(RecordingState::Idle)),
+            recording_state_machine: Arc::new(Mutex::new(RecordingStateMachine::new())),
             recording_shortcut: Arc::new(Mutex::new(None)),
             current_recording_path: Arc::new(Mutex::new(None)),
             transcription_task: Arc::new(Mutex::new(None)),
+            window_manager: Arc::new(Mutex::new(None)),
         }
+    }
+    
+    pub fn set_window_manager(&self, manager: WindowManager) {
+        let mut wm_guard = self.window_manager.lock().unwrap();
+        *wm_guard = Some(manager);
+    }
+    
+    pub fn get_window_manager(&self) -> Option<WindowManager> {
+        self.window_manager.lock().unwrap().clone()
+    }
+    
+    /// Transition recording state with validation
+    pub fn transition_recording_state(&self, new_state: RecordingState) -> Result<(), String> {
+        let mut state_machine = self.recording_state_machine.lock()
+            .map_err(|e| format!("Failed to lock state machine: {}", e))?;
+        
+        state_machine.transition_to(new_state)
+            .map_err(|e| e.to_string())?;
+        
+        // Update the legacy state as well
+        let mut state = self.recording_state.lock()
+            .map_err(|e| format!("Failed to lock recording state: {}", e))?;
+        *state = new_state;
+        
+        Ok(())
+    }
+    
+    /// Get current recording state from state machine
+    pub fn get_current_state(&self) -> RecordingState {
+        self.recording_state_machine.lock()
+            .map(|sm| sm.current())
+            .unwrap_or(RecordingState::Idle)
     }
 }
 
@@ -60,12 +99,25 @@ pub fn update_recording_state(
     new_state: RecordingState,
     error: Option<String>,
 ) {
-    {
-        let app_state = app.state::<AppState>();
-        if let Ok(mut current_state) = app_state.recording_state.lock() {
-            *current_state = new_state;
-        };
-    } // Drop the lock before emitting event
+    let app_state = app.state::<AppState>();
+    
+    // Try to transition using state machine
+    match app_state.transition_recording_state(new_state) {
+        Ok(_) => {
+            log::info!("Successfully transitioned to state: {:?}", new_state);
+        }
+        Err(e) => {
+            log::error!("State transition failed: {}. Forcing state update.", e);
+            // Force state update even if transition is invalid (for backwards compatibility)
+            if let Ok(mut state_machine) = app_state.recording_state_machine.lock() {
+                state_machine.reset();
+                let _ = state_machine.transition_to(new_state);
+            }
+            if let Ok(mut current_state) = app_state.recording_state.lock() {
+                *current_state = new_state;
+            }
+        }
+    }
 
     // Emit state change event with typed payload
     let _ = app.emit(
@@ -108,12 +160,20 @@ pub fn run() {
 
     log::info!("Starting VoiceTypr application");
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+
+    // Add NSPanel plugin on macOS
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
+    builder
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -200,6 +260,13 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // Set activation policy on macOS to prevent focus stealing
+            #[cfg(target_os = "macos")]
+            {
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                log::info!("Set macOS activation policy to Accessory");
+            }
+
             // Initialize whisper manager
             let models_dir = app.path().app_data_dir()?.join("models");
             log::info!("Models directory: {:?}", models_dir);
@@ -216,6 +283,11 @@ pub fn run() {
 
             // Initialize unified application state
             app.manage(AppState::new());
+            
+            // Initialize window manager after app state is managed
+            let app_state = app.state::<AppState>();
+            let window_manager = WindowManager::new(app.app_handle().clone());
+            app_state.set_window_manager(window_manager);
 
             // Initialize recorder state (kept separate for backwards compatibility)
             app.manage(RecorderState(Mutex::new(AudioRecorder::new())));
@@ -286,7 +358,31 @@ pub fn run() {
 
             app.global_shortcut().register(shortcut)?;
 
-            // Hide window on start (menu bar only)
+            // Create pill window at startup and convert to NSPanel
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::{WebviewUrl, WebviewWindowBuilder};
+                
+                // Create the pill window
+                let pill_window = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
+                    .title("Recording")
+                    .resizable(false)
+                    .decorations(false)
+                    .always_on_top(true)
+                    .skip_taskbar(true)
+                    .transparent(true)
+                    .inner_size(64.0, 40.0)
+                    .visible(false) // Start hidden
+                    .build()?;
+
+                // Convert to NSPanel to prevent focus stealing
+                use tauri_nspanel::WebviewWindowExt;
+                pill_window.to_panel().map_err(|e| format!("Failed to convert to NSPanel: {:?}", e))?;
+                
+                log::info!("Created pill window as NSPanel");
+            }
+
+            // Hide main window on start (menu bar only)
             // TODO: Only hide after successful onboarding
             // if let Some(window) = app.get_webview_window("main") {
             //     let _ = window.hide();
@@ -311,7 +407,9 @@ pub fn run() {
             get_transcription_history,
             show_pill_widget,
             hide_pill_widget,
+            close_pill_widget,
             update_pill_position,
+            focus_main_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -13,10 +13,13 @@
     "windows": [
       {
         "title": "voicetypr",
+        "label": "main",
         "width": 500,
         "height": 600,
         "resizable": false,
-        "center": true
+        "center": true,
+        "visible": true,
+        "skipTaskbar": false
       }
     ],
     "security": {

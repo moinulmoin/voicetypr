@@ -18,8 +18,12 @@ pub async fn insert_text(text: String) -> Result<(), String> {
 
         // Try direct text typing first
         match enigo.text(&text) {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                log::info!("Successfully inserted text using direct typing");
+                Ok(())
+            },
             Err(e) => {
+                log::warn!("Direct text typing failed: {:?}, falling back to clipboard method", e);
                 // Fallback to clipboard method if direct typing fails
                 insert_via_clipboard(text).map_err(|_| format!("Failed to insert text: {:?}", e))
             }

@@ -61,7 +61,7 @@ pub async fn start_recording(
             log::error!("Recording failed to start!");
             return Err("Failed to start recording".to_string());
         }
-        
+
         // Start audio level monitoring before releasing the lock
         if let Some(audio_level_rx) = recorder.take_audio_level_receiver() {
             let app_for_levels = app.clone();
@@ -69,7 +69,7 @@ pub async fn start_recording(
             std::thread::spawn(move || {
                 let mut last_emit = std::time::Instant::now();
                 let emit_interval = std::time::Duration::from_millis(33); // ~30fps
-                
+
                 while let Ok(level) = audio_level_rx.recv() {
                     // Throttle events to avoid overwhelming the UI
                     if last_emit.elapsed() >= emit_interval {
@@ -80,31 +80,19 @@ pub async fn start_recording(
             });
         }
     } // MutexGuard dropped here
-    
-    // Now perform async operations after mutex is released
 
-    // Show window if configured
-    if let Ok(store) = app.store("settings") {
-        if let Some(show_window) = store.get("show_window_on_record") {
-            if show_window.as_bool().unwrap_or(false) {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
-        }
-    }
+    // Now perform async operations after mutex is released
 
     // Update state to recording
     update_recording_state(&app, RecordingState::Recording, None);
-    
+
     // Show pill widget if enabled
     if let Ok(store) = app.store("settings") {
         let show_pill = store
             .get("show_pill_widget")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
-            
+
         if show_pill {
             if let Err(e) = crate::commands::window::show_pill_widget(app.clone()).await {
                 log::warn!("Failed to show pill widget: {}", e);
@@ -259,8 +247,8 @@ pub async fn stop_recording(
     let language = store
         .get("language")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
-        
-    let auto_insert = store
+
+    let _auto_insert = store
         .get("auto_insert")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
@@ -286,10 +274,10 @@ pub async fn stop_recording(
                 Err(e) => {
                     // Update state to error
                     update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
-                    
+
                     // Hide pill widget
                     let _ = crate::commands::window::hide_pill_widget(app_for_task.clone()).await;
-                    
+
                     // Also emit legacy event
                     let _ = app_for_task.emit("transcription-error", e);
                     return;
@@ -306,10 +294,7 @@ pub async fn stop_recording(
             Ok(text) => {
                 // Update state back to idle
                 update_recording_state(&app_for_task, RecordingState::Idle, None);
-                
-                // Hide pill widget
-                let _ = crate::commands::window::hide_pill_widget(app_for_task.clone()).await;
-                
+
                 // Save transcription to store
                 if let Ok(store) = app_for_task.store("transcriptions") {
                     let timestamp = chrono::Utc::now().to_rfc3339();
@@ -323,19 +308,9 @@ pub async fn stop_recording(
                     );
                     let _ = store.save();
                 }
-                
-                // Auto-insert text if enabled
-                if auto_insert && !text.is_empty() {
-                    if let Err(e) = crate::commands::text::insert_text(text.clone()).await {
-                        log::error!("Failed to auto-insert text: {}", e);
-                        // Still copy to clipboard as fallback
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            let _ = clipboard.set_text(&text);
-                        }
-                    }
-                }
-                
-                // Also emit legacy event
+
+                // Emit transcription complete event
+                // The pill window will handle auto-insert and clipboard
                 let _ = app_for_task.emit(
                     "transcription-complete",
                     serde_json::json!({
@@ -347,10 +322,7 @@ pub async fn stop_recording(
             Err(e) => {
                 // Update state to error
                 update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
-                
-                // Hide pill widget
-                let _ = crate::commands::window::hide_pill_widget(app_for_task.clone()).await;
-                
+
                 // Also emit legacy event
                 let _ = app_for_task.emit("transcription-error", e);
             }
@@ -381,12 +353,12 @@ pub async fn get_audio_devices() -> Result<Vec<String>, String> {
 pub async fn cleanup_old_transcriptions(app: AppHandle, days: Option<u32>) -> Result<(), String> {
     if let Some(days) = days {
         let store = app.store("transcriptions").map_err(|e| e.to_string())?;
-        
+
         let cutoff_date = chrono::Utc::now() - chrono::Duration::days(days as i64);
-        
+
         // Get all keys
         let keys: Vec<String> = store.keys().into_iter().map(|k| k.to_string()).collect();
-        
+
         // Remove old entries
         for key in keys {
             if let Ok(date) = chrono::DateTime::parse_from_rfc3339(&key) {
@@ -395,33 +367,33 @@ pub async fn cleanup_old_transcriptions(app: AppHandle, days: Option<u32>) -> Re
                 }
             }
         }
-        
+
         store.save().map_err(|e| e.to_string())?;
     }
-    
+
     Ok(())
 }
 
 #[tauri::command]
 pub async fn get_transcription_history(app: AppHandle, limit: Option<usize>) -> Result<Vec<serde_json::Value>, String> {
     let store = app.store("transcriptions").map_err(|e| e.to_string())?;
-    
+
     let mut entries: Vec<(String, serde_json::Value)> = Vec::new();
-    
+
     // Collect all entries with their timestamps
     for key in store.keys() {
         if let Some(value) = store.get(&key) {
             entries.push((key.to_string(), value));
         }
     }
-    
+
     // Sort by timestamp (newest first)
     entries.sort_by(|a, b| b.0.cmp(&a.0));
-    
+
     // Apply limit if specified
     let limit = limit.unwrap_or(50);
     entries.truncate(limit);
-    
+
     // Return just the values
     Ok(entries.into_iter().map(|(_, v)| v).collect())
 }

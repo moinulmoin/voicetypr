@@ -75,13 +75,25 @@ describe('Critical User Journeys', () => {
       expect(screen.getByText('Transcribing your speech...')).toBeInTheDocument();
     });
 
+    // Mock the transcription history to include the new transcription
+    vi.mocked(invoke).mockImplementation((cmd) => {
+      if (cmd === 'get_transcription_history') {
+        return Promise.resolve([{
+          text: 'Hello world',
+          model: 'base',
+          timestamp: new Date().toISOString()
+        }]);
+      }
+      return Promise.resolve();
+    });
+
     // Transcription completes
     emitMockEvent('transcription-complete', { 
       text: 'Hello world',
       model: 'base' 
     });
 
-    // User sees their text
+    // User sees their text in history
     await waitFor(() => {
       expect(screen.getByText('Hello world')).toBeInTheDocument();
     });

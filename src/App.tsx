@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { listen } from "@tauri-apps/api/event";
 import { Loader2, Mic, MicOff, Settings } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { HotkeyInput } from "./components/HotkeyInput";
@@ -18,6 +17,7 @@ import {
 import { Separator } from "./components/ui/separator";
 import { Switch } from "./components/ui/switch";
 import { useRecording } from "./hooks/useRecording";
+import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { AppSettings, ModelInfo, TranscriptionHistory } from "./types";
 import { AppErrorBoundary, RecordingErrorBoundary, SettingsErrorBoundary, ModelManagementErrorBoundary } from "./components/ErrorBoundary";
 
@@ -51,6 +51,7 @@ function sortModels(
 // Main App Component
 export default function App() {
   const recording = useRecording();
+  const { registerEvent } = useEventCoordinator("main");
   const [currentView, setCurrentView] = useState<"recorder" | "settings" | "onboarding">(
     "recorder"
   );
@@ -86,19 +87,24 @@ export default function App() {
           });
         }
 
-        // Load transcription history from store
-        try {
-          const storedHistory = await invoke<any[]>("get_transcription_history", { limit: 50 });
-          const formattedHistory: TranscriptionHistory[] = storedHistory.map((item) => ({
-            id: item.timestamp || Date.now().toString(),
-            text: item.text,
-            timestamp: new Date(item.timestamp),
-            model: item.model
-          }));
-          setHistory(formattedHistory);
-        } catch (error) {
-          console.error("Failed to load transcription history:", error);
-        }
+        // Define loadHistory function
+        const loadHistory = async () => {
+          try {
+            const storedHistory = await invoke<any[]>("get_transcription_history", { limit: 50 });
+            const formattedHistory: TranscriptionHistory[] = storedHistory.map((item) => ({
+              id: item.timestamp || Date.now().toString(),
+              text: item.text,
+              timestamp: new Date(item.timestamp),
+              model: item.model
+            }));
+            setHistory(formattedHistory);
+          } catch (error) {
+            console.error("Failed to load transcription history:", error);
+          }
+        };
+
+        // Load initial transcription history
+        await loadHistory();
 
         // All recording event handling is now managed by the useRecording hook
 
@@ -108,67 +114,35 @@ export default function App() {
           setCurrentView("onboarding");
         };
         window.addEventListener("no-models-available", handleNoModels);
+        
+        // Register event handler for updating history only
+        // The pill window handles the actual text insertion
+        registerEvent<{ text: string; model: string }>("transcription-complete", async () => {
+          console.log("[EventCoordinator] Main window: updating history after transcription");
+          // ONLY update history, no text insertion here!
+          await loadHistory();
+        });
 
-        const unlistenTranscription = await listen<{ text: string; model: string }>(
-          "transcription-complete",
-          async (event) => {
-            console.log("Transcription complete:", event.payload);
+        registerEvent<{ model: string; progress: number }>("download-progress", ({ model, progress }) => {
+          setDownloadProgress((prev) => ({
+            ...prev,
+            [model]: progress
+          }));
+        });
 
-            const { text, model } = event.payload;
-            const newEntry: TranscriptionHistory = {
-              id: Date.now().toString(),
-              text,
-              timestamp: new Date(),
-              model
-            };
-            setHistory((prev) => {
-              if (prev.length && prev[0].text === newEntry.text) return prev; // dedup
-              return [newEntry, ...prev].slice(0, 50);
-            });
-
-            // Copy to clipboard or insert at cursor
-            if (settings?.auto_insert) {
-              try {
-                await invoke("insert_text", { text });
-                console.log("Text inserted via native keyboard simulation");
-              } catch (e) {
-                // Fallback to clipboard
-                console.error("Failed to insert text, using clipboard:", e);
-                navigator.clipboard.writeText(text);
-              }
-            } else {
-              // Just copy to clipboard
-              navigator.clipboard.writeText(text);
-            }
-          }
-        );
-
-        const unlistenProgress = await listen<{ model: string; progress: number }>(
-          "download-progress",
-          (event) => {
-            setDownloadProgress((prev) => ({
-              ...prev,
-              [event.payload.model]: event.payload.progress
-            }));
-          }
-        );
-
-        const unlistenDownloaded = await listen<string>("model-downloaded", (event) => {
+        registerEvent<string>("model-downloaded", (modelName) => {
           setModels((prev) => ({
             ...prev,
-            [event.payload]: { ...prev[event.payload], downloaded: true }
+            [modelName]: { ...prev[modelName], downloaded: true }
           }));
           setDownloadProgress((prev) => {
             const newProgress = { ...prev };
-            delete newProgress[event.payload];
+            delete newProgress[modelName];
             return newProgress;
           });
         });
 
         return () => {
-          unlistenTranscription();
-          unlistenProgress();
-          unlistenDownloaded();
           window.removeEventListener("no-models-available", handleNoModels);
         };
       } catch (error) {
@@ -177,7 +151,7 @@ export default function App() {
     };
 
     init();
-  }, []);
+  }, [registerEvent]);
 
   // Download model
   const downloadModel = useCallback(async (modelName: string) => {
@@ -568,15 +542,16 @@ export default function App() {
       </div>
 
       {/* History */}
-      {history.length > 0 && (
-        <div className="border-t p-4">
-          <h3 className="text-sm font-medium text-muted-foreground mb-2">Recent Transcriptions</h3>
+      <div className="border-t p-4">
+        <h3 className="text-sm font-medium text-muted-foreground mb-2">Recent Transcriptions</h3>
+        {history.length > 0 ? (
           <div className="space-y-2 max-h-48 overflow-y-auto">
             {history.slice(0, 5).map((item) => (
               <div
                 key={item.id}
-                className="p-2  rounded border cursor-pointer"
+                className="p-2  rounded border cursor-pointer hover:bg-accent/50 transition-colors"
                 onClick={() => navigator.clipboard.writeText(item.text)}
+                title="Click to copy"
               >
                 <p className="text-sm text-foreground truncate">{item.text}</p>
                 <p className="text-xs text-muted-foreground">
@@ -585,8 +560,15 @@ export default function App() {
               </div>
             ))}
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="py-8 text-center">
+            <p className="text-sm text-muted-foreground">No transcriptions yet</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Press {settings?.hotkey || "Cmd+Shift+Space"} to start recording
+            </p>
+          </div>
+        )}
+      </div>
         </RecordingErrorBoundary>
       </div>
     </AppErrorBoundary>
