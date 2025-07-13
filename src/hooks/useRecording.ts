@@ -51,11 +51,9 @@ export function useRecording(): UseRecordingReturn {
         setState('transcribing');
       }));
 
-      unsubscribers.push(await listen('transcription-complete', () => {
-        console.log('[Recording Hook] Transcription complete');
-        setState('idle');
-        setError(null);
-      }));
+      // NOTE: We don't listen to transcription-complete here anymore
+      // The state will be set to idle by recording-state-changed event
+      // after the pill finishes processing and calls transcription_processed
 
       unsubscribers.push(await listen<string>('transcription-error', (event) => {
         console.error('[Recording Hook] Transcription error:', event.payload);

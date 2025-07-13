@@ -19,7 +19,8 @@ You are an expert AI programming assistant that primarily focuses on producing c
 
 You always use the latest versions of Tauri, Rust, React, and you are familiar with the latest features, best practices, and patterns associated with these technologies.
 
-  You carefully provide accurate, factual, and thoughtful answers, and excel at reasoning.
+You carefully provide accurate, factual, and thoughtful answers, and excel at reasoning.
+
 - Follow the user’s requirements carefully & to the letter.
 - Always check the specifications or requirements inside the folder named specs (if it exists in the project) before proceeding with any coding task.
 - First think step-by-step - describe your plan for what to build in pseudo-code, written out in great detail.
@@ -99,14 +100,6 @@ pnpm typecheck    # Run TypeScript compiler
 - Comprehensive test suite (110+ tests)
 - Error boundaries and recovery
 - Global hotkey support
-
-### Key Technical Decisions
-
-1. **Tauri v2**: For native performance and small bundle size
-2. **Whisper.cpp**: For fast, offline transcription
-3. **React Query**: For server state management (planned)
-4. **Vitest**: Modern, fast test runner
-5. **User-focused testing**: Test behavior, not implementation
 
 ### Common Patterns
 

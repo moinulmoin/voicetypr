@@ -16,8 +16,12 @@ pub struct Transcriber {
 
 impl Transcriber {
     pub fn new(model_path: &Path) -> Result<Self, String> {
+        let model_path_str = model_path
+            .to_str()
+            .ok_or_else(|| format!("Model path contains invalid UTF-8: {:?}", model_path))?;
+        
         let ctx = WhisperContext::new_with_params(
-            model_path.to_str().unwrap(),
+            model_path_str,
             WhisperContextParameters::default(),
         )
         .map_err(|e| format!("Failed to load model: {}", e))?;
@@ -26,12 +30,37 @@ impl Transcriber {
     }
 
     pub fn transcribe(&self, audio_path: &Path, language: Option<&str>) -> Result<String, String> {
+        log::info!("[TRANSCRIPTION_DEBUG] Starting transcription of: {:?}", audio_path);
+        
+        // Check if file exists and is readable
+        if !audio_path.exists() {
+            let error = format!("Audio file does not exist: {:?}", audio_path);
+            log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            return Err(error);
+        }
+        
+        let file_size = std::fs::metadata(audio_path)
+            .map_err(|e| format!("Cannot read file metadata: {}", e))?
+            .len();
+        log::info!("[TRANSCRIPTION_DEBUG] Audio file size: {} bytes", file_size);
+        
+        if file_size == 0 {
+            let error = "Audio file is empty (0 bytes)";
+            log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            return Err(error.to_string());
+        }
+        
         // Read WAV file
-        let mut reader = hound::WavReader::open(audio_path).map_err(|e| e.to_string())?;
+        let mut reader = hound::WavReader::open(audio_path)
+            .map_err(|e| {
+                let error = format!("Failed to open WAV file: {}", e);
+                log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+                error
+            })?;
 
         let spec = reader.spec();
-        log::debug!(
-            "WAV spec: channels={}, sample_rate={}, bits={}",
+        log::info!(
+            "[TRANSCRIPTION_DEBUG] WAV spec: channels={}, sample_rate={}, bits={}",
             spec.channels,
             spec.sample_rate,
             spec.bits_per_sample
@@ -40,7 +69,10 @@ impl Transcriber {
         /* ----------------------------------------------
         1) read raw i16 pcm
         ---------------------------------------------- */
-        let samples_i16: Vec<i16> = reader.samples::<i16>().map(|s| s.unwrap()).collect();
+        let samples_i16: Vec<i16> = reader
+            .samples::<i16>()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read audio samples: {}", e))?;
 
         /* ----------------------------------------------
         2) i16 → f32  (range -1.0 … 1.0)
@@ -112,29 +144,54 @@ impl Transcriber {
         // params.set_suppress_nst(true);
 
         // Run transcription
-        log::info!("Starting transcription...");
-        let mut state = self.context.create_state().map_err(|e| e.to_string())?;
+        log::info!("[TRANSCRIPTION_DEBUG] Creating Whisper state...");
+        let mut state = self.context.create_state()
+            .map_err(|e| {
+                let error = format!("Failed to create Whisper state: {}", e);
+                log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+                error
+            })?;
 
+        log::info!("[TRANSCRIPTION_DEBUG] Running Whisper inference with {} samples...", audio.len());
         state
             .full(params, &audio)
-            .map_err(|e| format!("Transcription failed: {}", e))?;
+            .map_err(|e| {
+                let error = format!("Whisper inference failed: {}", e);
+                log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+                error
+            })?;
 
         // Get text
-        let num_segments = state.full_n_segments().map_err(|e| e.to_string())?;
+        log::info!("[TRANSCRIPTION_DEBUG] Getting segments from Whisper output...");
+        let num_segments = state.full_n_segments()
+            .map_err(|e| {
+                let error = format!("Failed to get segments: {}", e);
+                log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+                error
+            })?;
 
-        log::info!("Transcription complete: {} segments", num_segments);
+        log::info!("[TRANSCRIPTION_DEBUG] Transcription complete: {} segments", num_segments);
 
         let mut text = String::new();
         for i in 0..num_segments {
-            let segment = state.full_get_segment_text(i).map_err(|e| e.to_string())?;
-            log::debug!("Segment {}: {}", i, segment);
+            let segment = state.full_get_segment_text(i)
+                .map_err(|e| {
+                    let error = format!("Failed to get segment {}: {}", i, e);
+                    log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+                    error
+                })?;
+            log::info!("[TRANSCRIPTION_DEBUG] Segment {}: '{}'", i, segment);
             text.push_str(&segment);
             text.push(' ');
         }
 
         let result = text.trim().to_string();
-        if result.is_empty() || result == "[SOUND]" {
-            log::warn!("Transcription resulted in empty or [SOUND] output");
+        if result.is_empty() {
+            log::warn!("[TRANSCRIPTION_DEBUG] Transcription resulted in empty output");
+        } else if result == "[SOUND]" {
+            log::warn!("[TRANSCRIPTION_DEBUG] Transcription resulted in [SOUND] output (no speech detected)");
+        } else {
+            log::info!("[TRANSCRIPTION_DEBUG] Final transcription: {} characters", result.len());
         }
 
         Ok(result)

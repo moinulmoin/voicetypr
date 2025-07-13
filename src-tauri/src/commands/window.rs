@@ -64,6 +64,21 @@ pub async fn update_pill_position(app: AppHandle, x: f64, y: f64) -> Result<(), 
     // Use window manager to update position
     window_manager.update_pill_position(x, y).await?;
     
+    // Save position directly to settings for persistence
+    save_pill_position_to_settings(&app, x, y)?;
+    
+    Ok(())
+}
+
+/// Helper function to save pill position to settings
+fn save_pill_position_to_settings(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
+    use tauri_plugin_store::StoreExt;
+    use serde_json::json;
+    
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    store.set("pill_position", json!([x, y]));
+    store.save().map_err(|e| e.to_string())?;
+    
     Ok(())
 }
 

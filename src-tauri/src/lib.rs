@@ -1,6 +1,7 @@
 use serde_json;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::async_runtime::Mutex as AsyncMutex;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -11,15 +12,23 @@ mod commands;
 mod whisper;
 mod window_manager;
 mod state_machine;
+mod state;
 
 #[cfg(test)]
 mod tests;
 
 use audio::recorder::AudioRecorder;
-use commands::{audio::*, model::*, settings::*, text::*, window::*};
+use commands::{
+    audio::*,
+    model::{download_model, get_model_status, delete_model, list_downloaded_models, preload_model},
+    settings::*,
+    text::*,
+    window::*,
+    debug::{debug_transcription_flow, test_transcription_event}
+};
 use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
-use state_machine::RecordingStateMachine;
+use state::unified_state::UnifiedRecordingState;
 
 // Recording state enum matching frontend
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
@@ -38,24 +47,29 @@ impl Default for RecordingState {
     }
 }
 
-// Application state - managed by Tauri
+// Application state - managed by Tauri (runtime state only)
 pub struct AppState {
-    pub recording_state: Arc<Mutex<RecordingState>>,
-    pub recording_state_machine: Arc<Mutex<RecordingStateMachine>>,
+    // Recording-related runtime state
+    pub recording_state: UnifiedRecordingState,
     pub recording_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
     pub current_recording_path: Arc<Mutex<Option<PathBuf>>>,
     pub transcription_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    
+    // Cancellation flag for graceful shutdown
+    pub should_cancel_recording: Arc<AtomicBool>,
+    
+    // Window management runtime state
     pub window_manager: Arc<Mutex<Option<WindowManager>>>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
-            recording_state: Arc::new(Mutex::new(RecordingState::Idle)),
-            recording_state_machine: Arc::new(Mutex::new(RecordingStateMachine::new())),
+            recording_state: UnifiedRecordingState::new(),
             recording_shortcut: Arc::new(Mutex::new(None)),
             current_recording_path: Arc::new(Mutex::new(None)),
             transcription_task: Arc::new(Mutex::new(None)),
+            should_cancel_recording: Arc::new(AtomicBool::new(false)),
             window_manager: Arc::new(Mutex::new(None)),
         }
     }
@@ -71,25 +85,45 @@ impl AppState {
     
     /// Transition recording state with validation
     pub fn transition_recording_state(&self, new_state: RecordingState) -> Result<(), String> {
-        let mut state_machine = self.recording_state_machine.lock()
-            .map_err(|e| format!("Failed to lock state machine: {}", e))?;
-        
-        state_machine.transition_to(new_state)
-            .map_err(|e| e.to_string())?;
-        
-        // Update the legacy state as well
-        let mut state = self.recording_state.lock()
-            .map_err(|e| format!("Failed to lock recording state: {}", e))?;
-        *state = new_state;
-        
-        Ok(())
+        self.recording_state.transition_to(new_state)
     }
     
-    /// Get current recording state from state machine
+    /// Get current recording state
     pub fn get_current_state(&self) -> RecordingState {
-        self.recording_state_machine.lock()
-            .map(|sm| sm.current())
-            .unwrap_or(RecordingState::Idle)
+        self.recording_state.current()
+    }
+    
+    /// Request cancellation of ongoing recording/transcription
+    pub fn request_cancellation(&self) {
+        self.should_cancel_recording.store(true, Ordering::SeqCst);
+        log::info!("Recording cancellation requested");
+    }
+    
+    /// Clear cancellation flag (call when starting new recording)
+    pub fn clear_cancellation(&self) {
+        self.should_cancel_recording.store(false, Ordering::SeqCst);
+    }
+    
+    /// Check if cancellation was requested
+    pub fn is_cancellation_requested(&self) -> bool {
+        self.should_cancel_recording.load(Ordering::SeqCst)
+    }
+    
+    /// Emit event to specific window using WindowManager
+    pub fn emit_to_window(&self, window: &str, event: &str, payload: impl serde::Serialize) -> Result<(), String> {
+        if let Some(wm) = self.get_window_manager() {
+            // Convert payload to JSON value
+            let json_payload = serde_json::to_value(payload)
+                .map_err(|e| format!("Failed to serialize payload: {}", e))?;
+            
+            match window {
+                "main" => wm.emit_to_main(event, json_payload),
+                "pill" => wm.emit_to_pill(event, json_payload),
+                _ => Err(format!("Unknown window: {}", window)),
+            }
+        } else {
+            Err("WindowManager not initialized".to_string())
+        }
     }
 }
 
@@ -101,25 +135,43 @@ pub fn update_recording_state(
 ) {
     let app_state = app.state::<AppState>();
     
-    // Try to transition using state machine
+    log::info!("[FLOW] update_recording_state called: {:?} -> {:?}, error: {:?}", 
+        app_state.get_current_state(), new_state, error);
+    
+    // Try to transition using unified state
     match app_state.transition_recording_state(new_state) {
         Ok(_) => {
-            log::info!("Successfully transitioned to state: {:?}", new_state);
+            log::info!("[FLOW] Successfully transitioned to state: {:?}", new_state);
         }
         Err(e) => {
-            log::error!("State transition failed: {}. Forcing state update.", e);
-            // Force state update even if transition is invalid (for backwards compatibility)
-            if let Ok(mut state_machine) = app_state.recording_state_machine.lock() {
-                state_machine.reset();
-                let _ = state_machine.transition_to(new_state);
-            }
-            if let Ok(mut current_state) = app_state.recording_state.lock() {
-                *current_state = new_state;
+            log::error!("[FLOW] State transition failed: {}", e);
+            
+            // Only force state updates in specific recovery scenarios
+            let current = app_state.get_current_state();
+            let should_force = match (current, new_state) {
+                // Allow force transition from Error state to Idle (recovery)
+                (RecordingState::Error, RecordingState::Idle) => true,
+                // Allow force transition to Error state (error reporting)
+                (_, RecordingState::Error) => true,
+                // Allow force transition to Idle from any state (reset)
+                (_, RecordingState::Idle) if error.is_some() => true,
+                // Disallow other forced transitions
+                _ => false,
+            };
+            
+            if should_force {
+                log::warn!("Forcing state transition from {:?} to {:?} for recovery", current, new_state);
+                if let Err(force_err) = app_state.recording_state.force_set(new_state) {
+                    log::error!("Failed to force set state: {}", force_err);
+                }
+            } else {
+                log::error!("Invalid state transition from {:?} to {:?} - transition blocked", current, new_state);
             }
         }
     }
 
     // Emit state change event with typed payload
+    log::info!("[FLOW] Emitting recording-state-changed event: {:?}", new_state);
     let _ = app.emit(
         "recording-state-changed",
         serde_json::json!({
@@ -139,11 +191,18 @@ pub fn update_recording_state(
 // Helper function to get current recording state
 pub fn get_recording_state(app: &tauri::AppHandle) -> RecordingState {
     let app_state = app.state::<AppState>();
-    app_state
-        .recording_state
-        .lock()
-        .map(|guard| *guard)
-        .unwrap_or(RecordingState::Idle)
+    app_state.get_current_state()
+}
+
+// Helper function to emit events to specific windows
+pub fn emit_to_window(
+    app: &tauri::AppHandle,
+    window: &str,
+    event: &str,
+    payload: impl serde::Serialize,
+) -> Result<(), String> {
+    let app_state = app.state::<AppState>();
+    app_state.emit_to_window(window, event, payload)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -278,7 +337,9 @@ pub fn run() {
             let whisper_manager = whisper::manager::WhisperManager::new(models_dir);
             app.manage(AsyncMutex::new(whisper_manager));
 
-            // NEW: cache for transcribers (keeps models in memory)
+            // Initialize transcriber cache for keeping models in memory
+            // Cache size is 1: only the current model (1-3GB RAM)
+            // When user switches models, old one is unloaded immediately
             app.manage(AsyncMutex::new(TranscriberCache::new()));
 
             // Initialize unified application state
@@ -288,6 +349,8 @@ pub fn run() {
             let app_state = app.state::<AppState>();
             let window_manager = WindowManager::new(app.app_handle().clone());
             app_state.set_window_manager(window_manager);
+            
+            // Pill position is loaded from settings when needed, no duplicate state
 
             // Initialize recorder state (kept separate for backwards compatibility)
             app.manage(RecorderState(Mutex::new(AudioRecorder::new())));
@@ -336,19 +399,34 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Load hotkey from settings store
-            let store = app.store("settings").map_err(|e| e.to_string())?;
+            // Load hotkey from settings store with graceful degradation
+            let hotkey_str = match app.store("settings") {
+                Ok(store) => {
+                    store
+                        .get("hotkey")
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .unwrap_or_else(|| {
+                            log::info!("No hotkey configured, using default");
+                            "CommandOrControl+Shift+Space".to_string()
+                        })
+                }
+                Err(e) => {
+                    log::warn!("Failed to load settings store: {}. Using default hotkey.", e);
+                    "CommandOrControl+Shift+Space".to_string()
+                }
+            };
 
-            let hotkey_str = store
-                .get("hotkey")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| "CommandOrControl+Shift+Space".to_string());
+            log::info!("Loading hotkey: {}", hotkey_str);
 
-            log::info!("Loading hotkey from store: {}", hotkey_str);
-
-            // Register global shortcut from settings
-            let shortcut: tauri_plugin_global_shortcut::Shortcut =
-                hotkey_str.parse().map_err(|_| "Invalid shortcut format")?;
+            // Register global shortcut from settings with fallback
+            let shortcut: tauri_plugin_global_shortcut::Shortcut = match hotkey_str.parse() {
+                Ok(s) => s,
+                Err(_) => {
+                    log::warn!("Invalid hotkey format '{}', using default", hotkey_str);
+                    "CommandOrControl+Shift+Space".parse()
+                        .expect("Default shortcut should be valid")
+                }
+            };
 
             // Store the recording shortcut in managed state
             let app_state = app.state::<AppState>();
@@ -357,6 +435,38 @@ pub fn run() {
             }
 
             app.global_shortcut().register(shortcut)?;
+
+            // Preload current model if set (graceful degradation)
+            // Use Tauri's async runtime which is available after setup
+            if let Ok(store) = app.store("settings") {
+                if let Some(current_model) = store.get("current_model")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .filter(|s| !s.is_empty()) 
+                {
+                    let app_handle = app.app_handle().clone();
+                    // Use tauri::async_runtime instead of tokio directly
+                    tauri::async_runtime::spawn(async move {
+                        log::info!("Attempting to preload model on startup: {}", current_model);
+                        
+                        let whisper_state = app_handle.state::<AsyncMutex<whisper::manager::WhisperManager>>();
+                        match preload_model(app_handle.clone(), current_model.clone(), whisper_state).await {
+                            Ok(_) => {
+                                log::info!("Successfully preloaded model: {}", current_model);
+                                // Model is already set in store, no need to update
+                            }
+                            Err(e) => {
+                                log::warn!("Failed to preload model '{}': {}. App will continue without preloading.", 
+                                         current_model, e);
+                                
+                                // Don't fail - just continue without preloading
+                                // The model will be loaded on first use
+                            }
+                        }
+                    });
+                } else {
+                    log::info!("No model configured for preloading");
+                }
+            }
 
             // Create pill window at startup and convert to NSPanel
             #[cfg(target_os = "macos")]
@@ -393,10 +503,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
+            cancel_recording,
+            transcription_processed,
+            debug_transcription_flow,
+            test_transcription_event,
             save_transcription,
             get_audio_devices,
             download_model,
             get_model_status,
+            preload_model,
             transcribe_audio,
             get_settings,
             save_settings,
@@ -411,6 +526,8 @@ pub fn run() {
             close_pill_widget,
             update_pill_position,
             focus_main_window,
+            debug_transcription_flow,
+            test_transcription_event,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

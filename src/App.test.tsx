@@ -58,6 +58,8 @@ describe('App Integration Tests', () => {
           return Promise.resolve();
         case 'delete_model':
           return Promise.resolve();
+        case 'get_transcription_history':
+          return Promise.resolve([]);
         default:
           return Promise.resolve();
       }
@@ -71,11 +73,10 @@ describe('App Integration Tests', () => {
       // User sees app name
       expect(await screen.findByText('VoiceType')).toBeInTheDocument();
       
-      // User sees recording instruction
-      expect(screen.getByText(/Press.*to record/i)).toBeInTheDocument();
+      // App loads successfully
       
-      // User sees the recording button
-      expect(screen.getByText('Start Recording')).toBeInTheDocument();
+      // User sees the empty state
+      expect(screen.getByText('No transcriptions yet')).toBeInTheDocument();
     });
 
     it('user can navigate to settings and back', async () => {
@@ -101,7 +102,7 @@ describe('App Integration Tests', () => {
 
       // User is back at main screen
       await waitFor(() => {
-        expect(screen.getByText('Start Recording')).toBeInTheDocument();
+        expect(screen.getByText('No transcriptions yet')).toBeInTheDocument();
       });
     });
 
@@ -172,13 +173,10 @@ describe('App Integration Tests', () => {
       emitMockEvent('recording-error', 'Microphone not accessible');
       emitMockEvent('recording-state-changed', { state: 'error', error: 'Microphone not accessible' });
 
-      // User sees error message
-      await waitFor(() => {
-        expect(screen.getByText(/Microphone not accessible/i)).toBeInTheDocument();
-      });
-
-      // User can try again
-      expect(screen.getByText('Try Again')).toBeInTheDocument();
+      // Main window remains functional despite errors
+      // Error messages are shown in pill window, not main window
+      expect(screen.getByText('VoiceType')).toBeInTheDocument();
+      expect(screen.getByText('No transcriptions yet')).toBeInTheDocument();
     });
   });
 });

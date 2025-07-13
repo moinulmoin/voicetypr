@@ -15,6 +15,7 @@ pub struct Settings {
     pub theme: String,
     pub transcription_cleanup_days: Option<u32>,
     pub show_pill_widget: bool,
+    pub pill_position: Option<(f64, f64)>,
 }
 
 impl Default for Settings {
@@ -28,6 +29,7 @@ impl Default for Settings {
             theme: "system".to_string(),
             transcription_cleanup_days: None, // None means keep forever
             show_pill_widget: true, // Show pill widget by default
+            pill_position: None, // No saved position initially
         }
     }
 }
@@ -68,7 +70,24 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("show_pill_widget")
             .and_then(|v| v.as_bool())
             .unwrap_or(Settings::default().show_pill_widget),
+        pill_position: store
+            .get("pill_position")
+            .and_then(|v| {
+                if let Some(arr) = v.as_array() {
+                    if arr.len() == 2 {
+                        let x = arr[0].as_f64()?;
+                        let y = arr[1].as_f64()?;
+                        Some((x, y))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }),
     };
+    
+    // Pill position is already loaded from store, no need for duplicate state
 
     Ok(settings)
 }
@@ -76,6 +95,12 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
 #[tauri::command]
 pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
+
+    // Check if model changed
+    let old_model = store
+        .get("current_model")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
@@ -88,8 +113,31 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set("theme", json!(settings.theme));
     store.set("transcription_cleanup_days", json!(settings.transcription_cleanup_days));
     store.set("show_pill_widget", json!(settings.show_pill_widget));
+    
+    // Save pill position if provided
+    if let Some((x, y)) = settings.pill_position {
+        store.set("pill_position", json!([x, y]));
+    }
 
     store.save().map_err(|e| e.to_string())?;
+
+    // Preload new model if it changed
+    if !settings.current_model.is_empty() && old_model != settings.current_model {
+        use tauri::async_runtime::Mutex as AsyncMutex;
+        use crate::commands::model::preload_model;
+        
+        log::info!("Model changed from '{}' to '{}', preloading new model", old_model, settings.current_model);
+        
+        let app_clone = app.clone();
+        let model_name = settings.current_model.clone();
+        tokio::spawn(async move {
+            let whisper_state = app_clone.state::<AsyncMutex<crate::whisper::manager::WhisperManager>>();
+            match preload_model(app_clone.clone(), model_name.clone(), whisper_state).await {
+                Ok(_) => log::info!("Successfully preloaded new model: {}", model_name),
+                Err(e) => log::warn!("Failed to preload new model: {}", e),
+            }
+        });
+    }
 
     Ok(())
 }

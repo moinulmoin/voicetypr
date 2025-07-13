@@ -57,6 +57,8 @@ describe('VoiceTypr User Scenarios', () => {
           return Promise.resolve();
         case 'download_model':
           return Promise.resolve();
+        case 'get_transcription_history':
+          return Promise.resolve([]);
         default:
           return Promise.reject(new Error(`Unknown command: ${cmd}`));
       }
@@ -111,34 +113,25 @@ describe('VoiceTypr User Scenarios', () => {
 
   describe('Recording voice', () => {
     it('user can record and see transcription', async () => {
-      const user = userEvent.setup();
       render(<App />);
 
-      // User sees the main recording interface
-      expect(await screen.findByText(/Press.*to record/i)).toBeInTheDocument();
-      
-      // User clicks the record button
-      const recordButton = screen.getByText('Start Recording');
-      await user.click(recordButton);
+      // Wait for app to load
+      await waitFor(() => {
+        expect(screen.getByText('No transcriptions yet')).toBeInTheDocument();
+      });
 
       // Recording starts
       emitMockEvent('recording-state-changed', { state: 'recording', error: null });
       
-      // User sees recording indicator
-      await waitFor(() => {
-        expect(screen.getByText('Stop Recording')).toBeInTheDocument();
-        expect(screen.getByText('Recording in progress')).toBeInTheDocument();
-      });
-
-      // User stops recording
-      await user.click(screen.getByText('Stop Recording'));
+      // Backend controls recording - no UI buttons to click
+      // The recording state is managed entirely by backend
 
       // Transcription starts
       emitMockEvent('recording-state-changed', { state: 'transcribing', error: null });
       
-      // User sees transcribing message
+      // Main window shows processing state in header
       await waitFor(() => {
-        expect(screen.getByText('Transcribing your speech...')).toBeInTheDocument();
+        expect(screen.getByText('Processing')).toBeInTheDocument();
       });
 
       // Mock the transcription history to include the new transcription
@@ -170,6 +163,9 @@ describe('VoiceTypr User Scenarios', () => {
         text: 'Hello world, this is my transcription',
         model: 'base' 
       });
+      
+      // Backend emits history-updated after saving transcription
+      emitMockEvent('history-updated', null);
 
       // User sees the transcribed text in history
       await waitFor(() => {
@@ -182,17 +178,16 @@ describe('VoiceTypr User Scenarios', () => {
     it('user sees error when recording fails', async () => {
       render(<App />);
 
-      await screen.findByText(/Press.*to record/i);
+      await screen.findByText('No transcriptions yet');
 
       // Recording error occurs
       emitMockEvent('recording-error', 'Microphone access denied');
       emitMockEvent('recording-state-changed', { state: 'error', error: 'Microphone access denied' });
 
-      // User sees error message
-      await waitFor(() => {
-        expect(screen.getByText('Error: Microphone access denied')).toBeInTheDocument();
-        expect(screen.getByText('Try Again')).toBeInTheDocument();
-      });
+      // Error handling is done in the pill window, not main window
+      // Main window continues to show normal UI even on errors
+      expect(screen.getByText('VoiceType')).toBeInTheDocument();
+      expect(screen.getByText('No transcriptions yet')).toBeInTheDocument();
     });
   });
 
@@ -202,7 +197,7 @@ describe('VoiceTypr User Scenarios', () => {
       render(<App />);
 
       // Wait for app to load
-      await screen.findByText(/Press.*to record/i);
+      await screen.findByText('No transcriptions yet');
 
       // User navigates to settings
       const settingsButton = screen.getByLabelText('Settings');
@@ -223,7 +218,7 @@ describe('VoiceTypr User Scenarios', () => {
       const user = userEvent.setup();
       render(<App />);
 
-      await screen.findByText(/Press.*to record/i);
+      await screen.findByText('No transcriptions yet');
 
       // User opens settings
       const settingsButton = screen.getByLabelText('Settings');
@@ -247,9 +242,10 @@ describe('VoiceTypr User Scenarios', () => {
     it('user can trigger recording with hotkey', async () => {
       render(<App />);
 
-      // User sees hotkey instruction
-      const instruction = await screen.findByText(/Press.*to record/i);
-      expect(instruction).toBeInTheDocument();
+      // User sees empty state
+      await waitFor(() => {
+        expect(screen.getByText('No transcriptions yet')).toBeInTheDocument();
+      });
 
       // Simulate global hotkey press
       emitMockEvent('hotkey-triggered', {});
@@ -257,11 +253,8 @@ describe('VoiceTypr User Scenarios', () => {
       // Backend starts recording
       emitMockEvent('recording-state-changed', { state: 'recording', error: null });
 
-      // User sees recording has started
-      await waitFor(() => {
-        expect(screen.getByText('Recording...')).toBeInTheDocument();
-        expect(screen.getByText('Stop Recording')).toBeInTheDocument();
-      });
+      // Recording is handled in pill window, main window just shows status
+      // The main window doesn't have recording controls
     });
   });
 
@@ -286,7 +279,7 @@ describe('VoiceTypr User Scenarios', () => {
       });
       
       // User can still use core functionality
-      expect(screen.getByText('Start Recording')).toBeInTheDocument();
+      expect(screen.getByText('No transcriptions yet')).toBeInTheDocument();
     });
   });
 });

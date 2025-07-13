@@ -39,7 +39,7 @@ impl ModelSize {
     }
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct ModelInfo {
     pub name: String,
     pub size: u64,

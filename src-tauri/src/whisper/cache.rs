@@ -5,7 +5,8 @@ use std::sync::Arc;
 use super::transcriber::Transcriber;
 
 /// Maximum number of models to keep in cache
-const MAX_CACHE_SIZE: usize = 2;
+/// Only cache the current model to minimize RAM usage (1-3GB per model)
+const MAX_CACHE_SIZE: usize = 1;
 
 /// Simple LRU cache that keeps loaded `Transcriber` models with size limits.
 ///
@@ -44,12 +45,22 @@ impl TranscriberCache {
 
     /// Retrieve a cached transcriber, or load and cache it if it isn't present yet.
     pub fn get_or_create(&mut self, model_path: &Path) -> Result<Arc<Transcriber>, String> {
+        log::info!("[TRANSCRIPTION_DEBUG] get_or_create called with path: {:?}", model_path);
+        
+        // Check if the model file exists
+        if !model_path.exists() {
+            let error = format!("Model file does not exist: {:?}", model_path);
+            log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            return Err(error);
+        }
+        
         // We store the path as a string key – this is fine because the path is
         // produced by the app itself and therefore always valid Unicode.
         let key = model_path.to_string_lossy().to_string();
 
         // Check if already cached
         if self.map.contains_key(&key) {
+            log::info!("[TRANSCRIPTION_DEBUG] Model found in cache: {}", key);
             // Clone the transcriber before updating LRU
             let transcriber = self.map.get(&key).cloned();
             // Move to end of LRU order
@@ -61,16 +72,30 @@ impl TranscriberCache {
 
         // Not cached – check if we need to evict
         if self.map.len() >= self.max_size {
+            log::info!("[TRANSCRIPTION_DEBUG] Cache full, evicting LRU model");
             self.evict_lru();
         }
 
         // Load the model
-        log::info!("Loading model into cache: {}", key);
-        let transcriber = Arc::new(Transcriber::new(model_path)?);
+        log::info!("[TRANSCRIPTION_DEBUG] Loading new model into cache: {}", key);
+        let start = std::time::Instant::now();
+        
+        let transcriber = match Transcriber::new(model_path) {
+            Ok(t) => {
+                let elapsed = start.elapsed();
+                log::info!("[TRANSCRIPTION_DEBUG] Model loaded successfully in {:?}", elapsed);
+                Arc::new(t)
+            },
+            Err(e) => {
+                log::error!("[TRANSCRIPTION_DEBUG] Failed to load model: {}", e);
+                return Err(e);
+            }
+        };
 
         // Insert into cache
         self.map.insert(key.clone(), transcriber.clone());
-        self.lru_order.push_back(key);
+        self.lru_order.push_back(key.clone());
+        log::info!("[TRANSCRIPTION_DEBUG] Model cached successfully. Cache size: {}/{}", self.map.len(), self.max_size);
 
         Ok(transcriber)
     }

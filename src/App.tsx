@@ -1,25 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Mic, Settings } from "lucide-react";
-import { useEffect, useState, useMemo, useCallback } from "react";
-import { HotkeyInput } from "./components/HotkeyInput";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AppErrorBoundary, ModelManagementErrorBoundary } from "./components/ErrorBoundary";
 import { ModelCard } from "./components/ModelCard";
-import { Button } from "./components/ui/button";
-import { Label } from "./components/ui/label";
-import { ScrollArea } from "./components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from "./components/ui/select";
-import { Separator } from "./components/ui/separator";
-import { Switch } from "./components/ui/switch";
-import { useRecording } from "./hooks/useRecording";
+import { Sidebar } from "./components/Sidebar";
+import { RecentRecordings } from "./components/sections/RecentRecordings";
+import { GeneralSettings } from "./components/sections/GeneralSettings";
+import { ModelsSection } from "./components/sections/ModelsSection";
+import { AboutSection } from "./components/sections/AboutSection";
 import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { AppSettings, ModelInfo, TranscriptionHistory } from "./types";
-import { AppErrorBoundary, RecordingErrorBoundary, SettingsErrorBoundary, ModelManagementErrorBoundary } from "./components/ErrorBoundary";
+import { SidebarProvider, SidebarInset } from "./components/ui/sidebar";
 
 // Helper function to calculate balanced performance score
 function calculateBalancedScore(model: ModelInfo): number {
@@ -50,11 +41,9 @@ function sortModels(
 
 // Main App Component
 export default function App() {
-  const recording = useRecording();
   const { registerEvent } = useEventCoordinator("main");
-  const [currentView, setCurrentView] = useState<"recorder" | "settings" | "onboarding">(
-    "recorder"
-  );
+  const [activeSection, setActiveSection] = useState<string>("recordings");
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [models, setModels] = useState<Record<string, ModelInfo>>({});
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
@@ -77,13 +66,13 @@ export default function App() {
         const hasModel = Object.values(modelStatus).some((m) => m.downloaded);
         console.log("Has downloaded model:", hasModel);
         if (!hasModel) {
-          setCurrentView("onboarding");
+          setShowOnboarding(true);
         }
 
         // Run cleanup if enabled
         if (appSettings.transcription_cleanup_days) {
-          await invoke("cleanup_old_transcriptions", { 
-            days: appSettings.transcription_cleanup_days 
+          await invoke("cleanup_old_transcriptions", {
+            days: appSettings.transcription_cleanup_days
           });
         }
 
@@ -111,10 +100,10 @@ export default function App() {
         // Listen for no-models event to redirect to onboarding
         const handleNoModels = () => {
           console.log("No models available - redirecting to onboarding");
-          setCurrentView("onboarding");
+          setShowOnboarding(true);
         };
         window.addEventListener("no-models-available", handleNoModels);
-        
+
         // Listen for history updates from backend
         // Backend is the single source of truth for transcription history
         registerEvent("history-updated", async () => {
@@ -187,7 +176,7 @@ export default function App() {
         title: "Delete Model",
         kind: "warning"
       });
-      
+
       if (!confirmed) {
         return;
       }
@@ -231,7 +220,7 @@ export default function App() {
   const saveSettings = useCallback(async (newSettings: AppSettings) => {
     try {
       await invoke("save_settings", { settings: newSettings });
-      
+
       // Update global shortcut in backend if changed
       if (newSettings.hotkey !== settings?.hotkey) {
         try {
@@ -241,7 +230,7 @@ export default function App() {
           // Still update UI even if hotkey registration fails
         }
       }
-      
+
       setSettings(newSettings);
     } catch (error) {
       console.error("Failed to save settings:", error);
@@ -252,10 +241,10 @@ export default function App() {
   const sortedModels = useMemo(() => sortModels(Object.entries(models), "accuracy"), [models]);
 
   // Onboarding View
-  if (currentView === "onboarding") {
+  if (showOnboarding) {
     return (
       <AppErrorBoundary>
-        <div className="flex flex-col h-screen bg-background">
+        <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-950">
           <div className="flex-1 flex flex-col items-center justify-center p-8">
             <h1 className="text-4xl font-bold mb-2">Welcome to VoiceType</h1>
             <p className="text-lg text-muted-foreground mb-8">Choose a model to get started</p>
@@ -283,7 +272,7 @@ export default function App() {
 
                   // Save with selected model
                   await saveSettings({ ...newSettings, current_model: modelName });
-                  setCurrentView("recorder");
+                  setShowOnboarding(false);
                 }}
               />
             ))}
@@ -295,236 +284,61 @@ export default function App() {
     );
   }
 
-  // Settings View
-  if (currentView === "settings") {
-    return (
-      <SettingsErrorBoundary>
-        <div className="flex flex-col h-screen bg-background">
-          <div className="flex items-center justify-between p-4 border-b">
-            <h2 className="text-lg font-semibold">Settings</h2>
-            <Button onClick={() => setCurrentView("recorder")} variant="ghost" size="sm">
-              ✕
-            </Button>
-          </div>
+  // Render section content based on active section
+  const renderSectionContent = () => {
+    switch (activeSection) {
+      case "recordings":
+        return (
+          <RecentRecordings
+            history={history}
+            hotkey={settings?.hotkey || "Cmd+Shift+Space"}
+          />
+        );
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-6">
-          {/* Hotkey Setting */}
-          <div className="space-y-2">
-            <Label htmlFor="hotkey">Hotkey</Label>
-            <HotkeyInput
-              value={settings?.hotkey || ""}
-              onChange={(hotkey) => settings && saveSettings({ ...settings, hotkey })}
-              placeholder="Click to set hotkey"
-            />
-          </div>
+      case "general":
+        return (
+          <GeneralSettings
+            settings={settings}
+            onSettingsChange={saveSettings}
+          />
+        );
 
-          {/* Language Setting */}
-          <div className="space-y-2">
-            <Label htmlFor="language">Language</Label>
-            <Select
-              value={settings?.language || "auto"}
-              onValueChange={(value) => settings && saveSettings({ ...settings, language: value })}
-            >
-              <SelectTrigger id="language">
-                <SelectValue placeholder="Select language" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">Auto-detect</SelectItem>
-                <SelectItem value="en">English</SelectItem>
-                <SelectItem value="es">Spanish</SelectItem>
-                <SelectItem value="fr">French</SelectItem>
-                <SelectItem value="de">German</SelectItem>
-                <SelectItem value="it">Italian</SelectItem>
-                <SelectItem value="pt">Portuguese</SelectItem>
-                <SelectItem value="ru">Russian</SelectItem>
-                <SelectItem value="ja">Japanese</SelectItem>
-                <SelectItem value="ko">Korean</SelectItem>
-                <SelectItem value="zh">Chinese</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Auto Insert Toggle */}
-          <div className="flex items-center justify-between">
-            <Label htmlFor="auto-insert" className="flex-1">
-              Auto-insert text at cursor
-            </Label>
-            <Switch
-              id="auto-insert"
-              checked={settings?.auto_insert || false}
-              onCheckedChange={(checked) =>
-                settings && saveSettings({ ...settings, auto_insert: checked })
+      case "models":
+        return (
+          <ModelsSection
+            models={sortedModels}
+            downloadProgress={downloadProgress}
+            currentModel={settings?.current_model}
+            onDownload={downloadModel}
+            onDelete={deleteModel}
+            onCancelDownload={cancelDownload}
+            onSelect={async (modelName) => {
+              if (settings) {
+                await saveSettings({ ...settings, current_model: modelName });
               }
-            />
-          </div>
+            }}
+          />
+        );
 
-          {/* Show Window on Record Toggle */}
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-window" className="flex-1">
-              Show window when recording
-            </Label>
-            <Switch
-              id="show-window"
-              checked={settings?.show_window_on_record || false}
-              onCheckedChange={(checked) =>
-                settings && saveSettings({ ...settings, show_window_on_record: checked })
-              }
-            />
-          </div>
+      case "about":
+        return <AboutSection />;
 
-          {/* Show Pill Widget Toggle */}
-          <div className="flex items-center justify-between">
-            <Label htmlFor="show-pill" className="flex-1">
-              Show floating pill when recording
-            </Label>
-            <Switch
-              id="show-pill"
-              checked={settings?.show_pill_widget ?? true}
-              onCheckedChange={(checked) =>
-                settings && saveSettings({ ...settings, show_pill_widget: checked })
-              }
-            />
-          </div>
+      default:
+        return null;
+    }
+  };
 
-          {/* Transcription History Cleanup */}
-          <div className="space-y-2">
-            <Label htmlFor="cleanup">Keep transcription history</Label>
-            <Select
-              value={settings?.transcription_cleanup_days?.toString() || "forever"}
-              onValueChange={(value) => {
-                const days = value === "forever" ? null : parseInt(value);
-                settings && saveSettings({ ...settings, transcription_cleanup_days: days });
-              }}
-            >
-              <SelectTrigger id="cleanup">
-                <SelectValue placeholder="Select retention period" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="forever">Forever</SelectItem>
-                <SelectItem value="7">7 days</SelectItem>
-                <SelectItem value="15">15 days</SelectItem>
-                <SelectItem value="30">30 days</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Model Management */}
-          <Separator />
-          <ModelManagementErrorBoundary>
-            <div className="space-y-3">
-              <div>
-                <h3 className="text-base font-semibold">Available Models</h3>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Select a model based on your needs
-                </p>
-              </div>
-
-              <ScrollArea className="h-[280px]">
-                <div className="space-y-2 pr-3">
-                  {/* Sort by balanced score (downloaded models always first) */}
-                  {sortedModels
-                    .map(([name, model]) => (
-                    <ModelCard
-                      key={name}
-                      name={name}
-                      model={model}
-                      downloadProgress={downloadProgress[name]}
-                      onDownload={downloadModel}
-                      onDelete={deleteModel}
-                      onCancelDownload={cancelDownload}
-                      onSelect={async (modelName) => {
-                        if (model.downloaded && settings) {
-                          await saveSettings({ ...settings, current_model: modelName });
-                        }
-                      }}
-                      showSelectButton={model.downloaded}
-                      isSelected={settings?.current_model === name}
-                    />
-                  ))}
-                </div>
-              </ScrollArea>
-            </div>
-          </ModelManagementErrorBoundary>
-        </div>
-      </div>
-      </SettingsErrorBoundary>
-    );
-  }
-
-  // Main Recorder View
+  // Main App Layout
   return (
     <AppErrorBoundary>
-      <div className="flex flex-col h-screen bg-background">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b">
-          <h1 className="text-lg font-semibold">VoiceType</h1>
-          <div className="flex items-center gap-3">
-            {/* Recording Status Indicator */}
-            {recording.isActive && (
-              <div className="flex items-center gap-2 text-sm">
-                <div className={`w-2 h-2 rounded-full ${
-                  recording.state === "recording" || recording.state === "starting"
-                    ? "bg-destructive animate-pulse"
-                    : recording.state === "transcribing"
-                    ? "bg-yellow-500 animate-pulse"
-                    : "bg-muted"
-                }`} />
-                <span className={`font-medium ${
-                  recording.state === "recording" || recording.state === "starting"
-                    ? "text-destructive"
-                    : recording.state === "transcribing"
-                    ? "text-yellow-600"
-                    : "text-muted-foreground"
-                }`}>
-                  {recording.state === "starting" && "Starting..."}
-                  {recording.state === "recording" && "Recording"}
-                  {recording.state === "stopping" && "Stopping..."}
-                  {recording.state === "transcribing" && "Processing"}
-                </span>
-              </div>
-            )}
-            <Button onClick={() => setCurrentView("settings")} variant="ghost" size="icon" aria-label="Settings">
-              <Settings className="w-5 h-5" />
-            </Button>
+      <SidebarProvider>
+        <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
+        <SidebarInset>
+          <div className="h-full overflow-auto">
+            {renderSectionContent()}
           </div>
-        </div>
-
-        <RecordingErrorBoundary>
-          {/* Transcription History - Now the main content */}
-          <div className="flex-1 flex flex-col p-6 overflow-hidden">
-            <h2 className="text-lg font-semibold mb-4">Recent Transcriptions</h2>
-            {history.length > 0 ? (
-              <ScrollArea className="flex-1">
-                <div className="space-y-3 pr-4">
-                  {history.map((item) => (
-                    <div
-                      key={item.id}
-                      className="p-4 rounded-lg border cursor-pointer hover:bg-accent/50 transition-colors"
-                      onClick={() => navigator.clipboard.writeText(item.text)}
-                      title="Click to copy"
-                    >
-                      <p className="text-sm text-foreground leading-relaxed">{item.text}</p>
-                      <p className="text-xs text-muted-foreground mt-2">
-                        {new Date(item.timestamp).toLocaleTimeString()} • {item.model}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </ScrollArea>
-            ) : (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center">
-                  <Mic className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
-                  <p className="text-sm text-muted-foreground">No transcriptions yet</p>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Press {settings?.hotkey || "Cmd+Shift+Space"} to start recording
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-        </RecordingErrorBoundary>
-      </div>
+        </SidebarInset>
+      </SidebarProvider>
     </AppErrorBoundary>
   );
 }

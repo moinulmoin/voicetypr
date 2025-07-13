@@ -38,15 +38,34 @@ impl RecordingStateMachine {
 
     /// Validate and perform state transition
     pub fn transition_to(&mut self, new_state: RecordingState) -> Result<(), StateTransitionError> {
+        log::info!("[FLOW] Attempting state transition: {:?} -> {:?}", self.current_state, new_state);
+        
         if self.is_valid_transition(self.current_state, new_state) {
-            log::info!("State transition: {:?} -> {:?}", self.current_state, new_state);
+            log::info!("[FLOW] State transition VALID: {:?} -> {:?}", self.current_state, new_state);
+            let old_state = self.current_state;
             self.current_state = new_state;
+            
+            // Log warnings for potentially problematic transitions
+            match (old_state, new_state) {
+                (RecordingState::Transcribing, RecordingState::Idle) => {
+                    log::info!("[FLOW] Completed transcription flow, now idle");
+                }
+                (RecordingState::Error, _) => {
+                    log::warn!("[FLOW] Recovering from error state to {:?}", new_state);
+                }
+                (_, RecordingState::Error) => {
+                    log::error!("[FLOW] Entered error state from {:?}", old_state);
+                }
+                _ => {}
+            }
+            
             Ok(())
         } else {
+            log::error!("[FLOW] State transition INVALID: {:?} -> {:?}", self.current_state, new_state);
             Err(StateTransitionError {
                 from: self.current_state,
                 to: new_state,
-                message: format!("Transition not allowed"),
+                message: format!("Transition not allowed by state machine rules"),
             })
         }
     }
@@ -106,6 +125,19 @@ impl RecordingStateMachine {
     pub fn reset(&mut self) {
         log::info!("Resetting state machine to Idle from {:?}", self.current_state);
         self.current_state = RecordingState::Idle;
+    }
+    
+    /// Force set the current state without validation (use with caution)
+    pub(crate) fn force_state(&mut self, state: RecordingState) {
+        log::warn!("[FLOW] FORCE setting state from {:?} to {:?} (bypassing validation)", self.current_state, state);
+        
+        // Log if this would have been an invalid transition
+        if !self.is_valid_transition(self.current_state, state) {
+            log::error!("[FLOW] WARNING: Forced transition {:?} -> {:?} would normally be INVALID", 
+                      self.current_state, state);
+        }
+        
+        self.current_state = state;
     }
 }
 

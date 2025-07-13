@@ -28,6 +28,7 @@ mod tests {
             theme: "dark".to_string(),
             transcription_cleanup_days: Some(7),
             show_pill_widget: false,
+            pill_position: Some((100.0, 200.0)),
         };
 
         // Test serialization
@@ -83,6 +84,7 @@ mod tests {
             theme: "light".to_string(),
             transcription_cleanup_days: Some(30),
             show_pill_widget: true,
+            pill_position: None,
         };
 
         let cloned = settings.clone();
