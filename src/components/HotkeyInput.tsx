@@ -11,17 +11,15 @@ interface HotkeyInputProps {
 
 export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, placeholder }: HotkeyInputProps) {
   const [mode, setMode] = useState<"display" | "edit">("display");
-  const [isRecording, setIsRecording] = useState(false);
   const [keys, setKeys] = useState<Set<string>>(new Set());
   const [pendingHotkey, setPendingHotkey] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">("idle");
   const [validationError, setValidationError] = useState<string>("");
   const [currentKeysDisplay, setCurrentKeysDisplay] = useState<string>("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const isEscapePressed = useRef(false);
 
   useEffect(() => {
-    if (!isRecording) return;
+    if (mode !== "edit") return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       e.preventDefault();
@@ -31,10 +29,7 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
 
       // Handle Escape to cancel
       if (key === "Escape") {
-        isEscapePressed.current = true;
-        setIsRecording(false);
-        setKeys(new Set());
-        inputRef.current?.blur();
+        handleCancel();
         return;
       }
 
@@ -125,7 +120,6 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
 
         if (keys.size >= 2 && keys.size <= 3) {
           setPendingHotkey(shortcut);
-          setIsRecording(false);
           setKeys(new Set());
           setCurrentKeysDisplay("");
         } else {
@@ -141,33 +135,39 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [isRecording, keys, onChange]);
+  }, [mode, keys]);
 
   const formatShortcutDisplay = useCallback((shortcut: string) => {
     const isMac = navigator.userAgent.toUpperCase().indexOf("MAC") >= 0;
     return shortcut
-      .replace("CommandOrControl", isMac ? "⌘" : "Ctrl")
-      .replace("Shift", "⇧")
-      .replace("Alt", isMac ? "⌥" : "Alt")
-      .replace("Plus", "+")
-      .replace("Space", "␣");
+      .split("+")
+      .map(key => key
+        .replace("CommandOrControl", isMac ? "⌘" : "Ctrl")
+        .replace("Shift", "⇧")
+        .replace("Alt", isMac ? "⌥" : "Alt")
+        .replace("Plus", "+")
+        .replace("Space", "␣")
+      )
+      .join(" + ");
   }, []);
 
   const handleSave = useCallback(() => {
     if (pendingHotkey && !validationError) {
       onChange(pendingHotkey);
       setSaveStatus("success");
-      
+
       setTimeout(() => {
         setMode("display");
         setSaveStatus("idle");
+        setPendingHotkey("");
+        setKeys(new Set());
+        setCurrentKeysDisplay("");
       }, 1500);
     }
   }, [pendingHotkey, validationError, onChange]);
 
   const handleCancel = useCallback(() => {
     setPendingHotkey("");
-    setIsRecording(false);
     setKeys(new Set());
     setMode("display");
     setSaveStatus("idle");
@@ -181,10 +181,10 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
     setSaveStatus("idle");
     setValidationError("");
     setCurrentKeysDisplay("");
+    setKeys(new Set());
 
     setTimeout(() => {
       inputRef.current?.focus();
-      setIsRecording(true);
     }, 100);
   }, []);
 
@@ -231,29 +231,11 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
           <Input
             ref={inputRef}
             value={
-              isRecording && currentKeysDisplay
-                ? currentKeysDisplay
-                : pendingHotkey
-                ? formatShortcutDisplay(pendingHotkey)
-                : ""
+              currentKeysDisplay || (pendingHotkey ? formatShortcutDisplay(pendingHotkey) : "")
             }
-            onClick={() => {
-              if (!isRecording && mode === "edit") {
-                setIsRecording(true);
-                inputRef.current?.focus();
-              }
-            }}
-            onBlur={() => {
-              if (!isEscapePressed.current) {
-                setIsRecording(false);
-                setKeys(new Set());
-                setCurrentKeysDisplay("");
-              }
-              isEscapePressed.current = false;
-            }}
             readOnly
             className="pr-10"
-            placeholder="Click here to set hotkey"
+            placeholder="Press keys to set hotkey"
           />
           <Keyboard className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         </div>
@@ -275,12 +257,7 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
           <X className="w-4 h-4" />
         </Button>
       </div>
-      {isRecording && (
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Press keys now</span>
-        </div>
-      )}
-      {!isRecording && pendingHotkey && !validationError && (
+      {pendingHotkey && !validationError && (
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Click ✓ to save</span>
         </div>

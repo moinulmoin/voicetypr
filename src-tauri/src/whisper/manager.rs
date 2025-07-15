@@ -4,6 +4,8 @@ use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -174,6 +176,7 @@ impl WhisperManager {
     pub async fn download_model(
         &self,
         model_name: &str,
+        cancel_flag: Option<Arc<AtomicBool>>,
         progress_callback: impl Fn(u64, u64),
     ) -> Result<(), String> {
         log::info!("WhisperManager: Downloading model {}", model_name);
@@ -234,6 +237,17 @@ impl WhisperManager {
         let update_threshold = total_size / 100; // Update every 1%
 
         while let Some(chunk) = stream.next().await {
+            // Check for cancellation
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(Ordering::Relaxed) {
+                    log::info!("Download cancelled by user for model: {}", model_name);
+                    // Clean up partial download
+                    drop(file);
+                    let _ = fs::remove_file(&output_path).await;
+                    return Err("Download cancelled by user".to_string());
+                }
+            }
+
             let chunk = chunk.map_err(|e| e.to_string())?;
 
             // Prevent downloading more than expected (with 1% tolerance)
@@ -506,5 +520,19 @@ impl WhisperManager {
         }
 
         models
+    }
+
+    /// Delete a partial download (used for cancelling downloads)
+    pub async fn delete_partial_download(&self, model_name: &str) -> Result<(), String> {
+        let file_path = self.models_dir.join(format!("{}.bin", model_name));
+        
+        if file_path.exists() {
+            fs::remove_file(&file_path)
+                .await
+                .map_err(|e| format!("Failed to delete partial download: {}", e))?;
+            log::info!("Deleted partial download for model: {}", model_name);
+        }
+        
+        Ok(())
     }
 }

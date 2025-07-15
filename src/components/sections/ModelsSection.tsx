@@ -24,7 +24,7 @@ export function ModelsSection({
     <div className="p-6">
       <h2 className="text-lg font-semibold mb-4">Models</h2>
       <p className="text-sm text-muted-foreground mb-6">
-        Download and manage Whisper models for transcription
+        Download and manage models for transcription
       </p>
 
       {/* <ScrollArea className="h-[calc(100vh-200px)]"> */}

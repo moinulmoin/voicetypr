@@ -1,6 +1,8 @@
 use crate::whisper::manager::{ModelInfo, WhisperManager};
 use crate::emit_to_window;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::async_runtime::Mutex;
 use tauri::{AppHandle, Manager, State};
 
@@ -9,6 +11,7 @@ pub async fn download_model(
     app: AppHandle,
     model_name: String,
     state: State<'_, Mutex<WhisperManager>>,
+    active_downloads: State<'_, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>,
 ) -> Result<(), String> {
     // Validate model name
     let valid_models = [
@@ -27,6 +30,13 @@ pub async fn download_model(
 
     log::info!("Starting download for model: {}", model_name);
     let app_handle = app.clone();
+
+    // Create cancellation flag for this download
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    {
+        let mut downloads = active_downloads.lock().unwrap();
+        downloads.insert(model_name.clone(), cancel_flag.clone());
+    }
 
     let model_name_clone = model_name.clone();
 
@@ -68,12 +78,19 @@ pub async fn download_model(
     let mut download_result = Err("No attempt made".to_string());
     
     for attempt in 1..=MAX_RETRIES {
+        // Check if download was cancelled
+        if cancel_flag.load(Ordering::Relaxed) {
+            log::info!("Download cancelled for model: {}", model_name);
+            download_result = Err("Download cancelled by user".to_string());
+            break;
+        }
+        
         log::info!("Download attempt {} of {} for model: {}", attempt, MAX_RETRIES, model_name);
         
         let manager = state.lock().await;
         let progress_tx_clone = progress_tx.clone();
         download_result = manager
-            .download_model(&model_name, move |downloaded, total| {
+            .download_model(&model_name, Some(cancel_flag.clone()), move |downloaded, total| {
                 let _ = progress_tx_clone.send((downloaded, total));
             })
             .await;
@@ -116,7 +133,20 @@ pub async fn download_model(
     // Ensure progress handler completes
     let _ = progress_handle.await;
 
+    // Clean up the cancellation flag
+    {
+        let mut downloads = active_downloads.lock().unwrap();
+        downloads.remove(&model_name);
+    }
+
     match download_result {
+        Err(ref e) if e.contains("cancelled") => {
+            // Emit download-cancelled event
+            if let Err(e) = emit_to_window(&app, "main", "download-cancelled", &model_name) {
+                log::warn!("Failed to emit download-cancelled event: {}", e);
+            }
+            Err(e.clone())
+        }
         Ok(_) => {
             log::info!("Download completed for model: {}", model_name);
 
@@ -170,6 +200,33 @@ pub async fn list_downloaded_models(
 ) -> Result<Vec<String>, String> {
     let manager = state.lock().await;
     Ok(manager.list_downloaded_files())
+}
+
+#[tauri::command]
+pub async fn cancel_download(
+    model_name: String,
+    state: State<'_, Mutex<WhisperManager>>,
+    active_downloads: State<'_, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>,
+) -> Result<(), String> {
+    log::info!("Cancelling download for model: {}", model_name);
+    
+    // Set the cancellation flag
+    {
+        let downloads = active_downloads.lock().unwrap();
+        if let Some(cancel_flag) = downloads.get(&model_name) {
+            cancel_flag.store(true, Ordering::Relaxed);
+            log::info!("Set cancellation flag for model: {}", model_name);
+        } else {
+            return Err(format!("No active download found for model: {}", model_name));
+        }
+    }
+    
+    // Also try to delete any partial file
+    let manager = state.lock().await;
+    let _ = manager.delete_partial_download(&model_name).await;
+    
+    log::info!("Download cancelled for model: {}", model_name);
+    Ok(())
 }
 
 #[tauri::command]

@@ -119,10 +119,20 @@ export default function App() {
         registerEvent<{ model: string; progress: number }>(
           "download-progress",
           ({ model, progress }) => {
-            setDownloadProgress((prev) => ({
-              ...prev,
-              [model]: progress
-            }));
+            // If progress reaches 100%, remove from download progress
+            // The model-downloaded event will handle setting it as downloaded
+            if (progress >= 100) {
+              setDownloadProgress((prev) => {
+                const newProgress = { ...prev };
+                delete newProgress[model];
+                return newProgress;
+              });
+            } else {
+              setDownloadProgress((prev) => ({
+                ...prev,
+                [model]: progress
+              }));
+            }
           }
         );
 
@@ -131,6 +141,16 @@ export default function App() {
             ...prev,
             [modelName]: { ...prev[modelName], downloaded: true }
           }));
+          setDownloadProgress((prev) => {
+            const newProgress = { ...prev };
+            delete newProgress[modelName];
+            return newProgress;
+          });
+        });
+
+        registerEvent<string>("download-cancelled", (modelName) => {
+          console.log(`Download cancelled for model: ${modelName}`);
+          // Remove from download progress
           setDownloadProgress((prev) => {
             const newProgress = { ...prev };
             delete newProgress[modelName];
@@ -216,13 +236,15 @@ export default function App() {
     [settings]
   );
 
-  // Cancel download (placeholder - backend support needed)
+  // Cancel download
   const cancelDownload = useCallback(async (modelName: string) => {
     try {
-      // TODO: Implement backend support for cancelling downloads
       console.log(`Cancelling download for model: ${modelName}`);
-
-      // For now, just remove from progress
+      
+      // Call backend to cancel download (deletes partial file)
+      await invoke("cancel_download", { modelName });
+      
+      // Remove from progress tracking
       setDownloadProgress((prev) => {
         const newProgress = { ...prev };
         delete newProgress[modelName];
@@ -230,6 +252,7 @@ export default function App() {
       });
     } catch (error) {
       console.error("Failed to cancel download:", error);
+      alert(`Failed to cancel download: ${error}`);
     }
   }, []);
 

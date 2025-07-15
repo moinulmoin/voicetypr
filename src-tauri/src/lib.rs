@@ -20,7 +20,7 @@ mod tests;
 use audio::recorder::AudioRecorder;
 use commands::{
     audio::*,
-    model::{download_model, get_model_status, delete_model, list_downloaded_models, preload_model},
+    model::{download_model, get_model_status, delete_model, list_downloaded_models, preload_model, cancel_download},
     settings::*,
     text::*,
     window::*,
@@ -30,6 +30,7 @@ use commands::{
 use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
 use state::unified_state::UnifiedRecordingState;
+use std::collections::HashMap;
 
 // Recording state enum matching frontend
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
@@ -404,6 +405,9 @@ pub fn run() {
 
             let whisper_manager = whisper::manager::WhisperManager::new(models_dir);
             app.manage(AsyncMutex::new(whisper_manager));
+            
+            // Manage active downloads for cancellation
+            app.manage(Arc::new(Mutex::new(HashMap::<String, Arc<AtomicBool>>::new())));
 
             // Initialize transcriber cache for keeping models in memory
             // Cache size is 1: only the current model (1-3GB RAM)
@@ -676,6 +680,7 @@ pub fn run() {
             insert_text,
             delete_model,
             list_downloaded_models,
+            cancel_download,
             cleanup_old_transcriptions,
             get_transcription_history,
             show_pill_widget,
