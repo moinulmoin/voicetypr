@@ -683,6 +683,7 @@ pub fn run() {
             cancel_download,
             cleanup_old_transcriptions,
             get_transcription_history,
+            delete_transcription_entry,
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,

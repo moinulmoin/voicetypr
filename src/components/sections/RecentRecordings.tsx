@@ -3,13 +3,16 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { TranscriptionHistory } from "@/types";
 import { useState } from "react";
 import { toast } from "sonner";
+import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 
 interface RecentRecordingsProps {
   history: TranscriptionHistory[];
   hotkey?: string;
+  onHistoryUpdate?: () => void;
 }
 
-export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space" }: RecentRecordingsProps) {
+export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistoryUpdate }: RecentRecordingsProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   
   const handleCopy = (text: string) => {
@@ -17,10 +20,31 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space" }: Recent
     toast.success("Copied to clipboard");
   };
   
-  const handleDelete = (e: React.MouseEvent, id: string) => {
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    // TODO: Implement delete functionality
-    toast.error("Delete functionality not yet implemented");
+    
+    try {
+      // Show confirmation dialog
+      const confirmed = await ask("Are you sure you want to delete this transcription?", {
+        title: "Delete Transcription",
+        kind: "warning"
+      });
+      
+      if (!confirmed) return;
+      
+      // Call the delete command with the timestamp (id)
+      await invoke("delete_transcription_entry", { timestamp: id });
+      
+      toast.success("Transcription deleted");
+      
+      // Refresh the history
+      if (onHistoryUpdate) {
+        onHistoryUpdate();
+      }
+    } catch (error) {
+      console.error("Failed to delete transcription:", error);
+      toast.error("Failed to delete transcription");
+    }
   };
   return (
     <div className="flex-1 flex flex-col p-6">

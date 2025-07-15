@@ -696,3 +696,22 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     
     Ok(())
 }
+
+#[tauri::command]
+pub async fn delete_transcription_entry(app: AppHandle, timestamp: String) -> Result<(), String> {
+    let store = app.store("transcriptions")
+        .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
+    
+    // Delete the entry
+    store.delete(&timestamp);
+    
+    // Save the store
+    store.save()
+        .map_err(|e| format!("Failed to save store after deletion: {}", e))?;
+    
+    // Emit event to update UI
+    let _ = emit_to_window(&app, "main", "history-updated", ());
+    
+    log::info!("Deleted transcription entry: {}", timestamp);
+    Ok(())
+}

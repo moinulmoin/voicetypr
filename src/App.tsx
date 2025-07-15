@@ -1,18 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Toaster } from "sonner";
 import { AppErrorBoundary, ModelManagementErrorBoundary } from "./components/ErrorBoundary";
 import { ModelCard } from "./components/ModelCard";
 import { Sidebar } from "./components/Sidebar";
-import { RecentRecordings } from "./components/sections/RecentRecordings";
+import { AboutSection } from "./components/sections/AboutSection";
 import { GeneralSettings } from "./components/sections/GeneralSettings";
 import { ModelsSection } from "./components/sections/ModelsSection";
-import { AboutSection } from "./components/sections/AboutSection";
-import { useEventCoordinator } from "./hooks/useEventCoordinator";
+import { RecentRecordings } from "./components/sections/RecentRecordings";
+import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { useAccessibilityPermission } from "./hooks/useAccessibilityPermission";
+import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { AppSettings, ModelInfo, TranscriptionHistory } from "./types";
-import { SidebarProvider, SidebarInset } from "./components/ui/sidebar";
-import { Toaster } from "sonner";
 
 // Helper function to calculate balanced performance score
 function calculateBalancedScore(model: ModelInfo): number {
@@ -54,6 +54,22 @@ export default function App() {
   // Check accessibility permissions on macOS
   useAccessibilityPermission();
 
+  // Load history function
+  const loadHistory = useCallback(async () => {
+    try {
+      const storedHistory = await invoke<any[]>("get_transcription_history", { limit: 50 });
+      const formattedHistory: TranscriptionHistory[] = storedHistory.map((item) => ({
+        id: item.timestamp || Date.now().toString(),
+        text: item.text,
+        timestamp: new Date(item.timestamp),
+        model: item.model
+      }));
+      setHistory(formattedHistory);
+    } catch (error) {
+      console.error("Failed to load transcription history:", error);
+    }
+  }, []);
+
   // Initialize app
   useEffect(() => {
     const init = async () => {
@@ -80,22 +96,6 @@ export default function App() {
             days: appSettings.transcription_cleanup_days
           });
         }
-
-        // Define loadHistory function
-        const loadHistory = async () => {
-          try {
-            const storedHistory = await invoke<any[]>("get_transcription_history", { limit: 50 });
-            const formattedHistory: TranscriptionHistory[] = storedHistory.map((item) => ({
-              id: item.timestamp || Date.now().toString(),
-              text: item.text,
-              timestamp: new Date(item.timestamp),
-              model: item.model
-            }));
-            setHistory(formattedHistory);
-          } catch (error) {
-            console.error("Failed to load transcription history:", error);
-          }
-        };
 
         // Load initial transcription history
         await loadHistory();
@@ -173,7 +173,7 @@ export default function App() {
     };
 
     init();
-  }, [registerEvent]);
+  }, [registerEvent, loadHistory]);
 
   // Download model
   const downloadModel = useCallback(async (modelName: string) => {
@@ -240,10 +240,10 @@ export default function App() {
   const cancelDownload = useCallback(async (modelName: string) => {
     try {
       console.log(`Cancelling download for model: ${modelName}`);
-      
+
       // Call backend to cancel download (deletes partial file)
       await invoke("cancel_download", { modelName });
-      
+
       // Remove from progress tracking
       setDownloadProgress((prev) => {
         const newProgress = { ...prev };
@@ -330,7 +330,11 @@ export default function App() {
     switch (activeSection) {
       case "recordings":
         return (
-          <RecentRecordings history={history} hotkey={settings?.hotkey || "Cmd+Shift+Space"} />
+          <RecentRecordings
+            history={history}
+            hotkey={settings?.hotkey || "Cmd+Shift+Space"}
+            onHistoryUpdate={loadHistory}
+          />
         );
 
       case "general":
@@ -370,7 +374,14 @@ export default function App() {
           <div className="h-full overflow-auto">{renderSectionContent()}</div>
         </SidebarInset>
       </SidebarProvider>
-      <Toaster position="top-right" />
+      <Toaster
+        position="top-center"
+          toastOptions={{
+            classNames:{
+              toast: "!w-fit",
+            }
+          }}
+      />
     </AppErrorBoundary>
   );
 }
