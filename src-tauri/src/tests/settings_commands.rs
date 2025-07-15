@@ -12,6 +12,7 @@ mod tests {
         assert_eq!(settings.language, "en");
         assert_eq!(settings.theme, "system");
         assert_eq!(settings.transcription_cleanup_days, None);
+        assert_eq!(settings.launch_at_startup, false);
     }
 
     #[test]
@@ -23,6 +24,7 @@ mod tests {
             theme: "dark".to_string(),
             transcription_cleanup_days: Some(7),
             pill_position: Some((100.0, 200.0)),
+            launch_at_startup: false,
         };
 
         // Test serialization
@@ -67,6 +69,7 @@ mod tests {
             theme: "light".to_string(),
             transcription_cleanup_days: Some(30),
             pill_position: None,
+            launch_at_startup: true,
         };
 
         let cloned = settings.clone();
@@ -152,6 +155,7 @@ mod tests {
             "language": settings.language,
             "theme": settings.theme,
             "transcription_cleanup_days": settings.transcription_cleanup_days,
+            "launch_at_startup": settings.launch_at_startup,
         });
 
         assert_eq!(value["hotkey"], "CommandOrControl+Shift+Space");
@@ -159,6 +163,7 @@ mod tests {
         assert_eq!(value["language"], "en");
         assert_eq!(value["theme"], "system");
         assert_eq!(value["transcription_cleanup_days"], serde_json::Value::Null);
+        assert_eq!(value["launch_at_startup"], false);
     }
 
     #[test]

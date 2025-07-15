@@ -74,7 +74,7 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().launch_at_startup),
     };
-    
+
     // Pill position is already loaded from store, no need for duplicate state
 
     Ok(settings)
@@ -96,7 +96,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set("theme", json!(settings.theme));
     store.set("transcription_cleanup_days", json!(settings.transcription_cleanup_days));
     store.set("launch_at_startup", json!(settings.launch_at_startup));
-    
+
     // Save pill position if provided
     if let Some((x, y)) = settings.pill_position {
         store.set("pill_position", json!([x, y]));
@@ -108,9 +108,9 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     if !settings.current_model.is_empty() && old_model != settings.current_model {
         use tauri::async_runtime::Mutex as AsyncMutex;
         use crate::commands::model::preload_model;
-        
+
         log::info!("Model changed from '{}' to '{}', preloading new model", old_model, settings.current_model);
-        
+
         let app_clone = app.clone();
         let model_name = settings.current_model.clone();
         tokio::spawn(async move {

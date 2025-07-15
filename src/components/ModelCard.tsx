@@ -1,8 +1,7 @@
-import { Download, Trash2, X, Zap, Brain, HardDrive } from 'lucide-react';
+import { Brain, Download, HardDrive, Trash2, X, Zap } from 'lucide-react';
 import React from 'react';
 import { ModelInfo } from '../types';
 import { Button } from './ui/button';
-import { Badge } from './ui/badge';
 import { Card, CardContent } from './ui/card';
 import { Progress } from './ui/progress';
 
@@ -45,15 +44,15 @@ export const ModelCard = React.memo(function ModelCard({
 
   const getModelDescription = () => {
     const sizeInMB = model.size / (1024 * 1024);
-    const sizeStr = sizeInMB >= 1024 
+    const sizeStr = sizeInMB >= 1024
       ? `${(sizeInMB / 1024).toFixed(1)} GB`
       : `${Math.round(sizeInMB)} MB`;
-    
+
     return sizeStr;
   };
 
   return (
-    <Card 
+    <Card
       className={`transition-all hover:shadow-md py-2 cursor-pointer ${
         isSelected ? 'border-primary shadow-sm bg-primary/5' : 'hover:border-muted-foreground/50'
       }`}
@@ -68,11 +67,6 @@ export const ModelCard = React.memo(function ModelCard({
               }`}>
                 {formatModelName(name)}
               </h3>
-              {name === 'large-v3-turbo' && (
-                <Badge variant="default" className="text-xs">
-                  Recommended
-                </Badge>
-              )}
             </div>
             <div className="flex items-center gap-3 mt-1">
               <div className="flex items-center gap-1">

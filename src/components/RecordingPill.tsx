@@ -1,20 +1,20 @@
+import IOSSpinner from "@/components/ios-spinner";
 import { Button } from "@/components/ui/button";
 import { useRecording } from "@/hooks/useRecording";
-import { invoke } from "@tauri-apps/api/core";
-import { AudioLines, Loader2 } from "lucide-react";
+import { AudioLines } from "lucide-react";
 
 export function RecordingPill() {
   const recording = useRecording();
 
-  const isRecording = recording.state === "recording";
+  // const isRecording = recording.state === "recording";
   const isTranscribing = recording.state === "transcribing";
 
   // Handle click to stop recording
-  const handleClick = async () => {
-    if (isRecording) {
-      await invoke("stop_recording");
-    }
-  };
+  // const handleClick = async () => {
+  //   if (isRecording) {
+  //     await invoke("stop_recording");
+  //   }
+  // };
 
   return (
     <div className="fixed inset-0 flex items-center justify-center pointer-events-none">
@@ -26,7 +26,7 @@ export function RecordingPill() {
       >
         {isTranscribing ? (
           <>
-            <Loader2 className="animate-spin" />
+            <IOSSpinner size={16} className="mr-2" />
             Transcribing
           </>
         ) : (

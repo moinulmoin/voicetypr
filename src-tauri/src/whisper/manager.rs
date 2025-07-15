@@ -78,7 +78,7 @@ impl WhisperManager {
 
         // Multilingual models only (no .en variants)
         // Removed tiny, small, and medium models - keeping only base and large variants
-        
+
         models.insert(
             "base".to_string(),
             ModelInfo {
@@ -103,7 +103,7 @@ impl WhisperManager {
                 sha256: "ad82bf6a9043ceed055076d0fd39f5f186ff8062".to_string(), // SHA1 (correct)
                 downloaded: false,
                 speed_score: 2,     // Slowest
-                accuracy_score: 10, // Best accuracy
+                accuracy_score: 9, // Best accuracy
             },
         );
 
@@ -113,8 +113,8 @@ impl WhisperManager {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin".to_string(),
             sha256: "e6e2ed78495d403bef4b7cff42ef4aaadcfea8de".to_string(), // SHA1 (correct)
             downloaded: false,
-            speed_score: 3,       // Quantized, faster than full large
-            accuracy_score: 9,    // Slight degradation from quantization
+            speed_score: 4,       // Quantized, faster than full large
+            accuracy_score: 8,    // Slight degradation from quantization
         });
 
         models.insert("large-v3-turbo".to_string(), ModelInfo {
@@ -134,7 +134,7 @@ impl WhisperManager {
             sha256: "e050f7970618a659205450ad97eb95a18d69c9ee".to_string(), // SHA1 (correct)
             downloaded: false,
             speed_score: 8,       // Very fast, quantized turbo
-            accuracy_score: 8,    // Good accuracy with turbo + quantization
+            accuracy_score: 7,    // Good accuracy with turbo + quantization
         });
 
         let mut manager = Self { models_dir, models };
