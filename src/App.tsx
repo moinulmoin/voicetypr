@@ -17,7 +17,7 @@ import { Toaster } from "sonner";
 // Helper function to calculate balanced performance score
 function calculateBalancedScore(model: ModelInfo): number {
   // Weighted average: 40% speed, 60% accuracy
-  return (model.speed_score * 0.4 + model.accuracy_score * 0.6) / 10 * 100;
+  return ((model.speed_score * 0.4 + model.accuracy_score * 0.6) / 10) * 100;
 }
 
 // Helper function to sort models by various criteria
@@ -44,13 +44,13 @@ function sortModels(
 // Main App Component
 export default function App() {
   const { registerEvent } = useEventCoordinator("main");
-  const [activeSection, setActiveSection] = useState<string>("recordings");
+  const [activeSection, setActiveSection] = useState<string>("general");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [models, setModels] = useState<Record<string, ModelInfo>>({});
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
-  
+
   // Check accessibility permissions on macOS
   useAccessibilityPermission();
 
@@ -116,12 +116,15 @@ export default function App() {
           await loadHistory();
         });
 
-        registerEvent<{ model: string; progress: number }>("download-progress", ({ model, progress }) => {
-          setDownloadProgress((prev) => ({
-            ...prev,
-            [model]: progress
-          }));
-        });
+        registerEvent<{ model: string; progress: number }>(
+          "download-progress",
+          ({ model, progress }) => {
+            setDownloadProgress((prev) => ({
+              ...prev,
+              [model]: progress
+            }));
+          }
+        );
 
         registerEvent<string>("model-downloaded", (modelName) => {
           setModels((prev) => ({
@@ -180,35 +183,38 @@ export default function App() {
   }, []);
 
   // Delete model
-  const deleteModel = useCallback(async (modelName: string) => {
-    console.log("deleteModel called with:", modelName);
-    try {
-      const confirmed = await ask(`Are you sure you want to delete the ${modelName} model?`, {
-        title: "Delete Model",
-        kind: "warning"
-      });
+  const deleteModel = useCallback(
+    async (modelName: string) => {
+      console.log("deleteModel called with:", modelName);
+      try {
+        const confirmed = await ask(`Are you sure you want to delete the ${modelName} model?`, {
+          title: "Delete Model",
+          kind: "warning"
+        });
 
-      if (!confirmed) {
-        return;
+        if (!confirmed) {
+          return;
+        }
+
+        console.log("Calling delete_model command...");
+        await invoke("delete_model", { modelName });
+        console.log("delete_model command completed");
+
+        // Refresh model status
+        const modelStatus = await invoke<Record<string, ModelInfo>>("get_model_status");
+        setModels(modelStatus);
+
+        // If deleted model was the current one, clear selection
+        if (settings?.current_model === modelName) {
+          await saveSettings({ ...settings, current_model: "" });
+        }
+      } catch (error) {
+        console.error("Failed to delete model:", error);
+        alert(`Failed to delete model: ${error}`);
       }
-
-      console.log("Calling delete_model command...");
-      await invoke("delete_model", { modelName });
-      console.log("delete_model command completed");
-
-      // Refresh model status
-      const modelStatus = await invoke<Record<string, ModelInfo>>("get_model_status");
-      setModels(modelStatus);
-
-      // If deleted model was the current one, clear selection
-      if (settings?.current_model === modelName) {
-        await saveSettings({ ...settings, current_model: "" });
-      }
-    } catch (error) {
-      console.error("Failed to delete model:", error);
-      alert(`Failed to delete model: ${error}`);
-    }
-  }, [settings]);
+    },
+    [settings]
+  );
 
   // Cancel download (placeholder - backend support needed)
   const cancelDownload = useCallback(async (modelName: string) => {
@@ -228,25 +234,28 @@ export default function App() {
   }, []);
 
   // Save settings
-  const saveSettings = useCallback(async (newSettings: AppSettings) => {
-    try {
-      await invoke("save_settings", { settings: newSettings });
+  const saveSettings = useCallback(
+    async (newSettings: AppSettings) => {
+      try {
+        await invoke("save_settings", { settings: newSettings });
 
-      // Update global shortcut in backend if changed
-      if (newSettings.hotkey !== settings?.hotkey) {
-        try {
-          await invoke("set_global_shortcut", { shortcut: newSettings.hotkey });
-        } catch (err) {
-          console.error("Failed to update hotkey:", err);
-          // Still update UI even if hotkey registration fails
+        // Update global shortcut in backend if changed
+        if (newSettings.hotkey !== settings?.hotkey) {
+          try {
+            await invoke("set_global_shortcut", { shortcut: newSettings.hotkey });
+          } catch (err) {
+            console.error("Failed to update hotkey:", err);
+            // Still update UI even if hotkey registration fails
+          }
         }
-      }
 
-      setSettings(newSettings);
-    } catch (error) {
-      console.error("Failed to save settings:", error);
-    }
-  }, [settings]);
+        setSettings(newSettings);
+      } catch (error) {
+        console.error("Failed to save settings:", error);
+      }
+    },
+    [settings]
+  );
 
   // Memoize sorted models to avoid recalculation on every render
   const sortedModels = useMemo(() => sortModels(Object.entries(models), "accuracy"), [models]);
@@ -263,28 +272,28 @@ export default function App() {
             <ModelManagementErrorBoundary>
               <div className="space-y-4 w-full max-w-md">
                 {sortedModels.map(([name, model]) => (
-              <ModelCard
-                key={name}
-                name={name}
-                model={model}
-                downloadProgress={downloadProgress[name]}
-                onDownload={downloadModel}
-                onDelete={deleteModel}
-                onCancelDownload={cancelDownload}
-                onSelect={async (modelName) => {
-                  // Create default settings if none exist
-                  const newSettings = settings || {
-                    hotkey: "CommandOrControl+Shift+Space",
-                    language: "auto",
-                    theme: "system"
-                  };
+                  <ModelCard
+                    key={name}
+                    name={name}
+                    model={model}
+                    downloadProgress={downloadProgress[name]}
+                    onDownload={downloadModel}
+                    onDelete={deleteModel}
+                    onCancelDownload={cancelDownload}
+                    onSelect={async (modelName) => {
+                      // Create default settings if none exist
+                      const newSettings = settings || {
+                        hotkey: "CommandOrControl+Shift+Space",
+                        language: "auto",
+                        theme: "system"
+                      };
 
-                  // Save with selected model
-                  await saveSettings({ ...newSettings, current_model: modelName });
-                  setShowOnboarding(false);
-                }}
-              />
-            ))}
+                      // Save with selected model
+                      await saveSettings({ ...newSettings, current_model: modelName });
+                      setShowOnboarding(false);
+                    }}
+                  />
+                ))}
               </div>
             </ModelManagementErrorBoundary>
           </div>
@@ -298,19 +307,11 @@ export default function App() {
     switch (activeSection) {
       case "recordings":
         return (
-          <RecentRecordings
-            history={history}
-            hotkey={settings?.hotkey || "Cmd+Shift+Space"}
-          />
+          <RecentRecordings history={history} hotkey={settings?.hotkey || "Cmd+Shift+Space"} />
         );
 
       case "general":
-        return (
-          <GeneralSettings
-            settings={settings}
-            onSettingsChange={saveSettings}
-          />
-        );
+        return <GeneralSettings settings={settings} onSettingsChange={saveSettings} />;
 
       case "models":
         return (
@@ -333,7 +334,7 @@ export default function App() {
         return <AboutSection />;
 
       default:
-        return null;
+        return <GeneralSettings settings={settings} onSettingsChange={saveSettings} />;
     }
   };
 
@@ -343,9 +344,7 @@ export default function App() {
       <SidebarProvider>
         <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
         <SidebarInset>
-          <div className="h-full overflow-auto">
-            {renderSectionContent()}
-          </div>
+          <div className="h-full overflow-auto">{renderSectionContent()}</div>
         </SidebarInset>
       </SidebarProvider>
       <Toaster position="top-right" />

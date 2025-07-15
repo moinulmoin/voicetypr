@@ -75,20 +75,8 @@ impl WhisperManager {
         // Note: The field is named 'sha256' for historical reasons but contains SHA1 values
 
         // Multilingual models only (no .en variants)
-        models.insert(
-            "tiny".to_string(),
-            ModelInfo {
-                name: "tiny".to_string(),
-                size: 75_000_000, // 75MB
-                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
-                    .to_string(),
-                sha256: "bd577a113a864445d4c299885e0cb97d4ba92b5f".to_string(), // SHA1 (correct)
-                downloaded: false,
-                speed_score: 10,   // Fastest
-                accuracy_score: 3, // Lowest accuracy
-            },
-        );
-
+        // Removed tiny, small, and medium models - keeping only base and large variants
+        
         models.insert(
             "base".to_string(),
             ModelInfo {
@@ -100,34 +88,6 @@ impl WhisperManager {
                 downloaded: false,
                 speed_score: 8,    // Very fast
                 accuracy_score: 5, // Basic accuracy
-            },
-        );
-
-        models.insert(
-            "small".to_string(),
-            ModelInfo {
-                name: "small".to_string(),
-                size: 466_000_000, // 466MB
-                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
-                    .to_string(),
-                sha256: "55356645c2b361a969dfd0ef2c5a50d530afd8d5".to_string(), // SHA1 (correct)
-                downloaded: false,
-                speed_score: 6,    // Good speed
-                accuracy_score: 7, // Good accuracy, best balance
-            },
-        );
-
-        models.insert(
-            "medium".to_string(),
-            ModelInfo {
-                name: "medium".to_string(),
-                size: 1_500_000_000, // 1.5GB
-                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
-                    .to_string(),
-                sha256: "fd9727b6e1217c2f614f9b698455c4ffd82463b4".to_string(), // SHA1 (correct)
-                downloaded: false,
-                speed_score: 4,    // Slower
-                accuracy_score: 8, // Very good accuracy
             },
         );
 

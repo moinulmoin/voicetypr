@@ -14,12 +14,15 @@
       {
         "title": "VoiceTypr",
         "label": "main",
-        "width": 800,
-        "height": 600,
-        "resizable": true,
+        "width": 700,
+        "height": 500,
+        "minWidth": 700,
+        "minHeight": 500,
+        "resizable": false,
         "center": true,
         "visible": true,
-        "skipTaskbar": false
+        "skipTaskbar": false,
+        "alwaysOnTop": true
       }
     ],
     "security": {

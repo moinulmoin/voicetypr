@@ -267,7 +267,11 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None::<Vec<&str>>
+        ));
 
     // Add NSPanel plugin on macOS
     #[cfg(target_os = "macos")]
@@ -597,6 +601,39 @@ pub fn run() {
                 pill_window.to_panel().map_err(|e| format!("Failed to convert to NSPanel: {:?}", e))?;
 
                 log::info!("Created pill window as NSPanel");
+            }
+
+            // Sync autostart state with saved settings
+            if let Ok(store) = app.store("settings") {
+                let saved_autostart = store.get("launch_at_startup")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                
+                // Check actual autostart state and sync if needed
+                use tauri_plugin_autostart::ManagerExt;
+                let autolaunch = app.autolaunch();
+                
+                match autolaunch.is_enabled() {
+                    Ok(actual_enabled) => {
+                        if actual_enabled != saved_autostart {
+                            log::info!("Syncing autostart state: saved={}, actual={}", saved_autostart, actual_enabled);
+                            
+                            // Settings are source of truth
+                            if saved_autostart {
+                                if let Err(e) = autolaunch.enable() {
+                                    log::warn!("Failed to enable autostart: {}", e);
+                                }
+                            } else {
+                                if let Err(e) = autolaunch.disable() {
+                                    log::warn!("Failed to disable autostart: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to check autostart state: {}", e);
+                    }
+                }
             }
 
             // Hide main window on start (menu bar only)

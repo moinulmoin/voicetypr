@@ -23,6 +23,9 @@
     "fs:scope-appdata",
     "shell:allow-open",
     "shell:allow-execute",
-    "macos-permissions:default"
+    "macos-permissions:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
   ]
 }

@@ -13,6 +13,7 @@ pub struct Settings {
     pub theme: String,
     pub transcription_cleanup_days: Option<u32>,
     pub pill_position: Option<(f64, f64)>,
+    pub launch_at_startup: bool,
 }
 
 impl Default for Settings {
@@ -24,6 +25,7 @@ impl Default for Settings {
             theme: "system".to_string(),
             transcription_cleanup_days: None, // None means keep forever
             pill_position: None, // No saved position initially
+            launch_at_startup: false, // Default to not launching at startup
         }
     }
 }
@@ -67,6 +69,10 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
                     None
                 }
             }),
+        launch_at_startup: store
+            .get("launch_at_startup")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().launch_at_startup),
     };
     
     // Pill position is already loaded from store, no need for duplicate state
@@ -89,6 +95,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set("language", json!(settings.language));
     store.set("theme", json!(settings.theme));
     store.set("transcription_cleanup_days", json!(settings.transcription_cleanup_days));
+    store.set("launch_at_startup", json!(settings.launch_at_startup));
     
     // Save pill position if provided
     if let Some((x, y)) = settings.pill_position {

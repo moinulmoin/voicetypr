@@ -7,7 +7,10 @@ import {
   SelectTrigger,
   SelectValue
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { AppSettings } from "@/types";
+import { useEffect, useState } from "react";
+import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 
 interface GeneralSettingsProps {
   settings: AppSettings | null;
@@ -15,7 +18,45 @@ interface GeneralSettingsProps {
 }
 
 export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsProps) {
+  const [autostartEnabled, setAutostartEnabled] = useState(false);
+  const [autostartLoading, setAutostartLoading] = useState(false);
+
+  useEffect(() => {
+    // Check if autostart is enabled on component mount
+    const checkAutostart = async () => {
+      try {
+        const enabled = await isEnabled();
+        setAutostartEnabled(enabled);
+      } catch (error) {
+        console.error('Failed to check autostart status:', error);
+      }
+    };
+    checkAutostart();
+  }, []);
+
   if (!settings) return null;
+
+  const handleAutostartToggle = async (checked: boolean) => {
+    setAutostartLoading(true);
+    try {
+      // Use the plugin API to enable/disable autostart
+      if (checked) {
+        await enable();
+      } else {
+        await disable();
+      }
+      setAutostartEnabled(checked);
+      
+      // Update settings to keep them in sync (backend is source of truth)
+      onSettingsChange({ ...settings, launch_at_startup: checked });
+    } catch (error) {
+      console.error('Failed to toggle autostart:', error);
+      // Revert the state if there was an error
+      setAutostartEnabled(!checked);
+    } finally {
+      setAutostartLoading(false);
+    }
+  };
 
   return (
     <div className="p-6 space-y-6">
@@ -32,18 +73,17 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
         />
       </div>
 
-      {/* Language Setting */}
+      {/* Output Setting */}
       <div className="flex items-center justify-between gap-4">
-        <Label htmlFor="language" className="text-sm font-medium">Language</Label>
+        <Label htmlFor="language" className="text-sm font-medium">Output</Label>
         <Select
-          value={settings.language || "auto"}
+          value={settings.language || "en"}
           onValueChange={(value) => onSettingsChange({ ...settings, language: value })}
         >
           <SelectTrigger id="language" className="w-64">
             <SelectValue placeholder="Select language" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="auto">Auto-detect</SelectItem>
             <SelectItem value="en">English</SelectItem>
             <SelectItem value="es">Spanish</SelectItem>
             <SelectItem value="fr">French</SelectItem>
@@ -56,6 +96,17 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
             <SelectItem value="zh">Chinese</SelectItem>
           </SelectContent>
         </Select>
+      </div>
+
+      {/* Launch at Startup Setting */}
+      <div className="flex items-center justify-between gap-4">
+        <Label htmlFor="autostart" className="text-sm font-medium">Launch at startup</Label>
+        <Switch
+          id="autostart"
+          checked={autostartEnabled}
+          onCheckedChange={handleAutostartToggle}
+          disabled={autostartLoading}
+        />
       </div>
     </div>
   );

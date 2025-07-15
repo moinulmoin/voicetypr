@@ -53,4 +53,5 @@ tauri-plugin-mic-recorder = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
+tauri-plugin-autostart = "2"
 

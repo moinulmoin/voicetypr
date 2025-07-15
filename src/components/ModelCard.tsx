@@ -1,7 +1,8 @@
-import { CheckCircle2, Download, Trash2, X } from 'lucide-react';
+import { Download, Trash2, X, Zap, Brain, HardDrive } from 'lucide-react';
 import React from 'react';
 import { ModelInfo } from '../types';
 import { Button } from './ui/button';
+import { Badge } from './ui/badge';
 import { Card, CardContent } from './ui/card';
 import { Progress } from './ui/progress';
 
@@ -48,46 +49,54 @@ export const ModelCard = React.memo(function ModelCard({
       ? `${(sizeInMB / 1024).toFixed(1)} GB`
       : `${Math.round(sizeInMB)} MB`;
     
-    return `Speed: ${model.speed_score}/10 • Accuracy: ${model.accuracy_score}/10 • ${sizeStr}`;
+    return sizeStr;
   };
 
   return (
-    <Card className={`transition-all hover:shadow-md py-2 ${
-      isSelected ? 'border-primary shadow-sm bg-primary/5' : 'hover:border-muted-foreground/50'
-    }`}>
+    <Card 
+      className={`transition-all hover:shadow-md py-2 cursor-pointer ${
+        isSelected ? 'border-primary shadow-sm bg-primary/5' : 'hover:border-muted-foreground/50'
+      }`}
+      onClick={() => model.downloaded && showSelectButton && onSelect(name)}
+    >
       <CardContent className="px-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex-1 min-w-0">
-            <h3 className="font-medium text-base">
-              {formatModelName(name)}
-            </h3>
-            <p className="text-sm text-muted-foreground mt-1">
-              {getModelDescription()}
-            </p>
+            <div className="flex items-center gap-2">
+              <h3 className={`font-medium text-base ${
+                isSelected ? 'text-primary' : ''
+              }`}>
+                {formatModelName(name)}
+              </h3>
+              {name === 'large-v3-turbo' && (
+                <Badge variant="default" className="text-xs">
+                  Recommended
+                </Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-3 mt-1">
+              <div className="flex items-center gap-1">
+                <Zap className={`w-3.5 h-3.5 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} />
+                <span className={`text-sm ${isSelected ? 'text-primary' : 'text-muted-foreground'}`}>{model.speed_score}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Brain className={`w-3.5 h-3.5 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} />
+                <span className={`text-sm ${isSelected ? 'text-primary' : 'text-muted-foreground'}`}>{model.accuracy_score}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <HardDrive className={`w-3.5 h-3.5 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} />
+                <span className={`text-sm ${isSelected ? 'text-primary' : 'text-muted-foreground'}`}>{getModelDescription()}</span>
+              </div>
+            </div>
           </div>
 
           <div className="flex-shrink-0 flex items-center gap-1">
             {model.downloaded ? (
               <>
-                {showSelectButton ? (
-                  isSelected ? (
-                    <CheckCircle2 className="w-5 h-5 text-primary" />
-                  ) : (
-                    <Button
-                      onClick={() => onSelect(name)}
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8"
-                    >
-                      <CheckCircle2 className="w-5 h-5 text-muted-foreground hover:text-primary" />
-                    </Button>
-                  )
-                ) : (
-                  <CheckCircle2 className="w-5 h-5 text-green-600" />
-                )}
                 {onDelete && (
                   <Button
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       console.log("Delete button clicked for:", name);
                       onDelete(name);
                     }}
@@ -105,7 +114,10 @@ export const ModelCard = React.memo(function ModelCard({
                 <span className="text-sm font-medium w-12 text-right">{downloadProgress.toFixed(0)}%</span>
                 {onCancelDownload && (
                   <Button
-                    onClick={() => onCancelDownload(name)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCancelDownload(name);
+                    }}
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 hover:text-destructive"
@@ -116,7 +128,10 @@ export const ModelCard = React.memo(function ModelCard({
               </>
             ) : (
               <Button
-                onClick={() => onDownload(name)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDownload(name);
+                }}
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"

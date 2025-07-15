@@ -13,6 +13,7 @@ export interface AppSettings {
   language: string;
   theme: string;
   transcription_cleanup_days?: number | null;
+  launch_at_startup?: boolean;
 }
 
 export interface TranscriptionHistory {
