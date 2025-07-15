@@ -1,5 +1,4 @@
 import { ModelCard } from "@/components/ModelCard";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { ModelInfo } from "@/types";
 
 interface ModelsSectionProps {
@@ -12,23 +11,23 @@ interface ModelsSectionProps {
   onSelect: (modelName: string) => void;
 }
 
-export function ModelsSection({ 
-  models, 
-  downloadProgress, 
+export function ModelsSection({
+  models,
+  downloadProgress,
   currentModel,
-  onDownload, 
-  onDelete, 
+  onDownload,
+  onDelete,
   onCancelDownload,
-  onSelect 
+  onSelect
 }: ModelsSectionProps) {
   return (
     <div className="p-6">
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Models</h2>
-      <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+      <h2 className="text-lg font-semibold mb-4">Models</h2>
+      <p className="text-sm text-muted-foreground mb-6">
         Download and manage Whisper models for transcription
       </p>
-      
-      <ScrollArea className="h-[calc(100vh-200px)]">
+
+      {/* <ScrollArea className="h-[calc(100vh-200px)]"> */}
         <div className="space-y-3 pr-4">
           {models.map(([name, model]) => (
             <ModelCard
@@ -49,7 +48,7 @@ export function ModelsSection({
             />
           ))}
         </div>
-      </ScrollArea>
+      {/* </ScrollArea> */}
     </div>
   );
 }

@@ -34,8 +34,6 @@ describe('VoiceTypr User Scenarios', () => {
     hotkey: 'CommandOrControl+Shift+Space',
     current_model: 'base',
     language: 'auto',
-    auto_insert: true,
-    show_window_on_record: false,
     theme: 'system',
   };
 
@@ -148,12 +146,9 @@ describe('VoiceTypr User Scenarios', () => {
         if (cmd === 'get_settings') return Promise.resolve({
           hotkey: 'CommandOrControl+Shift+Space',
           language: 'auto',
-          auto_insert: true,
-          show_window_on_record: false,
           theme: 'system',
           current_model: 'base',
           transcription_cleanup_days: null,
-          show_pill_widget: true,
         });
         return Promise.resolve();
       });

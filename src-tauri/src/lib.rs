@@ -24,7 +24,8 @@ use commands::{
     settings::*,
     text::*,
     window::*,
-    debug::{debug_transcription_flow, test_transcription_event}
+    debug::{debug_transcription_flow, test_transcription_event},
+    permissions::*
 };
 use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
@@ -54,12 +55,18 @@ pub struct AppState {
     pub recording_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
     pub current_recording_path: Arc<Mutex<Option<PathBuf>>>,
     pub transcription_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    
+
     // Cancellation flag for graceful shutdown
     pub should_cancel_recording: Arc<AtomicBool>,
-    
+
     // Window management runtime state
     pub window_manager: Arc<Mutex<Option<WindowManager>>>,
+}
+
+// Tray menu items managed state
+pub struct TrayMenuItems {
+    pub start_recording: Arc<Mutex<tauri::menu::MenuItem<tauri::Wry>>>,
+    pub stop_recording: Arc<Mutex<tauri::menu::MenuItem<tauri::Wry>>>,
 }
 
 impl AppState {
@@ -73,49 +80,48 @@ impl AppState {
             window_manager: Arc::new(Mutex::new(None)),
         }
     }
-    
+
     pub fn set_window_manager(&self, manager: WindowManager) {
         let mut wm_guard = self.window_manager.lock().unwrap();
         *wm_guard = Some(manager);
     }
-    
+
     pub fn get_window_manager(&self) -> Option<WindowManager> {
         self.window_manager.lock().unwrap().clone()
     }
-    
+
     /// Transition recording state with validation
     pub fn transition_recording_state(&self, new_state: RecordingState) -> Result<(), String> {
         self.recording_state.transition_to(new_state)
     }
-    
     /// Get current recording state
     pub fn get_current_state(&self) -> RecordingState {
         self.recording_state.current()
     }
-    
+
     /// Request cancellation of ongoing recording/transcription
     pub fn request_cancellation(&self) {
         self.should_cancel_recording.store(true, Ordering::SeqCst);
         log::info!("Recording cancellation requested");
     }
-    
+
     /// Clear cancellation flag (call when starting new recording)
     pub fn clear_cancellation(&self) {
         self.should_cancel_recording.store(false, Ordering::SeqCst);
     }
-    
+
     /// Check if cancellation was requested
     pub fn is_cancellation_requested(&self) -> bool {
         self.should_cancel_recording.load(Ordering::SeqCst)
     }
-    
+
     /// Emit event to specific window using WindowManager
     pub fn emit_to_window(&self, window: &str, event: &str, payload: impl serde::Serialize) -> Result<(), String> {
         if let Some(wm) = self.get_window_manager() {
             // Convert payload to JSON value
             let json_payload = serde_json::to_value(payload)
                 .map_err(|e| format!("Failed to serialize payload: {}", e))?;
-            
+
             match window {
                 "main" => wm.emit_to_main(event, json_payload),
                 "pill" => wm.emit_to_pill(event, json_payload),
@@ -134,18 +140,18 @@ pub fn update_recording_state(
     error: Option<String>,
 ) {
     let app_state = app.state::<AppState>();
-    
-    log::info!("[FLOW] update_recording_state called: {:?} -> {:?}, error: {:?}", 
+
+    log::debug!("update_recording_state called: {:?} -> {:?}, error: {:?}",
         app_state.get_current_state(), new_state, error);
-    
+
     // Try to transition using unified state
     match app_state.transition_recording_state(new_state) {
         Ok(_) => {
-            log::info!("[FLOW] Successfully transitioned to state: {:?}", new_state);
+            log::debug!("Successfully transitioned to state: {:?}", new_state);
         }
         Err(e) => {
-            log::error!("[FLOW] State transition failed: {}", e);
-            
+            log::error!("State transition failed: {}", e);
+
             // Only force state updates in specific recovery scenarios
             let current = app_state.get_current_state();
             let should_force = match (current, new_state) {
@@ -158,7 +164,7 @@ pub fn update_recording_state(
                 // Disallow other forced transitions
                 _ => false,
             };
-            
+
             if should_force {
                 log::warn!("Forcing state transition from {:?} to {:?} for recovery", current, new_state);
                 if let Err(force_err) = app_state.recording_state.force_set(new_state) {
@@ -171,7 +177,6 @@ pub fn update_recording_state(
     }
 
     // Emit state change event with typed payload
-    log::info!("[FLOW] Emitting recording-state-changed event: {:?}", new_state);
     let _ = app.emit(
         "recording-state-changed",
         serde_json::json!({
@@ -186,6 +191,9 @@ pub fn update_recording_state(
             "error": error
         }),
     );
+
+    // Update tray menu state
+    update_tray_menu_state(app, new_state);
 }
 
 // Helper function to get current recording state
@@ -203,6 +211,41 @@ pub fn emit_to_window(
 ) -> Result<(), String> {
     let app_state = app.state::<AppState>();
     app_state.emit_to_window(window, event, payload)
+}
+
+// Helper function to update tray menu state based on recording state
+pub fn update_tray_menu_state(app: &tauri::AppHandle, recording_state: RecordingState) {
+    if let Some(menu_items) = app.try_state::<TrayMenuItems>() {
+        match recording_state {
+            RecordingState::Idle | RecordingState::Error => {
+                // Enable start, disable stop
+                if let Ok(start) = menu_items.start_recording.lock() {
+                    let _ = start.set_enabled(true);
+                }
+                if let Ok(stop) = menu_items.stop_recording.lock() {
+                    let _ = stop.set_enabled(false);
+                }
+            }
+            RecordingState::Starting | RecordingState::Recording => {
+                // Disable start, enable stop
+                if let Ok(start) = menu_items.start_recording.lock() {
+                    let _ = start.set_enabled(false);
+                }
+                if let Ok(stop) = menu_items.stop_recording.lock() {
+                    let _ = stop.set_enabled(true);
+                }
+            }
+            RecordingState::Stopping | RecordingState::Transcribing => {
+                // Disable both during processing
+                if let Ok(start) = menu_items.start_recording.lock() {
+                    let _ = start.set_enabled(false);
+                }
+                if let Ok(stop) = menu_items.stop_recording.lock() {
+                    let _ = stop.set_enabled(false);
+                }
+            }
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -229,7 +272,9 @@ pub fn run() {
     // Add NSPanel plugin on macOS
     #[cfg(target_os = "macos")]
     {
-        builder = builder.plugin(tauri_nspanel::init());
+        builder = builder
+            .plugin(tauri_nspanel::init())
+            .plugin(tauri_plugin_macos_permissions::init());
     }
 
     builder
@@ -319,11 +364,30 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // Set up panic handler to catch crashes
+            std::panic::set_hook(Box::new(|panic_info| {
+                log::error!("PANIC: {:?}", panic_info);
+                eprintln!("Application panic: {:?}", panic_info);
+            }));
+            
             // Set activation policy on macOS to prevent focus stealing
             #[cfg(target_os = "macos")]
             {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 log::info!("Set macOS activation policy to Accessory");
+                
+                // Check accessibility permissions at startup
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    // Small delay to ensure app is fully initialized
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    
+                    // Check and request accessibility permission for keyboard simulation
+                    match app_handle.emit("check-accessibility-permission", ()) {
+                        Ok(_) => log::info!("Emitted accessibility permission check event"),
+                        Err(e) => log::error!("Failed to emit accessibility check: {}", e),
+                    }
+                });
             }
 
             // Initialize whisper manager
@@ -344,44 +408,87 @@ pub fn run() {
 
             // Initialize unified application state
             app.manage(AppState::new());
-            
+
             // Initialize window manager after app state is managed
             let app_state = app.state::<AppState>();
             let window_manager = WindowManager::new(app.app_handle().clone());
             app_state.set_window_manager(window_manager);
-            
+
             // Pill position is loaded from settings when needed, no duplicate state
 
             // Initialize recorder state (kept separate for backwards compatibility)
             app.manage(RecorderState(Mutex::new(AudioRecorder::new())));
 
             // Create tray icon
-            use tauri::menu::{MenuBuilder, MenuItem};
+            use tauri::menu::{MenuBuilder, MenuItem, PredefinedMenuItem};
             use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 
-            let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+            // Create menu items
+            let start_recording_i = MenuItem::with_id(app, "start_recording", "Start Recording", true, None::<&str>)?;
+            let stop_recording_i = MenuItem::with_id(app, "stop_recording", "Stop Recording", false, None::<&str>)?;
+            let separator1 = PredefinedMenuItem::separator(app)?;
+            let settings_i = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
+            let separator2 = PredefinedMenuItem::separator(app)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Quit VoiceTypr", true, None::<&str>)?;
 
             let menu = MenuBuilder::new(app)
-                .item(&show_i)
-                .separator()
+                .item(&start_recording_i)
+                .item(&stop_recording_i)
+                .item(&separator1)
+                .item(&settings_i)
+                .item(&separator2)
                 .item(&quit_i)
                 .build()?;
 
+            // Store menu item references in app state for dynamic updates
+            app.manage(TrayMenuItems {
+                start_recording: Arc::new(Mutex::new(start_recording_i.clone())),
+                stop_recording: Arc::new(Mutex::new(stop_recording_i.clone())),
+            });
+
+            // Use default window icon for tray
+            let tray_icon = app.default_window_icon()
+                .expect("Failed to get default window icon")
+                .clone();
+
             let _tray = TrayIconBuilder::with_id("main")
+                .icon(tray_icon)
                 .tooltip("VoiceType")
                 .menu(&menu)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                .on_menu_event(move |app, event| {
+                    log::info!("Tray menu event: {:?}", event.id);
+                    match event.id.as_ref() {
+                        "start_recording" => {
+                            let app_handle = app.app_handle().clone();
+                            tauri::async_runtime::spawn(async move {
+                                let recorder_state = app_handle.state::<RecorderState>();
+                                if let Err(e) = start_recording(app_handle.clone(), recorder_state).await {
+                                    log::error!("Failed to start recording from menu: {}", e);
+                                }
+                            });
                         }
+                        "stop_recording" => {
+                            let app_handle = app.app_handle().clone();
+                            tauri::async_runtime::spawn(async move {
+                                let recorder_state = app_handle.state::<RecorderState>();
+                                if let Err(e) = stop_recording(app_handle.clone(), recorder_state).await {
+                                    log::error!("Failed to stop recording from menu: {}", e);
+                                }
+                            });
+                        }
+                        "settings" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                                // Emit event to navigate to settings
+                                let _ = window.emit("navigate-to-settings", ());
+                            }
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
                     }
-                    "quit" => {
-                        app.exit(0);
-                    }
-                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
@@ -441,13 +548,13 @@ pub fn run() {
             if let Ok(store) = app.store("settings") {
                 if let Some(current_model) = store.get("current_model")
                     .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .filter(|s| !s.is_empty()) 
+                    .filter(|s| !s.is_empty())
                 {
                     let app_handle = app.app_handle().clone();
                     // Use tauri::async_runtime instead of tokio directly
                     tauri::async_runtime::spawn(async move {
                         log::info!("Attempting to preload model on startup: {}", current_model);
-                        
+
                         let whisper_state = app_handle.state::<AsyncMutex<whisper::manager::WhisperManager>>();
                         match preload_model(app_handle.clone(), current_model.clone(), whisper_state).await {
                             Ok(_) => {
@@ -455,9 +562,9 @@ pub fn run() {
                                 // Model is already set in store, no need to update
                             }
                             Err(e) => {
-                                log::warn!("Failed to preload model '{}': {}. App will continue without preloading.", 
+                                log::warn!("Failed to preload model '{}': {}. App will continue without preloading.",
                                          current_model, e);
-                                
+
                                 // Don't fail - just continue without preloading
                                 // The model will be loaded on first use
                             }
@@ -472,7 +579,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
-                
+
                 // Create the pill window
                 let pill_window = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
                     .title("Recording")
@@ -488,15 +595,29 @@ pub fn run() {
                 // Convert to NSPanel to prevent focus stealing
                 use tauri_nspanel::WebviewWindowExt;
                 pill_window.to_panel().map_err(|e| format!("Failed to convert to NSPanel: {:?}", e))?;
-                
+
                 log::info!("Created pill window as NSPanel");
             }
 
             // Hide main window on start (menu bar only)
-            // TODO: Only hide after successful onboarding
-            // if let Some(window) = app.get_webview_window("main") {
-            //     let _ = window.hide();
-            // }
+            // Check if this is first launch by looking for current_model setting
+            let should_hide_main = if let Ok(store) = app.store("settings") {
+                // If user has a model configured, they've completed onboarding
+                store.get("current_model")
+                    .and_then(|v| v.as_str().map(|s| !s.is_empty()))
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+
+            if should_hide_main {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                    log::info!("Main window hidden - menubar mode active");
+                }
+            } else {
+                log::info!("First launch or no model configured - keeping main window visible");
+            }
 
             Ok(())
         })
@@ -504,7 +625,6 @@ pub fn run() {
             start_recording,
             stop_recording,
             cancel_recording,
-            transcription_processed,
             debug_transcription_flow,
             test_transcription_event,
             save_transcription,
@@ -524,11 +644,23 @@ pub fn run() {
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,
-            update_pill_position,
             focus_main_window,
-            debug_transcription_flow,
-            test_transcription_event,
+            check_accessibility_permission,
+            request_accessibility_permission,
         ])
+        .on_window_event(|window, event| {
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    // Only hide the window instead of closing it (except for pill)
+                    if window.label() == "main" {
+                        api.prevent_close();
+                        window.hide().unwrap();
+                        log::info!("Main window hidden instead of closed");
+                    }
+                }
+                _ => {}
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

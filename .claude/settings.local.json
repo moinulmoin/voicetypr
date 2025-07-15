@@ -9,5 +9,56 @@
       "Bash(cargo check:*)"
     ],
     "deny": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '📚 Pre-edit analysis for: $FILE_PATH' && echo 'ℹ️  Reminder: Read related files, understand dependencies, and check for regression areas'"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '📚 Pre-write analysis for: $FILE_PATH' && echo 'ℹ️  Reminder: Check if this file should exist and understand its purpose in the codebase'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '🔍 Post-edit checks:' && echo '1. Check IDE diagnostics (mcp__ide__getDiagnostics)' && echo '2. Run related tests' && echo '3. Review changes with git diff' && echo '4. Ensure dev server is still running properly'"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '🔍 Post-write checks:' && echo '1. Verify file integrates with existing code' && echo '2. Add/update tests for new functionality' && echo '3. Check IDE diagnostics' && echo '4. Ensure proper imports/exports'"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '✅ Bash command complete'"
+          }
+        ]
+      }
+    ]
   }
 }

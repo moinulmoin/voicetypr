@@ -9,8 +9,10 @@ import { GeneralSettings } from "./components/sections/GeneralSettings";
 import { ModelsSection } from "./components/sections/ModelsSection";
 import { AboutSection } from "./components/sections/AboutSection";
 import { useEventCoordinator } from "./hooks/useEventCoordinator";
+import { useAccessibilityPermission } from "./hooks/useAccessibilityPermission";
 import { AppSettings, ModelInfo, TranscriptionHistory } from "./types";
 import { SidebarProvider, SidebarInset } from "./components/ui/sidebar";
+import { Toaster } from "sonner";
 
 // Helper function to calculate balanced performance score
 function calculateBalancedScore(model: ModelInfo): number {
@@ -48,6 +50,9 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
+  
+  // Check accessibility permissions on macOS
+  useAccessibilityPermission();
 
   // Initialize app
   useEffect(() => {
@@ -128,6 +133,12 @@ export default function App() {
             delete newProgress[modelName];
             return newProgress;
           });
+        });
+
+        // Listen for navigate-to-settings event from tray menu
+        registerEvent("navigate-to-settings", () => {
+          console.log("Navigate to settings requested from tray menu");
+          setActiveSection("settings");
         });
 
         return () => {
@@ -265,8 +276,6 @@ export default function App() {
                   const newSettings = settings || {
                     hotkey: "CommandOrControl+Shift+Space",
                     language: "auto",
-                    auto_insert: true,
-                    show_window_on_record: false,
                     theme: "system"
                   };
 
@@ -339,6 +348,7 @@ export default function App() {
           </div>
         </SidebarInset>
       </SidebarProvider>
+      <Toaster position="top-right" />
     </AppErrorBoundary>
   );
 }

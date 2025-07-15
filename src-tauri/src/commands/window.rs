@@ -54,33 +54,8 @@ pub async fn close_pill_widget(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub async fn update_pill_position(app: AppHandle, x: f64, y: f64) -> Result<(), String> {
-    // Get the window manager from app state
-    let app_state = app.state::<AppState>();
-    let window_manager = app_state.get_window_manager()
-        .ok_or("Window manager not initialized")?;
-    
-    // Use window manager to update position
-    window_manager.update_pill_position(x, y).await?;
-    
-    // Save position directly to settings for persistence
-    save_pill_position_to_settings(&app, x, y)?;
-    
-    Ok(())
-}
-
-/// Helper function to save pill position to settings
-fn save_pill_position_to_settings(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
-    use tauri_plugin_store::StoreExt;
-    use serde_json::json;
-    
-    let store = app.store("settings").map_err(|e| e.to_string())?;
-    store.set("pill_position", json!([x, y]));
-    store.save().map_err(|e| e.to_string())?;
-    
-    Ok(())
-}
+// Note: update_pill_position has been removed since pill position is now fixed at center-bottom
+// This was a design decision made during security review to simplify the codebase
 
 #[tauri::command]
 pub async fn focus_main_window(app: AppHandle) -> Result<(), String> {

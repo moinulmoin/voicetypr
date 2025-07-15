@@ -15,7 +15,7 @@ interface SidebarProps {
 }
 
 const sections = [
-  { id: "recordings", label: "Recent Recordings", icon: Clock },
+  { id: "recordings", label: "History", icon: Clock },
   { id: "general", label: "General", icon: Settings2 },
   { id: "models", label: "Models", icon: Cpu },
   { id: "about", label: "About", icon: Info },

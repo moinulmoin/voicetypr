@@ -74,13 +74,20 @@ pub async fn start_recording(
     
     // Update state to starting
     update_recording_state(&app, RecordingState::Starting, None);
-    // Get temp file path
-    let temp_dir = app.path().temp_dir().map_err(|e| e.to_string())?;
+    // Get app data directory for recordings
+    let recordings_dir = app.path().app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recordings");
+    
+    // Ensure recordings directory exists
+    std::fs::create_dir_all(&recordings_dir)
+        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+    
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| format!("Time error: {}", e))?
         .as_secs();
-    let audio_path = temp_dir.join(format!("recording_{}.wav", timestamp));
+    let audio_path = recordings_dir.join(format!("recording_{}.wav", timestamp));
 
     // Store path for later use
     let app_state = app.state::<AppState>();
@@ -104,8 +111,6 @@ pub async fn start_recording(
             return Err("Already recording".to_string());
         }
 
-        log::info!("Starting recording to: {:?}", audio_path);
-        
         // Try to start recording with graceful error handling
         match recorder.start_recording(
             audio_path
@@ -153,7 +158,7 @@ pub async fn start_recording(
             // Use a thread instead of tokio spawn for std::sync::mpsc
             std::thread::spawn(move || {
                 let mut last_emit = std::time::Instant::now();
-                let emit_interval = std::time::Duration::from_millis(100); // 10fps - reduce log spam
+                let emit_interval = std::time::Duration::from_millis(100); // Throttle to 10fps
 
                 while let Ok(level) = audio_level_rx.recv() {
                     // Throttle events to avoid overwhelming the UI
@@ -205,7 +210,7 @@ pub async fn start_recording(
 
     // Also emit legacy event for compatibility
     let _ = emit_to_window(&app, "pill", "recording-started", ());
-    log::info!("Recording started successfully");
+    log::debug!("Recording started successfully");
 
     // Set up 30-second timeout
     let app_clone = app.clone();
@@ -270,17 +275,16 @@ pub async fn stop_recording(
     // If no audio path, there was no recording
     let audio_path = match audio_path {
         Some(path) => {
-            log::info!("[FLOW] Audio file path: {:?}", path);
             // Check if file exists and has content
             if let Ok(metadata) = std::fs::metadata(&path) {
-                log::info!("[FLOW] Audio file size: {} bytes", metadata.len());
+                log::debug!("Audio file size: {} bytes", metadata.len());
             } else {
-                log::error!("[FLOW] Audio file does not exist at path: {:?}", path);
+                log::error!("Audio file does not exist at path: {:?}", path);
             }
             path
         },
         None => {
-            log::warn!("[FLOW] No audio file found - no recording was made");
+            log::warn!("No audio file found - no recording was made");
             return Ok("".to_string());
         }
     };
@@ -375,21 +379,16 @@ pub async fn stop_recording(
         .get("language")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-    let _auto_insert = store
-        .get("auto_insert")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-
     // clone for move into task
     let audio_path_clone = audio_path.clone();
     let model_path_clone = model_path.clone();
 
-    log::info!("[FLOW] Spawning transcription task with model: {}", model_name);
+    log::debug!("Spawning transcription task with model: {}", model_name);
     
     // Spawn and track the transcription task
     let app_for_task = app.clone();
     let task_handle = tokio::spawn(async move {
-        log::info!("[FLOW] Transcription task started");
+        log::debug!("Transcription task started");
         
         // Update state to transcribing
         update_recording_state(&app_for_task, RecordingState::Transcribing, None);
@@ -473,39 +472,48 @@ pub async fn stop_recording(
                     return;
                 }
                 
-                log::info!("[FLOW] Transcription successful, keeping state as Transcribing until pill processes");
-                log::info!("[TRANSCRIPTION_DEBUG] Transcribed text: '{}' ({} chars)", 
-                    if text.len() > 50 { format!("{}...", &text[..50]) } else { text.clone() },
-                    text.len()
-                );
+                log::debug!("Transcription successful, {} chars", text.len());
                 
-                // DON'T update state to idle yet - wait for pill to process
-                // This prevents the "Ready" flash before hiding
+                // Backend handles the complete flow
+                let app_for_process = app_for_task.clone();
+                let text_for_process = text.clone();
+                let model_for_process = model_name_clone.clone();
                 
-                // Emit transcription complete event to pill window
-                // The pill window will handle auto-insert, clipboard, and saving
-                log::info!("[FLOW] Emitting transcription-complete event to pill window");
-                let emit_result = emit_to_window(
-                    &app_for_task,
-                    "pill",
-                    "transcription-complete",
-                    serde_json::json!({
-                        "text": text,
-                        "model": model_name_clone
-                    }),
-                );
-                
-                match emit_result {
-                    Ok(_) => log::info!("[TRANSCRIPTION_DEBUG] Successfully emitted transcription-complete event"),
-                    Err(e) => log::error!("[TRANSCRIPTION_DEBUG] Failed to emit transcription-complete event: {}", e),
-                }
-                
-                // The pill will emit 'transcription-processed' when done
-                // We'll transition to Idle in response to that event
-                
-                // Note: For true lazy-loading, we keep the pill window alive
-                // during the session. It will only be hidden, not closed.
-                // This prevents "Rust cannot catch foreign exceptions" crashes.
+                tokio::spawn(async move {
+                    // 1. Hide pill window FIRST
+                    
+                    // Get window manager through AppState
+                    let app_state = app_for_process.state::<AppState>();
+                    if let Some(window_manager) = app_state.get_window_manager() {
+                        if let Err(e) = window_manager.hide_pill_window().await {
+                            log::error!("Failed to hide pill window: {}", e);
+                        }
+                    } else {
+                        log::error!("WindowManager not initialized");
+                    }
+                    
+                    // 2. Wait for pill to be fully hidden and system to stabilize
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    
+                    // 3. NOW handle text insertion - pill is gone, system is stable
+                    // Always insert text at cursor position (this also copies to clipboard)
+                    match crate::commands::text::insert_text(text_for_process.clone()).await {
+                        Ok(_) => log::debug!("Text inserted at cursor successfully"),
+                        Err(e) => log::error!("Failed to insert text: {}", e),
+                    }
+                    
+                    // 5. Save transcription to history
+                    match save_transcription(app_for_process.clone(), text_for_process, model_for_process).await {
+                        Ok(_) => {
+                            // Emit history-updated event to refresh UI
+                            let _ = emit_to_window(&app_for_process, "main", "history-updated", ());
+                        },
+                        Err(e) => log::error!("Failed to save transcription: {}", e),
+                    }
+                    
+                    // 6. Transition to idle state
+                    update_recording_state(&app_for_process, RecordingState::Idle, None);
+                });
             }
             Err(e) => {
                 // Update state to error
@@ -519,7 +527,7 @@ pub async fn stop_recording(
                 let app_for_reset = app_for_task.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                    log::info!("[FLOW] Resetting from Error to Idle state after transcription failure");
+                    log::debug!("Resetting from Error to Idle state after transcription failure");
                     update_recording_state(&app_for_reset, RecordingState::Idle, None);
                 });
             }
@@ -627,9 +635,16 @@ pub async fn transcribe_audio(
     audio_data: Vec<u8>,
     model_name: String,
 ) -> Result<String, String> {
-    // Save audio data to temp file
-    let temp_dir = app.path().temp_dir().map_err(|e| e.to_string())?;
-    let temp_path = temp_dir.join("temp_audio.wav");
+    // Save audio data to app data directory
+    let recordings_dir = app.path().app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recordings");
+    
+    // Ensure directory exists
+    std::fs::create_dir_all(&recordings_dir)
+        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+        
+    let temp_path = recordings_dir.join("temp_audio.wav");
 
     std::fs::write(&temp_path, audio_data).map_err(|e| e.to_string())?;
 
@@ -678,21 +693,6 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
         // Stop the recording
         stop_recording(app.clone(), recorder_state).await?;
     }
-    
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn transcription_processed(
-    app: AppHandle,
-) -> Result<(), String> {
-    log::info!("[FLOW] transcription_processed command called - pill has finished processing");
-    
-    // Now we can safely transition to Idle state
-    // The pill has hidden itself and processed the text
-    update_recording_state(&app, RecordingState::Idle, None);
-    
-    log::info!("[FLOW] Transitioned to Idle state after pill processing complete");
     
     Ok(())
 }

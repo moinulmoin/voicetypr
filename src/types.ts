@@ -11,11 +11,8 @@ export interface AppSettings {
   hotkey: string;
   current_model: string;
   language: string;
-  auto_insert: boolean;
-  show_window_on_record: boolean;
   theme: string;
   transcription_cleanup_days?: number | null;
-  show_pill_widget?: boolean;
 }
 
 export interface TranscriptionHistory {

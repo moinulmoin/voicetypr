@@ -32,8 +32,6 @@ describe('App Integration Tests', () => {
     hotkey: 'CommandOrControl+Shift+Space',
     current_model: 'base',
     language: 'auto',
-    auto_insert: true,
-    show_window_on_record: false,
     theme: 'system',
   };
 

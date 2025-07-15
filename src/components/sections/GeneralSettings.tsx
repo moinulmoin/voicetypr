@@ -7,7 +7,6 @@ import {
   SelectTrigger,
   SelectValue
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { AppSettings } from "@/types";
 
 interface GeneralSettingsProps {
@@ -20,26 +19,27 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
 
   return (
     <div className="p-6 space-y-6">
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">General Settings</h2>
+      <h2 className="text-lg font-semibold mb-6">General Settings</h2>
       
       {/* Hotkey Setting */}
-      <div className="space-y-2">
-        <Label htmlFor="hotkey">Hotkey</Label>
+      <div className="flex items-center justify-between gap-4">
+        <Label htmlFor="hotkey" className="text-sm font-medium">Hotkey</Label>
         <HotkeyInput
           value={settings.hotkey || ""}
           onChange={(hotkey) => onSettingsChange({ ...settings, hotkey })}
           placeholder="Click to set hotkey"
+          className="w-64"
         />
       </div>
 
       {/* Language Setting */}
-      <div className="space-y-2">
-        <Label htmlFor="language">Language</Label>
+      <div className="flex items-center justify-between gap-4">
+        <Label htmlFor="language" className="text-sm font-medium">Language</Label>
         <Select
           value={settings.language || "auto"}
           onValueChange={(value) => onSettingsChange({ ...settings, language: value })}
         >
-          <SelectTrigger id="language">
+          <SelectTrigger id="language" className="w-64">
             <SelectValue placeholder="Select language" />
           </SelectTrigger>
           <SelectContent>
@@ -56,48 +56,6 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
             <SelectItem value="zh">Chinese</SelectItem>
           </SelectContent>
         </Select>
-      </div>
-
-      {/* Auto Insert Toggle */}
-      <div className="flex items-center justify-between">
-        <Label htmlFor="auto-insert" className="flex-1">
-          Auto-insert text at cursor
-        </Label>
-        <Switch
-          id="auto-insert"
-          checked={settings.auto_insert || false}
-          onCheckedChange={(checked) =>
-            onSettingsChange({ ...settings, auto_insert: checked })
-          }
-        />
-      </div>
-
-      {/* Show Window on Record Toggle */}
-      <div className="flex items-center justify-between">
-        <Label htmlFor="show-window" className="flex-1">
-          Show window when recording
-        </Label>
-        <Switch
-          id="show-window"
-          checked={settings.show_window_on_record || false}
-          onCheckedChange={(checked) =>
-            onSettingsChange({ ...settings, show_window_on_record: checked })
-          }
-        />
-      </div>
-
-      {/* Show Pill Widget Toggle */}
-      <div className="flex items-center justify-between">
-        <Label htmlFor="show-pill" className="flex-1">
-          Show floating pill when recording
-        </Label>
-        <Switch
-          id="show-pill"
-          checked={settings.show_pill_widget ?? true}
-          onCheckedChange={(checked) =>
-            onSettingsChange({ ...settings, show_pill_widget: checked })
-          }
-        />
       </div>
     </div>
   );

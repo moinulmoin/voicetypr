@@ -35,8 +35,6 @@ describe('Critical User Journeys', () => {
           hotkey: 'CommandOrControl+Shift+Space',
           current_model: 'base',
           language: 'auto',
-          auto_insert: true,
-          show_window_on_record: false,
           theme: 'system',
         });
       }
@@ -86,8 +84,6 @@ describe('Critical User Journeys', () => {
           hotkey: 'CommandOrControl+Shift+Space',
           current_model: 'base',  
           language: 'auto',
-          auto_insert: true,
-          show_window_on_record: false,
           theme: 'system',
         });
       }
@@ -166,8 +162,6 @@ describe('Critical User Journeys', () => {
           hotkey: 'CommandOrControl+Shift+Space',
           current_model: '',
           language: 'auto',
-          auto_insert: true,
-          show_window_on_record: false,
           theme: 'system',
         });
       }

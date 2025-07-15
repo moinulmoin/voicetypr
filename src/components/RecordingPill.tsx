@@ -1,158 +1,33 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRecording } from "@/hooks/useRecording";
 import { cn } from "@/lib/utils";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
 
 export function RecordingPill() {
   const recording = useRecording();
-  const { registerEvent, getDebugInfo } = useEventCoordinator("pill");
+  const { registerEvent } = useEventCoordinator("pill");
   const [audioLevel, setAudioLevel] = useState<number>(0);
-  const autoInsertRef = useRef<boolean>(true);
-  
-  // Keep a ref to prevent duplicate processing
-  const processingRef = useRef(false);
 
   const isRecording = recording.state === "recording";
   const isTranscribing = recording.state === "transcribing";
-  
-  // Log state changes for debugging
-  useEffect(() => {
-    console.log("[DEBUG] RecordingPill state changed:", recording.state);
-  }, [recording.state]);
-  
-  // Log when component mounts
-  useEffect(() => {
-    console.log("[DEBUG] RecordingPill component mounted");
-    console.log("[DEBUG] EventCoordinator info:", getDebugInfo());
-    
-    return () => {
-      console.log("[DEBUG] RecordingPill component unmounting");
-    };
-  }, []);
-
-  // Load auto-insert setting
-  useEffect(() => {
-    invoke<{ auto_insert: boolean }>("get_settings")
-      .then((settings) => {
-        autoInsertRef.current = settings.auto_insert;
-      })
-      .catch(console.error);
-
-    return () => {
-      // Cleanup
-    };
-  }, []);
 
   // Register event handlers
   useEffect(() => {
-    console.log("[DEBUG] RecordingPill mounting, registering event handlers");
-    
-    // Test event handler for debugging
-    registerEvent("test-event", (payload) => {
-      console.log("[DEBUG] RecordingPill received test-event:", payload);
-    });
-    
     // Audio level updates
     registerEvent<number>("audio-level", (level) => {
       setAudioLevel(level);
     });
 
-    // Transcription error - hide pill and reset
-    registerEvent<string>("transcription-error", async (error) => {
-      console.error("[DEBUG] Transcription error received:", error);
-      
-      try {
-        await invoke("hide_pill_widget");
-      } catch (e) {
-        console.error("Failed to hide pill widget on error:", e);
-      }
-      
-      // Reset processing flag
-      processingRef.current = false;
+    // Transcription error - just log it, backend handles hiding
+    registerEvent<string>("transcription-error", (error) => {
+      console.error("[RecordingPill] Transcription error:", error);
     });
-    
-    // Transcription complete - handle clipboard and auto-insert
-    console.log("[DEBUG] Registering transcription-complete handler");
-    registerEvent<{ text: string; model: string }>(
-      "transcription-complete",
-      async ({ text, model }) => {
-        console.log("[DEBUG] transcription-complete event received:", {
-          timestamp: Date.now(),
-          textLength: text.length,
-          processing: processingRef.current,
-          eventCoordinatorInfo: getDebugInfo()
-        });
-        
-        // Guard against duplicate processing
-        if (processingRef.current) {
-          console.warn("[DEBUG] Skipping duplicate transcription-complete event");
-          return;
-        }
-        
-        processingRef.current = true;
-        console.log("[DEBUG] Processing transcription...");
-        
-        try {
-          // Hide the pill FIRST to ensure clean text insertion
-          try {
-            await invoke("hide_pill_widget");
-          } catch (e) {
-            console.error("Failed to hide pill widget:", e);
-          }
-          
-          // Longer delay to ensure window is fully hidden and focus is properly restored
-          // This prevents text duplication issues on macOS
-          await new Promise(resolve => setTimeout(resolve, 200));
-          
-          // Now insert at cursor if auto-insert is enabled
-          if (autoInsertRef.current) {
-            console.log("[DEBUG] Calling insert_text with", text.length, "characters");
-            try {
-              await invoke("insert_text", { text });
-              console.log("[DEBUG] insert_text completed successfully");
-            } catch (e) {
-              console.error("Failed to insert text:", e);
-            }
-          } else {
-            // If auto-insert is disabled, just copy to clipboard
-            console.log("[DEBUG] Auto-insert disabled, copying to clipboard only");
-            try {
-              await navigator.clipboard.writeText(text);
-            } catch (e) {
-              console.error("Failed to copy to clipboard:", e);
-            }
-          }
-
-          // Save transcription to backend AFTER paste/clipboard operations
-          try {
-            await invoke("save_transcription", { text, model });
-          } catch (e) {
-            console.error("Failed to save transcription:", e);
-          }
-          
-          // Notify backend that pill has finished processing
-          // This allows backend to transition to Idle state
-          console.log("[DEBUG] Notifying backend that transcription processing is complete");
-          try {
-            await invoke("transcription_processed");
-            console.log("[DEBUG] Backend notified successfully");
-          } catch (e) {
-            console.error("Failed to notify backend of processing completion:", e);
-          }
-        } finally {
-          // Reset processing flag after a delay
-          setTimeout(() => {
-            processingRef.current = false;
-          }, 1000);
-        }
-      },
-    );
     
     return () => {
       // Cleanup handled by useEventCoordinator
     };
-  }, [registerEvent]); // Only depend on registerEvent which is memoized
+  }, [registerEvent]);
 
   // Handle click to stop recording
   const handleClick = async () => {

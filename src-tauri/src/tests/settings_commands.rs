@@ -10,11 +10,8 @@ mod tests {
         assert_eq!(settings.hotkey, "CommandOrControl+Shift+Space");
         assert_eq!(settings.current_model, ""); // Empty means auto-select
         assert_eq!(settings.language, "en");
-        assert_eq!(settings.auto_insert, true);
-        assert_eq!(settings.show_window_on_record, false);
         assert_eq!(settings.theme, "system");
         assert_eq!(settings.transcription_cleanup_days, None);
-        assert_eq!(settings.show_pill_widget, true);
     }
 
     #[test]
@@ -23,11 +20,8 @@ mod tests {
             hotkey: "CommandOrControl+A".to_string(),
             current_model: "base".to_string(),
             language: "es".to_string(),
-            auto_insert: false,
-            show_window_on_record: true,
             theme: "dark".to_string(),
             transcription_cleanup_days: Some(7),
-            show_pill_widget: false,
             pill_position: Some((100.0, 200.0)),
         };
 
@@ -36,25 +30,16 @@ mod tests {
         assert!(json.contains("\"hotkey\":\"CommandOrControl+A\""));
         assert!(json.contains("\"current_model\":\"base\""));
         assert!(json.contains("\"language\":\"es\""));
-        assert!(json.contains("\"auto_insert\":false"));
-        assert!(json.contains("\"show_window_on_record\":true"));
         assert!(json.contains("\"theme\":\"dark\""));
         assert!(json.contains("\"transcription_cleanup_days\":7"));
-        assert!(json.contains("\"show_pill_widget\":false"));
 
         // Test deserialization
         let deserialized: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.hotkey, settings.hotkey);
         assert_eq!(deserialized.current_model, settings.current_model);
         assert_eq!(deserialized.language, settings.language);
-        assert_eq!(deserialized.auto_insert, settings.auto_insert);
-        assert_eq!(
-            deserialized.show_window_on_record,
-            settings.show_window_on_record
-        );
         assert_eq!(deserialized.theme, settings.theme);
         assert_eq!(deserialized.transcription_cleanup_days, settings.transcription_cleanup_days);
-        assert_eq!(deserialized.show_pill_widget, settings.show_pill_widget);
     }
 
     #[test]
@@ -79,11 +64,8 @@ mod tests {
             hotkey: "CommandOrControl+B".to_string(),
             current_model: "tiny".to_string(),
             language: "fr".to_string(),
-            auto_insert: true,
-            show_window_on_record: true,
             theme: "light".to_string(),
             transcription_cleanup_days: Some(30),
-            show_pill_widget: true,
             pill_position: None,
         };
 
@@ -91,11 +73,8 @@ mod tests {
         assert_eq!(cloned.hotkey, settings.hotkey);
         assert_eq!(cloned.current_model, settings.current_model);
         assert_eq!(cloned.language, settings.language);
-        assert_eq!(cloned.auto_insert, settings.auto_insert);
-        assert_eq!(cloned.show_window_on_record, settings.show_window_on_record);
         assert_eq!(cloned.theme, settings.theme);
         assert_eq!(cloned.transcription_cleanup_days, settings.transcription_cleanup_days);
-        assert_eq!(cloned.show_pill_widget, settings.show_pill_widget);
     }
 
     #[test]
@@ -161,21 +140,6 @@ mod tests {
         assert_eq!(specific_settings.current_model, "base");
     }
 
-    #[test]
-    fn test_boolean_flags() {
-        // Test all combinations of boolean flags
-        let combinations = vec![(true, true), (true, false), (false, true), (false, false)];
-
-        for (auto_insert, show_window) in combinations {
-            let settings = Settings {
-                auto_insert,
-                show_window_on_record: show_window,
-                ..Settings::default()
-            };
-            assert_eq!(settings.auto_insert, auto_insert);
-            assert_eq!(settings.show_window_on_record, show_window);
-        }
-    }
 
     #[test]
     fn test_settings_to_json_value() {
@@ -186,21 +150,15 @@ mod tests {
             "hotkey": settings.hotkey,
             "current_model": settings.current_model,
             "language": settings.language,
-            "auto_insert": settings.auto_insert,
-            "show_window_on_record": settings.show_window_on_record,
             "theme": settings.theme,
             "transcription_cleanup_days": settings.transcription_cleanup_days,
-            "show_pill_widget": settings.show_pill_widget,
         });
 
         assert_eq!(value["hotkey"], "CommandOrControl+Shift+Space");
         assert_eq!(value["current_model"], "");
         assert_eq!(value["language"], "en");
-        assert_eq!(value["auto_insert"], true);
-        assert_eq!(value["show_window_on_record"], false);
         assert_eq!(value["theme"], "system");
         assert_eq!(value["transcription_cleanup_days"], serde_json::Value::Null);
-        assert_eq!(value["show_pill_widget"], true);
     }
 
     #[test]

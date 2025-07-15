@@ -10,11 +10,8 @@ pub struct Settings {
     pub hotkey: String,
     pub current_model: String,
     pub language: String,
-    pub auto_insert: bool,
-    pub show_window_on_record: bool,
     pub theme: String,
     pub transcription_cleanup_days: Option<u32>,
-    pub show_pill_widget: bool,
     pub pill_position: Option<(f64, f64)>,
 }
 
@@ -24,11 +21,8 @@ impl Default for Settings {
             hotkey: "CommandOrControl+Shift+Space".to_string(),
             current_model: "".to_string(), // Empty means auto-select
             language: "en".to_string(),
-            auto_insert: true,
-            show_window_on_record: false,
             theme: "system".to_string(),
             transcription_cleanup_days: None, // None means keep forever
-            show_pill_widget: true, // Show pill widget by default
             pill_position: None, // No saved position initially
         }
     }
@@ -51,14 +45,6 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("language")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().language),
-        auto_insert: store
-            .get("auto_insert")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(Settings::default().auto_insert),
-        show_window_on_record: store
-            .get("show_window_on_record")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(Settings::default().show_window_on_record),
         theme: store
             .get("theme")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -66,10 +52,6 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
         transcription_cleanup_days: store
             .get("transcription_cleanup_days")
             .and_then(|v| v.as_u64().map(|n| n as u32)),
-        show_pill_widget: store
-            .get("show_pill_widget")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(Settings::default().show_pill_widget),
         pill_position: store
             .get("pill_position")
             .and_then(|v| {
@@ -105,14 +87,8 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
     store.set("language", json!(settings.language));
-    store.set("auto_insert", json!(settings.auto_insert));
-    store.set(
-        "show_window_on_record",
-        json!(settings.show_window_on_record),
-    );
     store.set("theme", json!(settings.theme));
     store.set("transcription_cleanup_days", json!(settings.transcription_cleanup_days));
-    store.set("show_pill_widget", json!(settings.show_pill_widget));
     
     // Save pill position if provided
     if let Some((x, y)) = settings.pill_position {

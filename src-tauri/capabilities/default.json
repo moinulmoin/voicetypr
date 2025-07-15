@@ -21,12 +21,8 @@
     "global-shortcut:default",
     "dialog:default",
     "fs:scope-appdata",
-    "fs:default",
-    "fs:allow-read-file",
-    "fs:allow-write-file",
-    "fs:allow-create",
-    "fs:allow-remove",
-    "fs:allow-exists",
-    "shell:allow-open"
+    "shell:allow-open",
+    "shell:allow-execute",
+    "macos-permissions:default"
   ]
 }

@@ -32,6 +32,7 @@ impl RecordingStateMachine {
         }
     }
 
+    #[allow(dead_code)] // Used in tests and for debugging
     pub fn current(&self) -> RecordingState {
         self.current_state
     }
@@ -106,20 +107,8 @@ impl RecordingStateMachine {
         }
     }
 
-    /// Check if recording can be started
-    pub fn can_start_recording(&self) -> bool {
-        matches!(self.current_state, RecordingState::Idle)
-    }
-
-    /// Check if recording can be stopped
-    pub fn can_stop_recording(&self) -> bool {
-        matches!(self.current_state, RecordingState::Recording)
-    }
-
-    /// Check if transcription can be started
-    pub fn can_start_transcription(&self) -> bool {
-        matches!(self.current_state, RecordingState::Stopping)
-    }
+    // Note: Removed can_* methods as they were only used in tests.
+    // Tests now directly check state transitions or use test module helpers.
 
     /// Reset to idle state (useful for error recovery)
     pub fn reset(&mut self) {
@@ -144,6 +133,27 @@ impl RecordingStateMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Test-only helper methods for asserting state machine capabilities
+    trait StateMachineTestHelpers {
+        fn can_start_recording(&self) -> bool;
+        fn can_stop_recording(&self) -> bool;
+        fn can_start_transcription(&self) -> bool;
+    }
+
+    impl StateMachineTestHelpers for RecordingStateMachine {
+        fn can_start_recording(&self) -> bool {
+            matches!(self.current(), RecordingState::Idle)
+        }
+
+        fn can_stop_recording(&self) -> bool {
+            matches!(self.current(), RecordingState::Recording)
+        }
+
+        fn can_start_transcription(&self) -> bool {
+            matches!(self.current(), RecordingState::Stopping)
+        }
+    }
 
     #[test]
     fn test_valid_transitions() {
@@ -198,24 +208,25 @@ mod tests {
     }
 
     #[test]
-    fn test_state_checks() {
+    fn test_state_transition_rules() {
         let mut sm = RecordingStateMachine::new();
         
-        assert!(sm.can_start_recording());
-        assert!(!sm.can_stop_recording());
-        assert!(!sm.can_start_transcription());
+        // From Idle: can only start recording
+        assert_eq!(sm.current(), RecordingState::Idle);
+        assert!(sm.transition_to(RecordingState::Starting).is_ok());
+        assert_eq!(sm.current(), RecordingState::Starting);
         
-        sm.transition_to(RecordingState::Starting).unwrap();
-        sm.transition_to(RecordingState::Recording).unwrap();
+        // From Starting: can go to Recording
+        assert!(sm.transition_to(RecordingState::Recording).is_ok());
+        assert_eq!(sm.current(), RecordingState::Recording);
         
-        assert!(!sm.can_start_recording());
-        assert!(sm.can_stop_recording());
-        assert!(!sm.can_start_transcription());
+        // From Recording: can only stop (not idle or transcribe)
+        assert!(sm.transition_to(RecordingState::Idle).is_err());
+        assert!(sm.transition_to(RecordingState::Transcribing).is_err());
+        assert!(sm.transition_to(RecordingState::Stopping).is_ok());
         
-        sm.transition_to(RecordingState::Stopping).unwrap();
-        
-        assert!(!sm.can_start_recording());
-        assert!(!sm.can_stop_recording());
-        assert!(sm.can_start_transcription());
+        // From Stopping: can go to Transcribing
+        assert!(sm.transition_to(RecordingState::Transcribing).is_ok());
+        assert_eq!(sm.current(), RecordingState::Transcribing);
     }
 }
