@@ -205,7 +205,6 @@ pub async fn list_downloaded_models(
 #[tauri::command]
 pub async fn cancel_download(
     model_name: String,
-    state: State<'_, Mutex<WhisperManager>>,
     active_downloads: State<'_, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>,
 ) -> Result<(), String> {
     log::info!("Cancelling download for model: {}", model_name);
@@ -221,9 +220,7 @@ pub async fn cancel_download(
         }
     }
     
-    // Also try to delete any partial file
-    let manager = state.lock().await;
-    let _ = manager.delete_partial_download(&model_name).await;
+    // The download loop will handle cleanup when it detects the cancellation flag
     
     log::info!("Download cancelled for model: {}", model_name);
     Ok(())

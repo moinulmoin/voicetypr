@@ -522,17 +522,4 @@ impl WhisperManager {
         models
     }
 
-    /// Delete a partial download (used for cancelling downloads)
-    pub async fn delete_partial_download(&self, model_name: &str) -> Result<(), String> {
-        let file_path = self.models_dir.join(format!("{}.bin", model_name));
-        
-        if file_path.exists() {
-            fs::remove_file(&file_path)
-                .await
-                .map_err(|e| format!("Failed to delete partial download: {}", e))?;
-            log::info!("Deleted partial download for model: {}", model_name);
-        }
-        
-        Ok(())
-    }
 }

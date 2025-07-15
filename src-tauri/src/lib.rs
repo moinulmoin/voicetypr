@@ -596,7 +596,7 @@ pub fn run() {
                     .always_on_top(true)
                     .skip_taskbar(true)
                     .transparent(true)
-                    .inner_size(64.0, 40.0)
+                    .inner_size(200.0, 60.0)
                     .visible(false) // Start hidden
                     .build()?;
 
