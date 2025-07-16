@@ -8,7 +8,7 @@ interface IOSSpinnerProps {
 export default function IOSSpinner({ size = 20, className }: IOSSpinnerProps) {
   return (
     <>
-      <div className={cn("relative inline-block", className)} style={{ width: size, height: size }}>
+      <div className={cn("relative inline-flex items-center justify-center", className)} style={{ width: size, height: size }}>
         {[...Array(12)].map((_, i) => (
           <div
             key={i}
@@ -22,7 +22,7 @@ export default function IOSSpinner({ size = 20, className }: IOSSpinnerProps) {
               transform: `translate(-50%, -100%) rotate(${i * 30}deg)`,
               opacity: 1 - i * 0.08,
               animation: "ios-spin 1s linear infinite",
-              animationDelay: `${i * -0.083}s`,
+              animationDelay: `${(11 - i) * -0.083}s`,
             }}
           />
         ))}

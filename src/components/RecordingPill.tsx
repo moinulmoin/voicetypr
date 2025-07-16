@@ -40,12 +40,12 @@ export function RecordingPill() {
       <Button
         // onClick={handleClick}
         variant="default"
-        className="rounded-xl !p-4 justify-center gap-2 items-center"
+        className="rounded-xl !p-4 flex items-center justify-center gap-2"
         // aria-readonly={isTranscribing}
       >
         {isTranscribing ? (
           <>
-            <IOSSpinner size={16} className="" />
+            <IOSSpinner size={16} className="-mt-[3px]" />
             Transcribing
           </>
         ) : (
