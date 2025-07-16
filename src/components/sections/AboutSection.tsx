@@ -1,11 +1,31 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { NotebookText, Mail, RefreshCw, CheckCircle, Twitter } from "lucide-react";
+import { check } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { toast } from 'sonner';
+import { useState } from 'react';
 
 export function AboutSection() {
-  const handleCheckForUpdates = () => {
-    console.log("Checking for updates...");
-    // Dummy functionality - just log for now
+  const [checking, setChecking] = useState(false);
+
+  const handleCheckForUpdates = async () => {
+    setChecking(true);
+    try {
+      const update = await check();
+      if (update?.available) {
+        // Tauri's dialog will handle the rest
+        await update.downloadAndInstall();
+        await relaunch();
+      } else {
+        toast.success("You're on the latest version!");
+      }
+    } catch (error) {
+      console.error('Update check failed:', error);
+      toast.error("Failed to check for updates");
+    } finally {
+      setChecking(false);
+    }
   };
 
   const openExternalLink = (url: string) => {
@@ -67,9 +87,10 @@ export function AboutSection() {
             variant="outline" 
             onClick={handleCheckForUpdates}
             className="h-8"
+            disabled={checking}
           >
-            <RefreshCw className="w-3 h-3 mr-1" />
-            Check for Updates
+            <RefreshCw className={`w-3 h-3 mr-1 ${checking ? 'animate-spin' : ''}`} />
+            {checking ? "Checking..." : "Check for Updates"}
           </Button>
         </div>
       </div>

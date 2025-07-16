@@ -152,8 +152,11 @@ impl AudioRecorder {
                                     / data.len() as f32)
                                     .sqrt();
                                 
-                                // Send audio level (ignore errors if receiver is dropped)
-                                let _ = audio_level_tx_clone.send(rms);
+                                // Apply logarithmic scaling for better perception
+                                let db = 20.0 * rms.log10();
+                                // Map -60dB to 0dB range to 0.0-1.0
+                                let normalized_db = ((db + 60.0) / 60.0).max(0.0).min(1.0);
+                                let _ = audio_level_tx_clone.send(normalized_db);
 
                                 // Update last sound time if above threshold
                                 if rms > silence_threshold {
@@ -207,18 +210,21 @@ impl AudioRecorder {
                         .build_input_stream(
                             &config.config(),
                             move |data: &[i16], _: &_| {
-                                // Calculate RMS for I16 samples
-                                let rms = ((data.iter().map(|&x| (x as i32).pow(2)).sum::<i32>()
-                                    as f32
-                                    / data.len() as f32)
-                                    .sqrt()) as i16;
+                                // Calculate RMS for I16 samples with proper normalization
+                                let sum_squares = data.iter().map(|&x| {
+                                    let normalized = (x as f32) / (i16::MAX as f32);
+                                    normalized * normalized
+                                }).sum::<f32>();
+                                let rms = (sum_squares / data.len() as f32).sqrt();
                                 
-                                // Send normalized audio level (0.0 to 1.0)
-                                let normalized_rms = (rms.abs() as f32) / (i16::MAX as f32);
-                                let _ = audio_level_tx_clone.send(normalized_rms);
+                                // Apply logarithmic scaling for better perception
+                                let db = 20.0 * rms.log10();
+                                // Map -60dB to 0dB range to 0.0-1.0
+                                let normalized_db = ((db + 60.0) / 60.0).max(0.0).min(1.0);
+                                let _ = audio_level_tx_clone.send(normalized_db);
 
                                 // Update last sound time if above threshold
-                                if rms.abs() > silence_threshold {
+                                if rms > (silence_threshold as f32 / i16::MAX as f32) {
                                     if let Ok(mut time_guard) = last_sound_clone.lock() {
                                         *time_guard = Instant::now();
                                     }

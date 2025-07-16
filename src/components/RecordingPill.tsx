@@ -1,13 +1,32 @@
+import { AudioWaveAnimation } from "@/components/AudioWaveAnimation";
 import IOSSpinner from "@/components/ios-spinner";
 import { Button } from "@/components/ui/button";
 import { useRecording } from "@/hooks/useRecording";
-import { AudioLines } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { useEffect, useState } from "react";
 
 export function RecordingPill() {
   const recording = useRecording();
+  const [audioLevel, setAudioLevel] = useState(0);
 
-  // const isRecording = recording.state === "recording";
+  const isRecording = recording.state === "recording";
   const isTranscribing = recording.state === "transcribing";
+
+  // Listen for audio level events
+  useEffect(() => {
+    if (!isRecording) {
+      setAudioLevel(0);
+      return;
+    }
+
+    const unlisten = listen<number>("audio-level", (event) => {
+      setAudioLevel(event.payload);
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [isRecording]);
 
   // Handle click to stop recording
   // const handleClick = async () => {
@@ -21,17 +40,17 @@ export function RecordingPill() {
       <Button
         // onClick={handleClick}
         variant="default"
-        className="rounded-xl !p-4"
+        className="rounded-xl !p-4 justify-center gap-2 items-center"
         // aria-readonly={isTranscribing}
       >
         {isTranscribing ? (
           <>
-            <IOSSpinner size={16} className="mr-2" />
+            <IOSSpinner size={16} className="" />
             Transcribing
           </>
         ) : (
           <>
-            <AudioLines />
+            <AudioWaveAnimation audioLevel={audioLevel} className="" />
             Listening
           </>
         )}
