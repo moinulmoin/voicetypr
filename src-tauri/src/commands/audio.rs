@@ -8,6 +8,7 @@ use serde_json;
 use std::sync::Mutex;
 use tauri::async_runtime::Mutex as AsyncMutex;
 use tauri_plugin_store::StoreExt;
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 // Global audio recorder state
 pub struct RecorderState(pub Mutex<AudioRecorder>);
@@ -212,19 +213,34 @@ pub async fn start_recording(
     let _ = emit_to_window(&app, "pill", "recording-started", ());
     log::debug!("Recording started successfully");
 
-    // Set up 30-second timeout
-    let app_clone = app.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-
-        // Check if still recording and emit timeout event
-        if let Ok(guard) = app_clone.state::<RecorderState>().inner().0.lock() {
-            if guard.is_recording() {
-                // Emit timeout warning to pill window
-                let _ = emit_to_window(&app_clone, "pill", "recording-timeout", ());
-            }
+    // Register global ESC key for cancellation
+    let app_state = app.state::<AppState>();
+    let escape_shortcut: tauri_plugin_global_shortcut::Shortcut = "Escape".parse()
+        .map_err(|e| format!("Failed to parse ESC shortcut: {:?}", e))?;
+    
+    log::info!("Attempting to register ESC shortcut: {:?}", escape_shortcut);
+    
+    // Clear ESC state
+    app_state.esc_pressed_once.store(false, std::sync::atomic::Ordering::SeqCst);
+    
+    // Cancel any existing ESC timeout
+    if let Ok(mut timeout_guard) = app_state.esc_timeout_handle.lock() {
+        if let Some(handle) = timeout_guard.take() {
+            handle.abort();
         }
-    });
+    }
+    
+    // Register the ESC key globally
+    match app.global_shortcut().register(escape_shortcut.clone()) {
+        Ok(_) => {
+            log::info!("Successfully registered global ESC key for recording cancellation");
+        }
+        Err(e) => {
+            log::error!("Failed to register ESC shortcut: {}", e);
+            // Don't fail recording start if ESC registration fails
+            log::warn!("Recording will continue without ESC cancellation support");
+        }
+    }
 
     Ok(())
 }
@@ -264,8 +280,59 @@ pub async fn stop_recording(
         }
     } // MutexGuard dropped here BEFORE any await
 
-    // Get the audio file path
+    // Unregister ESC key
+    match "Escape".parse::<tauri_plugin_global_shortcut::Shortcut>() {
+        Ok(escape_shortcut) => {
+            if let Err(e) = app.global_shortcut().unregister(escape_shortcut) {
+                log::debug!("Failed to unregister ESC shortcut (might not have been registered): {}", e);
+            } else {
+                log::info!("Unregistered ESC shortcut");
+            }
+        }
+        Err(e) => {
+            log::debug!("Failed to parse ESC shortcut for unregistration: {:?}", e);
+        }
+    }
+    
+    // Clean up ESC state
     let app_state = app.state::<AppState>();
+    app_state.esc_pressed_once.store(false, std::sync::atomic::Ordering::SeqCst);
+    
+    // Cancel any ESC timeout
+    if let Ok(mut timeout_guard) = app_state.esc_timeout_handle.lock() {
+        if let Some(handle) = timeout_guard.take() {
+            handle.abort();
+        }
+    }
+    
+    log::debug!("Unregistered ESC key and cleaned up state");
+    
+    // Check if cancellation was requested
+    if app_state.is_cancellation_requested() {
+        log::info!("Recording was cancelled, skipping transcription");
+        
+        // Clean up audio file if it exists
+        if let Ok(path_guard) = app_state.current_recording_path.lock() {
+            if let Some(audio_path) = path_guard.as_ref() {
+                log::info!("Removing cancelled recording file");
+                if let Err(e) = std::fs::remove_file(audio_path) {
+                    log::warn!("Failed to remove cancelled recording: {}", e);
+                }
+            }
+        }
+        
+        // Hide pill window
+        if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+            log::error!("Failed to hide pill window: {}", e);
+        }
+        
+        // Transition to idle
+        update_recording_state(&app, RecordingState::Idle, None);
+        
+        return Ok("".to_string());
+    }
+
+    // Get the audio file path
     let audio_path = app_state
         .current_recording_path
         .lock()
@@ -399,6 +466,12 @@ pub async fn stop_recording(
         let app_state = app_for_task.state::<AppState>();
         if app_state.is_cancellation_requested() {
             log::info!("Transcription cancelled before model loading");
+            
+            // Hide pill window since we're cancelling
+            if let Err(e) = crate::commands::window::hide_pill_widget(app_for_task.clone()).await {
+                log::error!("Failed to hide pill window on cancellation: {}", e);
+            }
+            
             update_recording_state(&app_for_task, RecordingState::Idle, None);
             return;
         }
@@ -468,11 +541,44 @@ pub async fn stop_recording(
                 // Final cancellation check before processing result
                 if app_state.is_cancellation_requested() {
                     log::info!("Transcription completed but was cancelled, discarding result");
+                    
+                    // Hide pill window since we're cancelling
+                    if let Err(e) = crate::commands::window::hide_pill_widget(app_for_task.clone()).await {
+                        log::error!("Failed to hide pill window on cancellation: {}", e);
+                    }
+                    
                     update_recording_state(&app_for_task, RecordingState::Idle, None);
                     return;
                 }
                 
                 log::debug!("Transcription successful, {} chars", text.len());
+                
+                // Check if transcription is empty or only whitespace
+                if text.trim().is_empty() {
+                    log::info!("Transcription is empty, no speech detected");
+                    
+                    // Emit event to pill for user feedback
+                    let _ = emit_to_window(&app_for_task, "pill", "transcription-empty", "No speech detected");
+                    
+                    // Wait a bit for feedback to show
+                    let app_for_empty = app_for_task.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+                        
+                        // Hide pill window
+                        let app_state = app_for_empty.state::<AppState>();
+                        if let Some(window_manager) = app_state.get_window_manager() {
+                            if let Err(e) = window_manager.hide_pill_window().await {
+                                log::error!("Failed to hide pill window: {}", e);
+                            }
+                        }
+                        
+                        // Transition to idle state
+                        update_recording_state(&app_for_empty, RecordingState::Idle, None);
+                    });
+                    
+                    return;
+                }
                 
                 // Backend handles the complete flow
                 let app_for_process = app_for_task.clone();
@@ -516,20 +622,36 @@ pub async fn stop_recording(
                 });
             }
             Err(e) => {
-                // Update state to error
-                update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
+                // Check if this is a cancellation error
+                if e.contains("cancelled") {
+                    log::info!("Handling transcription cancellation");
+                    // For cancellation, hide pill immediately and go to Idle
+                    if let Err(hide_err) = crate::commands::window::hide_pill_widget(app_for_task.clone()).await {
+                        log::error!("Failed to hide pill window on cancellation: {}", hide_err);
+                    }
+                    update_recording_state(&app_for_task, RecordingState::Idle, None);
+                } else {
+                    // For other errors, show error state briefly
+                    update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
 
-                // Also emit legacy event to pill window
-                let _ = emit_to_window(&app_for_task, "pill", "transcription-error", e);
-                
-                // Transition back to Idle after a delay
-                // This ensures we don't get stuck in Error state
-                let app_for_reset = app_for_task.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                    log::debug!("Resetting from Error to Idle state after transcription failure");
-                    update_recording_state(&app_for_reset, RecordingState::Idle, None);
-                });
+                    // Also emit legacy event to pill window
+                    let _ = emit_to_window(&app_for_task, "pill", "transcription-error", e);
+                    
+                    // Transition back to Idle after a delay
+                    // This ensures we don't get stuck in Error state
+                    let app_for_reset = app_for_task.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        log::debug!("Resetting from Error to Idle state after transcription failure");
+                        
+                        // Hide pill window when transitioning to Idle
+                        if let Err(e) = crate::commands::window::hide_pill_widget(app_for_reset.clone()).await {
+                            log::error!("Failed to hide pill window: {}", e);
+                        }
+                        
+                        update_recording_state(&app_for_reset, RecordingState::Idle, None);
+                    });
+                }
             }
         }
     });
@@ -675,11 +797,24 @@ pub async fn transcribe_audio(
 
 #[tauri::command]
 pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
-    log::info!("Cancel recording requested");
+    log::info!("=== CANCEL RECORDING CALLED ===");
     
-    // Request cancellation
+    // Request cancellation FIRST
     let app_state = app.state::<AppState>();
     app_state.request_cancellation();
+    log::info!("Cancellation requested in app state");
+    
+    // Get current state
+    let current_state = app_state.get_current_state();
+    log::info!("Current state when cancelling: {:?}", current_state);
+    
+    // Abort any ongoing transcription task
+    if let Ok(mut task_guard) = app_state.transcription_task.lock() {
+        if let Some(task) = task_guard.take() {
+            log::info!("Aborting transcription task");
+            task.abort();
+        }
+    }
     
     // Stop recording if active
     let recorder_state = app.state::<RecorderState>();
@@ -690,10 +825,54 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     };
     
     if is_recording {
-        // Stop the recording
-        stop_recording(app.clone(), recorder_state).await?;
+        log::info!("Stopping recorder");
+        // Just stop the recorder, don't do full stop_recording flow
+        {
+            let mut recorder = recorder_state.inner().0.lock()
+                .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
+            let _ = recorder.stop_recording()?;
+        }
+        
+        // Clean up audio file if it exists
+        if let Ok(path_guard) = app_state.current_recording_path.lock() {
+            if let Some(audio_path) = path_guard.as_ref() {
+                log::info!("Removing cancelled recording file");
+                if let Err(e) = std::fs::remove_file(audio_path) {
+                    log::warn!("Failed to remove cancelled recording: {}", e);
+                }
+            }
+        }
     }
     
+    // Unregister ESC key
+    match "Escape".parse::<tauri_plugin_global_shortcut::Shortcut>() {
+        Ok(escape_shortcut) => {
+            if let Err(e) = app.global_shortcut().unregister(escape_shortcut) {
+                log::debug!("Failed to unregister ESC shortcut: {}", e);
+            }
+        }
+        Err(e) => {
+            log::debug!("Failed to parse ESC shortcut: {:?}", e);
+        }
+    }
+    
+    // Clean up ESC state
+    app_state.esc_pressed_once.store(false, std::sync::atomic::Ordering::SeqCst);
+    if let Ok(mut timeout_guard) = app_state.esc_timeout_handle.lock() {
+        if let Some(handle) = timeout_guard.take() {
+            handle.abort();
+        }
+    }
+    
+    // Hide pill window immediately
+    if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+        log::error!("Failed to hide pill window: {}", e);
+    }
+    
+    // Transition directly to Idle
+    update_recording_state(&app, RecordingState::Idle, None);
+    
+    log::info!("=== CANCEL RECORDING COMPLETED ===");
     Ok(())
 }
 

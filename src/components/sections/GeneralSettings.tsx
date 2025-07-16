@@ -1,4 +1,5 @@
 import { HotkeyInput } from "@/components/HotkeyInput";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -9,8 +10,9 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { AppSettings } from "@/types";
+import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
+import { Info } from "lucide-react";
 import { useEffect, useState } from "react";
-import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 
 interface GeneralSettingsProps {
   settings: AppSettings | null;
@@ -46,7 +48,7 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
         await disable();
       }
       setAutostartEnabled(checked);
-      
+
       // Update settings to keep them in sync (backend is source of truth)
       onSettingsChange({ ...settings, launch_at_startup: checked });
     } catch (error) {
@@ -61,7 +63,7 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
   return (
     <div className="p-6 space-y-6">
       <h2 className="text-lg font-semibold mb-6">General Settings</h2>
-      
+
       {/* Hotkey Setting */}
       <div className="flex items-center justify-between gap-4">
         <Label htmlFor="hotkey" className="text-sm font-medium">Hotkey</Label>
@@ -69,13 +71,12 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
           value={settings.hotkey || ""}
           onChange={(hotkey) => onSettingsChange({ ...settings, hotkey })}
           placeholder="Click to set hotkey"
-          className="w-64"
         />
       </div>
 
       {/* Output Setting */}
       <div className="flex items-center justify-between gap-4">
-        <Label htmlFor="language" className="text-sm font-medium">Output</Label>
+        <Label htmlFor="language" className="text-sm font-medium">Your language</Label>
         <Select
           value={settings.language || "en"}
           onValueChange={(value) => onSettingsChange({ ...settings, language: value })}
@@ -108,6 +109,18 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
           disabled={autostartLoading}
         />
       </div>
+
+      {/* Tips Section */}
+      <Alert className="mt-8">
+        <Info className="h-4 w-4" />
+        <AlertDescription>
+          <strong>Tips:</strong>
+          <ul className="mt-1 space-y-1 text-sm">
+            <li>• Use the hotkey to start recording from anywhere</li>
+            <li>• While recording, press ESC twice to cancel</li>
+          </ul>
+        </AlertDescription>
+      </Alert>
     </div>
   );
 }

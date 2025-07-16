@@ -60,6 +60,10 @@ pub struct AppState {
     // Cancellation flag for graceful shutdown
     pub should_cancel_recording: Arc<AtomicBool>,
 
+    // ESC key handling for recording cancellation
+    pub esc_pressed_once: Arc<AtomicBool>,
+    pub esc_timeout_handle: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
+
     // Window management runtime state
     pub window_manager: Arc<Mutex<Option<WindowManager>>>,
 }
@@ -78,6 +82,8 @@ impl AppState {
             current_recording_path: Arc::new(Mutex::new(None)),
             transcription_task: Arc::new(Mutex::new(None)),
             should_cancel_recording: Arc::new(AtomicBool::new(false)),
+            esc_pressed_once: Arc::new(AtomicBool::new(false)),
+            esc_timeout_handle: Arc::new(Mutex::new(None)),
             window_manager: Arc::new(Mutex::new(None)),
         }
     }
@@ -365,7 +371,80 @@ pub fn run() {
                                 log::debug!("Toggle: Ignoring hotkey in state {:?}", current_state);
                             }
                         }
+                    } else {
+                        // Debug log all shortcuts
+                        log::debug!("Non-recording shortcut triggered: {:?}", shortcut);
+                        
+                        // Check if this is the ESC key
+                        let escape_shortcut: tauri_plugin_global_shortcut::Shortcut = match "Escape".parse() {
+                            Ok(s) => s,
+                            Err(e) => {
+                                log::error!("Failed to parse Escape shortcut: {:?}", e);
+                                return;
+                            }
+                        };
+                        
+                        log::debug!("Comparing shortcuts - received: {:?}, escape: {:?}", shortcut, escape_shortcut);
+                        
+                        if shortcut == &escape_shortcut {
+                            log::info!("ESC key detected in global handler");
+                            
+                            // Handle ESC key for recording cancellation
+                            let current_state = get_recording_state(&app_handle);
+                            log::debug!("Current recording state: {:?}", current_state);
+                            
+                            // Only handle ESC during recording or transcribing
+                            if matches!(current_state, RecordingState::Recording | RecordingState::Transcribing | RecordingState::Starting | RecordingState::Stopping) {
+                            let app_state = app_handle.state::<AppState>();
+                            let was_pressed_once = app_state.esc_pressed_once.load(Ordering::SeqCst);
+                            
+                            if !was_pressed_once {
+                                // First ESC press
+                                log::info!("First ESC press detected during recording");
+                                app_state.esc_pressed_once.store(true, Ordering::SeqCst);
+                                
+                                // Emit event to pill for feedback
+                                let _ = emit_to_window(&app_handle, "pill", "esc-first-press", "Press ESC again to stop recording");
+                                
+                                // Set timeout to reset ESC state
+                                let app_for_timeout = app_handle.clone();
+                                let timeout_handle = tauri::async_runtime::spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                                    
+                                    let app_state = app_for_timeout.state::<AppState>();
+                                    app_state.esc_pressed_once.store(false, Ordering::SeqCst);
+                                    log::debug!("ESC timeout expired, resetting state");
+                                });
+                                
+                                // Store timeout handle
+                                if let Ok(mut timeout_guard) = app_state.esc_timeout_handle.lock() {
+                                    *timeout_guard = Some(timeout_handle);
+                                }
+                            } else {
+                                // Second ESC press - cancel recording
+                                log::info!("Second ESC press detected, cancelling recording");
+                                
+                                // Cancel timeout
+                                if let Ok(mut timeout_guard) = app_state.esc_timeout_handle.lock() {
+                                    if let Some(handle) = timeout_guard.take() {
+                                        handle.abort();
+                                    }
+                                }
+                                
+                                // Reset ESC state
+                                app_state.esc_pressed_once.store(false, Ordering::SeqCst);
+                                
+                                // Cancel recording
+                                let app_for_cancel = app_handle.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    if let Err(e) = cancel_recording(app_for_cancel).await {
+                                        log::error!("Failed to cancel recording: {}", e);
+                                    }
+                                });
+                            }
+                        }
                     }
+                }
                 })
                 .build(),
         )
@@ -589,7 +668,7 @@ pub fn run() {
             {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-                // Create the pill window
+                // Create the pill window with extra height for tooltip
                 let pill_window = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
                     .title("Recording")
                     .resizable(false)
@@ -597,7 +676,7 @@ pub fn run() {
                     .always_on_top(true)
                     .skip_taskbar(true)
                     .transparent(true)
-                    .inner_size(200.0, 60.0)
+                    .inner_size(250.0, 120.0)  // Increased height to accommodate tooltip
                     .visible(false) // Start hidden
                     .build()?;
 
