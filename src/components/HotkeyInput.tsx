@@ -1,5 +1,5 @@
 import { Check, Edit2, X } from "lucide-react";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/button";
 import { formatHotkey } from "@/lib/hotkey-utils";
 

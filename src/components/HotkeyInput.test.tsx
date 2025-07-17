@@ -42,7 +42,7 @@ describe('HotkeyInput', () => {
 
     const input = screen.getByPlaceholderText('Click to set hotkey');
     expect(input).toBeInTheDocument();
-    expect(input.value).toBe('');
+    expect((input as HTMLInputElement).value).toBe('');
   });
 
   it('should enter recording mode on Edit click', async () => {

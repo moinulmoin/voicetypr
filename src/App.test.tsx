@@ -40,7 +40,7 @@ describe('App Integration Tests', () => {
     vi.clearAllMocks();
 
     // Default mocks
-    vi.mocked(invoke).mockImplementation((cmd: string, args?: any) => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
       switch (cmd) {
         case 'get_model_status':
           return Promise.resolve(mockModels);
