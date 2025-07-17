@@ -5,8 +5,8 @@ import { useRecording } from "@/hooks/useRecording";
 import { AppSettings } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useState } from "react";
 import { AlertCircle } from "lucide-react";
+import { useEffect, useState } from "react";
 
 export function RecordingPill() {
   const recording = useRecording();
@@ -90,26 +90,26 @@ export function RecordingPill() {
   }
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center pointer-events-none">
+    <div className="fixed inset-0 flex items-end justify-center pointer-events-none">
       <div className="relative">
         {/* Feedback message - white background with alert icon */}
         {feedbackMessage && (
           <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 pointer-events-auto animate-in fade-in slide-in-from-bottom-2 duration-200">
-            <div className="bg-white border border-gray-200 rounded-lg shadow-md overflow-hidden">
+            <div className="bg-white border border-gray-200 rounded-lg shadow-md overflow-hidden whitespace-nowrap">
               <div className="flex items-center gap-3 px-4 py-3">
                 <AlertCircle className="size-4 text-amber-500 flex-shrink-0" />
-                <span className="text-sm text-gray-700 font-medium">{feedbackMessage}</span>
+                <span className="text-sm text-gray-700 font-medium whitespace-nowrap">{feedbackMessage}</span>
               </div>
             </div>
           </div>
         )}
-        
+
         <Button
           // onClick={handleClick}
           variant="default"
           className={`${
-            isCompact 
-              ? "rounded-full !p-0 w-14 h-14 shadow-none" 
+            isCompact
+              ? "rounded-full !p-0 w-14 h-14 shadow-none"
               : "rounded-xl !p-4 gap-2"
           } flex items-center justify-center`}
           // aria-readonly={isTranscribing}
