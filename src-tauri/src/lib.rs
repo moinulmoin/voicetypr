@@ -1,7 +1,7 @@
 use serde_json;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::async_runtime::Mutex as AsyncMutex;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -9,10 +9,11 @@ use tauri_plugin_store::StoreExt;
 
 mod audio;
 mod commands;
+mod license;
+mod state;
+mod state_machine;
 mod whisper;
 mod window_manager;
-mod state_machine;
-mod state;
 
 #[cfg(test)]
 mod tests;
@@ -20,17 +21,21 @@ mod tests;
 use audio::recorder::AudioRecorder;
 use commands::{
     audio::*,
-    model::{download_model, get_model_status, delete_model, list_downloaded_models, preload_model, cancel_download},
+    debug::{debug_transcription_flow, test_transcription_event},
+    license::*,
+    model::{
+        cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
+        preload_model,
+    },
+    permissions::*,
     settings::*,
     text::*,
     window::*,
-    debug::{debug_transcription_flow, test_transcription_event},
-    permissions::*
 };
-use whisper::cache::TranscriberCache;
-use window_manager::WindowManager;
 use state::unified_state::UnifiedRecordingState;
 use std::collections::HashMap;
+use whisper::cache::TranscriberCache;
+use window_manager::WindowManager;
 
 // Recording state enum matching frontend
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
@@ -67,7 +72,6 @@ pub struct AppState {
     // Window management runtime state
     pub window_manager: Arc<Mutex<Option<WindowManager>>>,
 }
-
 
 impl AppState {
     pub fn new() -> Self {
@@ -118,7 +122,12 @@ impl AppState {
     }
 
     /// Emit event to specific window using WindowManager
-    pub fn emit_to_window(&self, window: &str, event: &str, payload: impl serde::Serialize) -> Result<(), String> {
+    pub fn emit_to_window(
+        &self,
+        window: &str,
+        event: &str,
+        payload: impl serde::Serialize,
+    ) -> Result<(), String> {
         if let Some(wm) = self.get_window_manager() {
             // Convert payload to JSON value
             let json_payload = serde_json::to_value(payload)
@@ -143,8 +152,12 @@ pub fn update_recording_state(
 ) {
     let app_state = app.state::<AppState>();
 
-    log::debug!("update_recording_state called: {:?} -> {:?}, error: {:?}",
-        app_state.get_current_state(), new_state, error);
+    log::debug!(
+        "update_recording_state called: {:?} -> {:?}, error: {:?}",
+        app_state.get_current_state(),
+        new_state,
+        error
+    );
 
     // Try to transition using unified state
     match app_state.transition_recording_state(new_state) {
@@ -168,12 +181,20 @@ pub fn update_recording_state(
             };
 
             if should_force {
-                log::warn!("Forcing state transition from {:?} to {:?} for recovery", current, new_state);
+                log::warn!(
+                    "Forcing state transition from {:?} to {:?} for recovery",
+                    current,
+                    new_state
+                );
                 if let Err(force_err) = app_state.recording_state.force_set(new_state) {
                     log::error!("Failed to force set state: {}", force_err);
                 }
             } else {
-                log::error!("Invalid state transition from {:?} to {:?} - transition blocked", current, new_state);
+                log::error!(
+                    "Invalid state transition from {:?} to {:?} - transition blocked",
+                    current,
+                    new_state
+                );
             }
         }
     }
@@ -212,7 +233,6 @@ pub fn emit_to_window(
     app_state.emit_to_window(window, event, payload)
 }
 
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logger with appropriate level based on build type
@@ -228,6 +248,7 @@ pub fn run() {
     log::info!("Starting VoiceTypr application");
 
     let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_cache::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
@@ -235,7 +256,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None::<Vec<&str>>
+            None::<Vec<&str>>,
         ))
         .plugin(tauri_plugin_updater::Builder::new().build());
 
@@ -711,6 +732,11 @@ pub fn run() {
             request_accessibility_permission,
             check_microphone_permission,
             request_microphone_permission,
+            check_license_status,
+            restore_license,
+            activate_license,
+            deactivate_license,
+            open_purchase_page,
         ])
         .on_window_event(|window, event| {
             match event {

@@ -24,3 +24,11 @@ export interface TranscriptionHistory {
   timestamp: Date;
   model: string;
 }
+
+export interface LicenseStatus {
+  status: 'licensed' | 'trial' | 'expired' | 'none';
+  trial_days_left?: number;
+  license_type?: string;
+  license_key?: string;
+  expires_at?: string;
+}

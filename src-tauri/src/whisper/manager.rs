@@ -4,8 +4,8 @@ use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -102,7 +102,7 @@ impl WhisperManager {
                     .to_string(),
                 sha256: "ad82bf6a9043ceed055076d0fd39f5f186ff8062".to_string(), // SHA1 (correct)
                 downloaded: false,
-                speed_score: 2,     // Slowest
+                speed_score: 2,    // Slowest
                 accuracy_score: 9, // Best accuracy
             },
         );
@@ -180,6 +180,11 @@ impl WhisperManager {
         progress_callback: impl Fn(u64, u64),
     ) -> Result<(), String> {
         log::info!("WhisperManager: Downloading model {}", model_name);
+
+        // Sanitize model name to prevent path traversal
+        if model_name.contains('/') || model_name.contains('\\') || model_name.contains("..") {
+            return Err("Invalid model name: path traversal characters not allowed".to_string());
+        }
 
         let model = self.models.get(model_name).ok_or(format!(
             "Model '{}' not found in available models",
@@ -414,6 +419,12 @@ impl WhisperManager {
     }
 
     pub fn get_model_path(&self, model_name: &str) -> Option<PathBuf> {
+        // Sanitize model name to prevent path traversal
+        if model_name.contains('/') || model_name.contains('\\') || model_name.contains("..") {
+            log::warn!("Rejected model name with path traversal characters: {}", model_name);
+            return None;
+        }
+        
         if self.models.get(model_name)?.downloaded {
             Some(self.models_dir.join(format!("{}.bin", model_name)))
         } else {
@@ -452,6 +463,11 @@ impl WhisperManager {
 
     /// Delete a model file from disk and refresh the downloaded status map.
     pub fn delete_model_file(&mut self, model_name: &str) -> Result<(), String> {
+        // Sanitize model name to prevent path traversal
+        if model_name.contains('/') || model_name.contains('\\') || model_name.contains("..") {
+            return Err("Invalid model name: path traversal characters not allowed".to_string());
+        }
+        
         let path = self.models_dir.join(format!("{}.bin", model_name));
         if !path.exists() {
             return Err("Model file not found".to_string());
@@ -521,5 +537,4 @@ impl WhisperManager {
 
         models
     }
-
 }

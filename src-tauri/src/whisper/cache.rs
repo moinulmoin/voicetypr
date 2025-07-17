@@ -45,15 +45,18 @@ impl TranscriberCache {
 
     /// Retrieve a cached transcriber, or load and cache it if it isn't present yet.
     pub fn get_or_create(&mut self, model_path: &Path) -> Result<Arc<Transcriber>, String> {
-        log::info!("[TRANSCRIPTION_DEBUG] get_or_create called with path: {:?}", model_path);
-        
+        log::info!(
+            "[TRANSCRIPTION_DEBUG] get_or_create called with path: {:?}",
+            model_path
+        );
+
         // Check if the model file exists
         if !model_path.exists() {
             let error = format!("Model file does not exist: {:?}", model_path);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
             return Err(error);
         }
-        
+
         // We store the path as a string key – this is fine because the path is
         // produced by the app itself and therefore always valid Unicode.
         let key = model_path.to_string_lossy().to_string();
@@ -77,15 +80,21 @@ impl TranscriberCache {
         }
 
         // Load the model
-        log::info!("[TRANSCRIPTION_DEBUG] Loading new model into cache: {}", key);
+        log::info!(
+            "[TRANSCRIPTION_DEBUG] Loading new model into cache: {}",
+            key
+        );
         let start = std::time::Instant::now();
-        
+
         let transcriber = match Transcriber::new(model_path) {
             Ok(t) => {
                 let elapsed = start.elapsed();
-                log::info!("[TRANSCRIPTION_DEBUG] Model loaded successfully in {:?}", elapsed);
+                log::info!(
+                    "[TRANSCRIPTION_DEBUG] Model loaded successfully in {:?}",
+                    elapsed
+                );
                 Arc::new(t)
-            },
+            }
             Err(e) => {
                 log::error!("[TRANSCRIPTION_DEBUG] Failed to load model: {}", e);
                 return Err(e);
@@ -95,7 +104,11 @@ impl TranscriberCache {
         // Insert into cache
         self.map.insert(key.clone(), transcriber.clone());
         self.lru_order.push_back(key.clone());
-        log::info!("[TRANSCRIPTION_DEBUG] Model cached successfully. Cache size: {}/{}", self.map.len(), self.max_size);
+        log::info!(
+            "[TRANSCRIPTION_DEBUG] Model cached successfully. Cache size: {}/{}",
+            self.map.len(),
+            self.max_size
+        );
 
         Ok(transcriber)
     }

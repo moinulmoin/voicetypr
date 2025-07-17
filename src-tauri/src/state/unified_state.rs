@@ -23,21 +23,23 @@ impl UnifiedRecordingState {
             })),
         }
     }
-    
+
     /// Transition to a new state atomically
     pub fn transition_to(&self, new_state: RecordingState) -> Result<(), String> {
         let mut guard = self.lock_or_recover()?;
-        
+
         // Validate transition
-        guard.machine.transition_to(new_state)
+        guard
+            .machine
+            .transition_to(new_state)
             .map_err(|e| e.to_string())?;
-        
+
         // Update current state only if validation passed
         guard.current = new_state;
-        
+
         Ok(())
     }
-    
+
     /// Get current state
     pub fn current(&self) -> RecordingState {
         match self.inner.lock() {
@@ -49,7 +51,7 @@ impl UnifiedRecordingState {
             }
         }
     }
-    
+
     /// Reset to initial state
     pub fn reset(&self) -> Result<(), String> {
         let mut guard = self.lock_or_recover()?;
@@ -57,7 +59,7 @@ impl UnifiedRecordingState {
         guard.current = RecordingState::Idle;
         Ok(())
     }
-    
+
     /// Force set state (use with caution, bypasses validation)
     pub fn force_set(&self, state: RecordingState) -> Result<(), String> {
         let mut guard = self.lock_or_recover()?;
@@ -66,7 +68,7 @@ impl UnifiedRecordingState {
         guard.current = state;
         Ok(())
     }
-    
+
     /// Lock the state, recovering from poison if necessary
     fn lock_or_recover(&self) -> Result<MutexGuard<'_, UnifiedStateInner>, String> {
         match self.inner.lock() {
@@ -82,51 +84,51 @@ impl UnifiedRecordingState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_unified_state_transitions() {
         let state = UnifiedRecordingState::new();
-        
+
         // Valid transition
         assert!(state.transition_to(RecordingState::Starting).is_ok());
         assert_eq!(state.current(), RecordingState::Starting);
-        
+
         // Invalid transition
         assert!(state.transition_to(RecordingState::Stopping).is_err());
         assert_eq!(state.current(), RecordingState::Starting); // State unchanged
-        
+
         // Valid transition
         assert!(state.transition_to(RecordingState::Recording).is_ok());
         assert_eq!(state.current(), RecordingState::Recording);
     }
-    
+
     #[test]
     fn test_unified_state_reset() {
         let state = UnifiedRecordingState::new();
-        
+
         // Valid transition path: Idle -> Starting -> Recording
         state.transition_to(RecordingState::Starting).unwrap();
         state.transition_to(RecordingState::Recording).unwrap();
         state.reset().unwrap();
-        
+
         assert_eq!(state.current(), RecordingState::Idle);
-        
+
         // Can transition from idle again
         assert!(state.transition_to(RecordingState::Starting).is_ok());
     }
-    
+
     #[test]
     fn test_unified_state_force_set() {
         let state = UnifiedRecordingState::new();
-        
+
         // Force invalid transition (normally can't go from Idle to Stopping)
         state.force_set(RecordingState::Stopping).unwrap();
         assert_eq!(state.current(), RecordingState::Stopping);
-        
+
         // After force set to Stopping, we can transition to Transcribing
         assert!(state.transition_to(RecordingState::Transcribing).is_ok());
         assert_eq!(state.current(), RecordingState::Transcribing);
-        
+
         // Force set to an invalid state again
         state.force_set(RecordingState::Recording).unwrap();
         assert_eq!(state.current(), RecordingState::Recording);

@@ -2,7 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "VoiceTyper permissions",
-  "windows": ["main", "pill"],
+  "windows": [
+    "main",
+    "pill"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-create",
@@ -26,6 +29,7 @@
     "macos-permissions:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
-    "autostart:allow-is-enabled"
+    "autostart:allow-is-enabled",
+    "cache:default"
   ]
 }

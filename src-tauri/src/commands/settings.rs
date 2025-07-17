@@ -26,10 +26,10 @@ impl Default for Settings {
             language: "en".to_string(),
             theme: "system".to_string(),
             transcription_cleanup_days: None, // None means keep forever
-            pill_position: None, // No saved position initially
-            launch_at_startup: false, // Default to not launching at startup
-            onboarding_completed: false, // Default to not completed
-            compact_recording_status: true, // Default to compact mode
+            pill_position: None,              // No saved position initially
+            launch_at_startup: false,         // Default to not launching at startup
+            onboarding_completed: false,      // Default to not completed
+            compact_recording_status: true,   // Default to compact mode
         }
     }
 }
@@ -58,21 +58,19 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
         transcription_cleanup_days: store
             .get("transcription_cleanup_days")
             .and_then(|v| v.as_u64().map(|n| n as u32)),
-        pill_position: store
-            .get("pill_position")
-            .and_then(|v| {
-                if let Some(arr) = v.as_array() {
-                    if arr.len() == 2 {
-                        let x = arr[0].as_f64()?;
-                        let y = arr[1].as_f64()?;
-                        Some((x, y))
-                    } else {
-                        None
-                    }
+        pill_position: store.get("pill_position").and_then(|v| {
+            if let Some(arr) = v.as_array() {
+                if arr.len() == 2 {
+                    let x = arr[0].as_f64()?;
+                    let y = arr[1].as_f64()?;
+                    Some((x, y))
                 } else {
                     None
                 }
-            }),
+            } else {
+                None
+            }
+        }),
         launch_at_startup: store
             .get("launch_at_startup")
             .and_then(|v| v.as_bool())
@@ -106,10 +104,16 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set("current_model", json!(settings.current_model));
     store.set("language", json!(settings.language));
     store.set("theme", json!(settings.theme));
-    store.set("transcription_cleanup_days", json!(settings.transcription_cleanup_days));
+    store.set(
+        "transcription_cleanup_days",
+        json!(settings.transcription_cleanup_days),
+    );
     store.set("launch_at_startup", json!(settings.launch_at_startup));
     store.set("onboarding_completed", json!(settings.onboarding_completed));
-    store.set("compact_recording_status", json!(settings.compact_recording_status));
+    store.set(
+        "compact_recording_status",
+        json!(settings.compact_recording_status),
+    );
 
     // Save pill position if provided
     if let Some((x, y)) = settings.pill_position {
@@ -120,15 +124,20 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
     // Preload new model if it changed
     if !settings.current_model.is_empty() && old_model != settings.current_model {
-        use tauri::async_runtime::Mutex as AsyncMutex;
         use crate::commands::model::preload_model;
+        use tauri::async_runtime::Mutex as AsyncMutex;
 
-        log::info!("Model changed from '{}' to '{}', preloading new model", old_model, settings.current_model);
+        log::info!(
+            "Model changed from '{}' to '{}', preloading new model",
+            old_model,
+            settings.current_model
+        );
 
         let app_clone = app.clone();
         let model_name = settings.current_model.clone();
         tokio::spawn(async move {
-            let whisper_state = app_clone.state::<AsyncMutex<crate::whisper::manager::WhisperManager>>();
+            let whisper_state =
+                app_clone.state::<AsyncMutex<crate::whisper::manager::WhisperManager>>();
             match preload_model(app_clone.clone(), model_name.clone(), whisper_state).await {
                 Ok(_) => log::info!("Successfully preloaded new model: {}", model_name),
                 Err(e) => log::warn!("Failed to preload new model: {}", e),

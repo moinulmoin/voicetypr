@@ -45,12 +45,17 @@ impl WindowManager {
                 Ok(_) => return Ok(()),
                 Err(e) => {
                     if attempt < MAX_RETRIES {
-                        log::warn!("Failed to show pill window (attempt {}): {}. Retrying...",
-                                  attempt, e);
+                        log::warn!(
+                            "Failed to show pill window (attempt {}): {}. Retrying...",
+                            attempt,
+                            e
+                        );
                         tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
                     } else {
-                        return Err(format!("Failed to show pill window after {} attempts: {}",
-                                         MAX_RETRIES, e));
+                        return Err(format!(
+                            "Failed to show pill window after {} attempts: {}",
+                            MAX_RETRIES, e
+                        ));
                     }
                 }
             }
@@ -86,12 +91,16 @@ impl WindowManager {
 
         // Always use fixed center-bottom position
         let (position_x, position_y) = self.calculate_center_position();
-        log::info!("Positioning pill at center-bottom: ({}, {})", position_x, position_y);
+        log::info!(
+            "Positioning pill at center-bottom: ({}, {})",
+            position_x,
+            position_y
+        );
 
         let pill_window = WebviewWindowBuilder::new(
             &self.app_handle,
             "pill",
-            WebviewUrl::App("pill.html".into())
+            WebviewUrl::App("pill.html".into()),
         )
         .title("Recording")
         .resizable(false)
@@ -106,8 +115,8 @@ impl WindowManager {
         .skip_taskbar(true)
         .inner_size(300.0, 150.0)
         .position(position_x, position_y)
-        .visible(true)  // Start visible
-        .focused(false)  // Don't steal focus
+        .visible(true) // Start visible
+        .focused(false) // Don't steal focus
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -119,7 +128,8 @@ impl WindowManager {
         {
             use tauri_nspanel::WebviewWindowExt;
 
-            pill_window.to_panel()
+            pill_window
+                .to_panel()
                 .map_err(|e| format!("Failed to convert to NSPanel: {:?}", e))?;
 
             log::info!("Converted pill window to NSPanel");
@@ -134,7 +144,11 @@ impl WindowManager {
             *pill_guard = Some(pill_window);
         }
 
-        log::info!("Pill window created and shown at ({}, {})", position_x, position_y);
+        log::info!(
+            "Pill window created and shown at ({}, {})",
+            position_x,
+            position_y
+        );
         Ok(())
     }
 
@@ -152,12 +166,18 @@ impl WindowManager {
                     }
                     Err(e) => {
                         if attempt < MAX_RETRIES {
-                            log::warn!("Failed to hide pill window (attempt {}): {}. Retrying...",
-                                      attempt, e);
-                            tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                            log::warn!(
+                                "Failed to hide pill window (attempt {}): {}. Retrying...",
+                                attempt,
+                                e
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS))
+                                .await;
                         } else {
-                            return Err(format!("Failed to hide pill window after {} attempts: {}",
-                                             MAX_RETRIES, e));
+                            return Err(format!(
+                                "Failed to hide pill window after {} attempts: {}",
+                                MAX_RETRIES, e
+                            ));
                         }
                     }
                 }
@@ -187,9 +207,17 @@ impl WindowManager {
     }
 
     /// Emit event to specific window
-    pub fn emit_to_window(&self, window_id: &str, event: &str, payload: serde_json::Value) -> Result<(), String> {
+    pub fn emit_to_window(
+        &self,
+        window_id: &str,
+        event: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), String> {
         // Only log critical events
-        if matches!(event, "recording-state-changed" | "transcription-complete" | "transcription-error") {
+        if matches!(
+            event,
+            "recording-state-changed" | "transcription-complete" | "transcription-error"
+        ) {
             log::debug!("emit_to_window: window='{}', event='{}'", window_id, event);
         }
 
@@ -203,7 +231,10 @@ impl WindowManager {
             // Skip visibility check for performance
 
             // Check if window is visible or if it's a critical event
-            let is_critical = matches!(event, "recording-state-changed" | "transcription-complete" | "transcription-error");
+            let is_critical = matches!(
+                event,
+                "recording-state-changed" | "transcription-complete" | "transcription-error"
+            );
 
             // Check if window is visible or if it's a critical event
 
@@ -211,21 +242,38 @@ impl WindowManager {
                 Ok(_) => {}
                 Err(e) => {
                     if is_critical {
-                        log::error!("[FLOW] Failed to emit critical event '{}' to {} window: {}", event, window_id, e);
+                        log::error!(
+                            "[FLOW] Failed to emit critical event '{}' to {} window: {}",
+                            event,
+                            window_id,
+                            e
+                        );
                         // For critical events, retry with app-wide emission
                         if let Err(e2) = self.app_handle.emit(event, payload) {
                             log::error!("Also failed app-wide emission: {}", e2);
                         }
                     } else {
-                        log::debug!("Failed to emit '{}' event to {} window: {}", event, window_id, e);
+                        log::debug!(
+                            "Failed to emit '{}' event to {} window: {}",
+                            event,
+                            window_id,
+                            e
+                        );
                     }
                     return Err(e.to_string());
                 }
             }
         } else {
-            log::debug!("Cannot emit '{}' event - {} window not found", event, window_id);
+            log::debug!(
+                "Cannot emit '{}' event - {} window not found",
+                event,
+                window_id
+            );
             // For critical events when window not found, try app-wide emission
-            if matches!(event, "recording-state-changed" | "transcription-complete" | "transcription-error") {
+            if matches!(
+                event,
+                "recording-state-changed" | "transcription-complete" | "transcription-error"
+            ) {
                 if let Err(e) = self.app_handle.emit(event, payload) {
                     log::error!("App-wide emission also failed: {}", e);
                 }
@@ -254,7 +302,6 @@ impl WindowManager {
         }
     }
 
-
     /// Calculate center bottom position for pill window
     fn calculate_center_position(&self) -> (f64, f64) {
         // Try to get monitor from main window
@@ -273,7 +320,13 @@ impl WindowManager {
                 let x = (width - pill_width) / 2.0;
                 let y = height - pill_height - bottom_offset;
 
-                log::info!("Calculated pill position: ({}, {}) on {}x{} screen", x, y, width, height);
+                log::info!(
+                    "Calculated pill position: ({}, {}) on {}x{} screen",
+                    x,
+                    y,
+                    width,
+                    height
+                );
                 (x, y)
             } else {
                 log::warn!("Could not get monitor from main window, trying primary monitor");
@@ -291,7 +344,13 @@ impl WindowManager {
                     let x = (width - pill_width) / 2.0;
                     let y = height - pill_height - bottom_offset;
 
-                    log::info!("Using primary monitor: ({}, {}) on {}x{} screen", x, y, width, height);
+                    log::info!(
+                        "Using primary monitor: ({}, {}) on {}x{} screen",
+                        x,
+                        y,
+                        width,
+                        height
+                    );
                     (x, y)
                 } else {
                     log::error!("Could not get any monitor, using safe defaults");
@@ -315,7 +374,13 @@ impl WindowManager {
                 let x = (width - pill_width) / 2.0;
                 let y = height - pill_height - bottom_offset;
 
-                log::info!("Using primary monitor (no main window): ({}, {}) on {}x{} screen", x, y, width, height);
+                log::info!(
+                    "Using primary monitor (no main window): ({}, {}) on {}x{} screen",
+                    x,
+                    y,
+                    width,
+                    height
+                );
                 (x, y)
             } else {
                 log::error!("Could not get any monitor info, using safe defaults");

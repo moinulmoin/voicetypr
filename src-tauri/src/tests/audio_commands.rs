@@ -81,7 +81,7 @@ mod tests {
         for expected_state in transitions {
             // Force set the state since we're testing direct state changes
             app_state.recording_state.force_set(expected_state).unwrap();
-            
+
             // Verify state was set
             let state = app_state.get_current_state();
             assert_eq!(state, expected_state);
@@ -167,15 +167,21 @@ mod tests {
         let app_state = AppState::new();
 
         // Set to error state
-        app_state.recording_state.force_set(RecordingState::Error).unwrap();
-        
+        app_state
+            .recording_state
+            .force_set(RecordingState::Error)
+            .unwrap();
+
         // Verify error state
         let state = app_state.get_current_state();
         assert_eq!(state, RecordingState::Error);
-        
+
         // Reset to idle
-        app_state.recording_state.force_set(RecordingState::Idle).unwrap();
-        
+        app_state
+            .recording_state
+            .force_set(RecordingState::Idle)
+            .unwrap();
+
         // Verify idle state
         let state = app_state.get_current_state();
         assert_eq!(state, RecordingState::Idle);

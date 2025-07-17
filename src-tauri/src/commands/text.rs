@@ -1,8 +1,8 @@
 use arboard::Clipboard;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
-use std::panic::{self, AssertUnwindSafe};
 
 // Only import Enigo on non-macOS platforms
 #[cfg(not(target_os = "macos"))]
@@ -21,10 +21,10 @@ pub async fn insert_text(text: String) -> Result<(), String> {
         log::warn!("Text insertion already in progress, skipping duplicate request");
         return Err("Text insertion already in progress".to_string());
     }
-    
+
     // Ensure we reset the flag on exit
     let _guard = InsertionGuard;
-    
+
     // Small delay to ensure the app doesn't interfere with text insertion
     thread::sleep(Duration::from_millis(100));
 
@@ -59,19 +59,19 @@ fn insert_via_clipboard(text: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         use crate::commands::permissions::check_accessibility_permission;
-        
+
         // Check permission synchronously from sync context
         let has_permission = match std::thread::spawn(|| {
             let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                check_accessibility_permission().await
-            })
-        }).join() {
+            rt.block_on(async { check_accessibility_permission().await })
+        })
+        .join()
+        {
             Ok(Ok(has_perm)) => has_perm,
             Ok(Err(_)) => false,
-            Err(_) => false
+            Err(_) => false,
         };
-        
+
         if !has_permission {
             log::warn!("No accessibility permission - text copied to clipboard but cannot paste automatically");
             // Text is in clipboard, user can paste manually
@@ -81,11 +81,9 @@ fn insert_via_clipboard(text: String) -> Result<(), String> {
 
     // Try to paste using Cmd+V (macOS) with panic protection
     // Add delay since pill was just hidden
-    
-    let paste_result = panic::catch_unwind(AssertUnwindSafe(|| {
-        try_paste_with_enigo()
-    }));
-    
+
+    let paste_result = panic::catch_unwind(AssertUnwindSafe(|| try_paste_with_enigo()));
+
     match paste_result {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => {
@@ -93,7 +91,10 @@ fn insert_via_clipboard(text: String) -> Result<(), String> {
             // Don't fail - text is still in clipboard for manual paste
         }
         Err(panic_err) => {
-            log::error!("PANIC during paste: {:?}, text remains in clipboard", panic_err);
+            log::error!(
+                "PANIC during paste: {:?}, text remains in clipboard",
+                panic_err
+            );
             // Don't fail - text is still in clipboard for manual paste
         }
     }
@@ -116,14 +117,14 @@ fn try_paste_with_enigo() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         log::debug!("Using AppleScript for keyboard simulation");
-        
+
         // AppleScript to simulate Cmd+V
         let script = r#"
             tell application "System Events"
                 keystroke "v" using {command down}
             end tell
         "#;
-        
+
         match std::process::Command::new("osascript")
             .arg("-e")
             .arg(script)
@@ -145,25 +146,28 @@ fn try_paste_with_enigo() -> Result<(), String> {
             }
         }
     }
-    
+
     #[cfg(not(target_os = "macos"))]
     {
         // Use Enigo on other platforms
         log::debug!("Using Enigo for keyboard simulation");
-        
+
         let mut enigo = Enigo::new(&Settings::default())
             .map_err(|e| format!("Failed to initialize Enigo: {:?}", e))?;
-        
+
         // Simulate Ctrl+V on Windows/Linux
-        enigo.key(Key::Control, Press)
+        enigo
+            .key(Key::Control, Press)
             .map_err(|e| format!("Failed to press Control: {:?}", e))?;
         thread::sleep(Duration::from_millis(20));
-        enigo.key(Key::Unicode('v'), Click)
+        enigo
+            .key(Key::Unicode('v'), Click)
             .map_err(|e| format!("Failed to click V: {:?}", e))?;
         thread::sleep(Duration::from_millis(20));
-        enigo.key(Key::Control, Release)
+        enigo
+            .key(Key::Control, Release)
             .map_err(|e| format!("Failed to release Control: {:?}", e))?;
-        
+
         Ok(())
     }
 }

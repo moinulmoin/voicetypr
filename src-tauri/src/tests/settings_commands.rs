@@ -43,7 +43,10 @@ mod tests {
         assert_eq!(deserialized.current_model, settings.current_model);
         assert_eq!(deserialized.language, settings.language);
         assert_eq!(deserialized.theme, settings.theme);
-        assert_eq!(deserialized.transcription_cleanup_days, settings.transcription_cleanup_days);
+        assert_eq!(
+            deserialized.transcription_cleanup_days,
+            settings.transcription_cleanup_days
+        );
     }
 
     #[test]
@@ -80,7 +83,10 @@ mod tests {
         assert_eq!(cloned.current_model, settings.current_model);
         assert_eq!(cloned.language, settings.language);
         assert_eq!(cloned.theme, settings.theme);
-        assert_eq!(cloned.transcription_cleanup_days, settings.transcription_cleanup_days);
+        assert_eq!(
+            cloned.transcription_cleanup_days,
+            settings.transcription_cleanup_days
+        );
     }
 
     #[test]
@@ -145,7 +151,6 @@ mod tests {
         };
         assert_eq!(specific_settings.current_model, "base");
     }
-
 
     #[test]
     fn test_settings_to_json_value() {

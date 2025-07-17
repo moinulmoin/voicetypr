@@ -84,10 +84,10 @@ export function RecordingPill() {
   //   }
   // };
 
-  // Only show pill when recording or transcribing
-  if (!isRecording && !isTranscribing) {
-    return null;
-  }
+  // // Only show pill when recording or transcribing
+  // if (!isRecording && !isTranscribing) {
+  //   return null;
+  // }
 
   return (
     <div className="fixed inset-0 flex items-end justify-center pointer-events-none">
@@ -109,7 +109,7 @@ export function RecordingPill() {
           variant="default"
           className={`${
             isCompact
-              ? "rounded-full !p-0 w-14 h-14 shadow-none"
+              ? "rounded-full !p-1 w-10 h-10 shadow-none"
               : "rounded-xl !p-4 gap-2"
           } flex items-center justify-center`}
           // aria-readonly={isTranscribing}
@@ -121,7 +121,7 @@ export function RecordingPill() {
             </>
           ) : (
             <>
-              <AudioWaveAnimation audioLevel={audioLevel} className={isCompact ? "scale-110" : ""} />
+              <AudioWaveAnimation audioLevel={audioLevel} className={isCompact ? "scale-80" : ""} />
               {!isCompact && "Listening"}
             </>
           )}

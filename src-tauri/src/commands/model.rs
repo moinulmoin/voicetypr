@@ -1,8 +1,10 @@
-use crate::whisper::manager::{ModelInfo, WhisperManager};
+use crate::commands::license::check_license_status_internal;
 use crate::emit_to_window;
+use crate::license::LicenseState;
+use crate::whisper::manager::{ModelInfo, WhisperManager};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use tauri::async_runtime::Mutex;
 use tauri::{AppHandle, Manager, State};
 
@@ -51,7 +53,7 @@ pub async fn download_model(
             );
 
             // Progress is already being emitted via events, no need for state storage
-            
+
             if let Err(e) = emit_to_window(
                 &app_handle,
                 "main",
@@ -71,9 +73,9 @@ pub async fn download_model(
     // Execute download with retry logic
     const MAX_RETRIES: u32 = 3;
     const RETRY_DELAY_MS: u64 = 2000;
-    
+
     let mut download_result = Err("No attempt made".to_string());
-    
+
     for attempt in 1..=MAX_RETRIES {
         // Check if download was cancelled
         if cancel_flag.load(Ordering::Relaxed) {
@@ -81,19 +83,28 @@ pub async fn download_model(
             download_result = Err("Download cancelled by user".to_string());
             break;
         }
-        
-        log::info!("Download attempt {} of {} for model: {}", attempt, MAX_RETRIES, model_name);
-        
+
+        log::info!(
+            "Download attempt {} of {} for model: {}",
+            attempt,
+            MAX_RETRIES,
+            model_name
+        );
+
         let manager = state.lock().await;
         let progress_tx_clone = progress_tx.clone();
         download_result = manager
-            .download_model(&model_name, Some(cancel_flag.clone()), move |downloaded, total| {
-                let _ = progress_tx_clone.send((downloaded, total));
-            })
+            .download_model(
+                &model_name,
+                Some(cancel_flag.clone()),
+                move |downloaded, total| {
+                    let _ = progress_tx_clone.send((downloaded, total));
+                },
+            )
             .await;
-        
+
         drop(manager); // Release lock before sleep
-        
+
         match &download_result {
             Ok(_) => {
                 log::info!("Download succeeded on attempt {}", attempt);
@@ -101,9 +112,13 @@ pub async fn download_model(
             }
             Err(e) => {
                 if attempt < MAX_RETRIES {
-                    log::warn!("Download attempt {} failed: {}. Retrying in {}ms...", 
-                              attempt, e, RETRY_DELAY_MS);
-                    
+                    log::warn!(
+                        "Download attempt {} failed: {}. Retrying in {}ms...",
+                        attempt,
+                        e,
+                        RETRY_DELAY_MS
+                    );
+
                     // Notify UI about retry
                     if let Err(e) = emit_to_window(
                         &app,
@@ -118,7 +133,7 @@ pub async fn download_model(
                     ) {
                         log::warn!("Failed to emit download-retry event: {}", e);
                     }
-                    
+
                     tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
                 } else {
                     log::error!("Download failed after {} attempts: {}", MAX_RETRIES, e);
@@ -150,7 +165,7 @@ pub async fn download_model(
             // Refresh the downloaded status in WhisperManager
             let mut manager = state.lock().await;
             manager.refresh_downloaded_status();
-            
+
             // Models are refreshed in WhisperManager, no need for duplicate state
 
             if let Err(e) = emit_to_window(&app, "main", "model-downloaded", &model_name) {
@@ -160,9 +175,9 @@ pub async fn download_model(
         }
         Err(e) => {
             log::error!("Download failed for model {}: {}", model_name, e);
-            
+
             // Progress tracking is event-based, no state cleanup needed
-            
+
             Err(e)
         }
     }
@@ -176,9 +191,9 @@ pub async fn get_model_status(
     let mut manager = state.lock().await;
     manager.refresh_downloaded_status();
     let models = manager.get_models_status();
-    
+
     // Models are already stored in WhisperManager, no duplicate state needed
-    
+
     Ok(models)
 }
 
@@ -205,7 +220,7 @@ pub async fn cancel_download(
     active_downloads: State<'_, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>,
 ) -> Result<(), String> {
     log::info!("Cancelling download for model: {}", model_name);
-    
+
     // Set the cancellation flag
     {
         let downloads = active_downloads.lock().unwrap();
@@ -213,12 +228,15 @@ pub async fn cancel_download(
             cancel_flag.store(true, Ordering::Relaxed);
             log::info!("Set cancellation flag for model: {}", model_name);
         } else {
-            return Err(format!("No active download found for model: {}", model_name));
+            return Err(format!(
+                "No active download found for model: {}",
+                model_name
+            ));
         }
     }
-    
+
     // The download loop will handle cleanup when it detects the cancellation flag
-    
+
     log::info!("Download cancelled for model: {}", model_name);
     Ok(())
 }
@@ -231,23 +249,34 @@ pub async fn preload_model(
 ) -> Result<(), String> {
     use crate::whisper::cache::TranscriberCache;
     use tauri::async_runtime::Mutex as AsyncMutex;
-    
+
+    // Check license status before preloading
+    log::info!("[Preload] Checking license status before preload_model");
+    let license_status = check_license_status_internal(&app).await?;
+    if matches!(
+        license_status.status,
+        LicenseState::Expired | LicenseState::None
+    ) {
+        return Err("License required to preload models".to_string());
+    }
+
     log::info!("Preloading model: {}", model_name);
-    
+
     // Get model path
     let model_path = {
         let manager = state.lock().await;
-        manager.get_model_path(&model_name)
+        manager
+            .get_model_path(&model_name)
             .ok_or(format!("Model '{}' not found", model_name))?
     };
-    
+
     // Load into cache
     let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
     let mut cache = cache_state.lock().await;
-    
+
     // This will load the model and cache it
     cache.get_or_create(&model_path)?;
-    
+
     log::info!("Model '{}' preloaded successfully", model_name);
     Ok(())
 }

@@ -61,9 +61,15 @@ mod tests {
     fn test_transcription_sorting() {
         // Test that timestamps sort correctly (newest first)
         let mut entries = vec![
-            ((Utc::now() - Duration::days(2)).to_rfc3339(), json!({"text": "old"})),
+            (
+                (Utc::now() - Duration::days(2)).to_rfc3339(),
+                json!({"text": "old"}),
+            ),
             (Utc::now().to_rfc3339(), json!({"text": "newest"})),
-            ((Utc::now() - Duration::days(1)).to_rfc3339(), json!({"text": "middle"})),
+            (
+                (Utc::now() - Duration::days(1)).to_rfc3339(),
+                json!({"text": "middle"}),
+            ),
         ];
 
         // Sort by timestamp (newest first)
@@ -82,17 +88,19 @@ mod tests {
         let cutoff = now - Duration::days(7);
 
         let test_dates = vec![
-            (now - Duration::days(1), false),  // Should not be deleted
-            (now - Duration::days(6), false),  // Should not be deleted
-            (now - Duration::days(7), false),  // Exactly at cutoff, should not be deleted
-            (now - Duration::days(8), true),   // Should be deleted
-            (now - Duration::days(30), true),  // Should be deleted
+            (now - Duration::days(1), false), // Should not be deleted
+            (now - Duration::days(6), false), // Should not be deleted
+            (now - Duration::days(7), false), // Exactly at cutoff, should not be deleted
+            (now - Duration::days(8), true),  // Should be deleted
+            (now - Duration::days(30), true), // Should be deleted
         ];
 
         for (date, should_delete) in test_dates {
             let is_old = date < cutoff;
-            assert_eq!(is_old, should_delete, 
-                "Date {} days old should {} be deleted", 
+            assert_eq!(
+                is_old,
+                should_delete,
+                "Date {} days old should {} be deleted",
                 (now - date).num_days(),
                 if should_delete { "" } else { "not" }
             );
@@ -103,11 +111,13 @@ mod tests {
     fn test_history_limit() {
         // Test that history limiting works correctly
         let entries: Vec<serde_json::Value> = (0..100)
-            .map(|i| json!({
-                "text": format!("Transcription {}", i),
-                "model": "base",
-                "timestamp": (Utc::now() - Duration::minutes(i)).to_rfc3339()
-            }))
+            .map(|i| {
+                json!({
+                    "text": format!("Transcription {}", i),
+                    "model": "base",
+                    "timestamp": (Utc::now() - Duration::minutes(i)).to_rfc3339()
+                })
+            })
             .collect();
 
         // Test different limits
@@ -151,10 +161,10 @@ mod tests {
     fn test_cleanup_with_none_days() {
         // Test that cleanup with None (keep forever) doesn't delete anything
         let days: Option<u32> = None;
-        
+
         // When days is None, nothing should be cleaned up
         assert!(days.is_none());
-        
+
         // In the actual implementation, the cleanup function should early return
         // when days is None, preserving all transcriptions
     }
@@ -166,17 +176,19 @@ mod tests {
         let timestamps: Vec<String> = (0..10)
             .map(|i| (now - Duration::hours(i)).to_rfc3339())
             .collect();
-        
+
         // The first timestamp should be the most recent
         for i in 1..timestamps.len() {
-            assert!(timestamps[0] > timestamps[i], 
-                "Newer timestamp should be greater than older when compared as strings");
+            assert!(
+                timestamps[0] > timestamps[i],
+                "Newer timestamp should be greater than older when compared as strings"
+            );
         }
-        
+
         // Test reverse chronological sort (newest first)
         let mut sorted = timestamps.clone();
         sorted.sort_by(|a, b| b.cmp(a));
         assert_eq!(sorted[0], timestamps[0]); // Most recent should be first
-        assert_eq!(sorted[sorted.len()-1], timestamps[timestamps.len()-1]); // Oldest should be last
+        assert_eq!(sorted[sorted.len() - 1], timestamps[timestamps.len() - 1]); // Oldest should be last
     }
 }

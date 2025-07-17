@@ -13,6 +13,8 @@ import { useAccessibilityPermission } from "./hooks/useAccessibilityPermission";
 import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { AppSettings, ModelInfo, TranscriptionHistory } from "./types";
 import { OnboardingDesktop } from "./components/onboarding/OnboardingDesktop";
+import { LicenseProvider } from "./contexts/LicenseContext";
+import { LicenseSection } from "./components/license";
 
 // Helper function to calculate balanced performance score
 function calculateBalancedScore(model: ModelInfo): number {
@@ -172,6 +174,31 @@ export default function App() {
           setActiveSection("settings");
         });
 
+        // Listen for license-required event
+        registerEvent<{ title: string; message: string; action: string }>("license-required", async (event) => {
+          console.log("License required event:", event);
+
+          // Small delay to prevent window animation conflicts
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+          // Focus main window and navigate to license section
+          try {
+            await invoke("focus_main_window");
+            setActiveSection("license");
+
+            // Show toast after window is focused to ensure it appears on top
+            setTimeout(() => {
+              toast.error(event.message, {
+                duration: 2000,
+              });
+            }, 200);
+          } catch (error) {
+            console.error("Failed to focus window:", error);
+            // If window focus fails, still show the toast
+            toast.error(event.message);
+          }
+        });
+
         return () => {
           window.removeEventListener("no-models-available", handleNoModels);
         };
@@ -295,12 +322,12 @@ export default function App() {
   if (showOnboarding) {
     return (
       <AppErrorBoundary>
-        <OnboardingDesktop 
+        <OnboardingDesktop
           onComplete={() => {
             setShowOnboarding(false);
             // Reload settings after onboarding
             invoke<AppSettings>("get_settings").then(setSettings);
-          }} 
+          }}
         />
       </AppErrorBoundary>
     );
@@ -341,6 +368,9 @@ export default function App() {
       case "about":
         return <AboutSection />;
 
+      case "license":
+        return <LicenseSection />;
+
       default:
         return <GeneralSettings settings={settings} onSettingsChange={saveSettings} />;
     }
@@ -349,20 +379,26 @@ export default function App() {
   // Main App Layout
   return (
     <AppErrorBoundary>
-      <SidebarProvider>
-        <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
-        <SidebarInset>
-          <div className="h-full overflow-auto">{renderSectionContent()}</div>
-        </SidebarInset>
-      </SidebarProvider>
-      <Toaster
-        position="top-center"
-          toastOptions={{
-            classNames:{
-              toast: "!w-fit",
-            }
-          }}
-      />
+      <LicenseProvider>
+        <div className="h-screen flex flex-col">
+          <SidebarProvider>
+            <div className="flex-1 flex overflow-hidden">
+              <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
+              <SidebarInset>
+                <div className="h-full overflow-auto">{renderSectionContent()}</div>
+              </SidebarInset>
+            </div>
+          </SidebarProvider>
+        </div>
+        <Toaster
+          position="top-center"
+            toastOptions={{
+              classNames:{
+                toast: "!w-fit",
+              }
+            }}
+        />
+      </LicenseProvider>
     </AppErrorBoundary>
   );
 }

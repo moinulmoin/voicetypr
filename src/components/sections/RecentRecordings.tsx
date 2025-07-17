@@ -47,6 +47,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       toast.error("Failed to delete transcription");
     }
   };
+  
   return (
     <div className="flex-1 flex flex-col p-6">
       <h2 className="text-lg font-semibold mb-4">Recent Transcriptions</h2>
