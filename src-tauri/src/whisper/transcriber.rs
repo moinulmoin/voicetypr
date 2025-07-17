@@ -30,6 +30,13 @@ impl Transcriber {
     }
 
     pub fn transcribe(&self, audio_path: &Path, language: Option<&str>) -> Result<String, String> {
+        self.transcribe_with_cancellation(audio_path, language, || false)
+    }
+    
+    pub fn transcribe_with_cancellation<F>(&self, audio_path: &Path, language: Option<&str>, should_cancel: F) -> Result<String, String> 
+    where
+        F: Fn() -> bool,
+    {
         log::info!("[TRANSCRIPTION_DEBUG] Starting transcription of: {:?}", audio_path);
         
         // Check if file exists and is readable
@@ -37,6 +44,12 @@ impl Transcriber {
             let error = format!("Audio file does not exist: {:?}", audio_path);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
             return Err(error);
+        }
+        
+        // Early cancellation check
+        if should_cancel() {
+            log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled before starting");
+            return Err("Transcription cancelled".to_string());
         }
         
         let file_size = std::fs::metadata(audio_path)
@@ -74,11 +87,23 @@ impl Transcriber {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to read audio samples: {}", e))?;
 
+        // Check cancellation after reading samples
+        if should_cancel() {
+            log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after reading samples");
+            return Err("Transcription cancelled".to_string());
+        }
+
         /* ----------------------------------------------
         2) i16 → f32  (range -1.0 … 1.0)
         ---------------------------------------------- */
         let mut audio: Vec<f32> = vec![0.0; samples_i16.len()];
         convert_integer_to_float_audio(&samples_i16, &mut audio).map_err(|e| e.to_string())?;
+
+        // Check cancellation after conversion
+        if should_cancel() {
+            log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after audio conversion");
+            return Err("Transcription cancelled".to_string());
+        }
 
         /* ----------------------------------------------
         3) stereo → mono  (Whisper needs mono)
@@ -94,6 +119,12 @@ impl Transcriber {
         ---------------------------------------------- */
         if spec.sample_rate != 16_000 {
             audio = resample_linear(&audio, spec.sample_rate as usize, 16_000);
+        }
+        
+        // Check cancellation after resampling
+        if should_cancel() {
+            log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after resampling");
+            return Err("Transcription cancelled".to_string());
         }
 
         log::debug!(
@@ -205,6 +236,11 @@ fn resample_linear(input: &[f32], in_rate: usize, out_rate: usize) -> Vec<f32> {
         return input.to_vec();
     }
 
+    // Fast path for exact 3:1 downsampling (48kHz → 16kHz)
+    if in_rate == 48000 && out_rate == 16000 {
+        return downsample_3x(input);
+    }
+
     let ratio = out_rate as f64 / in_rate as f64;
     let out_len = ((input.len() as f64) * ratio).round() as usize;
     let mut output = Vec::with_capacity(out_len);
@@ -222,5 +258,29 @@ fn resample_linear(input: &[f32], in_rate: usize, out_rate: usize) -> Vec<f32> {
         };
         output.push(sample);
     }
+    output
+}
+
+/// Fast 3:1 downsampling for 48kHz → 16kHz conversion
+/// Uses simple averaging which is good enough for speech
+fn downsample_3x(input: &[f32]) -> Vec<f32> {
+    let out_len = input.len() / 3;
+    let mut output = Vec::with_capacity(out_len);
+    
+    // Process in chunks of 3 samples
+    for chunk in input.chunks_exact(3) {
+        // Average 3 consecutive samples
+        let avg = (chunk[0] + chunk[1] + chunk[2]) / 3.0;
+        output.push(avg);
+    }
+    
+    // Handle any remaining samples (if input length not divisible by 3)
+    let remainder = input.len() % 3;
+    if remainder > 0 {
+        let start_idx = input.len() - remainder;
+        let sum: f32 = input[start_idx..].iter().sum();
+        output.push(sum / remainder as f32);
+    }
+    
     output
 }

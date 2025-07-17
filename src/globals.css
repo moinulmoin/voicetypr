@@ -165,3 +165,31 @@
   0% { opacity: 1; }
   100% { opacity: 0.15; }
 }
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse-once {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
+
+.animate-pulse-once {
+  animation: pulse-once 0.5s ease-in-out;
+}

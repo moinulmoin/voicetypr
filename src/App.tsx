@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Toaster } from "sonner";
+import { Toaster, toast } from "sonner";
 import { AppErrorBoundary } from "./components/ErrorBoundary";
 import { Sidebar } from "./components/Sidebar";
 import { AboutSection } from "./components/sections/AboutSection";
@@ -196,7 +196,7 @@ export default function App() {
       // Don't await - let it run async so progress events can update UI
       invoke("download_model", { modelName }).catch((error) => {
         console.error("Failed to download model:", error);
-        alert(`Failed to download model: ${error}`);
+        toast.error(`Failed to download model: ${error}`);
         // Remove from progress on error
         setDownloadProgress((prev) => {
           const newProgress = { ...prev };
@@ -206,7 +206,7 @@ export default function App() {
       });
     } catch (error) {
       console.error("Failed to start download:", error);
-      alert(`Failed to start download: ${error}`);
+      toast.error(`Failed to start download: ${error}`);
     }
   }, []);
 
@@ -238,7 +238,7 @@ export default function App() {
         }
       } catch (error) {
         console.error("Failed to delete model:", error);
-        alert(`Failed to delete model: ${error}`);
+        toast.error(`Failed to delete model: ${error}`);
       }
     },
     [settings]
@@ -260,7 +260,7 @@ export default function App() {
       });
     } catch (error) {
       console.error("Failed to cancel download:", error);
-      alert(`Failed to cancel download: ${error}`);
+      toast.error(`Failed to cancel download: ${error}`);
     }
   }, []);
 

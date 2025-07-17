@@ -572,19 +572,29 @@ pub fn run() {
                     tauri::async_runtime::spawn(async move {
                         log::info!("Attempting to preload model on startup: {}", current_model);
 
+                        // Get model path from WhisperManager
                         let whisper_state = app_handle.state::<AsyncMutex<whisper::manager::WhisperManager>>();
-                        match preload_model(app_handle.clone(), current_model.clone(), whisper_state).await {
-                            Ok(_) => {
-                                log::info!("Successfully preloaded model: {}", current_model);
-                                // Model is already set in store, no need to update
+                        let model_path = {
+                            let manager = whisper_state.lock().await;
+                            manager.get_model_path(&current_model)
+                        };
+                        
+                        if let Some(model_path) = model_path {
+                            // Load model into cache
+                            let cache_state = app_handle.state::<AsyncMutex<TranscriberCache>>();
+                            let mut cache = cache_state.lock().await;
+                            
+                            match cache.get_or_create(&model_path) {
+                                Ok(_) => {
+                                    log::info!("Successfully preloaded model '{}' into cache", current_model);
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to preload model '{}': {}. App will continue without preloading.",
+                                             current_model, e);
+                                }
                             }
-                            Err(e) => {
-                                log::warn!("Failed to preload model '{}': {}. App will continue without preloading.",
-                                         current_model, e);
-
-                                // Don't fail - just continue without preloading
-                                // The model will be loaded on first use
-                            }
+                        } else {
+                            log::warn!("Model '{}' not found in models directory, skipping preload", current_model);
                         }
                     });
                 } else {

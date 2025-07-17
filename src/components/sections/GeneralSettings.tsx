@@ -216,6 +216,21 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
         />
       </div>
 
+      {/* Compact Recording Status Setting */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="space-y-1">
+          <Label htmlFor="compact-recording" className="text-sm font-medium">Compact recording status</Label>
+          <p className="text-xs text-muted-foreground">
+            Hide text labels in recording indicator
+          </p>
+        </div>
+        <Switch
+          id="compact-recording"
+          checked={settings.compact_recording_status !== false}
+          onCheckedChange={(checked) => onSettingsChange({ ...settings, compact_recording_status: checked })}
+        />
+      </div>
+
       {/* Tips Section */}
       <Alert className="mt-8">
         <Info className="h-4 w-4" />

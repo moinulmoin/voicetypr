@@ -2,16 +2,27 @@ import { AudioWaveAnimation } from "@/components/AudioWaveAnimation";
 import IOSSpinner from "@/components/ios-spinner";
 import { Button } from "@/components/ui/button";
 import { useRecording } from "@/hooks/useRecording";
+import { AppSettings } from "@/types";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
+import { AlertCircle } from "lucide-react";
 
 export function RecordingPill() {
   const recording = useRecording();
   const [audioLevel, setAudioLevel] = useState(0);
   const [feedbackMessage, setFeedbackMessage] = useState<string>("");
+  const [isCompact, setIsCompact] = useState(true);
 
   const isRecording = recording.state === "recording";
   const isTranscribing = recording.state === "transcribing";
+
+  // Fetch settings on mount
+  useEffect(() => {
+    invoke<AppSettings>("get_settings").then((settings) => {
+      setIsCompact(settings.compact_recording_status !== false);
+    }).catch(console.error);
+  }, []);
 
   // Listen for audio level events
   useEffect(() => {
@@ -73,16 +84,22 @@ export function RecordingPill() {
   //   }
   // };
 
+  // Only show pill when recording or transcribing
+  if (!isRecording && !isTranscribing) {
+    return null;
+  }
+
   return (
     <div className="fixed inset-0 flex items-center justify-center pointer-events-none">
       <div className="relative">
-        {/* Feedback message tooltip - positioned with more padding to ensure visibility */}
+        {/* Feedback message - white background with alert icon */}
         {feedbackMessage && (
-          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 px-4 py-2.5 bg-gray-900 text-white text-sm rounded-lg shadow-lg whitespace-nowrap transition-opacity duration-300 ease-in-out z-50 min-w-[200px] text-center">
-            {feedbackMessage}
-            {/* Small arrow pointing down */}
-            <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-px">
-              <div className="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-gray-900" />
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 pointer-events-auto animate-in fade-in slide-in-from-bottom-2 duration-200">
+            <div className="bg-white border border-gray-200 rounded-lg shadow-md overflow-hidden">
+              <div className="flex items-center gap-3 px-4 py-3">
+                <AlertCircle className="size-4 text-amber-500 flex-shrink-0" />
+                <span className="text-sm text-gray-700 font-medium">{feedbackMessage}</span>
+              </div>
             </div>
           </div>
         )}
@@ -90,18 +107,22 @@ export function RecordingPill() {
         <Button
           // onClick={handleClick}
           variant="default"
-          className="rounded-xl !p-4 flex items-center justify-center gap-2"
+          className={`${
+            isCompact 
+              ? "rounded-full !p-0 w-14 h-14 shadow-none" 
+              : "rounded-xl !p-4 gap-2"
+          } flex items-center justify-center`}
           // aria-readonly={isTranscribing}
         >
           {isTranscribing ? (
             <>
-              <IOSSpinner size={16} className="-mt-[3px]" />
-              Transcribing
+              <IOSSpinner size={isCompact ? 20 : 16} />
+              {!isCompact && "Transcribing"}
             </>
           ) : (
             <>
-              <AudioWaveAnimation audioLevel={audioLevel} className="" />
-              Listening
+              <AudioWaveAnimation audioLevel={audioLevel} className={isCompact ? "scale-110" : ""} />
+              {!isCompact && "Listening"}
             </>
           )}
         </Button>

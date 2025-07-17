@@ -14,6 +14,8 @@ pub struct Settings {
     pub transcription_cleanup_days: Option<u32>,
     pub pill_position: Option<(f64, f64)>,
     pub launch_at_startup: bool,
+    pub onboarding_completed: bool,
+    pub compact_recording_status: bool,
 }
 
 impl Default for Settings {
@@ -26,6 +28,8 @@ impl Default for Settings {
             transcription_cleanup_days: None, // None means keep forever
             pill_position: None, // No saved position initially
             launch_at_startup: false, // Default to not launching at startup
+            onboarding_completed: false, // Default to not completed
+            compact_recording_status: true, // Default to compact mode
         }
     }
 }
@@ -73,6 +77,14 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("launch_at_startup")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().launch_at_startup),
+        onboarding_completed: store
+            .get("onboarding_completed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().onboarding_completed),
+        compact_recording_status: store
+            .get("compact_recording_status")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().compact_recording_status),
     };
 
     // Pill position is already loaded from store, no need for duplicate state
@@ -96,6 +108,8 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set("theme", json!(settings.theme));
     store.set("transcription_cleanup_days", json!(settings.transcription_cleanup_days));
     store.set("launch_at_startup", json!(settings.launch_at_startup));
+    store.set("onboarding_completed", json!(settings.onboarding_completed));
+    store.set("compact_recording_status", json!(settings.compact_recording_status));
 
     // Save pill position if provided
     if let Some((x, y)) = settings.pill_position {

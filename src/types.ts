@@ -15,6 +15,7 @@ export interface AppSettings {
   transcription_cleanup_days?: number | null;
   launch_at_startup?: boolean;
   onboarding_completed?: boolean;
+  compact_recording_status?: boolean;
 }
 
 export interface TranscriptionHistory {

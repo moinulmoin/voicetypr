@@ -9,7 +9,6 @@ import type { AppSettings, ModelInfo } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
-import { AnimatePresence, motion } from "framer-motion";
 import {
   Accessibility,
   CheckCircle,
@@ -21,6 +20,7 @@ import {
   Mic
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
 interface OnboardingDesktopProps {
   onComplete: () => void;
@@ -187,40 +187,47 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
       await invoke("save_settings", {
         settings: {
           ...settings,
-          recording_hotkey: hotkey,
+          hotkey: hotkey,
           current_model: selectedModel,
           onboarding_completed: true
         }
       });
     } catch (error) {
       console.error("Failed to save settings:", error);
+      toast.error("Failed to save settings. Please try again.");
+      throw error; // Re-throw to prevent navigation
     }
   };
 
   const handleNext = async () => {
-    if (currentStep === "setup") {
-      await saveSettings();
-    }
-
-    const nextIndex = currentIndex + 1;
-    if (nextIndex < steps.length) {
-      setCurrentStep(steps[nextIndex].id);
-
-      if (steps[nextIndex].id === "models") {
-        loadModels();
+    try {
+      if (currentStep === "setup") {
+        await saveSettings();
       }
+
+      const nextIndex = currentIndex + 1;
+      if (nextIndex < steps.length) {
+        const nextStep = steps[nextIndex].id;
+        setCurrentStep(nextStep);
+
+        if (nextStep === "models") {
+          loadModels();
+        }
+      }
+    } catch (error) {
+      // Error already handled in saveSettings
     }
   };
 
   const handleBack = () => {
     const prevIndex = currentIndex - 1;
     if (prevIndex >= 0) {
-      setCurrentStep(steps[prevIndex].id);
+      const prevStep = steps[prevIndex].id;
+      setCurrentStep(prevStep);
     }
   };
 
   const handleComplete = () => {
-    localStorage.removeItem("onboarding-step");
     onComplete();
   };
 
@@ -243,18 +250,14 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
         <div className="flex items-center justify-center gap-2 py-3 bg-muted/30">
           {steps.map((step, index) => (
             <div key={step.id} className="flex items-center">
-              <motion.div
-                animate={{
-                  scale: index === currentIndex ? 1.2 : 1,
-                  opacity: index <= currentIndex ? 1 : 0.5
-                }}
+              <div
                 className={cn(
-                  "w-2 h-2 rounded-full transition-colors",
+                  "w-2 h-2 rounded-full transition-all duration-300",
                   index < currentIndex
                     ? "bg-primary"
                     : index === currentIndex
-                    ? "bg-primary"
-                    : "bg-muted-foreground"
+                    ? "bg-primary scale-125"
+                    : "bg-muted-foreground opacity-50"
                 )}
               />
               {index < steps.length - 1 && (
@@ -272,16 +275,10 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
 
       {/* Content - constrained height */}
       <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
-        <AnimatePresence mode="wait">
+        <div className="w-full transition-opacity duration-300">
           {/* Welcome - Compact */}
           {currentStep === "welcome" && (
-            <motion.div
-              key="welcome"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="w-full max-w-2xl"
-            >
+            <div className="w-full max-w-2xl mx-auto animate-fade-in">
               <div className="text-center space-y-6">
                 <div className="space-y-2">
                   <h1 className="text-4xl font-bold">Welcome to VoiceTypr</h1>
@@ -295,18 +292,12 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
                   <ChevronRight className="ml-2 h-4 w-4" />
                 </Button>
               </div>
-            </motion.div>
+            </div>
           )}
 
           {/* Permissions - Side by side */}
           {currentStep === "permissions" && (
-            <motion.div
-              key="permissions"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="w-full max-w-3xl"
-            >
+            <div className="w-full max-w-3xl mx-auto animate-fade-in">
               <div className="space-y-6">
                 <div className="text-center space-y-1">
                   <h2 className="text-2xl font-bold">System Permissions</h2>
@@ -394,18 +385,12 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
                   </Button>
                 </div>
               </div>
-            </motion.div>
+            </div>
           )}
 
           {/* Models - List view */}
           {currentStep === "models" && (
-            <motion.div
-              key="models"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="w-full max-w-3xl mx-auto"
-            >
+            <div className="w-full max-w-3xl mx-auto animate-fade-in">
               <div className="space-y-6">
                 <div className="text-center space-y-1">
                   <h2 className="text-2xl font-bold">Choose AI Model</h2>
@@ -451,18 +436,12 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
                   </Button>
                 </div>
               </div>
-            </motion.div>
+            </div>
           )}
 
           {/* Setup - Compact */}
           {currentStep === "setup" && (
-            <motion.div
-              key="setup"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="w-full max-w-2xl"
-            >
+            <div className="w-full max-w-2xl mx-auto animate-fade-in">
               <div className="space-y-6">
                 <div className="text-center space-y-1">
                   <h2 className="text-2xl font-bold">Quick Setup</h2>
@@ -499,39 +478,31 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
                   </Button>
                 </div>
               </div>
-            </motion.div>
+            </div>
           )}
 
           {/* Success - Simple */}
           {currentStep === "success" && (
-            <motion.div
-              key="success"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="text-center space-y-6 max-w-md"
-            >
-              <motion.div
-                animate={{ scale: [1, 1.1, 1] }}
-                transition={{ duration: 0.5 }}
-                className="inline-flex p-4 bg-green-500/10 rounded-2xl"
-              >
-                <CheckCircle className="h-12 w-12 text-green-500" />
-              </motion.div>
+            <div className="w-full max-w-md mx-auto animate-fade-in">
+              <div className="text-center space-y-6">
+                <div className="inline-flex p-4 bg-green-500/10 rounded-2xl animate-pulse-once">
+                  <CheckCircle className="h-12 w-12 text-green-500" />
+                </div>
 
-              <div className="space-y-2">
-                <h1 className="text-3xl font-bold">You're all set!</h1>
-                <p className="text-muted-foreground mt-4">
-                  Press {formatHotkey(hotkey)} to start recording
-                </p>
+                <div className="space-y-2">
+                  <h1 className="text-3xl font-bold">You're all set!</h1>
+                  <p className="text-muted-foreground">
+                    Press {formatHotkey(hotkey)} to start recording
+                  </p>
+                </div>
+
+                <Button onClick={handleComplete} size="lg" className="min-w-[200px]">
+                  Go to dashboard
+                </Button>
               </div>
-
-              <Button onClick={handleComplete} size="lg" className="min-w-[200px]">
-                Go to dashboard
-              </Button>
-            </motion.div>
+            </div>
           )}
-        </AnimatePresence>
+        </div>
       </div>
     </div>
   );

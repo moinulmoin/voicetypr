@@ -160,13 +160,18 @@ pub async fn start_recording(
             std::thread::spawn(move || {
                 let mut last_emit = std::time::Instant::now();
                 let emit_interval = std::time::Duration::from_millis(100); // Throttle to 10fps
+                let mut last_emitted_level = 0.0f32;
+                const LEVEL_CHANGE_THRESHOLD: f32 = 0.05; // Only emit if change > 5%
 
                 while let Ok(level) = audio_level_rx.recv() {
-                    // Throttle events to avoid overwhelming the UI
-                    if last_emit.elapsed() >= emit_interval {
+                    // Check both time throttling and significant change
+                    let level_changed = (level - last_emitted_level).abs() > LEVEL_CHANGE_THRESHOLD;
+                    
+                    if last_emit.elapsed() >= emit_interval && level_changed {
                         // Only emit to pill window - main window doesn't need audio levels
                         let _ = emit_to_window(&app_for_levels, "pill", "audio-level", level);
                         last_emit = std::time::Instant::now();
+                        last_emitted_level = level;
                     }
                 }
             });
@@ -267,7 +272,9 @@ pub async fn stop_recording(
         // Check if actually recording first
         if !recorder.is_recording() {
             log::warn!("stop_recording called but not currently recording");
-            // Don't error - just return empty result
+            // Don't error - just return empty result, but make sure to reset state
+            drop(recorder); // Drop the lock before updating state
+            update_recording_state(&app, RecordingState::Idle, None);
             return Ok("".to_string());
         }
 
@@ -352,6 +359,8 @@ pub async fn stop_recording(
         },
         None => {
             log::warn!("No audio file found - no recording was made");
+            // Make sure to transition back to Idle state
+            update_recording_state(&app, RecordingState::Idle, None);
             return Ok("".to_string());
         }
     };
@@ -388,6 +397,14 @@ pub async fn stop_recording(
                 "message": "Please download at least one speech recognition model from Settings to use VoiceTypr.",
                 "action": "open-settings"
             }));
+        
+        // Hide pill window since we can't proceed
+        if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+            log::error!("Failed to hide pill window: {}", e);
+        }
+        
+        // Transition back to Idle state
+        update_recording_state(&app, RecordingState::Idle, None);
         
         return Err("No speech recognition models installed. Please download a model from Settings.".to_string());
     }
@@ -510,7 +527,9 @@ pub async fn stop_recording(
                 break;
             }
             
-            result = transcriber.transcribe(&audio_path_clone, language.as_deref());
+            result = transcriber.transcribe_with_cancellation(&audio_path_clone, language.as_deref(), || {
+                app_state.is_cancellation_requested()
+            });
             
             match &result {
                 Ok(_) => {
