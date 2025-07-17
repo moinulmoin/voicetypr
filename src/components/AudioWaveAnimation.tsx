@@ -31,8 +31,8 @@ export function AudioWaveAnimation({ audioLevel, className = "" }: AudioWaveAnim
       
       // Calculate heights with some organic variation
       const heights = barLevels.current.map((level, i) => {
-        // Apply exponential curve for more dynamic range
-        const exponentialLevel = Math.pow(Math.max(0, level), 1.8);
+        // Apply gentler exponential curve for better responsiveness to speech
+        const exponentialLevel = Math.pow(Math.max(0, level), 1.2);
         const baseHeight = minHeights[i] + exponentialLevel * (maxHeights[i] - minHeights[i]);
         
         // Add subtle random variation

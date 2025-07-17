@@ -14,6 +14,7 @@ export interface AppSettings {
   theme: string;
   transcription_cleanup_days?: number | null;
   launch_at_startup?: boolean;
+  onboarding_completed?: boolean;
 }
 
 export interface TranscriptionHistory {

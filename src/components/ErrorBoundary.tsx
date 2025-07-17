@@ -1,6 +1,6 @@
+import { AlertCircle, RefreshCw } from 'lucide-react';
 import React from 'react';
 import { ErrorBoundary as ReactErrorBoundary } from 'react-error-boundary';
-import { AlertCircle, RefreshCw } from 'lucide-react';
 import { Button } from './ui/button';
 
 interface ErrorFallbackProps {
@@ -18,9 +18,9 @@ function ErrorFallback({ error, resetErrorBoundary }: ErrorFallbackProps) {
           {error.message || 'An unexpected error occurred'}
         </p>
       </div>
-      <Button 
-        onClick={resetErrorBoundary} 
-        variant="outline" 
+      <Button
+        onClick={resetErrorBoundary}
+        variant="outline"
         size="sm"
         className="gap-2"
       >
@@ -39,8 +39,8 @@ interface AppErrorBoundaryProps {
   isolate?: boolean;
 }
 
-export function AppErrorBoundary({ 
-  children, 
+export function AppErrorBoundary({
+  children,
   fallback = ErrorFallback,
   onError,
   onReset,
@@ -85,10 +85,10 @@ export function SettingsErrorBoundary({ children }: { children: React.ReactNode 
           <p className="text-sm text-destructive">
             Failed to load settings: {error.message}
           </p>
-          <Button 
-            onClick={resetErrorBoundary} 
-            variant="ghost" 
-            size="sm" 
+          <Button
+            onClick={resetErrorBoundary}
+            variant="ghost"
+            size="sm"
             className="mt-2"
           >
             Retry

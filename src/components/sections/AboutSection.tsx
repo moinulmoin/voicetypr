@@ -1,13 +1,42 @@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { NotebookText, Mail, RefreshCw, CheckCircle, Twitter } from "lucide-react";
+import { NotebookText, Mail, RefreshCw, CheckCircle, Twitter, RotateCcw } from "lucide-react";
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { toast } from 'sonner';
 import { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import type { AppSettings } from '@/types';
 
 export function AboutSection() {
   const [checking, setChecking] = useState(false);
+  const [resetting, setResetting] = useState(false);
+
+  const handleResetOnboarding = async () => {
+    setResetting(true);
+    try {
+      // Get current settings and set onboarding_completed to false
+      const settings = await invoke<AppSettings>('get_settings');
+      await invoke('save_settings', {
+        settings: {
+          ...settings,
+          onboarding_completed: false,
+        },
+      });
+      
+      toast.success("Onboarding reset! Please restart the app.");
+      
+      // Reload the window to trigger onboarding
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
+    } catch (error) {
+      console.error('Failed to reset onboarding:', error);
+      toast.error("Failed to reset onboarding");
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const handleCheckForUpdates = async () => {
     setChecking(true);
@@ -80,8 +109,8 @@ export function AboutSection() {
             </button>
         </div>
 
-        {/* Check for Updates Button */}
-        <div className="mt-12 flex justify-center">
+        {/* Action Buttons */}
+        <div className="mt-12 flex justify-center gap-3">
           <Button 
             size="sm" 
             variant="outline" 
@@ -91,6 +120,17 @@ export function AboutSection() {
           >
             <RefreshCw className={`w-3 h-3 mr-1 ${checking ? 'animate-spin' : ''}`} />
             {checking ? "Checking..." : "Check for Updates"}
+          </Button>
+          
+          <Button 
+            size="sm" 
+            variant="outline" 
+            onClick={handleResetOnboarding}
+            className="h-8"
+            disabled={resetting}
+          >
+            <RotateCcw className={`w-3 h-3 mr-1 ${resetting ? 'animate-spin' : ''}`} />
+            {resetting ? "Resetting..." : "Reset Onboarding"}
           </Button>
         </div>
       </div>

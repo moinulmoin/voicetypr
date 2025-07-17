@@ -30,14 +30,11 @@ export const ModelCard = React.memo(function ModelCard({
 }: ModelCardProps) {
   const formatModelName = (name: string) => {
     const nameMap: Record<string, string> = {
-      'tiny': 'Tiny',
-      'base': 'Base',
-      'small': 'Small',
-      'medium': 'Medium',
+      'base.en': 'Base (English)',
       'large-v3': 'Large v3',
-      'large-v3-q5_0': 'Large v3 Q5',
+      'large-v3-q5_0': 'Large v3 (Compressed)',
       'large-v3-turbo': 'Large v3 Turbo',
-      'large-v3-turbo-q5_0': 'Large v3 Turbo Q5'
+      'large-v3-turbo-q5_0': 'Large v3 Turbo (Compressed)'
     };
     return nameMap[name] || name;
   };

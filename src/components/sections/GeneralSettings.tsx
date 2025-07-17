@@ -66,7 +66,12 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
 
       {/* Hotkey Setting */}
       <div className="flex items-center justify-between gap-4">
-        <Label htmlFor="hotkey" className="text-sm font-medium">Hotkey</Label>
+        <div className="space-y-1">
+          <Label htmlFor="hotkey" className="text-sm font-medium">Hotkey</Label>
+          <p className="text-xs text-muted-foreground">
+            Press anywhere
+          </p>
+        </div>
         <HotkeyInput
           value={settings.hotkey || ""}
           onChange={(hotkey) => onSettingsChange({ ...settings, hotkey })}
@@ -76,7 +81,12 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
 
       {/* Output Setting */}
       <div className="flex items-center justify-between gap-4">
-        <Label htmlFor="language" className="text-sm font-medium">Your language</Label>
+        <div className="space-y-1">
+          <Label htmlFor="language" className="text-sm font-medium">Language</Label>
+          <p className="text-xs text-muted-foreground">
+            In which you speak
+          </p>
+        </div>
         <Select
           value={settings.language || "en"}
           onValueChange={(value) => onSettingsChange({ ...settings, language: value })}
@@ -85,23 +95,119 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
             <SelectValue placeholder="Select language" />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="auto">Auto Detect</SelectItem>
             <SelectItem value="en">English</SelectItem>
-            <SelectItem value="es">Spanish</SelectItem>
-            <SelectItem value="fr">French</SelectItem>
-            <SelectItem value="de">German</SelectItem>
-            <SelectItem value="it">Italian</SelectItem>
-            <SelectItem value="pt">Portuguese</SelectItem>
-            <SelectItem value="ru">Russian</SelectItem>
-            <SelectItem value="ja">Japanese</SelectItem>
-            <SelectItem value="ko">Korean</SelectItem>
             <SelectItem value="zh">Chinese</SelectItem>
+            <SelectItem value="de">German</SelectItem>
+            <SelectItem value="es">Spanish</SelectItem>
+            <SelectItem value="ru">Russian</SelectItem>
+            <SelectItem value="ko">Korean</SelectItem>
+            <SelectItem value="fr">French</SelectItem>
+            <SelectItem value="ja">Japanese</SelectItem>
+            <SelectItem value="pt">Portuguese</SelectItem>
+            <SelectItem value="tr">Turkish</SelectItem>
+            <SelectItem value="pl">Polish</SelectItem>
+            <SelectItem value="ca">Catalan</SelectItem>
+            <SelectItem value="nl">Dutch</SelectItem>
+            <SelectItem value="ar">Arabic</SelectItem>
+            <SelectItem value="sv">Swedish</SelectItem>
+            <SelectItem value="it">Italian</SelectItem>
+            <SelectItem value="id">Indonesian</SelectItem>
+            <SelectItem value="hi">Hindi</SelectItem>
+            <SelectItem value="fi">Finnish</SelectItem>
+            <SelectItem value="vi">Vietnamese</SelectItem>
+            <SelectItem value="he">Hebrew</SelectItem>
+            <SelectItem value="uk">Ukrainian</SelectItem>
+            <SelectItem value="el">Greek</SelectItem>
+            <SelectItem value="ms">Malay</SelectItem>
+            <SelectItem value="cs">Czech</SelectItem>
+            <SelectItem value="ro">Romanian</SelectItem>
+            <SelectItem value="da">Danish</SelectItem>
+            <SelectItem value="hu">Hungarian</SelectItem>
+            <SelectItem value="ta">Tamil</SelectItem>
+            <SelectItem value="no">Norwegian</SelectItem>
+            <SelectItem value="th">Thai</SelectItem>
+            <SelectItem value="ur">Urdu</SelectItem>
+            <SelectItem value="hr">Croatian</SelectItem>
+            <SelectItem value="bg">Bulgarian</SelectItem>
+            <SelectItem value="lt">Lithuanian</SelectItem>
+            <SelectItem value="la">Latin</SelectItem>
+            <SelectItem value="mi">Maori</SelectItem>
+            <SelectItem value="ml">Malayalam</SelectItem>
+            <SelectItem value="cy">Welsh</SelectItem>
+            <SelectItem value="sk">Slovak</SelectItem>
+            <SelectItem value="te">Telugu</SelectItem>
+            <SelectItem value="fa">Persian</SelectItem>
+            <SelectItem value="lv">Latvian</SelectItem>
+            <SelectItem value="bn">Bengali</SelectItem>
+            <SelectItem value="sr">Serbian</SelectItem>
+            <SelectItem value="az">Azerbaijani</SelectItem>
+            <SelectItem value="sl">Slovenian</SelectItem>
+            <SelectItem value="kn">Kannada</SelectItem>
+            <SelectItem value="et">Estonian</SelectItem>
+            <SelectItem value="mk">Macedonian</SelectItem>
+            <SelectItem value="br">Breton</SelectItem>
+            <SelectItem value="eu">Basque</SelectItem>
+            <SelectItem value="is">Icelandic</SelectItem>
+            <SelectItem value="hy">Armenian</SelectItem>
+            <SelectItem value="ne">Nepali</SelectItem>
+            <SelectItem value="mn">Mongolian</SelectItem>
+            <SelectItem value="bs">Bosnian</SelectItem>
+            <SelectItem value="kk">Kazakh</SelectItem>
+            <SelectItem value="sq">Albanian</SelectItem>
+            <SelectItem value="sw">Swahili</SelectItem>
+            <SelectItem value="gl">Galician</SelectItem>
+            <SelectItem value="mr">Marathi</SelectItem>
+            <SelectItem value="pa">Punjabi</SelectItem>
+            <SelectItem value="si">Sinhala</SelectItem>
+            <SelectItem value="km">Khmer</SelectItem>
+            <SelectItem value="sn">Shona</SelectItem>
+            <SelectItem value="yo">Yoruba</SelectItem>
+            <SelectItem value="so">Somali</SelectItem>
+            <SelectItem value="af">Afrikaans</SelectItem>
+            <SelectItem value="oc">Occitan</SelectItem>
+            <SelectItem value="ka">Georgian</SelectItem>
+            <SelectItem value="be">Belarusian</SelectItem>
+            <SelectItem value="tg">Tajik</SelectItem>
+            <SelectItem value="sd">Sindhi</SelectItem>
+            <SelectItem value="gu">Gujarati</SelectItem>
+            <SelectItem value="am">Amharic</SelectItem>
+            <SelectItem value="yi">Yiddish</SelectItem>
+            <SelectItem value="lo">Lao</SelectItem>
+            <SelectItem value="uz">Uzbek</SelectItem>
+            <SelectItem value="fo">Faroese</SelectItem>
+            <SelectItem value="ht">Haitian Creole</SelectItem>
+            <SelectItem value="ps">Pashto</SelectItem>
+            <SelectItem value="tk">Turkmen</SelectItem>
+            <SelectItem value="nn">Nynorsk</SelectItem>
+            <SelectItem value="mt">Maltese</SelectItem>
+            <SelectItem value="sa">Sanskrit</SelectItem>
+            <SelectItem value="lb">Luxembourgish</SelectItem>
+            <SelectItem value="my">Myanmar</SelectItem>
+            <SelectItem value="bo">Tibetan</SelectItem>
+            <SelectItem value="tl">Tagalog</SelectItem>
+            <SelectItem value="mg">Malagasy</SelectItem>
+            <SelectItem value="as">Assamese</SelectItem>
+            <SelectItem value="tt">Tatar</SelectItem>
+            <SelectItem value="haw">Hawaiian</SelectItem>
+            <SelectItem value="ln">Lingala</SelectItem>
+            <SelectItem value="ha">Hausa</SelectItem>
+            <SelectItem value="ba">Bashkir</SelectItem>
+            <SelectItem value="jw">Javanese</SelectItem>
+            <SelectItem value="su">Sundanese</SelectItem>
+            <SelectItem value="yue">Cantonese</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       {/* Launch at Startup Setting */}
       <div className="flex items-center justify-between gap-4">
-        <Label htmlFor="autostart" className="text-sm font-medium">Launch at startup</Label>
+        <div className="space-y-1">
+          <Label htmlFor="autostart" className="text-sm font-medium">Launch at startup</Label>
+          <p className="text-xs text-muted-foreground">
+            Start with your computer
+          </p>
+        </div>
         <Switch
           id="autostart"
           checked={autostartEnabled}
@@ -113,12 +219,8 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
       {/* Tips Section */}
       <Alert className="mt-8">
         <Info className="h-4 w-4" />
-        <AlertDescription>
-          <strong>Tips:</strong>
-          <ul className="mt-1 space-y-1 text-sm">
-            <li>• Use the hotkey to start recording from anywhere</li>
-            <li>• While recording, press ESC twice to cancel</li>
-          </ul>
+        <AlertDescription className=" flex items-center">
+          While recording, press <kbd className=" inline bg-accent px-1 ">esc</kbd> twice to cancel
         </AlertDescription>
       </Alert>
     </div>

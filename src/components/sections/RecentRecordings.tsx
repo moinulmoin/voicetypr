@@ -5,6 +5,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
+import { formatHotkey } from "@/lib/hotkey-utils";
 
 interface RecentRecordingsProps {
   history: TranscriptionHistory[];
@@ -81,7 +82,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
             <Mic className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
             <p className="text-sm text-muted-foreground">No recordings yet</p>
             <p className="text-xs text-muted-foreground/70 mt-2">
-              Press {hotkey} to start recording
+              Press {formatHotkey(hotkey)} to start recording
             </p>
           </div>
         </div>

@@ -94,7 +94,7 @@ impl AudioRecorder {
 
         // Default silence detection config
         let silence_config = SilenceConfig {
-            threshold: 0.01,                        // 1% of max amplitude
+            threshold: 0.005,                       // 0.5% of max amplitude (matching whisper.cpp)
             duration: Duration::from_secs(60),      // 60 seconds of silence
             check_interval: Duration::from_secs(1), // Check every second
         };
@@ -154,8 +154,8 @@ impl AudioRecorder {
                                 
                                 // Apply logarithmic scaling for better perception
                                 let db = 20.0 * rms.log10();
-                                // Map -60dB to 0dB range to 0.0-1.0
-                                let normalized_db = ((db + 60.0) / 60.0).max(0.0).min(1.0);
+                                // Map -40dB to -10dB range to 0.0-1.0 (better for speech)
+                                let normalized_db = ((db + 40.0) / 30.0).max(0.0).min(1.0);
                                 let _ = audio_level_tx_clone.send(normalized_db);
 
                                 // Update last sound time if above threshold
@@ -219,8 +219,8 @@ impl AudioRecorder {
                                 
                                 // Apply logarithmic scaling for better perception
                                 let db = 20.0 * rms.log10();
-                                // Map -60dB to 0dB range to 0.0-1.0
-                                let normalized_db = ((db + 60.0) / 60.0).max(0.0).min(1.0);
+                                // Map -40dB to -10dB range to 0.0-1.0 (better for speech)
+                                let normalized_db = ((db + 40.0) / 30.0).max(0.0).min(1.0);
                                 let _ = audio_level_tx_clone.send(normalized_db);
 
                                 // Update last sound time if above threshold

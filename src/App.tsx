@@ -2,8 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Toaster } from "sonner";
-import { AppErrorBoundary, ModelManagementErrorBoundary } from "./components/ErrorBoundary";
-import { ModelCard } from "./components/ModelCard";
+import { AppErrorBoundary } from "./components/ErrorBoundary";
 import { Sidebar } from "./components/Sidebar";
 import { AboutSection } from "./components/sections/AboutSection";
 import { GeneralSettings } from "./components/sections/GeneralSettings";
@@ -13,6 +12,7 @@ import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { useAccessibilityPermission } from "./hooks/useAccessibilityPermission";
 import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { AppSettings, ModelInfo, TranscriptionHistory } from "./types";
+import { OnboardingDesktop } from "./components/onboarding/OnboardingDesktop";
 
 // Helper function to calculate balanced performance score
 function calculateBalancedScore(model: ModelInfo): number {
@@ -83,10 +83,8 @@ export default function App() {
         console.log("Model status from backend:", modelStatus);
         setModels(modelStatus);
 
-        // Check if any model is downloaded
-        const hasModel = Object.values(modelStatus).some((m) => m.downloaded);
-        console.log("Has downloaded model:", hasModel);
-        if (!hasModel) {
+        // Check if onboarding is completed
+        if (!appSettings.onboarding_completed) {
           setShowOnboarding(true);
         }
 
@@ -136,11 +134,21 @@ export default function App() {
           }
         );
 
-        registerEvent<string>("model-downloaded", (modelName) => {
-          setModels((prev) => ({
-            ...prev,
-            [modelName]: { ...prev[modelName], downloaded: true }
-          }));
+        registerEvent<string>("model-downloaded", async (modelName) => {
+          // Refresh model status from backend to ensure consistency
+          try {
+            const modelStatus = await invoke<Record<string, ModelInfo>>("get_model_status");
+            setModels(modelStatus);
+          } catch (error) {
+            console.error("Failed to refresh model status:", error);
+            // Fallback to updating local state
+            setModels((prev) => ({
+              ...prev,
+              [modelName]: { ...prev[modelName], downloaded: true }
+            }));
+          }
+
+          // Clear download progress
           setDownloadProgress((prev) => {
             const newProgress = { ...prev };
             delete newProgress[modelName];
@@ -287,40 +295,13 @@ export default function App() {
   if (showOnboarding) {
     return (
       <AppErrorBoundary>
-        <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-950">
-          <div className="flex-1 flex flex-col items-center justify-center p-8">
-            <h1 className="text-4xl font-bold mb-2">Welcome to VoiceType</h1>
-            <p className="text-lg text-muted-foreground mb-8">Choose a model to get started</p>
-
-            <ModelManagementErrorBoundary>
-              <div className="space-y-4 w-full max-w-md">
-                {sortedModels.map(([name, model]) => (
-                  <ModelCard
-                    key={name}
-                    name={name}
-                    model={model}
-                    downloadProgress={downloadProgress[name]}
-                    onDownload={downloadModel}
-                    onDelete={deleteModel}
-                    onCancelDownload={cancelDownload}
-                    onSelect={async (modelName) => {
-                      // Create default settings if none exist
-                      const newSettings = settings || {
-                        hotkey: "CommandOrControl+Shift+Space",
-                        language: "auto",
-                        theme: "system"
-                      };
-
-                      // Save with selected model
-                      await saveSettings({ ...newSettings, current_model: modelName });
-                      setShowOnboarding(false);
-                    }}
-                  />
-                ))}
-              </div>
-            </ModelManagementErrorBoundary>
-          </div>
-        </div>
+        <OnboardingDesktop 
+          onComplete={() => {
+            setShowOnboarding(false);
+            // Reload settings after onboarding
+            invoke<AppSettings>("get_settings").then(setSettings);
+          }} 
+        />
       </AppErrorBoundary>
     );
   }

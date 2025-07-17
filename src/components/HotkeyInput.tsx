@@ -1,7 +1,7 @@
-import { Check, Edit2, Keyboard, X } from "lucide-react";
+import { Check, Edit2, X } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
+import { formatHotkey } from "@/lib/hotkey-utils";
 
 interface HotkeyInputProps {
   value: string;
@@ -16,7 +16,6 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">("idle");
   const [validationError, setValidationError] = useState<string>("");
   const [currentKeysDisplay, setCurrentKeysDisplay] = useState<string>("");
-  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (mode !== "edit") return;
@@ -182,10 +181,6 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
     setValidationError("");
     setCurrentKeysDisplay("");
     setKeys(new Set());
-
-    setTimeout(() => {
-      inputRef.current?.focus();
-    }, 100);
   }, []);
 
   // Reset save status after showing success
@@ -201,14 +196,12 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
     return (
       <div className="space-y-2">
         <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Input
-              value={formatShortcutDisplay(value)}
-              readOnly
-              className="pr-10"
-              placeholder={placeholder || "No hotkey set"}
-            />
-            <Keyboard className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <div className="flex-1 flex items-center">
+            {value ? (
+              formatHotkey(value)
+            ) : (
+              <span className="text-muted-foreground">{placeholder || "No hotkey set"}</span>
+            )}
           </div>
           <Button size="icon" onClick={handleEdit} title="Change hotkey">
             <Edit2 />
@@ -227,17 +220,14 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Input
-            ref={inputRef}
-            value={
-              currentKeysDisplay || (pendingHotkey ? formatShortcutDisplay(pendingHotkey) : "")
-            }
-            readOnly
-            className="pr-10"
-            placeholder="Press keys to set hotkey"
-          />
-          <Keyboard className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+        <div className="flex-1 flex items-center">
+          {pendingHotkey ? (
+            formatHotkey(pendingHotkey)
+          ) : currentKeysDisplay ? (
+            <span className="text-foreground">{currentKeysDisplay}</span>
+          ) : (
+            <span className="text-muted-foreground">Press keys to set hotkey</span>
+          )}
         </div>
         <Button
           size="icon"

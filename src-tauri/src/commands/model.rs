@@ -15,10 +15,7 @@ pub async fn download_model(
 ) -> Result<(), String> {
     // Validate model name
     let valid_models = [
-        "tiny",
-        "base",
-        "small",
-        "medium",
+        "base.en",
         "large-v3",
         "large-v3-q5_0",
         "large-v3-turbo",

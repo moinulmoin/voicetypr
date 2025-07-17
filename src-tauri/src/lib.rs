@@ -68,11 +68,6 @@ pub struct AppState {
     pub window_manager: Arc<Mutex<Option<WindowManager>>>,
 }
 
-// Tray menu items managed state
-pub struct TrayMenuItems {
-    pub start_recording: Arc<Mutex<tauri::menu::MenuItem<tauri::Wry>>>,
-    pub stop_recording: Arc<Mutex<tauri::menu::MenuItem<tauri::Wry>>>,
-}
 
 impl AppState {
     pub fn new() -> Self {
@@ -198,9 +193,6 @@ pub fn update_recording_state(
             "error": error
         }),
     );
-
-    // Update tray menu state
-    update_tray_menu_state(app, new_state);
 }
 
 // Helper function to get current recording state
@@ -220,40 +212,6 @@ pub fn emit_to_window(
     app_state.emit_to_window(window, event, payload)
 }
 
-// Helper function to update tray menu state based on recording state
-pub fn update_tray_menu_state(app: &tauri::AppHandle, recording_state: RecordingState) {
-    if let Some(menu_items) = app.try_state::<TrayMenuItems>() {
-        match recording_state {
-            RecordingState::Idle | RecordingState::Error => {
-                // Enable start, disable stop
-                if let Ok(start) = menu_items.start_recording.lock() {
-                    let _ = start.set_enabled(true);
-                }
-                if let Ok(stop) = menu_items.stop_recording.lock() {
-                    let _ = stop.set_enabled(false);
-                }
-            }
-            RecordingState::Starting | RecordingState::Recording => {
-                // Disable start, enable stop
-                if let Ok(start) = menu_items.start_recording.lock() {
-                    let _ = start.set_enabled(false);
-                }
-                if let Ok(stop) = menu_items.stop_recording.lock() {
-                    let _ = stop.set_enabled(true);
-                }
-            }
-            RecordingState::Stopping | RecordingState::Transcribing => {
-                // Disable both during processing
-                if let Ok(start) = menu_items.start_recording.lock() {
-                    let _ = start.set_enabled(false);
-                }
-                if let Ok(stop) = menu_items.stop_recording.lock() {
-                    let _ = stop.set_enabled(false);
-                }
-            }
-        }
-    }
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -512,27 +470,16 @@ pub fn run() {
             use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 
             // Create menu items
-            let start_recording_i = MenuItem::with_id(app, "start_recording", "Start Recording", true, None::<&str>)?;
-            let stop_recording_i = MenuItem::with_id(app, "stop_recording", "Stop Recording", false, None::<&str>)?;
-            let separator1 = PredefinedMenuItem::separator(app)?;
             let settings_i = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
-            let separator2 = PredefinedMenuItem::separator(app)?;
+            let separator = PredefinedMenuItem::separator(app)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit VoiceTypr", true, None::<&str>)?;
 
             let menu = MenuBuilder::new(app)
-                .item(&start_recording_i)
-                .item(&stop_recording_i)
-                .item(&separator1)
                 .item(&settings_i)
-                .item(&separator2)
+                .item(&separator)
                 .item(&quit_i)
                 .build()?;
 
-            // Store menu item references in app state for dynamic updates
-            app.manage(TrayMenuItems {
-                start_recording: Arc::new(Mutex::new(start_recording_i.clone())),
-                stop_recording: Arc::new(Mutex::new(stop_recording_i.clone())),
-            });
 
             // Use default window icon for tray
             let tray_icon = app.default_window_icon()
@@ -546,24 +493,6 @@ pub fn run() {
                 .on_menu_event(move |app, event| {
                     log::info!("Tray menu event: {:?}", event.id);
                     match event.id.as_ref() {
-                        "start_recording" => {
-                            let app_handle = app.app_handle().clone();
-                            tauri::async_runtime::spawn(async move {
-                                let recorder_state = app_handle.state::<RecorderState>();
-                                if let Err(e) = start_recording(app_handle.clone(), recorder_state).await {
-                                    log::error!("Failed to start recording from menu: {}", e);
-                                }
-                            });
-                        }
-                        "stop_recording" => {
-                            let app_handle = app.app_handle().clone();
-                            tauri::async_runtime::spawn(async move {
-                                let recorder_state = app_handle.state::<RecorderState>();
-                                if let Err(e) = stop_recording(app_handle.clone(), recorder_state).await {
-                                    log::error!("Failed to stop recording from menu: {}", e);
-                                }
-                            });
-                        }
                         "settings" => {
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
@@ -770,6 +699,8 @@ pub fn run() {
             focus_main_window,
             check_accessibility_permission,
             request_accessibility_permission,
+            check_microphone_permission,
+            request_microphone_permission,
         ])
         .on_window_event(|window, event| {
             match event {

@@ -80,13 +80,13 @@ impl WhisperManager {
         // Removed tiny, small, and medium models - keeping only base and large variants
 
         models.insert(
-            "base".to_string(),
+            "base.en".to_string(),
             ModelInfo {
-                name: "base".to_string(),
-                size: 142_000_000, // 142MB
-                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+                name: "base.en".to_string(),
+                size: 148_897_792, // 142 MiB = 142 * 1024 * 1024 bytes
+                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
                     .to_string(),
-                sha256: "465707469ff3a37a2b9b8d8f89f2f99de7299dac".to_string(), // SHA1 (correct)
+                sha256: "137c40403d78fd54d454da0f9bd998f78703390c".to_string(), // SHA1 (correct)
                 downloaded: false,
                 speed_score: 8,    // Very fast
                 accuracy_score: 5, // Basic accuracy
@@ -97,7 +97,7 @@ impl WhisperManager {
             "large-v3".to_string(),
             ModelInfo {
                 name: "large-v3".to_string(),
-                size: 2_900_000_000, // 2.9GB
+                size: 3_117_854_720, // 2.9 GiB = 2.9 * 1024 * 1024 * 1024 bytes
                 url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"
                     .to_string(),
                 sha256: "ad82bf6a9043ceed055076d0fd39f5f186ff8062".to_string(), // SHA1 (correct)
@@ -109,7 +109,7 @@ impl WhisperManager {
 
         models.insert("large-v3-q5_0".to_string(), ModelInfo {
             name: "large-v3-q5_0".to_string(),
-            size: 1_100_000_000, // 1.1GB
+            size: 1_181_116_416, // 1.1 GiB = 1.1 * 1024 * 1024 * 1024 bytes
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin".to_string(),
             sha256: "e6e2ed78495d403bef4b7cff42ef4aaadcfea8de".to_string(), // SHA1 (correct)
             downloaded: false,
@@ -119,7 +119,7 @@ impl WhisperManager {
 
         models.insert("large-v3-turbo".to_string(), ModelInfo {
             name: "large-v3-turbo".to_string(),
-            size: 1_500_000_000, // 1.5GB
+            size: 1_610_612_736, // 1.5 GiB = 1.5 * 1024 * 1024 * 1024 bytes
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".to_string(),
             sha256: "4af2b29d7ec73d781377bfd1758ca957a807e941".to_string(), // SHA1 (correct)
             downloaded: false,
@@ -129,7 +129,7 @@ impl WhisperManager {
 
         models.insert("large-v3-turbo-q5_0".to_string(), ModelInfo {
             name: "large-v3-turbo-q5_0".to_string(),
-            size: 547_000_000, // 547MB
+            size: 573_571_072, // 547 MiB = 547 * 1024 * 1024 bytes
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin".to_string(),
             sha256: "e050f7970618a659205450ad97eb95a18d69c9ee".to_string(), // SHA1 (correct)
             downloaded: false,

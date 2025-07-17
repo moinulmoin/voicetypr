@@ -17,7 +17,7 @@ export function ModelsSection({
   currentModel,
   onDownload,
   onDelete,
-  onCancelDownload,
+onCancelDownload,
   onSelect
 }: ModelsSectionProps) {
   return (
