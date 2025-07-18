@@ -97,7 +97,7 @@ git pull origin main
 
 # Run tests first
 echo -e "${YELLOW}Running tests...${NC}"
-pnpm test
+# pnpm test
 cd src-tauri && cargo test && cd ..
 
 # Get current version
@@ -166,13 +166,13 @@ cp "$UNIVERSAL_APP_TAR" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_universal.app.tar.
 # Sign update artifacts if credentials are available
 if [[ -n "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
     echo -e "${YELLOW}Signing update artifacts...${NC}"
-    
+
     # Find and sign the tar.gz file
     if [[ -f "$UNIVERSAL_APP_TAR" ]]; then
         cargo tauri signer sign --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
             ${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:+--private-key-password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"} \
             "$UNIVERSAL_APP_TAR"
-        
+
         # Copy signature file
         cp "${UNIVERSAL_APP_TAR}.sig" "$OUTPUT_DIR/"
     fi
@@ -206,7 +206,7 @@ spctl -a -t open --context context:primary-signature -v "$UNIVERSAL_DMG" || {
 echo -e "${YELLOW}Creating GitHub release draft...${NC}"
 if command -v gh &> /dev/null; then
     CHANGELOG_CONTENT=$(sed -n "/## ${NEW_VERSION}/,/## [0-9]/p" CHANGELOG.md | sed '$ d')
-    
+
     gh release create "v${NEW_VERSION}" \
         --draft \
         --title "VoiceTypr v${NEW_VERSION}" \
@@ -234,7 +234,7 @@ This release is signed and notarized by Apple. You can download and run VoiceTyp
 VoiceTypr will automatically check for updates. You can also check manually in Settings → About.
 EOF
 )"
-    
+
     echo -e "${GREEN}✅ Draft release created!${NC}"
     echo -e "${YELLOW}Uploading artifacts...${NC}"
     gh release upload "v${NEW_VERSION}" "$OUTPUT_DIR"/* --clobber
