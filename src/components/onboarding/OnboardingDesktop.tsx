@@ -355,7 +355,7 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete }: Onbo
                         if (!model) return null;
                         const progress = downloadProgress[name];
                         return (
-                          <div key={`${name}-${model.downloaded}`} className="relative">
+                          <div key={name} className="relative">
                             <ModelCard
                             name={name}
                             model={model}

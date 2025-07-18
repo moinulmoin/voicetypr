@@ -140,8 +140,17 @@ pub async fn download_model(
         }
     }
 
+    log::info!("Exited download retry loop. Result: {:?}", download_result.is_ok());
+
+    // Close the progress channel to signal completion
+    drop(progress_tx);
+    
     // Ensure progress handler completes
-    let _ = progress_handle.await;
+    log::info!("Waiting for progress handler to complete...");
+    match progress_handle.await {
+        Ok(_) => log::info!("Progress handler completed successfully"),
+        Err(e) => log::warn!("Progress handler task error: {}", e),
+    }
 
     // Clean up the cancellation flag
     {
@@ -149,8 +158,10 @@ pub async fn download_model(
         downloads.remove(&model_name);
     }
 
+    log::info!("Processing download result for model: {}", model_name);
     match download_result {
         Err(ref e) if e.contains("cancelled") => {
+            log::info!("Download was cancelled");
             // Emit download-cancelled event
             if let Err(e) = emit_to_all(&app, "download-cancelled", &model_name) {
                 log::warn!("Failed to emit download-cancelled event: {}", e);
@@ -158,74 +169,22 @@ pub async fn download_model(
             Err(e.clone())
         }
         Ok(_) => {
-            log::info!("Download completed for model: {}", model_name);
-
-            // Refresh the downloaded status in WhisperManager with retries
-            let mut retry_count = 0;
-            const MAX_RETRIES: u32 = 3;
-            let mut model_actually_downloaded = false;
+            log::info!("Download completed successfully for model: {}", model_name);
             
-            while retry_count < MAX_RETRIES {
-                {
-                    let mut manager = state.lock().await;
-                    log::info!("[VERIFY] Attempt {} for model '{}'", retry_count + 1, model_name);
-                    
-                    // Check if the model exists
-                    let models_dir = manager.get_models_dir();
-                    let expected_path = models_dir.join(format!("{}.bin", model_name));
-                    log::info!("[VERIFY] Looking for file at: {:?}", expected_path);
-                    log::info!("[VERIFY] File exists: {}", expected_path.exists());
-                    if expected_path.exists() {
-                        if let Ok(metadata) = std::fs::metadata(&expected_path) {
-                            log::info!("[VERIFY] File size: {} bytes", metadata.len());
-                        }
-                    }
-                    
-                    manager.refresh_downloaded_status();
-                    
-                    // Verify the model is actually marked as downloaded
-                    let models = manager.get_models_status();
-                    
-                    // Log all models for debugging
-                    for (name, info) in &models {
-                        log::info!("[VERIFY] Model '{}': downloaded={}", name, info.downloaded);
-                    }
-                    
-                    model_actually_downloaded = models.get(&model_name).map(|m| m.downloaded).unwrap_or(false);
-                    log::info!("[VERIFY] Model '{}' final status: {}", model_name, model_actually_downloaded);
-                } // Drop the lock
-                
-                if model_actually_downloaded {
-                    log::info!("Model {} confirmed as downloaded after {} attempts", model_name, retry_count + 1);
-                    break;
-                }
-                
-                retry_count += 1;
-                if retry_count < MAX_RETRIES {
-                    log::warn!("Model {} not found in directory after refresh, retry {}/{}", model_name, retry_count, MAX_RETRIES);
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                }
+            // Refresh the manager's status to reflect the new download
+            {
+                let mut manager = state.lock().await;
+                manager.refresh_downloaded_status();
             }
             
-            if !model_actually_downloaded {
-                log::error!("Model {} was downloaded but not found in models directory after {} retries!", model_name, MAX_RETRIES);
-                // Still emit the event even if verification failed, let the frontend handle it
-                log::info!("Emitting model-downloaded event despite verification failure for {}", model_name);
-                if let Err(e) = emit_to_all(&app, "model-downloaded", serde_json::json!({
-                    "model": model_name
-                })) {
-                    log::warn!("Failed to emit model-downloaded event: {}", e);
-                }
-                return Err(format!("Model {} file not detected after download completed", model_name));
-            }
-
-            // Emit the event if the model is confirmed as downloaded
+            // Emit the event - the download_model function already verified the file
             log::info!("Emitting model-downloaded event for {}", model_name);
             if let Err(e) = emit_to_all(&app, "model-downloaded", serde_json::json!({
                 "model": model_name
             })) {
                 log::warn!("Failed to emit model-downloaded event: {}", e);
             }
+            
             Ok(())
         }
         Err(e) => {

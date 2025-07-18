@@ -171,15 +171,11 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           // If progress reaches 100%, remove from download progress
           // The model-downloaded event will handle setting it as downloaded
           if (progress >= 100) {
-            console.log(`[useModelManagement] Progress reached 100% for ${model}, refreshing models...`);
             setDownloadProgress((prev) => {
               const newProgress = { ...prev };
               delete newProgress[model];
               return newProgress;
             });
-            // Refresh models when download reaches 100%
-            // This ensures UI updates even if model-downloaded event fails
-            loadModels();
           } else {
             setDownloadProgress((prev) => ({
               ...prev,
@@ -191,7 +187,6 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
       // Download complete
       unregisterComplete = await registerEvent<{ model: string }>("model-downloaded", async (event) => {
-        console.log('[useModelManagement] model-downloaded event received:', event);
         const modelName = event.model;
         
         // Remove from progress tracking
@@ -202,9 +197,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         });
         
         // Refresh model list
-        console.log('[useModelManagement] Calling loadModels after download complete...');
-        const updatedModels = await loadModels();
-        console.log('[useModelManagement] Updated models after download:', updatedModels);
+        await loadModels();
         
         if (showToasts) {
           toast.success(`Model ${modelName} downloaded successfully`);
