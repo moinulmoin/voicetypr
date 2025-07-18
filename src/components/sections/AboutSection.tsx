@@ -1,11 +1,12 @@
+import { XformerlyTwitter } from "@/assets/icon";
 import { Button } from "@/components/ui/button";
-import { NotebookText, Mail, Twitter } from "lucide-react";
-import { check } from '@tauri-apps/plugin-updater';
-import { relaunch } from '@tauri-apps/plugin-process';
-import { toast } from 'sonner';
-import { useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import type { AppSettings } from '@/types';
+import { invoke } from '@tauri-apps/api/core';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { check } from '@tauri-apps/plugin-updater';
+import { Mail } from "lucide-react";
+import { useState } from 'react';
+import { toast } from 'sonner';
 
 export function AboutSection() {
   const [checking, setChecking] = useState(false);
@@ -87,7 +88,7 @@ export function AboutSection() {
               onClick={() => openExternalLink("https://twitter.com/voicetypr")}
               className="flex items-center gap-2 text-sm text-gray-900 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-400 hover:underline underline-offset-4"
             >
-              <Twitter className="w-4 h-4" />
+              <XformerlyTwitter className="w-4 h-4" />
               @voicetypr
             </button>
         </div>
