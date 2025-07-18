@@ -66,24 +66,24 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
     loadModels(); // Load models on mount so they're ready
 
     // Setup download listeners
-    const unlistenProgress = listen<{ modelName: string; progress: number }>(
-      "model-download-progress",
+    const unlistenProgress = listen<{ model: string; downloaded: number; total: number; progress: number }>(
+      "download-progress",
       (event) => {
         setDownloadProgress((prev) => ({
           ...prev,
-          [event.payload.modelName]: event.payload.progress
+          [event.payload.model]: event.payload.progress
         }));
       }
     );
 
-    const unlistenComplete = listen<{ modelName: string }>("model-download-complete", (event) => {
+    const unlistenComplete = listen<{ model: string }>("model-downloaded", (event) => {
       setDownloadProgress((prev) => {
         const newProgress = { ...prev };
-        delete newProgress[event.payload.modelName];
+        delete newProgress[event.payload.model];
         return newProgress;
       });
       loadModels();
-      setSelectedModel(event.payload.modelName);
+      setSelectedModel(event.payload.model);
     });
 
     return () => {
