@@ -6,16 +6,51 @@ import { AppSettings } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AlertCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export function RecordingPill() {
   const recording = useRecording();
   const [audioLevel, setAudioLevel] = useState(0);
   const [feedbackMessage, setFeedbackMessage] = useState<string>("");
   const [isCompact, setIsCompact] = useState(true);
+  
+  // Track timer IDs for cleanup
+  const feedbackTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const mountedRef = useRef(true);
 
   const isRecording = recording.state === "recording";
   const isTranscribing = recording.state === "transcribing";
+  
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      if (feedbackTimerRef.current) {
+        clearTimeout(feedbackTimerRef.current);
+      }
+    };
+  }, []);
+  
+  // Helper function to set feedback message with auto-hide
+  const setFeedbackWithTimeout = (message: string, timeout: number) => {
+    // Clear any existing timer
+    if (feedbackTimerRef.current) {
+      clearTimeout(feedbackTimerRef.current);
+    }
+    
+    // Only update state if component is still mounted
+    if (mountedRef.current) {
+      setFeedbackMessage(message);
+      
+      // Set new timer
+      feedbackTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) {
+          setFeedbackMessage("");
+        }
+        feedbackTimerRef.current = null;
+      }, timeout);
+    }
+  };
 
   // Fetch settings on mount
   useEffect(() => {
@@ -47,27 +82,42 @@ export function RecordingPill() {
     // Listen for empty transcription
     unlisteners.push(
       listen<string>("transcription-empty", (event) => {
-        setFeedbackMessage(event.payload);
-        // Auto-hide after 2 seconds
-        setTimeout(() => setFeedbackMessage(""), 2000);
+        setFeedbackWithTimeout(event.payload, 2000);
       })
     );
 
     // Listen for recording stopped due to silence
     unlisteners.push(
       listen("recording-stopped-silence", () => {
-        setFeedbackMessage("Recording stopped - no sound detected");
-        // Auto-hide after 2 seconds
-        setTimeout(() => setFeedbackMessage(""), 2000);
+        setFeedbackWithTimeout("Recording stopped - no sound detected", 2000);
       })
     );
 
     // Listen for ESC first press from backend
     unlisteners.push(
       listen<string>("esc-first-press", (event) => {
-        setFeedbackMessage(event.payload);
-        // Auto-hide after 3 seconds
-        setTimeout(() => setFeedbackMessage(""), 3000);
+        setFeedbackWithTimeout(event.payload, 3000);
+      })
+    );
+    
+    // Listen for recording errors
+    unlisteners.push(
+      listen<string>("recording-error", (event) => {
+        setFeedbackWithTimeout(event.payload || "Recording error occurred", 3000);
+      })
+    );
+    
+    // Listen for transcription errors
+    unlisteners.push(
+      listen<string>("transcription-error", (event) => {
+        setFeedbackWithTimeout(event.payload || "Transcription error occurred", 3000);
+      })
+    );
+    
+    // Listen for no models error
+    unlisteners.push(
+      listen<{ title: string; message: string; action: string }>("no-models-error", (event) => {
+        setFeedbackWithTimeout(event.payload.message, 4000);
       })
     );
 

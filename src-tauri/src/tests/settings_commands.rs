@@ -27,6 +27,7 @@ mod tests {
             pill_position: Some((100.0, 200.0)),
             launch_at_startup: false,
             onboarding_completed: true,
+            compact_recording_status: true,
         };
 
         // Test serialization
@@ -76,6 +77,7 @@ mod tests {
             pill_position: None,
             launch_at_startup: true,
             onboarding_completed: false,
+            compact_recording_status: false,
         };
 
         let cloned = settings.clone();

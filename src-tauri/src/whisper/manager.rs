@@ -435,6 +435,25 @@ impl WhisperManager {
     pub fn get_models_status(&self) -> HashMap<String, ModelInfo> {
         self.models.clone()
     }
+    
+    /// Get a reference to the models map for internal use (avoids cloning)
+    pub fn models(&self) -> &HashMap<String, ModelInfo> {
+        &self.models
+    }
+    
+    /// Check if any models are downloaded (efficient, no cloning)
+    pub fn has_downloaded_models(&self) -> bool {
+        self.models.values().any(|info| info.downloaded)
+    }
+    
+    /// Get list of downloaded model names (efficient, minimal allocation)
+    pub fn get_downloaded_model_names(&self) -> Vec<String> {
+        self.models
+            .iter()
+            .filter(|(_, info)| info.downloaded)
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
 
     pub fn refresh_downloaded_status(&mut self) {
         // Reset all to not downloaded

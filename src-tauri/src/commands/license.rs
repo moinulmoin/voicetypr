@@ -2,6 +2,20 @@ use crate::license::{api_client::LicenseApiClient, device, keychain, LicenseStat
 // Chrono imports removed - not used in current implementation
 use tauri::{AppHandle, Manager};
 use tauri_plugin_cache::{CacheExt, SetItemOptions};
+use std::sync::Arc;
+use tokio::sync::{RwLock, OnceCell};
+use std::collections::HashMap;
+use tokio::sync::broadcast;
+
+// Global deduplication map for license status checks
+static LICENSE_CHECK_DEDUP: OnceCell<Arc<RwLock<HashMap<String, Arc<broadcast::Sender<Result<LicenseStatus, String>>>>>>> = 
+    OnceCell::const_new();
+
+async fn get_dedup_map() -> &'static Arc<RwLock<HashMap<String, Arc<broadcast::Sender<Result<LicenseStatus, String>>>>>> {
+    LICENSE_CHECK_DEDUP.get_or_init(|| async {
+        Arc::new(RwLock::new(HashMap::new()))
+    }).await
+}
 
 /// Check the current license status
 /// This checks license first (if stored), then falls back to trial
@@ -10,6 +24,58 @@ use tauri_plugin_cache::{CacheExt, SetItemOptions};
 pub async fn check_license_status(app: AppHandle) -> Result<LicenseStatus, String> {
     log::info!("Checking license status");
     
+    // Deduplication key - use a constant since we're checking the same thing
+    const DEDUP_KEY: &str = "license_status_check";
+    
+    // Check if there's already an in-flight request
+    {
+        let dedup_map = get_dedup_map().await.read().await;
+        if let Some(sender) = dedup_map.get(DEDUP_KEY) {
+            log::info!("License check already in progress, waiting for result...");
+            let mut receiver = sender.subscribe();
+            drop(dedup_map); // Release the read lock
+            
+            // Wait for the in-flight request to complete
+            match receiver.recv().await {
+                Ok(result) => {
+                    log::info!("Received result from in-flight license check");
+                    return result;
+                }
+                Err(_) => {
+                    log::warn!("In-flight license check sender dropped, proceeding with new check");
+                    // Fall through to perform our own check
+                }
+            }
+        }
+    }
+    
+    // No in-flight request, we'll be the primary requester
+    let (tx, _rx) = broadcast::channel(1);
+    let tx = Arc::new(tx);
+    
+    // Register our request
+    {
+        let mut dedup_map = get_dedup_map().await.write().await;
+        dedup_map.insert(DEDUP_KEY.to_string(), tx.clone());
+    }
+    
+    // Perform the actual license check
+    let result = check_license_status_impl(app).await;
+    
+    // Send result to any waiting threads
+    let _ = tx.send(result.clone());
+    
+    // Remove from dedup map
+    {
+        let mut dedup_map = get_dedup_map().await.write().await;
+        dedup_map.remove(DEDUP_KEY);
+    }
+    
+    result
+}
+
+/// Internal implementation of license status check
+async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, String> {
     // Try to get cached status first
     let cache = app.cache();
     match cache.get("license_status") {
@@ -196,6 +262,9 @@ pub async fn restore_license(app: AppHandle) -> Result<LicenseStatus, String> {
             if response.data.valid {
                 log::info!("License restored successfully");
                 
+                // Clear cache when license is restored
+                invalidate_license_cache(&app).await;
+                
                 // Reset recording state when license is restored
                 let app_state = app.state::<crate::AppState>();
                 if let Err(e) = app_state.recording_state.reset() {
@@ -280,11 +349,7 @@ async fn activate_license_internal(
                 log::info!("License activated successfully");
                 
                 // Clear cache when license is activated
-                let cache = app.cache();
-                match cache.remove("license_status") {
-                    Ok(_) => log::info!("Cleared license cache after activation"),
-                    Err(e) => log::warn!("Failed to clear cache after activation: {}", e),
-                }
+                invalidate_license_cache(&app).await;
                 
                 // Reset recording state when license is successfully activated
                 let app_state = app.state::<crate::AppState>();
@@ -424,6 +489,15 @@ pub async fn open_purchase_page() -> Result<(), String> {
 }
 
 /// Internal function to check license status (for use by other commands)
+/// Helper function to invalidate license cache
+async fn invalidate_license_cache(app: &AppHandle) {
+    let cache = app.cache();
+    match cache.remove("license_status") {
+        Ok(_) => log::info!("License cache invalidated"),
+        Err(e) => log::warn!("Failed to invalidate license cache: {}", e),
+    }
+}
+
 pub async fn check_license_status_internal(app: &AppHandle) -> Result<LicenseStatus, String> {
     check_license_status(app.clone()).await
 }

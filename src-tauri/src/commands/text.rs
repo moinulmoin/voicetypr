@@ -26,19 +26,32 @@ pub async fn insert_text(text: String) -> Result<(), String> {
     let _guard = InsertionGuard;
 
     // Small delay to ensure the app doesn't interfere with text insertion
-    thread::sleep(Duration::from_millis(100));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    
+    // Check accessibility permission on macOS before attempting to paste
+    #[cfg(target_os = "macos")]
+    let has_accessibility_permission = {
+        use crate::commands::permissions::check_accessibility_permission;
+        match check_accessibility_permission().await {
+            Ok(has_perm) => has_perm,
+            Err(_) => false,
+        }
+    };
+    
+    #[cfg(not(target_os = "macos"))]
+    let has_accessibility_permission = true;
 
     // Move to a blocking task since clipboard operations are synchronous
     tokio::task::spawn_blocking(move || {
         // Always use clipboard method for reliability and to prevent duplicate insertion
         // This function handles both copying to clipboard and pasting at cursor
-        insert_via_clipboard(text)
+        insert_via_clipboard(text, has_accessibility_permission)
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?
 }
 
-fn insert_via_clipboard(text: String) -> Result<(), String> {
+fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Result<(), String> {
     // This function handles both copying text to clipboard AND pasting it at cursor
     // Initialize clipboard
     let mut clipboard =
@@ -56,27 +69,10 @@ fn insert_via_clipboard(text: String) -> Result<(), String> {
     thread::sleep(Duration::from_millis(100));
 
     // Check if we have accessibility permissions before attempting to paste
-    #[cfg(target_os = "macos")]
-    {
-        use crate::commands::permissions::check_accessibility_permission;
-
-        // Check permission synchronously from sync context
-        let has_permission = match std::thread::spawn(|| {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async { check_accessibility_permission().await })
-        })
-        .join()
-        {
-            Ok(Ok(has_perm)) => has_perm,
-            Ok(Err(_)) => false,
-            Err(_) => false,
-        };
-
-        if !has_permission {
-            log::warn!("No accessibility permission - text copied to clipboard but cannot paste automatically");
-            // Text is in clipboard, user can paste manually
-            return Ok(());
-        }
+    if !has_accessibility_permission {
+        log::warn!("No accessibility permission - text copied to clipboard but cannot paste automatically");
+        // Text is in clipboard, user can paste manually
+        return Ok(());
     }
 
     // Try to paste using Cmd+V (macOS) with panic protection

@@ -66,10 +66,7 @@ mod tests {
         let models = manager.get_models_status();
 
         // Should have all the default models
-        assert!(models.contains_key("tiny"));
-        assert!(models.contains_key("base"));
-        assert!(models.contains_key("small"));
-        assert!(models.contains_key("medium"));
+        assert!(models.contains_key("base.en"));
         assert!(models.contains_key("large-v3"));
 
         // All models should initially be not downloaded
@@ -149,11 +146,11 @@ mod tests {
         let mut manager = WhisperManager::new(models_dir.clone());
 
         // get_model_path only returns path if model is downloaded
-        let path = manager.get_model_path("tiny");
+        let path = manager.get_model_path("base.en");
         assert!(path.is_none()); // Not downloaded yet
 
         // Create the model file to simulate download
-        fs::write(models_dir.join("tiny.bin"), b"dummy model")
+        fs::write(models_dir.join("base.en.bin"), b"dummy model")
             .await
             .unwrap();
 
@@ -161,9 +158,9 @@ mod tests {
         manager.refresh_downloaded_status();
 
         // Now it should return the path
-        let path = manager.get_model_path("tiny");
+        let path = manager.get_model_path("base.en");
         assert!(path.is_some());
-        assert_eq!(path.unwrap(), models_dir.join("tiny.bin"));
+        assert_eq!(path.unwrap(), models_dir.join("base.en.bin"));
 
         // Test getting path for unknown model
         let path = manager.get_model_path("unknown");
@@ -233,17 +230,17 @@ mod tests {
         }
 
         // Create a model file
-        fs::write(models_dir.join("tiny.bin"), b"dummy model")
+        fs::write(models_dir.join("base.en.bin"), b"dummy model")
             .await
             .unwrap();
 
         // Refresh status
         manager.refresh_downloaded_status();
 
-        // Now tiny should be marked as downloaded
+        // Now base.en should be marked as downloaded
         let status = manager.get_models_status();
-        assert!(status.get("tiny").unwrap().downloaded);
-        assert!(!status.get("base").unwrap().downloaded);
+        assert!(status.get("base.en").unwrap().downloaded);
+        assert!(!status.get("large-v3").unwrap().downloaded);
     }
 
     #[test]
@@ -253,13 +250,13 @@ mod tests {
         let models = manager.get_models_status();
 
         // Test that speed and accuracy scores are inversely related
-        let tiny = models.get("tiny").unwrap();
-        assert_eq!(tiny.speed_score, 10); // Fastest
-        assert_eq!(tiny.accuracy_score, 3); // Lowest accuracy
+        let base_en = models.get("base.en").unwrap();
+        assert_eq!(base_en.speed_score, 8); // Very fast
+        assert_eq!(base_en.accuracy_score, 5); // Basic accuracy
 
         let large = models.get("large-v3").unwrap();
-        assert!(large.speed_score < tiny.speed_score); // Slower
-        assert!(large.accuracy_score > tiny.accuracy_score); // More accurate
+        assert!(large.speed_score < base_en.speed_score); // Slower
+        assert!(large.accuracy_score > base_en.accuracy_score); // More accurate
 
         // Verify all scores are in valid range (1-10)
         for (_, model) in &models {
@@ -275,18 +272,15 @@ mod tests {
         let models = manager.get_models_status();
 
         // Verify model sizes are reasonable
-        let tiny = models.get("tiny").unwrap();
-        assert!(tiny.size > 50 * 1024 * 1024); // > 50MB
-        assert!(tiny.size < 100 * 1024 * 1024); // < 100MB
-
-        let base = models.get("base").unwrap();
-        assert!(base.size > tiny.size); // Base should be larger than tiny
+        let base_en = models.get("base.en").unwrap();
+        assert!(base_en.size > 100 * 1024 * 1024); // > 100MB
+        assert!(base_en.size < 200 * 1024 * 1024); // < 200MB
 
         // Note: large-v3 is actually 2.9GB, which exceeds the 2GB limit
         // but it's defined in the manager for compatibility
-        let medium = models.get("medium").unwrap();
-        assert!(medium.size > base.size); // Medium should be larger than base
-        assert!(medium.size < 2 * 1024 * 1024 * 1024); // < 2GB (max size)
+        let large = models.get("large-v3").unwrap();
+        assert!(large.size > base_en.size); // Large should be larger than base
+        assert!(large.size > 2 * 1024 * 1024 * 1024); // > 2GB
     }
 
     #[test]

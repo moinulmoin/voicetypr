@@ -58,8 +58,7 @@ pub async fn start_recording(
 ) -> Result<(), String> {
     // Check if we have any models BEFORE starting to record
     let whisper_manager = app.state::<AsyncMutex<WhisperManager>>();
-    let available_models = whisper_manager.lock().await.get_models_status();
-    let has_models = available_models.iter().any(|(_, info)| info.downloaded);
+    let has_models = whisper_manager.lock().await.has_downloaded_models();
 
     if !has_models {
         log::error!("Cannot start recording - no models downloaded");
@@ -425,12 +424,7 @@ pub async fn stop_recording(
 
     // Get available models
     let whisper_manager = app.state::<AsyncMutex<WhisperManager>>();
-    let available_models = whisper_manager.lock().await.get_models_status();
-    let downloaded_models: Vec<String> = available_models
-        .iter()
-        .filter(|(_, info)| info.downloaded)
-        .map(|(name, _)| name.clone())
-        .collect();
+    let downloaded_models = whisper_manager.lock().await.get_downloaded_model_names();
 
     log::debug!("Downloaded models: {:?}", downloaded_models);
 

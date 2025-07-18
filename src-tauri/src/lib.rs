@@ -152,23 +152,18 @@ pub fn update_recording_state(
 ) {
     let app_state = app.state::<AppState>();
 
-    log::debug!(
-        "update_recording_state called: {:?} -> {:?}, error: {:?}",
-        app_state.get_current_state(),
+    // Use atomic transition with fallback to prevent race conditions
+    let final_state = match app_state.recording_state.transition_with_fallback(
         new_state,
-        error
-    );
+        |current| {
+            log::debug!(
+                "update_recording_state: {:?} -> {:?}, error: {:?}",
+                current,
+                new_state,
+                error
+            );
 
-    // Try to transition using unified state
-    match app_state.transition_recording_state(new_state) {
-        Ok(_) => {
-            log::debug!("Successfully transitioned to state: {:?}", new_state);
-        }
-        Err(e) => {
-            log::error!("State transition failed: {}", e);
-
-            // Only force state updates in specific recovery scenarios
-            let current = app_state.get_current_state();
+            // Determine if we should force a transition based on current state
             let should_force = match (current, new_state) {
                 // Allow force transition from Error state to Idle (recovery)
                 (RecordingState::Error, RecordingState::Idle) => true,
@@ -182,28 +177,36 @@ pub fn update_recording_state(
 
             if should_force {
                 log::warn!(
-                    "Forcing state transition from {:?} to {:?} for recovery",
+                    "Will force state transition from {:?} to {:?} for recovery",
                     current,
                     new_state
                 );
-                if let Err(force_err) = app_state.recording_state.force_set(new_state) {
-                    log::error!("Failed to force set state: {}", force_err);
-                }
+                Some(new_state)
             } else {
                 log::error!(
                     "Invalid state transition from {:?} to {:?} - transition blocked",
                     current,
                     new_state
                 );
+                None
             }
         }
-    }
+    ) {
+        Ok(state) => {
+            log::debug!("Successfully transitioned to state: {:?}", state);
+            state
+        }
+        Err(e) => {
+            log::error!("Failed to transition state: {}", e);
+            app_state.get_current_state()
+        }
+    };
 
-    // Emit state change event with typed payload
+    // Emit state change event with typed payload using the actual final state
     let _ = app.emit(
         "recording-state-changed",
         serde_json::json!({
-            "state": match new_state {
+            "state": match final_state {
                 RecordingState::Idle => "idle",
                 RecordingState::Starting => "starting",
                 RecordingState::Recording => "recording",

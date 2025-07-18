@@ -25,14 +25,28 @@ impl WindowManager {
         self.main_window.lock().unwrap().clone()
     }
 
-    /// Get the pill window reference
+    /// Get the pill window reference (validates window is still alive)
     pub fn get_pill_window(&self) -> Option<WebviewWindow> {
-        self.pill_window.lock().unwrap().clone()
+        let mut pill_guard = self.pill_window.lock().unwrap();
+        
+        // Check if the window reference is still valid
+        if let Some(ref window) = *pill_guard {
+            // Verify the window still exists
+            if window.is_closable().is_ok() {
+                return Some(window.clone());
+            } else {
+                // Window is no longer valid, clear the reference
+                log::debug!("Pill window reference is stale, clearing");
+                *pill_guard = None;
+            }
+        }
+        
+        None
     }
 
-    /// Check if pill window exists
+    /// Check if pill window exists and is valid
     pub fn has_pill_window(&self) -> bool {
-        self.pill_window.lock().unwrap().is_some()
+        self.get_pill_window().is_some()
     }
 
     /// Show the pill window, creating it if necessary (with retry logic)
@@ -66,24 +80,47 @@ impl WindowManager {
 
     /// Internal implementation of show_pill_window
     async fn show_pill_window_internal(&self) -> Result<(), String> {
-        // First check if Tauri has a window with the "pill" label
-        if let Some(existing_window) = self.app_handle.get_webview_window("pill") {
-            // Window exists in Tauri, update our reference and show it
-            {
-                let mut pill_guard = self.pill_window.lock().unwrap();
-                *pill_guard = Some(existing_window.clone());
+        // Hold the lock for the entire operation to prevent race conditions
+        let mut pill_guard = self.pill_window.lock().unwrap();
+        
+        // First check if we have a cached reference and if it's still valid
+        if let Some(ref existing_window) = *pill_guard {
+            // Verify the window still exists and is not closed
+            if existing_window.is_closable().is_ok() {
+                // Window is still valid, show it
+                existing_window.show().map_err(|e| e.to_string())?;
+                
+                // Always position at center-bottom
+                use tauri::LogicalPosition;
+                let (x, y) = self.calculate_center_position();
+                let _ = existing_window.set_position(LogicalPosition::new(x, y));
+                
+                log::debug!("Showing existing pill window from cache");
+                return Ok(());
+            } else {
+                // Window reference is stale, clear it
+                log::debug!("Cached pill window reference is stale, clearing");
+                *pill_guard = None;
             }
-
-            existing_window.show().map_err(|e| e.to_string())?;
-
-            // Always position at center-bottom
-            use tauri::LogicalPosition;
-            let (x, y) = self.calculate_center_position();
-            let _ = existing_window.set_position(LogicalPosition::new(x, y));
-
-            log::debug!("Found and showing existing pill window from Tauri");
-
-            return Ok(());
+        }
+        
+        // Check if Tauri has a window with the "pill" label
+        if let Some(existing_window) = self.app_handle.get_webview_window("pill") {
+            // Verify this window is valid before using it
+            if existing_window.is_closable().is_ok() {
+                // Window exists in Tauri and is valid, update our reference
+                *pill_guard = Some(existing_window.clone());
+                
+                existing_window.show().map_err(|e| e.to_string())?;
+                
+                // Always position at center-bottom
+                use tauri::LogicalPosition;
+                let (x, y) = self.calculate_center_position();
+                let _ = existing_window.set_position(LogicalPosition::new(x, y));
+                
+                log::debug!("Found and showing existing pill window from Tauri");
+                return Ok(());
+            }
         }
 
         // No window exists, create new one
@@ -138,11 +175,10 @@ impl WindowManager {
             pill_window.show().map_err(|e| e.to_string())?;
         }
 
-        // Store the window reference
-        {
-            let mut pill_guard = self.pill_window.lock().unwrap();
-            *pill_guard = Some(pill_window);
-        }
+        // Store the window reference while still holding the lock
+        *pill_guard = Some(pill_window);
+        
+        // Lock is automatically released when pill_guard goes out of scope
 
         log::info!(
             "Pill window created and shown at ({}, {})",
@@ -154,17 +190,41 @@ impl WindowManager {
 
     /// Hide the pill window (don't close it) with retry logic
     pub async fn hide_pill_window(&self) -> Result<(), String> {
-        if let Some(window) = self.get_pill_window() {
-            const MAX_RETRIES: u32 = 3;
-            const RETRY_DELAY_MS: u64 = 50;
+        const MAX_RETRIES: u32 = 3;
+        const RETRY_DELAY_MS: u64 = 50;
 
-            for attempt in 1..=MAX_RETRIES {
+        for attempt in 1..=MAX_RETRIES {
+            // Get the window reference inside the retry loop to handle stale references
+            let window = {
+                let pill_guard = self.pill_window.lock().unwrap();
+                pill_guard.clone()
+            };
+            
+            if let Some(window) = window {
+                // Verify window is still valid before trying to hide
+                if window.is_closable().is_err() {
+                    // Window is no longer valid, clear the reference
+                    let mut pill_guard = self.pill_window.lock().unwrap();
+                    *pill_guard = None;
+                    log::debug!("Pill window reference is stale during hide, cleared");
+                    return Ok(());
+                }
+                
                 match window.hide() {
                     Ok(_) => {
                         log::info!("Pill window hidden");
                         return Ok(());
                     }
                     Err(e) => {
+                        // Check if error is because window was closed
+                        if !window.is_closable().unwrap_or(false) {
+                            // Window was closed, clear the reference
+                            let mut pill_guard = self.pill_window.lock().unwrap();
+                            *pill_guard = None;
+                            log::debug!("Pill window was closed during hide attempt");
+                            return Ok(());
+                        }
+                        
                         if attempt < MAX_RETRIES {
                             log::warn!(
                                 "Failed to hide pill window (attempt {}): {}. Retrying...",
@@ -181,8 +241,12 @@ impl WindowManager {
                         }
                     }
                 }
+            } else {
+                // No window to hide
+                return Ok(());
             }
         }
+        
         Ok(())
     }
 
@@ -295,8 +359,15 @@ impl WindowManager {
 
     /// Check if pill window is visible
     pub fn is_pill_visible(&self) -> bool {
-        if let Some(window) = self.get_pill_window() {
-            window.is_visible().unwrap_or(false)
+        let pill_guard = self.pill_window.lock().unwrap();
+        
+        if let Some(ref window) = *pill_guard {
+            // Check both that window is valid and visible
+            if window.is_closable().is_ok() {
+                window.is_visible().unwrap_or(false)
+            } else {
+                false
+            }
         } else {
             false
         }
