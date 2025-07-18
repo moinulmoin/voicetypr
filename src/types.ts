@@ -11,11 +11,11 @@ export interface AppSettings {
   hotkey: string;
   current_model: string;
   language: string;
-  auto_insert: boolean;
-  show_window_on_record: boolean;
   theme: string;
   transcription_cleanup_days?: number | null;
-  show_pill_widget?: boolean;
+  launch_at_startup?: boolean;
+  onboarding_completed?: boolean;
+  compact_recording_status?: boolean;
 }
 
 export interface TranscriptionHistory {
@@ -23,4 +23,12 @@ export interface TranscriptionHistory {
   text: string;
   timestamp: Date;
   model: string;
+}
+
+export interface LicenseStatus {
+  status: 'licensed' | 'trial' | 'expired' | 'none';
+  trial_days_left?: number;
+  license_type?: string;
+  license_key?: string;
+  expires_at?: string;
 }

@@ -2,7 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "VoiceTyper permissions",
-  "windows": ["main", "pill"],
+  "windows": [
+    "main",
+    "pill"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-create",
@@ -11,17 +14,22 @@
     "core:window:allow-hide",
     "core:window:allow-close",
     "core:window:allow-set-focus",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-start-dragging",
+    "core:webview:allow-create-webview-window",
     "opener:default",
     "store:default",
     "global-shortcut:default",
     "dialog:default",
     "fs:scope-appdata",
-    "fs:default",
-    "fs:allow-read-file",
-    "fs:allow-write-file",
-    "fs:allow-create",
-    "fs:allow-remove",
-    "fs:allow-exists",
-    "shell:allow-open"
+    "shell:allow-open",
+    "shell:allow-execute",
+    "macos-permissions:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled",
+    "cache:default"
   ]
 }

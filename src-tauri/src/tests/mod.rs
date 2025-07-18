@@ -11,6 +11,9 @@ mod settings_commands;
 mod transcription_history;
 
 #[cfg(test)]
+mod regression_tests;
+
+#[cfg(test)]
 mod integration_tests {
     use crate::whisper::manager::{ModelSize, WhisperManager};
     use tempfile::TempDir;

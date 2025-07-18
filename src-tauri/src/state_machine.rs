@@ -32,21 +32,53 @@ impl RecordingStateMachine {
         }
     }
 
+    #[allow(dead_code)] // Used in tests and for debugging
     pub fn current(&self) -> RecordingState {
         self.current_state
     }
 
     /// Validate and perform state transition
     pub fn transition_to(&mut self, new_state: RecordingState) -> Result<(), StateTransitionError> {
+        log::info!(
+            "[FLOW] Attempting state transition: {:?} -> {:?}",
+            self.current_state,
+            new_state
+        );
+
         if self.is_valid_transition(self.current_state, new_state) {
-            log::info!("State transition: {:?} -> {:?}", self.current_state, new_state);
+            log::info!(
+                "[FLOW] State transition VALID: {:?} -> {:?}",
+                self.current_state,
+                new_state
+            );
+            let old_state = self.current_state;
             self.current_state = new_state;
+
+            // Log warnings for potentially problematic transitions
+            match (old_state, new_state) {
+                (RecordingState::Transcribing, RecordingState::Idle) => {
+                    log::info!("[FLOW] Completed transcription flow, now idle");
+                }
+                (RecordingState::Error, _) => {
+                    log::warn!("[FLOW] Recovering from error state to {:?}", new_state);
+                }
+                (_, RecordingState::Error) => {
+                    log::error!("[FLOW] Entered error state from {:?}", old_state);
+                }
+                _ => {}
+            }
+
             Ok(())
         } else {
+            log::error!(
+                "[FLOW] State transition INVALID: {:?} -> {:?}",
+                self.current_state,
+                new_state
+            );
             Err(StateTransitionError {
                 from: self.current_state,
                 to: new_state,
-                message: format!("Transition not allowed"),
+                message: format!("Transition not allowed by state machine rules"),
             })
         }
     }
@@ -87,25 +119,36 @@ impl RecordingStateMachine {
         }
     }
 
-    /// Check if recording can be started
-    pub fn can_start_recording(&self) -> bool {
-        matches!(self.current_state, RecordingState::Idle)
-    }
-
-    /// Check if recording can be stopped
-    pub fn can_stop_recording(&self) -> bool {
-        matches!(self.current_state, RecordingState::Recording)
-    }
-
-    /// Check if transcription can be started
-    pub fn can_start_transcription(&self) -> bool {
-        matches!(self.current_state, RecordingState::Stopping)
-    }
+    // Note: Removed can_* methods as they were only used in tests.
+    // Tests now directly check state transitions or use test module helpers.
 
     /// Reset to idle state (useful for error recovery)
     pub fn reset(&mut self) {
-        log::info!("Resetting state machine to Idle from {:?}", self.current_state);
+        log::info!(
+            "Resetting state machine to Idle from {:?}",
+            self.current_state
+        );
         self.current_state = RecordingState::Idle;
+    }
+
+    /// Force set the current state without validation (use with caution)
+    pub(crate) fn force_state(&mut self, state: RecordingState) {
+        log::warn!(
+            "[FLOW] FORCE setting state from {:?} to {:?} (bypassing validation)",
+            self.current_state,
+            state
+        );
+
+        // Log if this would have been an invalid transition
+        if !self.is_valid_transition(self.current_state, state) {
+            log::error!(
+                "[FLOW] WARNING: Forced transition {:?} -> {:?} would normally be INVALID",
+                self.current_state,
+                state
+            );
+        }
+
+        self.current_state = state;
     }
 }
 
@@ -113,23 +156,44 @@ impl RecordingStateMachine {
 mod tests {
     use super::*;
 
+    // Test-only helper methods for asserting state machine capabilities
+    trait StateMachineTestHelpers {
+        fn can_start_recording(&self) -> bool;
+        fn can_stop_recording(&self) -> bool;
+        fn can_start_transcription(&self) -> bool;
+    }
+
+    impl StateMachineTestHelpers for RecordingStateMachine {
+        fn can_start_recording(&self) -> bool {
+            matches!(self.current(), RecordingState::Idle)
+        }
+
+        fn can_stop_recording(&self) -> bool {
+            matches!(self.current(), RecordingState::Recording)
+        }
+
+        fn can_start_transcription(&self) -> bool {
+            matches!(self.current(), RecordingState::Stopping)
+        }
+    }
+
     #[test]
     fn test_valid_transitions() {
         let mut sm = RecordingStateMachine::new();
-        
+
         // Valid flow: Idle -> Starting -> Recording -> Stopping -> Transcribing -> Idle
         assert!(sm.transition_to(RecordingState::Starting).is_ok());
         assert_eq!(sm.current(), RecordingState::Starting);
-        
+
         assert!(sm.transition_to(RecordingState::Recording).is_ok());
         assert_eq!(sm.current(), RecordingState::Recording);
-        
+
         assert!(sm.transition_to(RecordingState::Stopping).is_ok());
         assert_eq!(sm.current(), RecordingState::Stopping);
-        
+
         assert!(sm.transition_to(RecordingState::Transcribing).is_ok());
         assert_eq!(sm.current(), RecordingState::Transcribing);
-        
+
         assert!(sm.transition_to(RecordingState::Idle).is_ok());
         assert_eq!(sm.current(), RecordingState::Idle);
     }
@@ -137,17 +201,17 @@ mod tests {
     #[test]
     fn test_invalid_transitions() {
         let mut sm = RecordingStateMachine::new();
-        
+
         // Cannot go directly from Idle to Recording
         assert!(sm.transition_to(RecordingState::Recording).is_err());
-        
+
         // Cannot go from Idle to Stopping
         assert!(sm.transition_to(RecordingState::Stopping).is_err());
-        
+
         // Start recording properly
         sm.transition_to(RecordingState::Starting).unwrap();
         sm.transition_to(RecordingState::Recording).unwrap();
-        
+
         // Cannot go from Recording to Idle directly
         assert!(sm.transition_to(RecordingState::Idle).is_err());
     }
@@ -155,35 +219,36 @@ mod tests {
     #[test]
     fn test_error_recovery() {
         let mut sm = RecordingStateMachine::new();
-        
+
         // Any state can transition to Error
         sm.transition_to(RecordingState::Starting).unwrap();
         assert!(sm.transition_to(RecordingState::Error).is_ok());
-        
+
         // Error can only transition to Idle
         assert!(sm.transition_to(RecordingState::Recording).is_err());
         assert!(sm.transition_to(RecordingState::Idle).is_ok());
     }
 
     #[test]
-    fn test_state_checks() {
+    fn test_state_transition_rules() {
         let mut sm = RecordingStateMachine::new();
-        
-        assert!(sm.can_start_recording());
-        assert!(!sm.can_stop_recording());
-        assert!(!sm.can_start_transcription());
-        
-        sm.transition_to(RecordingState::Starting).unwrap();
-        sm.transition_to(RecordingState::Recording).unwrap();
-        
-        assert!(!sm.can_start_recording());
-        assert!(sm.can_stop_recording());
-        assert!(!sm.can_start_transcription());
-        
-        sm.transition_to(RecordingState::Stopping).unwrap();
-        
-        assert!(!sm.can_start_recording());
-        assert!(!sm.can_stop_recording());
-        assert!(sm.can_start_transcription());
+
+        // From Idle: can only start recording
+        assert_eq!(sm.current(), RecordingState::Idle);
+        assert!(sm.transition_to(RecordingState::Starting).is_ok());
+        assert_eq!(sm.current(), RecordingState::Starting);
+
+        // From Starting: can go to Recording
+        assert!(sm.transition_to(RecordingState::Recording).is_ok());
+        assert_eq!(sm.current(), RecordingState::Recording);
+
+        // From Recording: can only stop (not idle or transcribe)
+        assert!(sm.transition_to(RecordingState::Idle).is_err());
+        assert!(sm.transition_to(RecordingState::Transcribing).is_err());
+        assert!(sm.transition_to(RecordingState::Stopping).is_ok());
+
+        // From Stopping: can go to Transcribing
+        assert!(sm.transition_to(RecordingState::Transcribing).is_ok());
+        assert_eq!(sm.current(), RecordingState::Transcribing);
     }
 }

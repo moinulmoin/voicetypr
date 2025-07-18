@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release type (patch, minor, major)'
+        required: false
+        default: 'patch'
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      
+      - name: Install dependencies
+        run: pnpm install
+      
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx release-it ${{ github.event.inputs.version }} --ci
+      
+      - name: Get version
+        id: get_version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+  build-tauri:
+    needs: create-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            arch: Intel
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            arch: Apple Silicon
+    runs-on: ${{ matrix.platform }}
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.create-release.outputs.version }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+      
+      - name: Install frontend dependencies
+        run: pnpm install
+      
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        with:
+          tagName: v${{ needs.create-release.outputs.version }}
+          releaseName: 'VoiceTypr v${{ needs.create-release.outputs.version }}'
+          releaseBody: 'See the assets to download this version.'
+          releaseDraft: false
+          prerelease: false
+          args: --target ${{ matrix.target }}
+          includeUpdaterJson: true

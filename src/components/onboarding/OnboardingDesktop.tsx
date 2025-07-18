@@ -1,0 +1,509 @@
+import { HotkeyInput } from "@/components/HotkeyInput";
+import { ModelCard } from "@/components/ModelCard";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { formatHotkey } from "@/lib/hotkey-utils";
+import { cn } from "@/lib/utils";
+import type { AppSettings, ModelInfo } from "@/types";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-shell";
+import {
+  Accessibility,
+  CheckCircle,
+  ChevronLeft,
+  ChevronRight,
+  Info,
+  Keyboard,
+  Loader2,
+  Mic
+} from "lucide-react";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+
+interface OnboardingDesktopProps {
+  onComplete: () => void;
+}
+
+type Step = "welcome" | "permissions" | "models" | "setup" | "success";
+
+const STEPS = [
+  { id: "welcome" as const },
+  { id: "permissions" as const },
+  { id: "models" as const },
+  { id: "setup" as const },
+  { id: "success" as const }
+];
+
+export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
+  const [currentStep, setCurrentStep] = useState<Step>("welcome");
+  const [permissions, setPermissions] = useState({
+    microphone: "checking" as "checking" | "granted" | "denied",
+    accessibility: "checking" as "checking" | "granted" | "denied"
+  });
+  const [models, setModels] = useState<Record<string, ModelInfo>>({});
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
+  const [hotkey, setHotkey] = useState("cmd+shift+space");
+  const [isRequesting, setIsRequesting] = useState<string | null>(null);
+
+  const steps = STEPS;
+
+  const currentIndex = steps.findIndex((s) => s.id === currentStep);
+  // const progress = ((currentIndex + 1) / steps.length) * 100;
+
+  useEffect(() => {
+    if (currentStep === "permissions") {
+      checkPermissions();
+      const interval = setInterval(checkPermissions, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [currentStep]);
+
+  useEffect(() => {
+    checkExistingModels();
+    loadModels(); // Load models on mount so they're ready
+
+    // Setup download listeners
+    const unlistenProgress = listen<{ modelName: string; progress: number }>(
+      "model-download-progress",
+      (event) => {
+        setDownloadProgress((prev) => ({
+          ...prev,
+          [event.payload.modelName]: event.payload.progress
+        }));
+      }
+    );
+
+    const unlistenComplete = listen<{ modelName: string }>("model-download-complete", (event) => {
+      setDownloadProgress((prev) => {
+        const newProgress = { ...prev };
+        delete newProgress[event.payload.modelName];
+        return newProgress;
+      });
+      loadModels();
+      setSelectedModel(event.payload.modelName);
+    });
+
+    return () => {
+      unlistenProgress.then((fn) => fn());
+      unlistenComplete.then((fn) => fn());
+    };
+  }, []);
+
+  const checkExistingModels = async () => {
+    try {
+      const modelStatus = await invoke<Record<string, ModelInfo>>("get_model_status");
+      const hasModel = Object.values(modelStatus).some((m) => m.downloaded);
+      if (hasModel) {
+        // Pre-select the first downloaded model
+        const downloadedModel = Object.entries(modelStatus).find(([_, m]) => m.downloaded);
+        if (downloadedModel) {
+          setSelectedModel(downloadedModel[0]);
+        }
+      }
+      // If no models are downloaded, don't select any - user must download one
+    } catch (error) {
+      console.error("Failed to check models:", error);
+    }
+  };
+
+  const checkPermissions = async () => {
+    try {
+      const [mic, accessibility] = await Promise.all([
+        invoke<boolean>("check_microphone_permission"),
+        invoke<boolean>("check_accessibility_permission")
+      ]);
+
+      setPermissions({
+        microphone: mic ? "granted" : "denied",
+        accessibility: accessibility ? "granted" : "denied"
+      });
+    } catch (error) {
+      console.error("Failed to check permissions:", error);
+    }
+  };
+
+  const requestPermission = async (type: "microphone" | "accessibility") => {
+    setIsRequesting(type);
+    try {
+      if (type === "microphone") {
+        const granted = await invoke<boolean>("request_microphone_permission");
+        if (!granted) {
+          await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+        }
+      } else {
+        await invoke("request_accessibility_permission");
+        await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+      }
+    } catch (error) {
+      console.error(`Failed to request ${type} permission:`, error);
+    } finally {
+      setIsRequesting(null);
+    }
+  };
+
+  const loadModels = async () => {
+    try {
+      const modelStatus = await invoke<Record<string, ModelInfo>>("get_model_status");
+      setModels(modelStatus);
+    } catch (error) {
+      console.error("Failed to load models:", error);
+    }
+  };
+
+  const downloadModel = async (modelName: string) => {
+    try {
+      setDownloadProgress((prev) => ({ ...prev, [modelName]: 0 }));
+      await invoke("download_model", { modelName });
+    } catch (error) {
+      console.error("Failed to download model:", error);
+      setDownloadProgress((prev) => {
+        const newProgress = { ...prev };
+        delete newProgress[modelName];
+        return newProgress;
+      });
+    }
+  };
+
+  const cancelDownload = async (modelName: string) => {
+    try {
+      await invoke("cancel_download", { modelName });
+      setDownloadProgress((prev) => {
+        const newProgress = { ...prev };
+        delete newProgress[modelName];
+        return newProgress;
+      });
+    } catch (error) {
+      console.error("Failed to cancel download:", error);
+    }
+  };
+
+  const saveSettings = async () => {
+    try {
+      await invoke("set_global_shortcut", { shortcut: hotkey });
+      const settings = await invoke<AppSettings>("get_settings");
+      await invoke("save_settings", {
+        settings: {
+          ...settings,
+          hotkey: hotkey,
+          current_model: selectedModel,
+          onboarding_completed: true
+        }
+      });
+    } catch (error) {
+      console.error("Failed to save settings:", error);
+      toast.error("Failed to save settings. Please try again.");
+      throw error; // Re-throw to prevent navigation
+    }
+  };
+
+  const handleNext = async () => {
+    try {
+      if (currentStep === "setup") {
+        await saveSettings();
+      }
+
+      const nextIndex = currentIndex + 1;
+      if (nextIndex < steps.length) {
+        const nextStep = steps[nextIndex].id;
+        setCurrentStep(nextStep);
+
+        if (nextStep === "models") {
+          loadModels();
+        }
+      }
+    } catch (error) {
+      // Error already handled in saveSettings
+    }
+  };
+
+  const handleBack = () => {
+    const prevIndex = currentIndex - 1;
+    if (prevIndex >= 0) {
+      const prevStep = steps[prevIndex].id;
+      setCurrentStep(prevStep);
+    }
+  };
+
+  const handleComplete = () => {
+    onComplete();
+  };
+
+  const canProceed = () => {
+    switch (currentStep) {
+      case "permissions":
+        return permissions.microphone === "granted" && permissions.accessibility === "granted";
+      case "models":
+        // User can proceed if they have selected a model that is downloaded
+        return selectedModel !== null && models[selectedModel]?.downloaded === true;
+      default:
+        return true;
+    }
+  };
+
+  return (
+    <div className="h-screen flex flex-col bg-background overflow-hidden">
+      {/* Compact step indicators */}
+      {currentStep !== "success" && (
+        <div className="flex items-center justify-center gap-2 py-3 bg-muted/30">
+          {steps.map((step, index) => (
+            <div key={step.id} className="flex items-center">
+              <div
+                className={cn(
+                  "w-2 h-2 rounded-full transition-all duration-300",
+                  index < currentIndex
+                    ? "bg-primary"
+                    : index === currentIndex
+                    ? "bg-primary scale-125"
+                    : "bg-muted-foreground opacity-50"
+                )}
+              />
+              {index < steps.length - 1 && (
+                <div
+                  className={cn(
+                    "w-12 h-[1px] mx-1",
+                    index < currentIndex ? "bg-primary" : "bg-muted-foreground/30"
+                  )}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Content - constrained height */}
+      <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
+        <div className="w-full transition-opacity duration-300">
+          {/* Welcome - Compact */}
+          {currentStep === "welcome" && (
+            <div className="w-full max-w-2xl mx-auto animate-fade-in">
+              <div className="text-center space-y-6">
+                <div className="space-y-2">
+                  <h1 className="text-4xl font-bold">Welcome to VoiceTypr</h1>
+                  <p className="text-lg text-muted-foreground max-w-lg mx-auto">
+                    Write 5x faster with your voice
+                  </p>
+                </div>
+
+                <Button onClick={handleNext} size="lg">
+                  Get Started
+                  <ChevronRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Permissions - Side by side */}
+          {currentStep === "permissions" && (
+            <div className="w-full max-w-3xl mx-auto animate-fade-in">
+              <div className="space-y-6">
+                <div className="text-center space-y-1">
+                  <h2 className="text-2xl font-bold">System Permissions</h2>
+                  <p className="text-muted-foreground">Grant required permissions to continue</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  {[
+                    {
+                      type: "microphone" as const,
+                      icon: Mic,
+                      title: "Microphone",
+                      desc: "Record your voice",
+                      status: permissions.microphone
+                    },
+                    {
+                      type: "accessibility" as const,
+                      icon: Accessibility,
+                      title: "Accessibility",
+                      desc: "Insert text at cursor",
+                      status: permissions.accessibility
+                    }
+                  ].map((perm) => (
+                    <Card
+                      key={perm.type}
+                      className={cn(
+                        "p-6 transition-colors",
+                        perm.status === "granted" && "bg-green-500/5 border-green-500/50"
+                      )}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={cn(
+                              "p-2 rounded-lg",
+                              perm.status === "granted"
+                                ? "bg-green-500/10 text-green-500"
+                                : "bg-primary/10 text-primary"
+                            )}
+                          >
+                            <perm.icon className="h-5 w-5" />
+                          </div>
+                          <div>
+                            <h3 className="font-medium">{perm.title}</h3>
+                            <p className="text-sm text-muted-foreground">{perm.desc}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center">
+                          {perm.status === "checking" ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : perm.status === "granted" ? (
+                            <div className="flex items-center gap-2 text-green-500">
+                              <CheckCircle className="h-4 w-4" />
+                              <span className="text-sm">Granted</span>
+                            </div>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => requestPermission(perm.type)}
+                              disabled={isRequesting === perm.type}
+                            >
+                              {isRequesting === perm.type ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                "Grant Access"
+                              )}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+
+                <div className="flex gap-3 justify-center">
+                  <Button variant="outline" onClick={handleBack} size="sm">
+                    <ChevronLeft className="mr-1 h-4 w-4" />
+                    Back
+                  </Button>
+                  <Button onClick={handleNext} disabled={!canProceed()} size="sm">
+                    Continue
+                    <ChevronRight className="ml-1 h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Models - List view */}
+          {currentStep === "models" && (
+            <div className="w-full max-w-3xl mx-auto animate-fade-in">
+              <div className="space-y-6">
+                <div className="text-center space-y-1">
+                  <h2 className="text-2xl font-bold">Choose AI Model</h2>
+                  <p className="text-muted-foreground">
+                    Download and select a model for transcription
+                  </p>
+                </div>
+
+                <div className="bg-card rounded-lg border">
+                  <div className="max-h-[220px] overflow-y-auto">
+                    <div className="space-y-3 p-4">
+                      {Object.entries(models).map(([name, model]) => (
+                        <div key={name} className="relative">
+                          {name === "ggml-large-v3-turbo" && (
+                            <Badge className="absolute -top-2 left-3 z-10 bg-green-500 text-xs">
+                              Recommended
+                            </Badge>
+                          )}
+                          <ModelCard
+                            name={name}
+                            model={model}
+                            downloadProgress={downloadProgress[name]}
+                            isSelected={selectedModel === name}
+                            onDownload={downloadModel}
+                            onSelect={setSelectedModel}
+                            onCancelDownload={cancelDownload}
+                            showSelectButton={model.downloaded}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex gap-3 justify-center">
+                  <Button variant="outline" onClick={handleBack} size="sm">
+                    <ChevronLeft className="mr-1 h-4 w-4" />
+                    Back
+                  </Button>
+                  <Button onClick={handleNext} disabled={!canProceed()} size="sm">
+                    Continue
+                    <ChevronRight className="ml-1 h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Setup - Compact */}
+          {currentStep === "setup" && (
+            <div className="w-full max-w-2xl mx-auto animate-fade-in">
+              <div className="space-y-6">
+                <div className="text-center space-y-1">
+                  <h2 className="text-2xl font-bold">Quick Setup</h2>
+                  <p className="text-muted-foreground">Configure your hotkey</p>
+                </div>
+
+                <div className="max-w-md mx-auto space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium flex items-center gap-2">
+                      <Keyboard className="h-4 w-4 text-primary" />
+                      Recording Hotkey
+                    </label>
+                    <HotkeyInput value={hotkey} onChange={setHotkey} />
+                  </div>
+
+                  {/* <Card className="p-4 bg-border-primary/20"> */}
+                  <div className="flex items-start gap-3 p-2">
+                    <Info className="h-4 w-4 text-primary mt-0.5" />
+                    <p className="text-sm text-muted-foreground">
+                      Double tap ESC to cancel recording
+                    </p>
+                  </div>
+                  {/* </Card> */}
+                </div>
+
+                <div className="flex gap-3 justify-center">
+                  <Button variant="outline" onClick={handleBack} size="sm">
+                    <ChevronLeft className="mr-1 h-4 w-4" />
+                    Back
+                  </Button>
+                  <Button onClick={handleNext} size="sm">
+                    Continue
+                    <ChevronRight className="ml-1 h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Success - Simple */}
+          {currentStep === "success" && (
+            <div className="w-full max-w-md mx-auto animate-fade-in">
+              <div className="text-center space-y-6">
+                <div className="inline-flex p-4 bg-green-500/10 rounded-2xl animate-pulse-once">
+                  <CheckCircle className="h-12 w-12 text-green-500" />
+                </div>
+
+                <div className="space-y-2">
+                  <h1 className="text-3xl font-bold">You're all set!</h1>
+                  <p className="text-muted-foreground">
+                    Press {formatHotkey(hotkey)} to start recording
+                  </p>
+                </div>
+
+                <Button onClick={handleComplete} size="lg" className="min-w-[200px]">
+                  Go to dashboard
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

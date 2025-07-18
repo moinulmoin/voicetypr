@@ -16,22 +16,69 @@ pub struct Transcriber {
 
 impl Transcriber {
     pub fn new(model_path: &Path) -> Result<Self, String> {
-        let ctx = WhisperContext::new_with_params(
-            model_path.to_str().unwrap(),
-            WhisperContextParameters::default(),
-        )
-        .map_err(|e| format!("Failed to load model: {}", e))?;
+        let model_path_str = model_path
+            .to_str()
+            .ok_or_else(|| format!("Model path contains invalid UTF-8: {:?}", model_path))?;
+
+        let ctx =
+            WhisperContext::new_with_params(model_path_str, WhisperContextParameters::default())
+                .map_err(|e| format!("Failed to load model: {}", e))?;
 
         Ok(Self { context: ctx })
     }
 
     pub fn transcribe(&self, audio_path: &Path, language: Option<&str>) -> Result<String, String> {
+        self.transcribe_with_cancellation(audio_path, language, || false)
+    }
+
+    pub fn transcribe_with_cancellation<F>(
+        &self,
+        audio_path: &Path,
+        language: Option<&str>,
+        should_cancel: F,
+    ) -> Result<String, String>
+    where
+        F: Fn() -> bool,
+    {
+        log::info!(
+            "[TRANSCRIPTION_DEBUG] Starting transcription of: {:?}",
+            audio_path
+        );
+
+        // Check if file exists and is readable
+        if !audio_path.exists() {
+            let error = format!("Audio file does not exist: {:?}", audio_path);
+            log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            return Err(error);
+        }
+
+        // Early cancellation check
+        if should_cancel() {
+            log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled before starting");
+            return Err("Transcription cancelled".to_string());
+        }
+
+        let file_size = std::fs::metadata(audio_path)
+            .map_err(|e| format!("Cannot read file metadata: {}", e))?
+            .len();
+        log::info!("[TRANSCRIPTION_DEBUG] Audio file size: {} bytes", file_size);
+
+        if file_size == 0 {
+            let error = "Audio file is empty (0 bytes)";
+            log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            return Err(error.to_string());
+        }
+
         // Read WAV file
-        let mut reader = hound::WavReader::open(audio_path).map_err(|e| e.to_string())?;
+        let mut reader = hound::WavReader::open(audio_path).map_err(|e| {
+            let error = format!("Failed to open WAV file: {}", e);
+            log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            error
+        })?;
 
         let spec = reader.spec();
-        log::debug!(
-            "WAV spec: channels={}, sample_rate={}, bits={}",
+        log::info!(
+            "[TRANSCRIPTION_DEBUG] WAV spec: channels={}, sample_rate={}, bits={}",
             spec.channels,
             spec.sample_rate,
             spec.bits_per_sample
@@ -40,13 +87,28 @@ impl Transcriber {
         /* ----------------------------------------------
         1) read raw i16 pcm
         ---------------------------------------------- */
-        let samples_i16: Vec<i16> = reader.samples::<i16>().map(|s| s.unwrap()).collect();
+        let samples_i16: Vec<i16> = reader
+            .samples::<i16>()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read audio samples: {}", e))?;
+
+        // Check cancellation after reading samples
+        if should_cancel() {
+            log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after reading samples");
+            return Err("Transcription cancelled".to_string());
+        }
 
         /* ----------------------------------------------
         2) i16 → f32  (range -1.0 … 1.0)
         ---------------------------------------------- */
         let mut audio: Vec<f32> = vec![0.0; samples_i16.len()];
         convert_integer_to_float_audio(&samples_i16, &mut audio).map_err(|e| e.to_string())?;
+
+        // Check cancellation after conversion
+        if should_cancel() {
+            log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after audio conversion");
+            return Err("Transcription cancelled".to_string());
+        }
 
         /* ----------------------------------------------
         3) stereo → mono  (Whisper needs mono)
@@ -62,6 +124,12 @@ impl Transcriber {
         ---------------------------------------------- */
         if spec.sample_rate != 16_000 {
             audio = resample_linear(&audio, spec.sample_rate as usize, 16_000);
+        }
+
+        // Check cancellation after resampling
+        if should_cancel() {
+            log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after resampling");
+            return Err("Transcription cancelled".to_string());
         }
 
         log::debug!(
@@ -112,29 +180,58 @@ impl Transcriber {
         // params.set_suppress_nst(true);
 
         // Run transcription
-        log::info!("Starting transcription...");
-        let mut state = self.context.create_state().map_err(|e| e.to_string())?;
+        log::info!("[TRANSCRIPTION_DEBUG] Creating Whisper state...");
+        let mut state = self.context.create_state().map_err(|e| {
+            let error = format!("Failed to create Whisper state: {}", e);
+            log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            error
+        })?;
 
-        state
-            .full(params, &audio)
-            .map_err(|e| format!("Transcription failed: {}", e))?;
+        log::info!(
+            "[TRANSCRIPTION_DEBUG] Running Whisper inference with {} samples...",
+            audio.len()
+        );
+        state.full(params, &audio).map_err(|e| {
+            let error = format!("Whisper inference failed: {}", e);
+            log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            error
+        })?;
 
         // Get text
-        let num_segments = state.full_n_segments().map_err(|e| e.to_string())?;
+        log::info!("[TRANSCRIPTION_DEBUG] Getting segments from Whisper output...");
+        let num_segments = state.full_n_segments().map_err(|e| {
+            let error = format!("Failed to get segments: {}", e);
+            log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            error
+        })?;
 
-        log::info!("Transcription complete: {} segments", num_segments);
+        log::info!(
+            "[TRANSCRIPTION_DEBUG] Transcription complete: {} segments",
+            num_segments
+        );
 
         let mut text = String::new();
         for i in 0..num_segments {
-            let segment = state.full_get_segment_text(i).map_err(|e| e.to_string())?;
-            log::debug!("Segment {}: {}", i, segment);
+            let segment = state.full_get_segment_text(i).map_err(|e| {
+                let error = format!("Failed to get segment {}: {}", i, e);
+                log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+                error
+            })?;
+            log::info!("[TRANSCRIPTION_DEBUG] Segment {}: '{}'", i, segment);
             text.push_str(&segment);
             text.push(' ');
         }
 
         let result = text.trim().to_string();
-        if result.is_empty() || result == "[SOUND]" {
-            log::warn!("Transcription resulted in empty or [SOUND] output");
+        if result.is_empty() {
+            log::warn!("[TRANSCRIPTION_DEBUG] Transcription resulted in empty output");
+        } else if result == "[SOUND]" {
+            log::warn!("[TRANSCRIPTION_DEBUG] Transcription resulted in [SOUND] output (no speech detected)");
+        } else {
+            log::info!(
+                "[TRANSCRIPTION_DEBUG] Final transcription: {} characters",
+                result.len()
+            );
         }
 
         Ok(result)
@@ -146,6 +243,11 @@ impl Transcriber {
 fn resample_linear(input: &[f32], in_rate: usize, out_rate: usize) -> Vec<f32> {
     if in_rate == out_rate {
         return input.to_vec();
+    }
+
+    // Fast path for exact 3:1 downsampling (48kHz → 16kHz)
+    if in_rate == 48000 && out_rate == 16000 {
+        return downsample_3x(input);
     }
 
     let ratio = out_rate as f64 / in_rate as f64;
@@ -165,5 +267,29 @@ fn resample_linear(input: &[f32], in_rate: usize, out_rate: usize) -> Vec<f32> {
         };
         output.push(sample);
     }
+    output
+}
+
+/// Fast 3:1 downsampling for 48kHz → 16kHz conversion
+/// Uses simple averaging which is good enough for speech
+fn downsample_3x(input: &[f32]) -> Vec<f32> {
+    let out_len = input.len() / 3;
+    let mut output = Vec::with_capacity(out_len);
+
+    // Process in chunks of 3 samples
+    for chunk in input.chunks_exact(3) {
+        // Average 3 consecutive samples
+        let avg = (chunk[0] + chunk[1] + chunk[2]) / 3.0;
+        output.push(avg);
+    }
+
+    // Handle any remaining samples (if input length not divisible by 3)
+    let remainder = input.len() % 3;
+    if remainder > 0 {
+        let start_idx = input.len() - remainder;
+        let sum: f32 = input[start_idx..].iter().sum();
+        output.push(sum / remainder as f32);
+    }
+
     output
 }

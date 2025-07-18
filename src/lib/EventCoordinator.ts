@@ -147,9 +147,12 @@ export class EventCoordinator {
       "download-progress": "main",
       "model-downloaded": "main",
       
-      // Error events go to active window
-      "transcription-error": this.activeWindow,
-      "recording-error": this.activeWindow,
+      // Error events go to pill window (where recording UI is shown)
+      "transcription-error": "pill",
+      "recording-error": "pill",
+      
+      // Debug events
+      "test-event": "pill",
     };
 
     const rule = routingRules[eventName];

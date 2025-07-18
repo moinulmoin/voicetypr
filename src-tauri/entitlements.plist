@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required for JIT compilation (Rust/WebView) -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    
+    <!-- Required for unsigned executable memory (WebView) -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    
+    <!-- Required for dynamic libraries -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    
+    <!-- Required for microphone access -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    
+    <!-- Required for accessibility features (paste text) -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    
+    <!-- Required for app sandbox -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    
+    <!-- Allow outgoing network connections for updates -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

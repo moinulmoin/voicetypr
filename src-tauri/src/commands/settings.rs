@@ -10,11 +10,12 @@ pub struct Settings {
     pub hotkey: String,
     pub current_model: String,
     pub language: String,
-    pub auto_insert: bool,
-    pub show_window_on_record: bool,
     pub theme: String,
     pub transcription_cleanup_days: Option<u32>,
-    pub show_pill_widget: bool,
+    pub pill_position: Option<(f64, f64)>,
+    pub launch_at_startup: bool,
+    pub onboarding_completed: bool,
+    pub compact_recording_status: bool,
 }
 
 impl Default for Settings {
@@ -23,11 +24,12 @@ impl Default for Settings {
             hotkey: "CommandOrControl+Shift+Space".to_string(),
             current_model: "".to_string(), // Empty means auto-select
             language: "en".to_string(),
-            auto_insert: true,
-            show_window_on_record: false,
             theme: "system".to_string(),
             transcription_cleanup_days: None, // None means keep forever
-            show_pill_widget: true, // Show pill widget by default
+            pill_position: None,              // No saved position initially
+            launch_at_startup: false,         // Default to not launching at startup
+            onboarding_completed: false,      // Default to not completed
+            compact_recording_status: true,   // Default to compact mode
         }
     }
 }
@@ -49,14 +51,6 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("language")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().language),
-        auto_insert: store
-            .get("auto_insert")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(Settings::default().auto_insert),
-        show_window_on_record: store
-            .get("show_window_on_record")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(Settings::default().show_window_on_record),
         theme: store
             .get("theme")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -64,11 +58,34 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
         transcription_cleanup_days: store
             .get("transcription_cleanup_days")
             .and_then(|v| v.as_u64().map(|n| n as u32)),
-        show_pill_widget: store
-            .get("show_pill_widget")
+        pill_position: store.get("pill_position").and_then(|v| {
+            if let Some(arr) = v.as_array() {
+                if arr.len() == 2 {
+                    let x = arr[0].as_f64()?;
+                    let y = arr[1].as_f64()?;
+                    Some((x, y))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }),
+        launch_at_startup: store
+            .get("launch_at_startup")
             .and_then(|v| v.as_bool())
-            .unwrap_or(Settings::default().show_pill_widget),
+            .unwrap_or_else(|| Settings::default().launch_at_startup),
+        onboarding_completed: store
+            .get("onboarding_completed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().onboarding_completed),
+        compact_recording_status: store
+            .get("compact_recording_status")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().compact_recording_status),
     };
+
+    // Pill position is already loaded from store, no need for duplicate state
 
     Ok(settings)
 }
@@ -77,19 +94,56 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
 pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
+    // Check if model changed
+    let old_model = store
+        .get("current_model")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
     store.set("language", json!(settings.language));
-    store.set("auto_insert", json!(settings.auto_insert));
-    store.set(
-        "show_window_on_record",
-        json!(settings.show_window_on_record),
-    );
     store.set("theme", json!(settings.theme));
-    store.set("transcription_cleanup_days", json!(settings.transcription_cleanup_days));
-    store.set("show_pill_widget", json!(settings.show_pill_widget));
+    store.set(
+        "transcription_cleanup_days",
+        json!(settings.transcription_cleanup_days),
+    );
+    store.set("launch_at_startup", json!(settings.launch_at_startup));
+    store.set("onboarding_completed", json!(settings.onboarding_completed));
+    store.set(
+        "compact_recording_status",
+        json!(settings.compact_recording_status),
+    );
+
+    // Save pill position if provided
+    if let Some((x, y)) = settings.pill_position {
+        store.set("pill_position", json!([x, y]));
+    }
 
     store.save().map_err(|e| e.to_string())?;
+
+    // Preload new model if it changed
+    if !settings.current_model.is_empty() && old_model != settings.current_model {
+        use crate::commands::model::preload_model;
+        use tauri::async_runtime::Mutex as AsyncMutex;
+
+        log::info!(
+            "Model changed from '{}' to '{}', preloading new model",
+            old_model,
+            settings.current_model
+        );
+
+        let app_clone = app.clone();
+        let model_name = settings.current_model.clone();
+        tokio::spawn(async move {
+            let whisper_state =
+                app_clone.state::<AsyncMutex<crate::whisper::manager::WhisperManager>>();
+            match preload_model(app_clone.clone(), model_name.clone(), whisper_state).await {
+                Ok(_) => log::info!("Successfully preloaded new model: {}", model_name),
+                Err(e) => log::warn!("Failed to preload new model: {}", e),
+            }
+        });
+    }
 
     Ok(())
 }

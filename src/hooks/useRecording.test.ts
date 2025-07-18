@@ -9,7 +9,6 @@ import { emitMockEvent } from '../test/setup';
 const mockListen = vi.mocked(listen);
 
 describe('useRecording', () => {
-  const mockUnsubscribe = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();

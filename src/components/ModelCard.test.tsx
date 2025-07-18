@@ -9,7 +9,6 @@ describe('ModelCard', () => {
     name: 'base',
     size: 157286400, // 150MB
     url: 'https://example.com/model.bin',
-    sha256: 'abc123',
     downloaded: false,
     speed_score: 7,
     accuracy_score: 5,
@@ -84,6 +83,7 @@ describe('ModelCard', () => {
         onDownload={mockOnDownload}
         onDelete={mockOnDelete}
         onCancelDownload={mockOnCancelDownload}
+        onSelect={mockOnSelect}
       />
     );
 
@@ -102,6 +102,7 @@ describe('ModelCard', () => {
         model={mockModel}
         onDownload={mockOnDownload}
         onDelete={mockOnDelete}
+        onSelect={mockOnSelect}
       />
     );
 
@@ -121,6 +122,7 @@ describe('ModelCard', () => {
         model={downloadedModel}
         onDownload={mockOnDownload}
         onDelete={mockOnDelete}
+        onSelect={mockOnSelect}
       />
     );
 
@@ -144,6 +146,7 @@ describe('ModelCard', () => {
         onDownload={mockOnDownload}
         onDelete={mockOnDelete}
         onCancelDownload={mockOnCancelDownload}
+        onSelect={mockOnSelect}
       />
     );
 
@@ -202,6 +205,7 @@ describe('ModelCard', () => {
         model={largeModel}
         onDownload={mockOnDownload}
         onDelete={mockOnDelete}
+        onSelect={mockOnSelect}
       />
     );
 

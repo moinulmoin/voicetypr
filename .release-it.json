@@ -1,0 +1,28 @@
+{
+  "git": {
+    "commitMessage": "chore: release v${version}",
+    "tagName": "v${version}",
+    "requireCommits": true,
+    "requireCleanWorkingDir": true
+  },
+  "github": {
+    "release": true,
+    "draft": true,
+    "releaseName": "VoiceTypr v${version}",
+    "autoGenerate": true
+  },
+  "npm": {
+    "publish": false
+  },
+  "hooks": {
+    "before:init": ["pnpm lint", "pnpm typecheck", "pnpm test:all"],
+    "after:bump": "pnpm version ${version} --no-git-tag-version",
+    "after:release": "echo 'Release draft created for v${version}'"
+  },
+  "plugins": {
+    "@release-it/conventional-changelog": {
+      "preset": "angular",
+      "infile": "CHANGELOG.md"
+    }
+  }
+}

@@ -45,8 +45,8 @@ mod tests {
 
         // Verify initial state
         {
-            let recording_state = app_state.recording_state.lock().unwrap();
-            assert_eq!(*recording_state, RecordingState::Idle);
+            let recording_state = app_state.get_current_state();
+            assert_eq!(recording_state, RecordingState::Idle);
         }
 
         {
@@ -79,15 +79,12 @@ mod tests {
         ];
 
         for expected_state in transitions {
-            {
-                let mut state = app_state.recording_state.lock().unwrap();
-                *state = expected_state;
-            }
+            // Force set the state since we're testing direct state changes
+            app_state.recording_state.force_set(expected_state).unwrap();
 
-            {
-                let state = app_state.recording_state.lock().unwrap();
-                assert_eq!(*state, expected_state);
-            }
+            // Verify state was set
+            let state = app_state.get_current_state();
+            assert_eq!(state, expected_state);
         }
     }
 
@@ -139,8 +136,8 @@ mod tests {
                     RecordingState::Idle
                 };
 
-                let mut recording_state = state_clone.recording_state.lock().unwrap();
-                *recording_state = new_state;
+                // Force set state in concurrent test
+                state_clone.recording_state.force_set(new_state).unwrap();
             });
             handles.push(handle);
         }
@@ -151,9 +148,9 @@ mod tests {
         }
 
         // State should be valid (either Recording or Idle)
-        let final_state = app_state.recording_state.lock().unwrap();
+        let final_state = app_state.get_current_state();
         assert!(matches!(
-            *final_state,
+            final_state,
             RecordingState::Recording | RecordingState::Idle
         ));
     }
@@ -170,27 +167,24 @@ mod tests {
         let app_state = AppState::new();
 
         // Set to error state
-        {
-            let mut state = app_state.recording_state.lock().unwrap();
-            *state = RecordingState::Error;
-        }
+        app_state
+            .recording_state
+            .force_set(RecordingState::Error)
+            .unwrap();
 
         // Verify error state
-        {
-            let state = app_state.recording_state.lock().unwrap();
-            assert_eq!(*state, RecordingState::Error);
-        }
+        let state = app_state.get_current_state();
+        assert_eq!(state, RecordingState::Error);
 
         // Reset to idle
-        {
-            let mut state = app_state.recording_state.lock().unwrap();
-            *state = RecordingState::Idle;
-        }
+        app_state
+            .recording_state
+            .force_set(RecordingState::Idle)
+            .unwrap();
 
-        {
-            let state = app_state.recording_state.lock().unwrap();
-            assert_eq!(*state, RecordingState::Idle);
-        }
+        // Verify idle state
+        let state = app_state.get_current_state();
+        assert_eq!(state, RecordingState::Idle);
     }
 
     // Test for the audio recorder functionality would require mocking

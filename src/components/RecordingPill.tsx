@@ -1,251 +1,182 @@
-import { useEventCoordinator } from "@/hooks/useEventCoordinator";
+import { AudioWaveAnimation } from "@/components/AudioWaveAnimation";
+import IOSSpinner from "@/components/ios-spinner";
+import { Button } from "@/components/ui/button";
 import { useRecording } from "@/hooks/useRecording";
-import { cn } from "@/lib/utils";
+import { AppSettings } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
-import { Mic } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { AlertCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 export function RecordingPill() {
   const recording = useRecording();
   const [audioLevel, setAudioLevel] = useState(0);
-  const [autoInsert, setAutoInsert] = useState(true);
-  const { registerEvent } = useEventCoordinator("pill");
+  const [feedbackMessage, setFeedbackMessage] = useState<string>("");
+  const [isCompact, setIsCompact] = useState(true);
+  
+  // Track timer IDs for cleanup
+  const feedbackTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const mountedRef = useRef(true);
 
-  // Use ref to always have latest autoInsert value in event handlers
-  const autoInsertRef = useRef(autoInsert);
+  const isRecording = recording.state === "recording";
+  const isTranscribing = recording.state === "transcribing";
+  
+  // Cleanup on unmount
   useEffect(() => {
-    autoInsertRef.current = autoInsert;
-  }, [autoInsert]);
-
-  // Prevent duplicate processing
-  const processingRef = useRef(false);
-
-  // Load auto-insert setting on mount
-  useEffect(() => {
-    console.log("RecordingPill mounted");
-    invoke("get_settings")
-      .then((settings: any) => {
-        setAutoInsert(settings?.auto_insert ?? true);
-      })
-      .catch(console.error);
-
     return () => {
-      console.log("RecordingPill unmounted");
+      mountedRef.current = false;
+      if (feedbackTimerRef.current) {
+        clearTimeout(feedbackTimerRef.current);
+      }
     };
   }, []);
-
-  // Register event handlers through coordinator - only once!
-  useEffect(() => {
-    console.log("[RecordingPill] Registering event handlers...");
-
-    // Audio level events
-    registerEvent<number>("audio-level", (level) => {
-      setAudioLevel(level);
-      console.log("[EventCoordinator] Audio level:", level);
-    });
-
-    // Transcription complete events
-    registerEvent<{ text: string; model: string }>(
-      "transcription-complete",
-      async ({ text, model }) => {
-        // Guard against duplicate processing
-        if (processingRef.current) {
-          console.warn(
-            "[RecordingPill] Already processing transcription, skipping duplicate",
-          );
-          return;
+  
+  // Helper function to set feedback message with auto-hide
+  const setFeedbackWithTimeout = (message: string, timeout: number) => {
+    // Clear any existing timer
+    if (feedbackTimerRef.current) {
+      clearTimeout(feedbackTimerRef.current);
+    }
+    
+    // Only update state if component is still mounted
+    if (mountedRef.current) {
+      setFeedbackMessage(message);
+      
+      // Set new timer
+      feedbackTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) {
+          setFeedbackMessage("");
         }
-
-        processingRef.current = true;
-
-        console.log("[EventCoordinator] Pill window received transcription:", {
-          text: text.substring(0, 50) + "...",
-          model,
-          timestamp: new Date().toISOString(),
-        });
-
-        try {
-          // Always copy to clipboard first
-          try {
-            await navigator.clipboard.writeText(text);
-            console.log("Text copied to clipboard successfully");
-          } catch (e) {
-            console.error("Failed to copy to clipboard:", e);
-          }
-
-          // Try to insert at cursor if auto-insert is enabled
-          // Use ref to get latest value
-          if (autoInsertRef.current) {
-            console.log("Auto-insert is enabled, inserting text at cursor...");
-            try {
-              await invoke("insert_text", { text });
-              console.log("Text inserted at cursor successfully");
-            } catch (e) {
-              console.error("Failed to insert text:", e);
-            }
-          } else {
-            console.log("Auto-insert is disabled, skipping cursor insertion");
-          }
-
-          // Save transcription to backend AFTER paste/clipboard operations
-          // This ensures we save the exact text that was pasted
-          try {
-            console.log("Saving transcription with model:", model);
-            await invoke("save_transcription", { text, model });
-            console.log("Transcription saved to backend");
-          } catch (e) {
-            console.error("Failed to save transcription:", e);
-          }
-        } finally {
-          // Reset processing flag after a delay
-          setTimeout(() => {
-            processingRef.current = false;
-          }, 1000);
-        }
-
-        // Hide the pill widget after handling transcription
-        setTimeout(async () => {
-          try {
-            await invoke("hide_pill_widget");
-            console.log("Pill widget hidden after transcription");
-          } catch (e) {
-            console.error("Failed to hide pill widget:", e);
-          }
-        }, 500); // Small delay to ensure paste completes
-      },
-    );
-  }, [registerEvent]); // Only depend on registerEvent which is memoized
-
-  // Handle click to stop recording
-  const handleClick = async () => {
-    if (recording.state === "recording") {
-      console.log("Stopping recording from pill");
-      await recording.stopRecording();
+        feedbackTimerRef.current = null;
+      }, timeout);
     }
   };
 
-  // Calculate glow effect based on audio level
-  // Make it MUCH more sensitive and visible
-  const normalizedLevel = Math.min(audioLevel * 20, 1); // 20x amplification for better sensitivity
-  const glowRadius = normalizedLevel > 0.05 ? 20 + normalizedLevel * 40 : 0; // 20-60px range
-  const glowOpacity = normalizedLevel > 0.05 ? 0.7 + normalizedLevel * 0.3 : 0; // 0.7-1.0 opacity
+  // Fetch settings on mount
+  useEffect(() => {
+    invoke<AppSettings>("get_settings").then((settings) => {
+      setIsCompact(settings.compact_recording_status !== false);
+    }).catch(console.error);
+  }, []);
 
-  // Debug logging
-  console.log("RecordingPill Debug:", {
-    audioLevel,
-    normalizedLevel,
-    glowRadius,
-    glowOpacity,
-    recordingState: recording.state,
-  });
+  // Listen for audio level events
+  useEffect(() => {
+    if (!isRecording) {
+      setAudioLevel(0);
+      return;
+    }
 
-  const isTranscribing = recording.state === "transcribing";
-  const isRecording = recording.state === "recording";
+    const unlisten = listen<number>("audio-level", (event) => {
+      setAudioLevel(event.payload);
+    });
 
-  // Build style objects to ensure they're valid
-  const pillStyle = {
-    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)", // Default shadow
-    background: "rgba(0, 0, 0, 0.95)", // Default background
-  };
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [isRecording]);
 
-  if (isRecording && normalizedLevel > 0.05) {
-    // Apply glow effect when recording and speaking
-    const shadowString = `0 0 ${Math.round(glowRadius)}px rgba(255, 59, 48, ${glowOpacity.toFixed(2)}), 0 4px 12px rgba(0, 0, 0, 0.4)`;
-    pillStyle.boxShadow = shadowString;
+  // Listen for feedback events
+  useEffect(() => {
+    const unlisteners: Promise<() => void>[] = [];
 
-    const bgString = `radial-gradient(ellipse at center, rgba(255, 59, 48, ${(normalizedLevel * 0.15).toFixed(2)}) 0%, rgba(0, 0, 0, 0.95) 70%)`;
-    pillStyle.background = bgString;
+    // Listen for empty transcription
+    unlisteners.push(
+      listen<string>("transcription-empty", (event) => {
+        setFeedbackWithTimeout(event.payload, 2000);
+      })
+    );
 
-    console.log("Pill style applied:", { shadowString, bgString });
-  }
+    // Listen for recording stopped due to silence
+    unlisteners.push(
+      listen("recording-stopped-silence", () => {
+        setFeedbackWithTimeout("Recording stopped - no sound detected", 2000);
+      })
+    );
+
+    // Listen for ESC first press from backend
+    unlisteners.push(
+      listen<string>("esc-first-press", (event) => {
+        setFeedbackWithTimeout(event.payload, 3000);
+      })
+    );
+    
+    // Listen for recording errors
+    unlisteners.push(
+      listen<string>("recording-error", (event) => {
+        setFeedbackWithTimeout(event.payload || "Recording error occurred", 3000);
+      })
+    );
+    
+    // Listen for transcription errors
+    unlisteners.push(
+      listen<string>("transcription-error", (event) => {
+        setFeedbackWithTimeout(event.payload || "Transcription error occurred", 3000);
+      })
+    );
+    
+    // Listen for no models error
+    unlisteners.push(
+      listen<{ title: string; message: string; action: string }>("no-models-error", (event) => {
+        setFeedbackWithTimeout(event.payload.message, 4000);
+      })
+    );
+
+    return () => {
+      unlisteners.forEach((unlisten) => unlisten.then((fn) => fn()));
+    };
+  }, []);
+
+
+  // Handle click to stop recording
+  // const handleClick = async () => {
+  //   if (isRecording) {
+  //     await invoke("stop_recording");
+  //   }
+  // };
+
+  // // Only show pill when recording or transcribing
+  // if (!isRecording && !isTranscribing) {
+  //   return null;
+  // }
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center pointer-events-none">
-      <button
-        onClick={handleClick}
-        className={cn(
-          "pointer-events-auto",
-          "relative w-48 h-14 rounded-full", // Increased size to match window
-          "bg-black/95",
-          "flex items-center justify-center gap-2", // Added gap for spacing
-          "transition-all duration-200 ease-out",
-          "shadow-lg hover:shadow-xl", // Stronger shadow for visibility
-          "border border-white/10", // Add border for better visibility
-          isRecording && normalizedLevel > 0.05 && "scale-110", // More noticeable scale when speaking
-        )}
-        style={pillStyle}
-      >
-        {/* Pulsing ring when recording */}
-        {isRecording && (
-          <div
-            className="absolute inset-0 rounded-full"
-            style={{
-              background:
-                normalizedLevel > 0.05
-                  ? `radial-gradient(ellipse at center, transparent 40%, rgba(255, 59, 48, ${(normalizedLevel * 0.3).toFixed(2)}) 100%)`
-                  : "none",
-              animation:
-                normalizedLevel > 0.05
-                  ? "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite"
-                  : "none",
-            }}
-          />
-        )}
-
-        {isTranscribing ? (
-          <div className="w-6 h-6 relative z-10">
-            {/* macOS-style spinner */}
-            <svg className="animate-spin" viewBox="0 0 24 24">
-              <circle
-                cx="12"
-                cy="12"
-                r="10"
-                fill="none"
-                stroke="rgba(255, 255, 255, 0.2)"
-                strokeWidth="2.5"
-              />
-              <path
-                d="M12 2 A10 10 0 0 1 22 12"
-                fill="none"
-                stroke="white"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-              />
-            </svg>
+    <div className="fixed inset-0 flex items-end justify-center pointer-events-none">
+      <div className="relative">
+        {/* Feedback message - white background with alert icon */}
+        {feedbackMessage && (
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 pointer-events-auto animate-in fade-in slide-in-from-bottom-2 duration-200">
+            <div className="bg-white border border-gray-200 rounded-lg shadow-md overflow-hidden whitespace-nowrap">
+              <div className="flex items-center gap-3 px-4 py-3">
+                <AlertCircle className="size-4 text-amber-500 flex-shrink-0" />
+                <span className="text-sm text-gray-700 font-medium whitespace-nowrap">{feedbackMessage}</span>
+              </div>
+            </div>
           </div>
-        ) : (
-          <Mic
-            className={cn(
-              "w-6 h-6 relative z-10",
-              isRecording ? "text-white" : "text-white/70",
-            )}
-            style={{
-              filter:
-                isRecording && normalizedLevel > 0.05
-                  ? `drop-shadow(0 0 ${normalizedLevel * 8}px rgba(255, 255, 255, 0.8))`
-                  : "none",
-            }}
-          />
         )}
 
-        {/* Status text */}
-        <span className="text-white text-sm font-medium">
-          {isTranscribing
-            ? "Processing..."
-            : isRecording
-              ? "Recording"
-              : "Ready"}
-        </span>
-      </button>
-
-      {/* Debug info - remove in production */}
-      {process.env.NODE_ENV === "development" && (
-        <div className="absolute bottom-2 left-2 text-[10px] text-white/70 pointer-events-none bg-black/50 px-2 py-1 rounded">
-          <div>State: {recording.state}</div>
-          <div>Audio: {(audioLevel * 100).toFixed(1)}%</div>
-          <div>Glow: {glowRadius.toFixed(0)}px</div>
-        </div>
-      )}
+        <Button
+          // onClick={handleClick}
+          variant="default"
+          className={`${
+            isCompact
+              ? "rounded-full !p-1 w-10 h-10 shadow-none"
+              : "rounded-xl !p-4 gap-2"
+          } flex items-center justify-center`}
+          // aria-readonly={isTranscribing}
+        >
+          {isTranscribing ? (
+            <>
+              <IOSSpinner size={isCompact ? 20 : 16} />
+              {!isCompact && "Transcribing"}
+            </>
+          ) : (
+            <>
+              <AudioWaveAnimation audioLevel={audioLevel} className={isCompact ? "scale-80" : ""} />
+              {!isCompact && "Listening"}
+            </>
+          )}
+        </Button>
+      </div>
     </div>
   );
 }

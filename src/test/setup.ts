@@ -53,12 +53,9 @@ mockIPC((cmd, args) => {
       return Promise.resolve({
         hotkey: 'CommandOrControl+Shift+Space',
         language: 'auto',
-        auto_insert: true,
-        show_window_on_record: false,
         theme: 'system',
         current_model: 'base',
         transcription_cleanup_days: null,
-        show_pill_widget: true,
       });
     
     case 'save_settings':

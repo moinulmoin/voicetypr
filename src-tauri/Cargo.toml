@@ -1,7 +1,7 @@
 [package]
 name = "voicetypr"
 version = "0.1.0"
-description = "A Tauri App"
+description = "open source voice to text transcription app"
 authors = ["moinulmoin"]
 edition = "2021"
 
@@ -35,15 +35,16 @@ arboard = "3.6.0"
 log = "0.4"
 env_logger = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
+tauri-plugin-updater = "2.9.0"
+keyring = "2.0"
+tauri-plugin-cache = "0.1.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+tauri-plugin-macos-permissions = "2"
 
 [dev-dependencies]
 tempfile = "3.10"
-mockall = "0.12"
-serial_test = "3.1"
-tokio-test = "0.4"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-fs = "2"
@@ -52,4 +53,5 @@ tauri-plugin-mic-recorder = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
+tauri-plugin-autostart = "2"
 

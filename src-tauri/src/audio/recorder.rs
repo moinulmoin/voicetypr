@@ -38,6 +38,23 @@ pub struct AudioRecorder {
     audio_level_receiver: Arc<Mutex<Option<mpsc::Receiver<f32>>>>,
 }
 
+impl Drop for AudioRecorder {
+    fn drop(&mut self) {
+        // Ensure cleanup on drop
+        if let Ok(mut handle_guard) = self.recording_handle.lock() {
+            if let Some(handle) = handle_guard.take() {
+                // Send stop signal but don't wait (avoid blocking in Drop)
+                let _ = handle.stop_tx.send(RecorderCommand::Stop);
+            }
+        }
+        
+        // Clear audio level receiver
+        if let Ok(mut receiver_guard) = self.audio_level_receiver.lock() {
+            receiver_guard.take();
+        }
+    }
+}
+
 struct RecordingHandle {
     stop_tx: mpsc::Sender<RecorderCommand>,
     thread_handle: thread::JoinHandle<Result<String, String>>,
@@ -85,17 +102,22 @@ impl AudioRecorder {
             return Err("Already recording".to_string());
         }
 
+        // Clear any leftover audio level receiver from previous recordings
+        if let Ok(mut guard) = self.audio_level_receiver.lock() {
+            guard.take();
+        }
+
         let output_path = PathBuf::from(output_path);
         let (stop_tx, stop_rx) = mpsc::channel();
         let stop_tx_clone = stop_tx.clone();
-        
+
         // Create audio level channel
         let (audio_level_tx, audio_level_rx) = mpsc::channel();
 
         // Default silence detection config
         let silence_config = SilenceConfig {
-            threshold: 0.01,                        // 1% of max amplitude
-            duration: Duration::from_secs(60),      // 60 seconds of silence
+            threshold: 0.005,                  // 0.5% of max amplitude (matching whisper.cpp)
+            duration: Duration::from_secs(60), // 60 seconds of silence
             check_interval: Duration::from_secs(1), // Check every second
         };
 
@@ -151,9 +173,12 @@ impl AudioRecorder {
                                 let rms = (data.iter().map(|&x| x * x).sum::<f32>()
                                     / data.len() as f32)
                                     .sqrt();
-                                
-                                // Send audio level (ignore errors if receiver is dropped)
-                                let _ = audio_level_tx_clone.send(rms);
+
+                                // Apply logarithmic scaling for better perception
+                                let db = 20.0 * rms.log10();
+                                // Map -40dB to -10dB range to 0.0-1.0 (better for speech)
+                                let normalized_db = ((db + 40.0) / 30.0).max(0.0).min(1.0);
+                                let _ = audio_level_tx_clone.send(normalized_db);
 
                                 // Update last sound time if above threshold
                                 if rms > silence_threshold {
@@ -207,18 +232,24 @@ impl AudioRecorder {
                         .build_input_stream(
                             &config.config(),
                             move |data: &[i16], _: &_| {
-                                // Calculate RMS for I16 samples
-                                let rms = ((data.iter().map(|&x| (x as i32).pow(2)).sum::<i32>()
-                                    as f32
-                                    / data.len() as f32)
-                                    .sqrt()) as i16;
-                                
-                                // Send normalized audio level (0.0 to 1.0)
-                                let normalized_rms = (rms.abs() as f32) / (i16::MAX as f32);
-                                let _ = audio_level_tx_clone.send(normalized_rms);
+                                // Calculate RMS for I16 samples with proper normalization
+                                let sum_squares = data
+                                    .iter()
+                                    .map(|&x| {
+                                        let normalized = (x as f32) / (i16::MAX as f32);
+                                        normalized * normalized
+                                    })
+                                    .sum::<f32>();
+                                let rms = (sum_squares / data.len() as f32).sqrt();
+
+                                // Apply logarithmic scaling for better perception
+                                let db = 20.0 * rms.log10();
+                                // Map -40dB to -10dB range to 0.0-1.0 (better for speech)
+                                let normalized_db = ((db + 40.0) / 30.0).max(0.0).min(1.0);
+                                let _ = audio_level_tx_clone.send(normalized_db);
 
                                 // Update last sound time if above threshold
-                                if rms.abs() > silence_threshold {
+                                if rms > (silence_threshold as f32 / i16::MAX as f32) {
                                     if let Ok(mut time_guard) = last_sound_clone.lock() {
                                         *time_guard = Instant::now();
                                     }
@@ -288,7 +319,7 @@ impl AudioRecorder {
 
             // Create a channel to stop the silence detection thread
             let (silence_stop_tx, silence_stop_rx) = mpsc::channel();
-            
+
             // Spawn silence detection thread
             let last_sound_clone = last_sound_time.clone();
             let silence_duration = silence_config.duration;
@@ -299,7 +330,7 @@ impl AudioRecorder {
                     log::debug!("Silence detection thread received stop signal");
                     break;
                 }
-                
+
                 thread::sleep(check_interval);
 
                 if let Ok(last_sound) = last_sound_clone.lock() {
@@ -355,7 +386,7 @@ impl AudioRecorder {
             stop_tx,
             thread_handle,
         });
-        
+
         // Store the audio level receiver
         *self
             .audio_level_receiver
@@ -371,7 +402,7 @@ impl AudioRecorder {
             .lock()
             .map_err(|e| format!("Failed to acquire lock: {}", e))?
             .take();
-            
+
         // Also clear the audio level receiver
         if let Ok(mut guard) = self.audio_level_receiver.lock() {
             guard.take();
