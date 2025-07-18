@@ -71,6 +71,9 @@ importers:
       tauri-plugin-cache-api:
         specifier: ^0.1.5
         version: 0.1.5
+      tauri-plugin-macos-permissions-api:
+        specifier: ^2.3.0
+        version: 2.3.0
     devDependencies:
       '@release-it/conventional-changelog':
         specifier: ^10.0.1
@@ -2924,6 +2927,9 @@ packages:
 
   tauri-plugin-cache-api@0.1.5:
     resolution: {integrity: sha512-wNhvhanmB47d18hy7Xom3uY/LRzSM/E7z8SFELPffpVHvNcBLJyWqAqqNkj1WjT+4dr8J45YQmqJMCcKUi0Jyg==}
+
+  tauri-plugin-macos-permissions-api@2.3.0:
+    resolution: {integrity: sha512-pZp0jmDySysBqrGueknd1a7Rr4XEO9aXpMv9TNrT2PDHP0MSH20njieOagsFYJ5MCVb8A+wcaK0cIkjUC2dOww==}
 
   tinybench@2.9.0:
     resolution: {integrity: sha512-0+DUvqWMValLmha6lr4kD8iAMK1HzV0/aKnCtWb9v9641TnP/MFb7Pc2bxoxQjTXAErryXVgUOfv2YqNllqGeg==}
@@ -6017,6 +6023,10 @@ snapshots:
       yallist: 5.0.0
 
   tauri-plugin-cache-api@0.1.5:
+    dependencies:
+      '@tauri-apps/api': 2.6.0
+
+  tauri-plugin-macos-permissions-api@2.3.0:
     dependencies:
       '@tauri-apps/api': 2.6.0
 

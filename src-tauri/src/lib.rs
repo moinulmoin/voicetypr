@@ -236,6 +236,16 @@ pub fn emit_to_window(
     app_state.emit_to_window(window, event, payload)
 }
 
+// Helper function to emit events to all windows
+pub fn emit_to_all(
+    app: &tauri::AppHandle,
+    event: &str,
+    payload: impl serde::Serialize + Clone,
+) -> Result<(), String> {
+    app.emit(event, payload)
+        .map_err(|e| format!("Failed to emit to all windows: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logger with appropriate level based on build type

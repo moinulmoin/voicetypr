@@ -314,30 +314,7 @@ if command -v gh &> /dev/null; then
     gh release create "v${NEW_VERSION}" \
         --draft \
         --title "VoiceTypr v${NEW_VERSION}" \
-        --notes "$(cat <<EOF
-$CHANGELOG_CONTENT
-
-## Installation
-
-### macOS Universal Binary
-Download \`VoiceTypr_${NEW_VERSION}_universal.dmg\`
-
-This universal binary works on both Intel and Apple Silicon Macs.
-
-### ✅ Fully Notarized
-This release is signed and notarized by Apple. You can download and run VoiceTypr without any security warnings.
-
-### First-time Setup
-1. Download the DMG
-2. Open the DMG and drag VoiceTypr to Applications
-3. Launch VoiceTypr normally (no right-click needed!)
-4. Grant microphone and accessibility permissions when prompted
-
-## Auto-Updates
-
-VoiceTypr will automatically check for updates. You can also check manually in Settings → About.
-EOF
-)"
+        --notes "$CHANGELOG_CONTENT"
 
     echo -e "${GREEN}✅ Draft release created!${NC}"
     echo -e "${YELLOW}Uploading artifacts...${NC}"

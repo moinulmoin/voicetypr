@@ -17,7 +17,7 @@ export class EventCoordinator {
   private static instance: EventCoordinator;
   private registrations: Map<string, EventRegistration[]> = new Map();
   private activeWindow: WindowId = "main";
-  private debug = process.env.NODE_ENV === "development";
+  private debug = true; // Force debug logging to troubleshoot
 
   private constructor() {
     // Singleton pattern
@@ -143,9 +143,11 @@ export class EventCoordinator {
       "audio-level": "pill",
       "recording-state-changed": "all",
       
-      // Model events should only go to main window
-      "download-progress": "main",
-      "model-downloaded": "main",
+      // Model events should go to all windows (for onboarding support)
+      "download-progress": "all",
+      "model-downloaded": "all",
+      "download-cancelled": "all",
+      "download-retry": "all",
       
       // Error events go to pill window (where recording UI is shown)
       "transcription-error": "pill",

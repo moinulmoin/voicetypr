@@ -45,7 +45,8 @@
     "sonner": "^2.0.6",
     "tailwind-merge": "^3.3.1",
     "tailwindcss": "^4.1.11",
-    "tauri-plugin-cache-api": "^0.1.5"
+    "tauri-plugin-cache-api": "^0.1.5",
+    "tauri-plugin-macos-permissions-api": "^2.3.0"
   },
   "devDependencies": {
     "@release-it/conventional-changelog": "^10.0.1",

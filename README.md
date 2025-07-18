@@ -10,10 +10,8 @@
   [![macOS](https://img.shields.io/badge/macOS-13.0+-black)](https://www.apple.com/macos)
   [![Downloads](https://img.shields.io/github/downloads/moinulmoin/voicetypr/total)](https://github.com/moinulmoin/voicetypr/releases)
 
-  [Download](https://github.com/moinulmoin/voicetypr/releases/latest) • [Features](#features) • [Installation](#installation) • [Usage](#usage) • [Development](#development)
+  [Download](https://github.com/moinulmoin/voicetypr/releases/latest) • [Features](#features) • [Installation](#installation) • [Usage](#usage)
 </div>
-
----
 
 ## 🎯 What is VoiceTypr?
 

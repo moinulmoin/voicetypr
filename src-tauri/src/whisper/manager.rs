@@ -143,33 +143,38 @@ impl WhisperManager {
     }
 
     fn check_downloaded_models(&mut self) {
-        log::debug!("Checking models directory: {:?}", self.models_dir);
-        if let Ok(entries) = std::fs::read_dir(&self.models_dir) {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    log::trace!("Found file: {}", name);
-                    if name.ends_with(".bin") {
-                        let model_name = name.trim_end_matches(".bin");
-                        log::trace!("Model name from file: {}", model_name);
-                        if let Some(model) = self.models.get_mut(model_name) {
-                            #[cfg(debug_assertions)]
-                            log::debug!("Marking model {} as downloaded", model_name);
-                            model.downloaded = true;
-                        } else {
-                            // File present but not in the predefined list—quietly ignore
-                            #[cfg(debug_assertions)]
-                            log::info!("Extra model file detected: {}.bin", model_name);
-                        }
+        log::info!("[check_downloaded_models] Checking models directory: {:?}", self.models_dir);
+        
+        // Check each known model directly instead of scanning directory
+        for (model_name, model_info) in self.models.iter_mut() {
+            let model_path = self.models_dir.join(format!("{}.bin", model_name));
+            let exists = model_path.exists();
+            
+            if exists {
+                // Double-check with metadata to ensure file is actually accessible
+                if let Ok(metadata) = std::fs::metadata(&model_path) {
+                    if metadata.len() > 0 {
+                        log::info!("[check_downloaded_models] Model '{}' found at {:?} (size: {} bytes)", 
+                            model_name, model_path, metadata.len());
+                        model_info.downloaded = true;
+                    } else {
+                        log::warn!("[check_downloaded_models] Model '{}' exists but has 0 bytes", model_name);
+                        model_info.downloaded = false;
                     }
+                } else {
+                    log::warn!("[check_downloaded_models] Model '{}' path exists but cannot read metadata", model_name);
+                    model_info.downloaded = false;
                 }
+            } else {
+                log::debug!("[check_downloaded_models] Model '{}' not found at {:?}", model_name, model_path);
+                model_info.downloaded = false;
             }
-        } else {
-            log::warn!("Failed to read models directory or directory doesn't exist");
         }
 
         // Log final status
+        log::info!("[check_downloaded_models] Final status after directory scan:");
         for (name, info) in &self.models {
-            log::debug!("Model {}: downloaded = {}", name, info.downloaded);
+            log::info!("  Model '{}': downloaded = {}", name, info.downloaded);
         }
     }
 
@@ -206,7 +211,8 @@ impl WhisperManager {
             .map_err(|e| format!("Failed to create models directory: {}", e))?;
 
         let output_path = self.models_dir.join(format!("{}.bin", model_name));
-        log::debug!("Output path: {:?}", output_path);
+        log::info!("[download_model] Output path: {:?}", output_path);
+        log::info!("[download_model] File name will be: {}.bin", model_name);
 
         // Download the model
         let client = reqwest::Client::new();
@@ -281,7 +287,16 @@ impl WhisperManager {
 
         // Ensure file is flushed to disk
         file.flush().await.map_err(|e| e.to_string())?;
+        // Force OS to write to physical disk
+        file.sync_all().await.map_err(|e| format!("Failed to sync file to disk: {}", e))?;
         drop(file);
+        
+        // Also sync the parent directory to ensure directory entry is visible
+        if let Some(parent) = output_path.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
 
         // Ensure final 100% progress is sent
         if downloaded < total_size {
@@ -319,6 +334,16 @@ impl WhisperManager {
                 model_name
             );
             log::warn!("File integrity cannot be guaranteed without checksum verification.");
+        }
+        
+        // Log what files are in the directory after download
+        log::info!("[download_model] Download complete. Listing models directory:");
+        if let Ok(entries) = std::fs::read_dir(&self.models_dir) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    log::info!("[download_model]   Found file: {}", name);
+                }
+            }
         }
 
         Ok(())
@@ -418,6 +443,10 @@ impl WhisperManager {
         Ok(())
     }
 
+    pub fn get_models_dir(&self) -> &PathBuf {
+        &self.models_dir
+    }
+    
     pub fn get_model_path(&self, model_name: &str) -> Option<PathBuf> {
         // Sanitize model name to prevent path traversal
         if model_name.contains('/') || model_name.contains('\\') || model_name.contains("..") {
@@ -456,12 +485,22 @@ impl WhisperManager {
     }
 
     pub fn refresh_downloaded_status(&mut self) {
+        log::info!("[refresh_downloaded_status] Starting refresh");
+        
         // Reset all to not downloaded
-        for model in self.models.values_mut() {
+        for (name, model) in self.models.iter_mut() {
+            log::debug!("[refresh_downloaded_status] Resetting {} to not downloaded", name);
             model.downloaded = false;
         }
+        
         // Check again
         self.check_downloaded_models();
+        
+        // Log final status
+        log::info!("[refresh_downloaded_status] Final status:");
+        for (name, model) in &self.models {
+            log::info!("  Model {}: downloaded = {}", name, model.downloaded);
+        }
     }
 
     /// Returns the names of every `.bin` file currently present in the models directory

@@ -1,5 +1,4 @@
 import { Brain, Download, HardDrive, Trash2, X, Zap } from 'lucide-react';
-import React from 'react';
 import { ModelInfo } from '../types';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
@@ -17,7 +16,7 @@ interface ModelCardProps {
   showSelectButton?: boolean;
 }
 
-export const ModelCard = React.memo(function ModelCard({
+export const ModelCard = function ModelCard({
   name,
   model,
   downloadProgress,
@@ -102,7 +101,7 @@ export const ModelCard = React.memo(function ModelCard({
             ) : downloadProgress !== undefined ? (
               <>
                 <Progress value={downloadProgress} className="w-20 h-2" />
-                <span className="text-sm font-medium w-12 text-right">{downloadProgress.toFixed(0)}%</span>
+                <span className="text-sm font-medium w-12 text-right">{Math.round(downloadProgress)}%</span>
                 {onCancelDownload && (
                   <Button
                     onClick={(e) => {
@@ -135,4 +134,4 @@ export const ModelCard = React.memo(function ModelCard({
       </CardContent>
     </Card>
   );
-});
+};

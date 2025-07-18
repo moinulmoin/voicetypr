@@ -1,13 +1,12 @@
 import { HotkeyInput } from "@/components/HotkeyInput";
 import { ModelCard } from "@/components/ModelCard";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { cn } from "@/lib/utils";
+import { useModelManagement } from "@/hooks/useModelManagement";
 import type { AppSettings, ModelInfo } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import {
   Accessibility,
@@ -24,6 +23,17 @@ import { toast } from "sonner";
 
 interface OnboardingDesktopProps {
   onComplete: () => void;
+  modelManagement?: {
+    models: Record<string, ModelInfo>;
+    modelOrder: string[];
+    downloadProgress: Record<string, number>;
+    selectedModel: string | null;
+    setSelectedModel: (model: string | null) => void;
+    loadModels: () => Promise<[string, ModelInfo][]>;
+    downloadModel: (modelName: string) => Promise<void>;
+    cancelDownload: (modelName: string) => Promise<void>;
+    sortedModels: [string, ModelInfo][];
+  };
 }
 
 type Step = "welcome" | "permissions" | "models" | "setup" | "success";
@@ -36,17 +46,35 @@ const STEPS = [
   { id: "success" as const }
 ];
 
-export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
+export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelManagement }: OnboardingDesktopProps) {
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
   const [permissions, setPermissions] = useState({
     microphone: "checking" as "checking" | "granted" | "denied",
     accessibility: "checking" as "checking" | "granted" | "denied"
   });
-  const [models, setModels] = useState<Record<string, ModelInfo>>({});
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
   const [hotkey, setHotkey] = useState("cmd+shift+space");
   const [isRequesting, setIsRequesting] = useState<string | null>(null);
+  
+  // Use the shared model management hook OR props
+  const hookData = useModelManagement({ windowId: "main", showToasts: true });
+  const [localSelectedModel, setLocalSelectedModel] = useState<string | null>(null);
+  
+  const {
+    models,
+    modelOrder,
+    downloadProgress,
+    selectedModel: _selectedModel,
+    setSelectedModel: _setSelectedModel,
+    loadModels,
+    downloadModel,
+    cancelDownload,
+    sortedModels
+  } = modelManagement || hookData;
+  
+  // Use local state for selectedModel since onboarding needs its own selection
+  const selectedModel = localSelectedModel;
+  const setSelectedModel = setLocalSelectedModel;
+  
 
   const steps = STEPS;
 
@@ -60,54 +88,19 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
       return () => clearInterval(interval);
     }
   }, [currentStep]);
-
+  
   useEffect(() => {
-    checkExistingModels();
-    loadModels(); // Load models on mount so they're ready
-
-    // Setup download listeners
-    const unlistenProgress = listen<{ model: string; downloaded: number; total: number; progress: number }>(
-      "download-progress",
-      (event) => {
-        setDownloadProgress((prev) => ({
-          ...prev,
-          [event.payload.model]: event.payload.progress
-        }));
+    const hasModel = Object.values(models).some((m) => m.downloaded);
+    if (hasModel && !selectedModel) {
+      // Pre-select the first downloaded model
+      const downloadedModel = Object.entries(models).find(([_, m]) => m.downloaded);
+      if (downloadedModel) {
+        setSelectedModel(downloadedModel[0]);
       }
-    );
-
-    const unlistenComplete = listen<{ model: string }>("model-downloaded", (event) => {
-      setDownloadProgress((prev) => {
-        const newProgress = { ...prev };
-        delete newProgress[event.payload.model];
-        return newProgress;
-      });
-      loadModels();
-      setSelectedModel(event.payload.model);
-    });
-
-    return () => {
-      unlistenProgress.then((fn) => fn());
-      unlistenComplete.then((fn) => fn());
-    };
-  }, []);
-
-  const checkExistingModels = async () => {
-    try {
-      const modelStatus = await invoke<Record<string, ModelInfo>>("get_model_status");
-      const hasModel = Object.values(modelStatus).some((m) => m.downloaded);
-      if (hasModel) {
-        // Pre-select the first downloaded model
-        const downloadedModel = Object.entries(modelStatus).find(([_, m]) => m.downloaded);
-        if (downloadedModel) {
-          setSelectedModel(downloadedModel[0]);
-        }
-      }
-      // If no models are downloaded, don't select any - user must download one
-    } catch (error) {
-      console.error("Failed to check models:", error);
     }
-  };
+  }, [models, selectedModel, setSelectedModel]); // Re-check when models change
+  
+
 
   const checkPermissions = async () => {
     try {
@@ -144,41 +137,6 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
     }
   };
 
-  const loadModels = async () => {
-    try {
-      const modelStatus = await invoke<Record<string, ModelInfo>>("get_model_status");
-      setModels(modelStatus);
-    } catch (error) {
-      console.error("Failed to load models:", error);
-    }
-  };
-
-  const downloadModel = async (modelName: string) => {
-    try {
-      setDownloadProgress((prev) => ({ ...prev, [modelName]: 0 }));
-      await invoke("download_model", { modelName });
-    } catch (error) {
-      console.error("Failed to download model:", error);
-      setDownloadProgress((prev) => {
-        const newProgress = { ...prev };
-        delete newProgress[modelName];
-        return newProgress;
-      });
-    }
-  };
-
-  const cancelDownload = async (modelName: string) => {
-    try {
-      await invoke("cancel_download", { modelName });
-      setDownloadProgress((prev) => {
-        const newProgress = { ...prev };
-        delete newProgress[modelName];
-        return newProgress;
-      });
-    } catch (error) {
-      console.error("Failed to cancel download:", error);
-    }
-  };
 
   const saveSettings = async () => {
     try {
@@ -211,7 +169,7 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
         setCurrentStep(nextStep);
 
         if (nextStep === "models") {
-          loadModels();
+          await loadModels();
         }
       }
     } catch (error) {
@@ -402,25 +360,25 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
                 <div className="bg-card rounded-lg border">
                   <div className="max-h-[220px] overflow-y-auto">
                     <div className="space-y-3 p-4">
-                      {Object.entries(models).map(([name, model]) => (
-                        <div key={name} className="relative">
-                          {name === "ggml-large-v3-turbo" && (
-                            <Badge className="absolute -top-2 left-3 z-10 bg-green-500 text-xs">
-                              Recommended
-                            </Badge>
-                          )}
-                          <ModelCard
+                      {modelOrder.map((name) => {
+                        const model = models[name];
+                        if (!model) return null;
+                        const progress = downloadProgress[name];
+                        return (
+                          <div key={name} className="relative">
+                            <ModelCard
                             name={name}
                             model={model}
-                            downloadProgress={downloadProgress[name]}
+                            downloadProgress={progress}
                             isSelected={selectedModel === name}
                             onDownload={downloadModel}
                             onSelect={setSelectedModel}
                             onCancelDownload={cancelDownload}
                             showSelectButton={model.downloaded}
                           />
-                        </div>
-                      ))}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
@@ -506,4 +464,4 @@ export function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
       </div>
     </div>
   );
-}
+};

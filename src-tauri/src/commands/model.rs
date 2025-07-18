@@ -1,5 +1,5 @@
 use crate::commands::license::check_license_status_internal;
-use crate::emit_to_window;
+use crate::emit_to_all;
 use crate::license::LicenseState;
 use crate::whisper::manager::{ModelInfo, WhisperManager};
 use std::collections::HashMap;
@@ -54,9 +54,8 @@ pub async fn download_model(
 
             // Progress is already being emitted via events, no need for state storage
 
-            if let Err(e) = emit_to_window(
+            if let Err(e) = emit_to_all(
                 &app_handle,
-                "main",
                 "download-progress",
                 serde_json::json!({
                     "model": &model_name_clone,
@@ -120,9 +119,8 @@ pub async fn download_model(
                     );
 
                     // Notify UI about retry
-                    if let Err(e) = emit_to_window(
+                    if let Err(e) = emit_to_all(
                         &app,
-                        "main",
                         "download-retry",
                         serde_json::json!({
                             "model": &model_name,
@@ -154,7 +152,7 @@ pub async fn download_model(
     match download_result {
         Err(ref e) if e.contains("cancelled") => {
             // Emit download-cancelled event
-            if let Err(e) = emit_to_window(&app, "main", "download-cancelled", &model_name) {
+            if let Err(e) = emit_to_all(&app, "download-cancelled", &model_name) {
                 log::warn!("Failed to emit download-cancelled event: {}", e);
             }
             Err(e.clone())
@@ -162,13 +160,63 @@ pub async fn download_model(
         Ok(_) => {
             log::info!("Download completed for model: {}", model_name);
 
-            // Refresh the downloaded status in WhisperManager
-            let mut manager = state.lock().await;
-            manager.refresh_downloaded_status();
+            // Refresh the downloaded status in WhisperManager with retries
+            let mut retry_count = 0;
+            const MAX_RETRIES: u32 = 3;
+            let mut model_actually_downloaded = false;
+            
+            while retry_count < MAX_RETRIES {
+                {
+                    let mut manager = state.lock().await;
+                    log::info!("[VERIFY] Attempt {} for model '{}'", retry_count + 1, model_name);
+                    
+                    // Check if the model exists
+                    let models_dir = manager.get_models_dir();
+                    let expected_path = models_dir.join(format!("{}.bin", model_name));
+                    log::info!("[VERIFY] Looking for file at: {:?}", expected_path);
+                    log::info!("[VERIFY] File exists: {}", expected_path.exists());
+                    if expected_path.exists() {
+                        if let Ok(metadata) = std::fs::metadata(&expected_path) {
+                            log::info!("[VERIFY] File size: {} bytes", metadata.len());
+                        }
+                    }
+                    
+                    manager.refresh_downloaded_status();
+                    
+                    // Verify the model is actually marked as downloaded
+                    let models = manager.get_models_status();
+                    
+                    // Log all models for debugging
+                    for (name, info) in &models {
+                        log::info!("[VERIFY] Model '{}': downloaded={}", name, info.downloaded);
+                    }
+                    
+                    model_actually_downloaded = models.get(&model_name).map(|m| m.downloaded).unwrap_or(false);
+                    log::info!("[VERIFY] Model '{}' final status: {}", model_name, model_actually_downloaded);
+                } // Drop the lock
+                
+                if model_actually_downloaded {
+                    log::info!("Model {} confirmed as downloaded after {} attempts", model_name, retry_count + 1);
+                    break;
+                }
+                
+                retry_count += 1;
+                if retry_count < MAX_RETRIES {
+                    log::warn!("Model {} not found in directory after refresh, retry {}/{}", model_name, retry_count, MAX_RETRIES);
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+            
+            if !model_actually_downloaded {
+                log::error!("Model {} was downloaded but not found in models directory after {} retries!", model_name, MAX_RETRIES);
+                return Err(format!("Model {} file not detected after download completed", model_name));
+            }
 
-            // Models are refreshed in WhisperManager, no need for duplicate state
-
-            if let Err(e) = emit_to_window(&app, "main", "model-downloaded", &model_name) {
+            // Only emit the event if the model is confirmed as downloaded
+            log::info!("Emitting model-downloaded event for {}", model_name);
+            if let Err(e) = emit_to_all(&app, "model-downloaded", serde_json::json!({
+                "model": model_name
+            })) {
                 log::warn!("Failed to emit model-downloaded event: {}", e);
             }
             Ok(())
@@ -186,15 +234,24 @@ pub async fn download_model(
 #[tauri::command]
 pub async fn get_model_status(
     state: State<'_, Mutex<WhisperManager>>,
-) -> Result<HashMap<String, ModelInfo>, String> {
+) -> Result<Vec<(String, ModelInfo)>, String> {
     // Force refresh before returning status
     let mut manager = state.lock().await;
+    log::info!("[GET_MODEL_STATUS] Refreshing downloaded status...");
     manager.refresh_downloaded_status();
     let models = manager.get_models_status();
 
-    // Models are already stored in WhisperManager, no duplicate state needed
+    // Convert HashMap to Vec and sort by accuracy (ascending)
+    let mut models_vec: Vec<(String, ModelInfo)> = models.into_iter().collect();
+    models_vec.sort_by(|a, b| a.1.accuracy_score.cmp(&b.1.accuracy_score));
+    
+    // Log what we're returning
+    log::info!("[GET_MODEL_STATUS] Returning {} models:", models_vec.len());
+    for (name, info) in &models_vec {
+        log::info!("[GET_MODEL_STATUS]   Model '{}': downloaded={}", name, info.downloaded);
+    }
 
-    Ok(models)
+    Ok(models_vec)
 }
 
 #[tauri::command]
