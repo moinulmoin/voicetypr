@@ -47,10 +47,12 @@ fn format_duration(duration: &Duration) -> String {
 
 /// Check the current license status
 /// This checks license first (if stored), then falls back to trial
-/// Uses cache with 6-hour interval for trial users, 24-hour for licensed users
+/// Forces fresh check on app start, then uses cache during session
 #[tauri::command]
 pub async fn check_license_status(app: AppHandle) -> Result<LicenseStatus, String> {
     log::info!("Checking license status");
+    
+    // Since we clear cache on app start, we can use simpler logic
 
     // Deduplication key - use a constant since we're checking the same thing
     const DEDUP_KEY: &str = "license_status_check";
@@ -104,11 +106,13 @@ pub async fn check_license_status(app: AppHandle) -> Result<LicenseStatus, Strin
 
 /// Internal implementation of license status check
 async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, String> {
-    // Try to get cached status first
     let cache = app.cache();
+    
+    // Try to get cached status (cache is cleared on app start)
     match cache.get(LICENSE_CACHE_KEY) {
-        Ok(Some(cached_json)) => {
-            log::info!("Cache hit: Found cached license status");
+            Ok(Some(cached_json)) => {
+                log::info!("📦 Cache hit: Found cached license status");
+                log::debug!("Raw cached data: {:?}", cached_json);
             
             // Try to deserialize as new format first (with metadata)
             match serde_json::from_value::<CachedLicenseStatus>(cached_json.clone()) {
@@ -174,7 +178,7 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
             }
         },
         Ok(None) => {
-            log::info!("Cache miss: No cached license status found");
+            log::info!("Cache miss: No cached license status found (fresh check after app start)");
         },
         Err(e) => {
             log::warn!("Cache error: Failed to check cache: {}", e);
@@ -629,3 +633,4 @@ async fn invalidate_license_cache(app: &AppHandle) {
 pub async fn check_license_status_internal(app: &AppHandle) -> Result<LicenseStatus, String> {
     check_license_status(app.clone()).await
 }
+

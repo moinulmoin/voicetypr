@@ -4,17 +4,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { AppErrorBoundary } from "./components/ErrorBoundary";
 import { Sidebar } from "./components/Sidebar";
+import { LicenseSection } from "./components/license";
+import { OnboardingDesktop } from "./components/onboarding/OnboardingDesktop";
 import { AboutSection } from "./components/sections/AboutSection";
 import { GeneralSettings } from "./components/sections/GeneralSettings";
 import { ModelsSection } from "./components/sections/ModelsSection";
 import { RecentRecordings } from "./components/sections/RecentRecordings";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
+import { LicenseProvider } from "./contexts/LicenseContext";
 import { useAccessibilityPermission } from "./hooks/useAccessibilityPermission";
 import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { AppSettings, ModelInfo, TranscriptionHistory } from "./types";
-import { OnboardingDesktop } from "./components/onboarding/OnboardingDesktop";
-import { LicenseProvider } from "./contexts/LicenseContext";
-import { LicenseSection } from "./components/license";
 
 // Helper function to calculate balanced performance score
 function calculateBalancedScore(model: ModelInfo): number {
@@ -46,7 +46,7 @@ function sortModels(
 // Main App Component
 export default function App() {
   const { registerEvent } = useEventCoordinator("main");
-  const [activeSection, setActiveSection] = useState<string>("general");
+  const [activeSection, setActiveSection] = useState<string>("recordings");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [models, setModels] = useState<Record<string, ModelInfo>>({});
   const [settings, setSettings] = useState<AppSettings | null>(null);

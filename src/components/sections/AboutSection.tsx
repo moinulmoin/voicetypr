@@ -1,16 +1,22 @@
 import { XformerlyTwitter } from "@/assets/icon";
 import { Button } from "@/components/ui/button";
 import type { AppSettings } from '@/types';
+import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check } from '@tauri-apps/plugin-updater';
 import { Mail } from "lucide-react";
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 export function AboutSection() {
   const [checking, setChecking] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [appVersion, setAppVersion] = useState<string>('Loading...');
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion('Unknown'));
+  }, []);
 
   const handleResetOnboarding = async () => {
     setResetting(true);
@@ -71,7 +77,7 @@ export function AboutSection() {
           {/* Version */}
           <div className="flex items-center gap-3">
             <p className="text-sm text-gray-600 dark:text-gray-400">Version</p>
-            <p className="text-base font-medium">0.1.0</p>
+            <p className="text-base font-medium">{appVersion}</p>
           </div>
         </div>
 
