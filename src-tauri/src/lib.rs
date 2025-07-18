@@ -457,6 +457,19 @@ pub fn run() {
                 });
             }
 
+            // Clear license cache on app start to ensure fresh checks
+            {
+                use tauri_plugin_cache::CacheExt;
+                let cache = app.cache();
+                if let Err(e) = cache.remove("license_status") {
+                    log::debug!("No license cache to clear on startup: {}", e);
+                } else {
+                    log::info!("🧹 Cleared license cache on app startup for fresh check");
+                }
+                // Also clear the last validation tracker
+                let _ = cache.remove("last_license_validation");
+            }
+
             // Initialize whisper manager
             let models_dir = app.path().app_data_dir()?.join("models");
             log::info!("Models directory: {:?}", models_dir);

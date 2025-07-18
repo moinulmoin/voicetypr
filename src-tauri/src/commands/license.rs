@@ -1,11 +1,24 @@
 use crate::license::{api_client::LicenseApiClient, device, keychain, LicenseState, LicenseStatus};
-// Chrono imports removed - not used in current implementation
+use chrono::{DateTime, Utc, Duration};
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_cache::{CacheExt, SetItemOptions};
 use std::sync::Arc;
 use tokio::sync::{RwLock, OnceCell};
 use std::collections::HashMap;
 use tokio::sync::broadcast;
+
+// Wrapper for cached license status with metadata
+#[derive(Serialize, Deserialize, Debug)]
+struct CachedLicenseStatus {
+    status: LicenseStatus,
+    cached_at: DateTime<Utc>,
+}
+
+// Constants for cache and grace periods
+const OFFLINE_GRACE_PERIOD_DAYS: i64 = 7; // 7 days offline grace for licensed users
+const LICENSE_CACHE_KEY: &str = "license_status";
+const LAST_VALIDATION_KEY: &str = "last_license_validation";
 
 // Global deduplication map for license status checks
 static LICENSE_CHECK_DEDUP: OnceCell<Arc<RwLock<HashMap<String, Arc<broadcast::Sender<Result<LicenseStatus, String>>>>>>> =
@@ -17,12 +30,29 @@ async fn get_dedup_map() -> &'static Arc<RwLock<HashMap<String, Arc<broadcast::S
     }).await
 }
 
+// Helper function to format duration for logging
+fn format_duration(duration: &Duration) -> String {
+    let days = duration.num_days();
+    let hours = duration.num_hours() % 24;
+    let minutes = duration.num_minutes() % 60;
+    
+    if days > 0 {
+        format!("{} days, {} hours", days, hours)
+    } else if hours > 0 {
+        format!("{} hours, {} minutes", hours, minutes)
+    } else {
+        format!("{} minutes", minutes)
+    }
+}
+
 /// Check the current license status
 /// This checks license first (if stored), then falls back to trial
-/// Uses cache with 6-hour interval for trial users, 24-hour for licensed users
+/// Forces fresh check on app start, then uses cache during session
 #[tauri::command]
 pub async fn check_license_status(app: AppHandle) -> Result<LicenseStatus, String> {
     log::info!("Checking license status");
+    
+    // Since we clear cache on app start, we can use simpler logic
 
     // Deduplication key - use a constant since we're checking the same thing
     const DEDUP_KEY: &str = "license_status_check";
@@ -76,40 +106,79 @@ pub async fn check_license_status(app: AppHandle) -> Result<LicenseStatus, Strin
 
 /// Internal implementation of license status check
 async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, String> {
-    // Try to get cached status first
     let cache = app.cache();
-    match cache.get("license_status") {
-        Ok(Some(cached_json)) => {
-            log::info!("Cache hit: Found cached license status");
-            match serde_json::from_value::<LicenseStatus>(cached_json) {
-                Ok(cached_status) => {
-                    log::info!("Cache hit: Successfully deserialized cached status - Type: {:?}, Days left: {:?}",
-                        cached_status.status, cached_status.trial_days_left);
-
-                    // Double-check: If cached trial has 0 days left, treat as expired
-                    if matches!(cached_status.status, LicenseState::Trial) {
-                        if let Some(days) = cached_status.trial_days_left {
-                            if days <= 0 {
-                                log::warn!("Cache hit but trial has expired (0 days left) - ignoring cache");
+    
+    // Try to get cached status (cache is cleared on app start)
+    match cache.get(LICENSE_CACHE_KEY) {
+            Ok(Some(cached_json)) => {
+                log::info!("📦 Cache hit: Found cached license status");
+                log::debug!("Raw cached data: {:?}", cached_json);
+            
+            // Try to deserialize as new format first (with metadata)
+            match serde_json::from_value::<CachedLicenseStatus>(cached_json.clone()) {
+                Ok(cached_with_metadata) => {
+                    let mut status = cached_with_metadata.status;
+                    let cached_at = cached_with_metadata.cached_at;
+                    let elapsed = Utc::now().signed_duration_since(cached_at);
+                    
+                    log::info!("Cache hit: New format with metadata - cached {} ago", 
+                        format_duration(&elapsed));
+                    
+                    // For trials, adjust days left based on elapsed time
+                    if matches!(status.status, LicenseState::Trial) {
+                        if let Some(original_days) = status.trial_days_left {
+                            let elapsed_days = elapsed.num_days() as i32;
+                            let current_days = (original_days - elapsed_days).max(0);
+                            
+                            log::info!("Trial days adjustment: {} days cached - {} days elapsed = {} days left",
+                                original_days, elapsed_days, current_days);
+                            
+                            if current_days <= 0 {
+                                log::warn!("Cached trial has expired - performing fresh check");
                                 // Fall through to fresh check
                             } else {
-                                return Ok(cached_status);
+                                status.trial_days_left = Some(current_days);
+                                return Ok(status);
                             }
-                        } else {
-                            return Ok(cached_status);
                         }
                     } else {
                         // Not a trial, return cached status
-                        return Ok(cached_status);
+                        return Ok(status);
                     }
                 },
-                Err(e) => {
-                    log::warn!("Cache hit but failed to deserialize: {}", e);
+                Err(_) => {
+                    // Try old format (backward compatibility)
+                    match serde_json::from_value::<LicenseStatus>(cached_json) {
+                        Ok(cached_status) => {
+                            log::info!("Cache hit: Old format (no metadata) - Type: {:?}, Days left: {:?}",
+                                cached_status.status, cached_status.trial_days_left);
+
+                            // For old format, we can't adjust trial days, so be conservative
+                            if matches!(cached_status.status, LicenseState::Trial) {
+                                if let Some(days) = cached_status.trial_days_left {
+                                    if days <= 1 {
+                                        log::warn!("Old format cache with low trial days - performing fresh check");
+                                        // Fall through to fresh check
+                                    } else {
+                                        return Ok(cached_status);
+                                    }
+                                } else {
+                                    return Ok(cached_status);
+                                }
+                            } else {
+                                // Not a trial, return cached status
+                                return Ok(cached_status);
+                            }
+                        },
+                        Err(e) => {
+                            log::warn!("Cache hit but failed to deserialize: {}", e);
+                        }
+                    }
                 }
             }
         },
         Ok(None) => {
-            log::info!("Cache miss: No cached license status found");
+            log::info!("Cache miss: No cached license status found (fresh check after app start)");
         },
         Err(e) => {
             log::warn!("Cache error: Failed to check cache: {}", e);
@@ -142,14 +211,27 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                         expires_at: None,
                     };
 
+                    // Store last successful validation timestamp
+                    let validation_time = Utc::now();
+                    let _ = cache.set(
+                        LAST_VALIDATION_KEY.to_string(),
+                        serde_json::to_value(&validation_time).unwrap_or_default(),
+                        None
+                    );
+                    
                     // Cache for 24 hours for licensed users
+                    let wrapped_status = CachedLicenseStatus {
+                        status: status.clone(),
+                        cached_at: validation_time,
+                    };
+                    
                     let cache_options = Some(SetItemOptions {
                         ttl: Some(24 * 60 * 60), // 24 hours in seconds
                         compress: None,
                         compression_method: None,
                     });
-                    match cache.set("license_status".to_string(), serde_json::to_value(&status).unwrap_or_default(), cache_options) {
-                        Ok(_) => log::info!("Cached licensed status for 24 hours"),
+                    match cache.set(LICENSE_CACHE_KEY.to_string(), serde_json::to_value(&wrapped_status).unwrap_or_default(), cache_options) {
+                        Ok(_) => log::info!("Cached licensed status for 24 hours with metadata"),
                         Err(e) => log::error!("Failed to cache licensed status: {}", e),
                     }
 
@@ -162,11 +244,50 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
             }
             Err(e) => {
                 log::error!("Failed to validate license: {}", e);
-                // TODO: Implement offline grace period for licensed users
-                // Backend has 7-day offline grace configured (CONFIG.offlineGracePeriodDays)
-                // Client should store last successful validation timestamp
-                // and allow offline usage if within grace period
-                // For now, we'll fall through to trial check
+                
+                // Check for offline grace period
+                if let Ok(Some(last_validation_json)) = cache.get(LAST_VALIDATION_KEY) {
+                    if let Ok(last_validation) = serde_json::from_value::<DateTime<Utc>>(last_validation_json) {
+                        let elapsed = Utc::now().signed_duration_since(last_validation);
+                        let grace_period = Duration::days(OFFLINE_GRACE_PERIOD_DAYS);
+                        
+                        if elapsed < grace_period {
+                            log::info!("License validation failed but within {} day grace period (last validated {} ago)",
+                                OFFLINE_GRACE_PERIOD_DAYS, format_duration(&elapsed));
+                            
+                            let status = LicenseStatus {
+                                status: LicenseState::Licensed,
+                                trial_days_left: None,
+                                license_type: Some("pro".to_string()),
+                                license_key: Some(license_key),
+                                expires_at: None,
+                            };
+                            
+                            // Cache with shorter TTL during offline grace
+                            let wrapped_status = CachedLicenseStatus {
+                                status: status.clone(),
+                                cached_at: Utc::now(),
+                            };
+                            
+                            let cache_options = Some(SetItemOptions {
+                                ttl: Some(4 * 60 * 60), // 4 hours during grace period
+                                compress: None,
+                                compression_method: None,
+                            });
+                            let _ = cache.set(LICENSE_CACHE_KEY.to_string(), 
+                                serde_json::to_value(&wrapped_status).unwrap_or_default(), 
+                                cache_options);
+                            
+                            return Ok(status);
+                        } else {
+                            log::warn!("License validation failed and grace period expired ({} > {} days)",
+                                elapsed.num_days(), OFFLINE_GRACE_PERIOD_DAYS);
+                        }
+                    }
+                }
+                
+                // Grace period expired or no last validation found
+                // Fall through to trial check
             }
         }
     }
@@ -206,13 +327,18 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                 // Only cache trial status if more than 1 day remaining
                 // This prevents caching a trial that's about to expire
                 if trial_days_left > 1 {
+                    let wrapped_status = CachedLicenseStatus {
+                        status: status.clone(),
+                        cached_at: Utc::now(),
+                    };
+                    
                     let cache_options = Some(SetItemOptions {
                         ttl: Some(6 * 60 * 60), // 6 hours in seconds
                         compress: None,
                         compression_method: None,
                     });
-                    match cache.set("license_status".to_string(), serde_json::to_value(&status).unwrap_or_default(), cache_options) {
-                        Ok(_) => log::info!("Cached trial status for 6 hours - {} days remaining", trial_days_left),
+                    match cache.set(LICENSE_CACHE_KEY.to_string(), serde_json::to_value(&wrapped_status).unwrap_or_default(), cache_options) {
+                        Ok(_) => log::info!("Cached trial status for 6 hours with metadata - {} days remaining", trial_days_left),
                         Err(e) => log::error!("Failed to cache trial status: {}", e),
                     }
                 } else {
@@ -408,10 +534,12 @@ pub async fn deactivate_license(app: AppHandle) -> Result<(), String> {
 
                 // Clear cache when license is deactivated
                 let cache = app.cache();
-                match cache.remove("license_status") {
+                match cache.remove(LICENSE_CACHE_KEY) {
                     Ok(_) => log::info!("Cleared license cache after deactivation"),
                     Err(e) => log::warn!("Failed to clear cache after deactivation: {}", e),
                 }
+                // Also clear last validation timestamp
+                let _ = cache.remove(LAST_VALIDATION_KEY);
 
                 log::info!("License deactivated successfully");
 
@@ -438,10 +566,12 @@ pub async fn deactivate_license(app: AppHandle) -> Result<(), String> {
 
             // Clear cache even on failure
             let cache = app.cache();
-            match cache.remove("license_status") {
+            match cache.remove(LICENSE_CACHE_KEY) {
                 Ok(_) => log::info!("Cleared license cache after deactivation failure"),
                 Err(e) => log::warn!("Failed to clear cache after deactivation failure: {}", e),
             }
+            // Also clear last validation timestamp
+            let _ = cache.remove(LAST_VALIDATION_KEY);
 
             // Reset recording state even on API failure (since we removed from keychain)
             let app_state = app.state::<crate::AppState>();
@@ -492,12 +622,15 @@ pub async fn open_purchase_page() -> Result<(), String> {
 /// Helper function to invalidate license cache
 async fn invalidate_license_cache(app: &AppHandle) {
     let cache = app.cache();
-    match cache.remove("license_status") {
+    match cache.remove(LICENSE_CACHE_KEY) {
         Ok(_) => log::info!("License cache invalidated"),
         Err(e) => log::warn!("Failed to invalidate license cache: {}", e),
     }
+    // Also remove last validation timestamp when invalidating
+    let _ = cache.remove(LAST_VALIDATION_KEY);
 }
 
 pub async fn check_license_status_internal(app: &AppHandle) -> Result<LicenseStatus, String> {
     check_license_status(app.clone()).await
 }
+

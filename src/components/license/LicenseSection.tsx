@@ -94,7 +94,7 @@ export function LicenseSection() {
           {/* License key activation at the bottom */}
           <div className="space-y-3 mt-20">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Have a license key?
               </label>
               <div className="flex gap-2">
