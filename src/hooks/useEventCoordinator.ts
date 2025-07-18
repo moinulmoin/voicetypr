@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { eventCoordinator } from "@/lib/EventCoordinator";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
-type WindowId = "main" | "pill";
+type WindowId = "main" | "pill" | "onboarding";
 
 /**
  * Hook to easily register event handlers through the EventCoordinator

@@ -1,7 +1,7 @@
 import { listen, UnlistenFn, Event as TauriEvent } from "@tauri-apps/api/event";
 
 type EventHandler<T = any> = (payload: T) => void | Promise<void>;
-type WindowId = "main" | "pill";
+type WindowId = "main" | "pill" | "onboarding";
 
 interface EventRegistration {
   windowId: WindowId;
@@ -17,7 +17,7 @@ export class EventCoordinator {
   private static instance: EventCoordinator;
   private registrations: Map<string, EventRegistration[]> = new Map();
   private activeWindow: WindowId = "main";
-  private debug = true; // Force debug logging to troubleshoot
+  private debug = false;
 
   private constructor() {
     // Singleton pattern

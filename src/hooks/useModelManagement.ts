@@ -6,7 +6,7 @@ import { useEventCoordinator } from "./useEventCoordinator";
 import { ModelInfo } from "../types";
 
 interface UseModelManagementOptions {
-  windowId?: "main" | "pill";
+  windowId?: "main" | "pill" | "onboarding";
   showToasts?: boolean;
 }
 
@@ -47,6 +47,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   const [models, setModels] = useState<Record<string, ModelInfo>>({});
   const [modelOrder, setModelOrder] = useState<string[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
+  
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -54,20 +55,12 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   const loadModels = useCallback(async () => {
     try {
       setIsLoading(true);
-      console.log("[useModelManagement.loadModels] Loading models from backend...");
       const modelStatusArray = await invoke<[string, ModelInfo][]>("get_model_status");
-      console.log("[useModelManagement.loadModels] Received from backend:", modelStatusArray);
-      
-      // Log each model's status
-      modelStatusArray.forEach(([name, info]) => {
-        console.log(`[useModelManagement.loadModels] Model '${name}': downloaded=${info.downloaded}`);
-      });
       
       // Convert array to object for compatibility
       const modelStatus = Object.fromEntries(modelStatusArray);
       const order = modelStatusArray.map(([name]) => name);
       
-      console.log("[useModelManagement.loadModels] Setting models state...");
       setModels(modelStatus);
       setModelOrder(order);
       
@@ -86,7 +79,6 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   // Download model
   const downloadModel = useCallback(async (modelName: string) => {
     try {
-      console.log(`[useModelManagement.downloadModel] Starting download for model: ${modelName}`);
       
       // Set initial progress to show download started
       setDownloadProgress((prev) => ({
@@ -118,7 +110,6 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   // Cancel download
   const cancelDownload = useCallback(async (modelName: string) => {
     try {
-      console.log(`Cancelling download for model: ${modelName}`);
       await invoke("cancel_download", { modelName });
       
       // Remove from progress tracking
@@ -137,7 +128,6 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
   // Delete model
   const deleteModel = useCallback(async (modelName: string) => {
-    console.log("deleteModel called with:", modelName);
     try {
       const confirmed = await ask(`Are you sure you want to delete the ${modelName} model?`, {
         title: "Delete Model",
@@ -148,9 +138,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         return;
       }
 
-      console.log("Calling delete_model command...");
       await invoke("delete_model", { modelName });
-      console.log("delete_model command completed");
 
       // Refresh model status
       await loadModels();
@@ -183,11 +171,15 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           // If progress reaches 100%, remove from download progress
           // The model-downloaded event will handle setting it as downloaded
           if (progress >= 100) {
+            console.log(`[useModelManagement] Progress reached 100% for ${model}, refreshing models...`);
             setDownloadProgress((prev) => {
               const newProgress = { ...prev };
               delete newProgress[model];
               return newProgress;
             });
+            // Refresh models when download reaches 100%
+            // This ensures UI updates even if model-downloaded event fails
+            loadModels();
           } else {
             setDownloadProgress((prev) => ({
               ...prev,
@@ -199,9 +191,8 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
       // Download complete
       unregisterComplete = await registerEvent<{ model: string }>("model-downloaded", async (event) => {
-        console.log("[useModelManagement] Model downloaded event received:", event);
+        console.log('[useModelManagement] model-downloaded event received:', event);
         const modelName = event.model;
-        console.log("[useModelManagement] Model name:", modelName);
         
         // Remove from progress tracking
         setDownloadProgress((prev) => {
@@ -211,7 +202,9 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         });
         
         // Refresh model list
-        await loadModels();
+        console.log('[useModelManagement] Calling loadModels after download complete...');
+        const updatedModels = await loadModels();
+        console.log('[useModelManagement] Updated models after download:', updatedModels);
         
         if (showToasts) {
           toast.success(`Model ${modelName} downloaded successfully`);
@@ -220,7 +213,6 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
       // Download cancelled
       unregisterCancelled = await registerEvent<string>("download-cancelled", (modelName) => {
-        console.log("Download cancelled for model:", modelName);
         
         // Remove from progress tracking
         setDownloadProgress((prev) => {

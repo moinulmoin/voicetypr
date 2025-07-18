@@ -189,17 +189,6 @@ export default function App() {
             // Reload settings after onboarding
             invoke<AppSettings>("get_settings").then(setSettings);
           }}
-          modelManagement={{
-            models: sortedModels.reduce((acc, [name, model]) => ({ ...acc, [name]: model }), {}),
-            modelOrder: sortedModels.map(([name]) => name),
-            downloadProgress,
-            selectedModel: null,
-            setSelectedModel: () => {},
-            loadModels: async () => sortedModels,
-            downloadModel,
-            cancelDownload,
-            sortedModels
-          }}
         />
       </AppErrorBoundary>
     );

@@ -209,10 +209,17 @@ pub async fn download_model(
             
             if !model_actually_downloaded {
                 log::error!("Model {} was downloaded but not found in models directory after {} retries!", model_name, MAX_RETRIES);
+                // Still emit the event even if verification failed, let the frontend handle it
+                log::info!("Emitting model-downloaded event despite verification failure for {}", model_name);
+                if let Err(e) = emit_to_all(&app, "model-downloaded", serde_json::json!({
+                    "model": model_name
+                })) {
+                    log::warn!("Failed to emit model-downloaded event: {}", e);
+                }
                 return Err(format!("Model {} file not detected after download completed", model_name));
             }
 
-            // Only emit the event if the model is confirmed as downloaded
+            // Emit the event if the model is confirmed as downloaded
             log::info!("Emitting model-downloaded event for {}", model_name);
             if let Err(e) = emit_to_all(&app, "model-downloaded", serde_json::json!({
                 "model": model_name

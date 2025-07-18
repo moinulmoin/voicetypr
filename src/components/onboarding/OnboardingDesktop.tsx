@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { cn } from "@/lib/utils";
 import { useModelManagement } from "@/hooks/useModelManagement";
-import type { AppSettings, ModelInfo } from "@/types";
+import type { AppSettings } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import {
@@ -23,17 +23,6 @@ import { toast } from "sonner";
 
 interface OnboardingDesktopProps {
   onComplete: () => void;
-  modelManagement?: {
-    models: Record<string, ModelInfo>;
-    modelOrder: string[];
-    downloadProgress: Record<string, number>;
-    selectedModel: string | null;
-    setSelectedModel: (model: string | null) => void;
-    loadModels: () => Promise<[string, ModelInfo][]>;
-    downloadModel: (modelName: string) => Promise<void>;
-    cancelDownload: (modelName: string) => Promise<void>;
-    sortedModels: [string, ModelInfo][];
-  };
 }
 
 type Step = "welcome" | "permissions" | "models" | "setup" | "success";
@@ -46,7 +35,7 @@ const STEPS = [
   { id: "success" as const }
 ];
 
-export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelManagement }: OnboardingDesktopProps) {
+export const OnboardingDesktop = function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
   const [permissions, setPermissions] = useState({
     microphone: "checking" as "checking" | "granted" | "denied",
@@ -56,9 +45,11 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
   const [isRequesting, setIsRequesting] = useState<string | null>(null);
   
   // Use the shared model management hook OR props
-  const hookData = useModelManagement({ windowId: "main", showToasts: true });
+  // Always call the hook to satisfy React rules
+  const hookData = useModelManagement({ windowId: "onboarding", showToasts: true });
   const [localSelectedModel, setLocalSelectedModel] = useState<string | null>(null);
   
+  // Use hookData for now since modelManagement from props might not be loaded
   const {
     models,
     modelOrder,
@@ -68,8 +59,7 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
     loadModels,
     downloadModel,
     cancelDownload,
-    sortedModels
-  } = modelManagement || hookData;
+  } = hookData;
   
   // Use local state for selectedModel since onboarding needs its own selection
   const selectedModel = localSelectedModel;
@@ -365,7 +355,7 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
                         if (!model) return null;
                         const progress = downloadProgress[name];
                         return (
-                          <div key={name} className="relative">
+                          <div key={`${name}-${model.downloaded}`} className="relative">
                             <ModelCard
                             name={name}
                             model={model}
