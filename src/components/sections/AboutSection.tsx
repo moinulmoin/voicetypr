@@ -22,9 +22,9 @@ export function AboutSection() {
           onboarding_completed: false,
         },
       });
-      
+
       toast.success("Onboarding reset! Please restart the app.");
-      
+
       // Reload the window to trigger onboarding
       setTimeout(() => {
         window.location.reload();
@@ -63,7 +63,7 @@ export function AboutSection() {
   return (
     <div className="p-6 h-full flex flex-col">
       <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-6">About VoiceTypr</h2>
-      
+
       <div className="flex-1 space-y-6">
         {/* App Info Section */}
         <div className="space-y-4">
@@ -76,13 +76,6 @@ export function AboutSection() {
 
         {/* Links Section */}
         <div className="flex items-center gap-6 mt-8">
-            <button
-              onClick={() => openExternalLink("https://voicetypr.com/changelog")}
-              className="flex items-center gap-2 text-sm text-gray-900 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-400 hover:underline underline-offset-4"
-            >
-              <NotebookText className="w-4 h-4" />
-              Changelog
-            </button>
             <button
               onClick={() => openExternalLink("mailto:support@voicetypr.com")}
               className="flex items-center gap-2 text-sm text-gray-900 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-400 hover:underline underline-offset-4"
@@ -101,9 +94,9 @@ export function AboutSection() {
 
         {/* Check for Updates Button */}
         <div className="mt-12 flex justify-center">
-          <Button 
-            size="sm" 
-            variant="default" 
+          <Button
+            size="sm"
+            variant="default"
             onClick={handleCheckForUpdates}
             className="h-8"
             disabled={checking}
@@ -112,12 +105,12 @@ export function AboutSection() {
           </Button>
         </div>
       </div>
-      
+
       {/* Reset Onboarding at the absolute bottom */}
       <div className="flex justify-center mt-auto pt-6">
-        <Button 
-          size="sm" 
-          variant="ghost" 
+        <Button
+          size="sm"
+          variant="ghost"
           onClick={handleResetOnboarding}
           className="h-8 text-muted-foreground hover:text-foreground"
           disabled={resetting}
