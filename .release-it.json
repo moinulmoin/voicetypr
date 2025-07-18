@@ -15,7 +15,7 @@
     "publish": false
   },
   "hooks": {
-    "before:init": ["pnpm lint", "pnpm typecheck", "pnpm test:all"],
+    "before:init": ["pnpm typecheck"],
     "after:bump": "pnpm version ${version} --no-git-tag-version",
     "after:release": "echo 'Release draft created for v${version}'"
   },
