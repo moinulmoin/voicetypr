@@ -1,5 +1,17 @@
 # Changelog
 
+# [1.1.0](https://github.com/moinulmoin/voicetypr/compare/v1.0.0...v1.1.0) (2025-07-18)
+
+
+### Features
+
+* :sparkles: fix license cache ([435f8a5](https://github.com/moinulmoin/voicetypr/commit/435f8a557962fb845302d20dd5aac57acbe9a26f))
+* :sparkles: remove CI, release, and test workflows from GitHub Actions for project restructuring ([c763ae0](https://github.com/moinulmoin/voicetypr/commit/c763ae083c63f2982edeb066d43b0ddc0e87881e))
+* :sparkles: reorganize imports in App component, update active section state, enhance AboutSection with app version retrieval, and clear license cache on startup for fresh checks ([762e158](https://github.com/moinulmoin/voicetypr/commit/762e1583b2aa6eac6b4ceb5736e406671a0e5318))
+* :sparkles: replace Twitter icon with XformerlyTwitter in AboutSection and reorganize imports for better structure ([97c05c6](https://github.com/moinulmoin/voicetypr/commit/97c05c6f4515ef29a1b7bf4cbe05e7991bb3116d))
+* :sparkles: update .gitignore to include release files, clean up AboutSection and LicenseContext for improved readability, and fix URL in license commands ([1f9d501](https://github.com/moinulmoin/voicetypr/commit/1f9d501b5e56a7f5a8d66251d17e420ca2b246f4))
+* :sparkles: update script ([ff5ebeb](https://github.com/moinulmoin/voicetypr/commit/ff5ebeb4816325efaaa2cc74e4a08801bade61c9))
+
 # 1.0.0 (2025-07-18)
 
 
