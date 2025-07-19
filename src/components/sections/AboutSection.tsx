@@ -5,6 +5,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check } from '@tauri-apps/plugin-updater';
+import { open } from '@tauri-apps/plugin-shell';
 import { Mail } from "lucide-react";
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
@@ -63,8 +64,13 @@ export function AboutSection() {
     }
   };
 
-  const openExternalLink = (url: string) => {
-    window.open(url, "_blank", "noopener,noreferrer");
+  const openExternalLink = async (url: string) => {
+    try {
+      await open(url);
+    } catch (error) {
+      console.error('Failed to open external link:', error);
+      toast.error('Failed to open link');
+    }
   };
 
   return (

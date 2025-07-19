@@ -11,7 +11,6 @@ import { ModelsSection } from "./components/sections/ModelsSection";
 import { RecentRecordings } from "./components/sections/RecentRecordings";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { LicenseProvider } from "./contexts/LicenseContext";
-import { useAccessibilityPermission } from "./hooks/useAccessibilityPermission";
 import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { useModelManagement } from "./hooks/useModelManagement";
 import { AppSettings, TranscriptionHistory } from "./types";
@@ -34,8 +33,6 @@ export default function App() {
     sortedModels
   } = modelManagement;
 
-  // Check accessibility permissions on macOS
-  useAccessibilityPermission();
 
   // Load history function
   const loadHistory = useCallback(async () => {
