@@ -50,6 +50,7 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
     models,
     modelOrder,
     downloadProgress,
+    verifyingModels,
     selectedModel,
     setSelectedModel,
     loadModels,
@@ -358,6 +359,7 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
                             name={name}
                             model={model}
                             downloadProgress={progress}
+                            isVerifying={verifyingModels.has(name)}
                             isSelected={selectedModel === name}
                             onDownload={downloadModel}
                             onSelect={setSelectedModel}

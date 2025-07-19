@@ -31,7 +31,7 @@ export function AboutSection() {
         },
       });
 
-      toast.success("Onboarding reset! Please restart the app.");
+      toast.success("Onboarding reset! Restarting the app.");
 
       // Reload the window to trigger onboarding
       setTimeout(() => {

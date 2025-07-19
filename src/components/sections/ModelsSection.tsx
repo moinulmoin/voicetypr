@@ -4,6 +4,7 @@ import { ModelInfo } from "@/types";
 interface ModelsSectionProps {
   models: [string, ModelInfo][];
   downloadProgress: Record<string, number>;
+  verifyingModels: Set<string>;
   currentModel?: string;
   onDownload: (modelName: string) => void;
   onDelete: (modelName: string) => void;
@@ -14,6 +15,7 @@ interface ModelsSectionProps {
 export function ModelsSection({
   models,
   downloadProgress,
+  verifyingModels,
   currentModel,
   onDownload,
   onDelete,
@@ -35,6 +37,7 @@ onCancelDownload,
               name={name}
               model={model}
               downloadProgress={downloadProgress[name]}
+              isVerifying={verifyingModels.has(name)}
               onDownload={onDownload}
               onDelete={onDelete}
               onCancelDownload={onCancelDownload}

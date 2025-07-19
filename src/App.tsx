@@ -27,6 +27,7 @@ export default function App() {
   const modelManagement = useModelManagement({ windowId: "main", showToasts: true });
   const {
     downloadProgress,
+    verifyingModels,
     downloadModel,
     cancelDownload,
     deleteModel,
@@ -213,6 +214,7 @@ export default function App() {
           <ModelsSection
             models={sortedModels}
             downloadProgress={downloadProgress}
+            verifyingModels={verifyingModels}
             currentModel={settings?.current_model}
             onDownload={downloadModel}
             onDelete={handleDeleteModel}

@@ -46,6 +46,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
   const [models, setModels] = useState<Record<string, ModelInfo>>({});
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
+  const [verifyingModels, setVerifyingModels] = useState<Set<string>>(new Set());
 
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -193,6 +194,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   // Setup event listeners BEFORE any other effects
   useEffect(() => {
     let unregisterProgress: (() => void) | undefined;
+    let unregisterVerifying: (() => void) | undefined;
     let unregisterComplete: (() => void) | undefined;
     let unregisterCancelled: (() => void) | undefined;
 
@@ -203,22 +205,28 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         (payload) => {
           const { model, progress } = payload;
 
-          // If progress reaches 100%, remove from download progress
-          // The model-downloaded event will handle setting it as downloaded
-          if (progress >= 100) {
-            setDownloadProgress((prev) => {
-              const newProgress = { ...prev };
-              delete newProgress[model];
-              return newProgress;
-            });
-          } else {
-            setDownloadProgress((prev) => ({
-              ...prev,
-              [model]: progress
-            }));
-          }
+          // Keep updating progress until we receive the verifying event
+          setDownloadProgress((prev) => ({
+            ...prev,
+            [model]: progress
+          }));
         }
       );
+
+      // Model verifying (after download, before verification)
+      unregisterVerifying = await registerEvent<{ model: string }>("model-verifying", (event) => {
+        const modelName = event.model;
+        
+        // Remove from download progress
+        setDownloadProgress((prev) => {
+          const newProgress = { ...prev };
+          delete newProgress[modelName];
+          return newProgress;
+        });
+        
+        // Add to verifying set
+        setVerifyingModels((prev) => new Set(prev).add(modelName));
+      });
 
       // Download complete
       unregisterComplete = await registerEvent<{ model: string }>("model-downloaded", async (event) => {
@@ -227,11 +235,18 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         // Remove from active downloads
         activeDownloads.current.delete(modelName);
 
-        // Remove from progress tracking
+        // Remove from progress tracking and verifying
         setDownloadProgress((prev) => {
           const newProgress = { ...prev };
           delete newProgress[modelName];
           return newProgress;
+        });
+        
+        // Remove from verifying set
+        setVerifyingModels((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(modelName);
+          return newSet;
         });
 
         // Refresh model list
@@ -265,6 +280,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     // Cleanup
     return () => {
       unregisterProgress?.();
+      unregisterVerifying?.();
       unregisterComplete?.();
       unregisterCancelled?.();
     };
@@ -284,6 +300,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     models,
     modelOrder,
     downloadProgress,
+    verifyingModels,
     selectedModel,
     isLoading,
 

@@ -1,4 +1,4 @@
-import { Brain, Download, HardDrive, Trash2, X, Zap } from 'lucide-react';
+import { Brain, Download, HardDrive, Loader2, Trash2, X, Zap } from 'lucide-react';
 import { ModelInfo } from '../types';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
@@ -8,6 +8,7 @@ interface ModelCardProps {
   name: string;
   model: ModelInfo;
   downloadProgress?: number;
+  isVerifying?: boolean;
   isSelected?: boolean;
   onDownload: (name: string) => void;
   onSelect: (name: string) => void;
@@ -20,6 +21,7 @@ export const ModelCard = function ModelCard({
   name,
   model,
   downloadProgress,
+  isVerifying = false,
   isSelected = false,
   onDownload,
   onSelect,
@@ -97,6 +99,10 @@ export const ModelCard = function ModelCard({
                     <Trash2 className="w-4 h-4" />
                   </Button>
                 )}
+              </>
+            ) : isVerifying ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
               </>
             ) : downloadProgress !== undefined ? (
               <>

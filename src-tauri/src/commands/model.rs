@@ -44,6 +44,8 @@ pub async fn download_model(
 
     // Spawn task to handle progress updates
     let progress_handle = tokio::spawn(async move {
+        let mut verification_emitted = false;
+        
         while let Some((downloaded, total)) = progress_rx.recv().await {
             let progress = (downloaded as f64 / total as f64) * 100.0;
             log::debug!(
@@ -65,6 +67,21 @@ pub async fn download_model(
                 }),
             ) {
                 log::warn!("Failed to emit download progress: {}", e);
+            }
+            
+            // When download reaches 100%, emit verification event
+            if progress >= 100.0 && !verification_emitted {
+                verification_emitted = true;
+                log::info!("Download complete, starting verification for model: {}", &model_name_clone);
+                if let Err(e) = emit_to_all(
+                    &app_handle,
+                    "model-verifying",
+                    serde_json::json!({
+                        "model": &model_name_clone
+                    }),
+                ) {
+                    log::warn!("Failed to emit model-verifying event: {}", e);
+                }
             }
         }
     });
