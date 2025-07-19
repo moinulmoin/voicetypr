@@ -252,26 +252,26 @@ echo -e "${YELLOW}Creating latest.json...${NC}"
 # Get signature from the sig file if it exists
 if [[ -f "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_universal.app.tar.gz.sig" ]]; then
     # Read the entire signature file content (it's base64 encoded)
-    SIGNATURE=$(cat "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_universal.app.tar.gz.sig")
+    # Join all lines into a single line (as expected by Tauri updater)
+    SIGNATURE=$(cat "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_universal.app.tar.gz.sig" | tr -d '\n')
 else
     SIGNATURE="SIGNATURE_PLACEHOLDER"
     echo -e "${YELLOW}Warning: No signature file found, using placeholder${NC}"
     echo -e "${YELLOW}The auto-updater will not work without a valid signature${NC}"
 fi
 
-cat > "$OUTPUT_DIR/latest.json" << EOF
-{
-  "version": "v${NEW_VERSION}",
-  "notes": "See the release notes for v${NEW_VERSION}",
-  "pub_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+# Create latest.json using printf to avoid heredoc issues
+printf '{
+  "version": "v%s",
+  "notes": "See the release notes for v%s",
+  "pub_date": "%s",
   "platforms": {
     "darwin-universal": {
-      "signature": "$SIGNATURE",
-      "url": "https://github.com/moinulmoin/voicetypr/releases/download/v${NEW_VERSION}/VoiceTypr_${NEW_VERSION}_universal.app.tar.gz"
+      "signature": "%s",
+      "url": "https://github.com/moinulmoin/voicetypr/releases/download/v%s/VoiceTypr_%s_universal.app.tar.gz"
     }
   }
-}
-EOF
+}\n' "$NEW_VERSION" "$NEW_VERSION" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$SIGNATURE" "$NEW_VERSION" "$NEW_VERSION" > "$OUTPUT_DIR/latest.json"
 
 # Verify notarization
 echo -e "${BLUE}✅ Verifying notarization...${NC}"
