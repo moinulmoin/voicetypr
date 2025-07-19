@@ -140,17 +140,11 @@ pub async fn download_model(
         }
     }
 
-    log::info!("Exited download retry loop. Result: {:?}", download_result.is_ok());
-
     // Close the progress channel to signal completion
     drop(progress_tx);
     
     // Ensure progress handler completes
-    log::info!("Waiting for progress handler to complete...");
-    match progress_handle.await {
-        Ok(_) => log::info!("Progress handler completed successfully"),
-        Err(e) => log::warn!("Progress handler task error: {}", e),
-    }
+    let _ = progress_handle.await;
 
     // Clean up the cancellation flag
     {
@@ -197,10 +191,21 @@ pub async fn download_model(
     }
 }
 
+#[derive(serde::Serialize)]
+pub struct ModelStatusResponse {
+    pub models: Vec<ModelEntry>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ModelEntry {
+    pub name: String,
+    pub info: ModelInfo,
+}
+
 #[tauri::command]
 pub async fn get_model_status(
     state: State<'_, Mutex<WhisperManager>>,
-) -> Result<Vec<(String, ModelInfo)>, String> {
+) -> Result<ModelStatusResponse, String> {
     // Force refresh before returning status
     let mut manager = state.lock().await;
     log::info!("[GET_MODEL_STATUS] Refreshing downloaded status...");
@@ -208,16 +213,19 @@ pub async fn get_model_status(
     let models = manager.get_models_status();
 
     // Convert HashMap to Vec and sort by accuracy (ascending)
-    let mut models_vec: Vec<(String, ModelInfo)> = models.into_iter().collect();
-    models_vec.sort_by(|a, b| a.1.accuracy_score.cmp(&b.1.accuracy_score));
+    let mut models_vec: Vec<ModelEntry> = models
+        .into_iter()
+        .map(|(name, info)| ModelEntry { name, info })
+        .collect();
+    models_vec.sort_by(|a, b| a.info.accuracy_score.cmp(&b.info.accuracy_score));
     
     // Log what we're returning
     log::info!("[GET_MODEL_STATUS] Returning {} models:", models_vec.len());
-    for (name, info) in &models_vec {
-        log::info!("[GET_MODEL_STATUS]   Model '{}': downloaded={}", name, info.downloaded);
+    for entry in &models_vec {
+        log::info!("[GET_MODEL_STATUS]   Model '{}': downloaded={}", entry.name, entry.info.downloaded);
     }
 
-    Ok(models_vec)
+    Ok(ModelStatusResponse { models: models_vec })
 }
 
 #[tauri::command]

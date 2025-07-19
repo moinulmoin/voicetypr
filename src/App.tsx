@@ -25,13 +25,14 @@ export default function App() {
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
   
   // Use the new model management hook
+  const modelManagement = useModelManagement({ windowId: "main", showToasts: true });
   const {
     downloadProgress,
     downloadModel,
     cancelDownload,
     deleteModel,
     sortedModels
-  } = useModelManagement({ windowId: "main", showToasts: true });
+  } = modelManagement;
 
   // Check accessibility permissions on macOS
   useAccessibilityPermission();
@@ -189,6 +190,7 @@ export default function App() {
             // Reload settings after onboarding
             invoke<AppSettings>("get_settings").then(setSettings);
           }}
+          modelManagement={modelManagement}
         />
       </AppErrorBoundary>
     );

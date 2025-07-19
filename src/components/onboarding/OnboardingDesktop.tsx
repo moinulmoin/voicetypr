@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { cn } from "@/lib/utils";
-import { useModelManagement } from "@/hooks/useModelManagement";
+import type { useModelManagement } from "@/hooks/useModelManagement";
 import type { AppSettings } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
@@ -23,6 +23,7 @@ import { toast } from "sonner";
 
 interface OnboardingDesktopProps {
   onComplete: () => void;
+  modelManagement: ReturnType<typeof useModelManagement>;
 }
 
 type Step = "welcome" | "permissions" | "models" | "setup" | "success";
@@ -35,7 +36,7 @@ const STEPS = [
   { id: "success" as const }
 ];
 
-export const OnboardingDesktop = function OnboardingDesktop({ onComplete }: OnboardingDesktopProps) {
+export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelManagement }: OnboardingDesktopProps) {
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
   const [permissions, setPermissions] = useState({
     microphone: "checking" as "checking" | "granted" | "denied",
@@ -44,27 +45,22 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete }: Onbo
   const [hotkey, setHotkey] = useState("cmd+shift+space");
   const [isRequesting, setIsRequesting] = useState<string | null>(null);
   
-  // Use the shared model management hook OR props
-  // Always call the hook to satisfy React rules
-  const hookData = useModelManagement({ windowId: "onboarding", showToasts: true });
-  const [localSelectedModel, setLocalSelectedModel] = useState<string | null>(null);
-  
-  // Use hookData for now since modelManagement from props might not be loaded
+  // Get model management from props
   const {
     models,
     modelOrder,
     downloadProgress,
-    selectedModel: _selectedModel,
-    setSelectedModel: _setSelectedModel,
+    selectedModel,
+    setSelectedModel,
     loadModels,
     downloadModel,
     cancelDownload,
-  } = hookData;
+    isLoading,
+  } = modelManagement;
   
-  // Use local state for selectedModel since onboarding needs its own selection
-  const selectedModel = localSelectedModel;
-  const setSelectedModel = setLocalSelectedModel;
-  
+  console.log("[OnboardingDesktop] models:", models);
+  console.log("[OnboardingDesktop] modelOrder:", modelOrder);
+  console.log("[OnboardingDesktop] isLoading:", isLoading);
 
   const steps = STEPS;
 
@@ -159,7 +155,9 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete }: Onbo
         setCurrentStep(nextStep);
 
         if (nextStep === "models") {
+          console.log("[OnboardingDesktop] Navigating to models step, calling loadModels...");
           await loadModels();
+          console.log("[OnboardingDesktop] loadModels completed");
         }
       }
     } catch (error) {
@@ -350,7 +348,7 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete }: Onbo
                 <div className="bg-card rounded-lg border">
                   <div className="max-h-[220px] overflow-y-auto">
                     <div className="space-y-3 p-4">
-                      {modelOrder.map((name) => {
+                      {modelOrder.map((name: string) => {
                         const model = models[name];
                         if (!model) return null;
                         const progress = downloadProgress[name];
@@ -369,6 +367,19 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete }: Onbo
                           </div>
                         );
                       })}
+                      {isLoading && modelOrder.length === 0 && (
+                        <div className="text-center py-8 text-muted-foreground">
+                          <div className="flex items-center justify-center">
+                            <Loader2 className="h-6 w-6 animate-spin mr-2" />
+                            <span>Loading models...</span>
+                          </div>
+                        </div>
+                      )}
+                      {!isLoading && modelOrder.length === 0 && (
+                        <div className="text-center py-8 text-muted-foreground">
+                          <p>No models available</p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
