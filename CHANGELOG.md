@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.1](https://github.com/moinulmoin/voicetypr/compare/v1.1.0...v1.1.1) (2025-07-19)
+
+
+### Features
+
+* :sparkles: add tauri-plugin-macos-permissions-api dependency, enhance model management in App component, and improve accessibility permission handling ([fd96e05](https://github.com/moinulmoin/voicetypr/commit/fd96e05853fb35794eac1565fc5670855ba0705c))
+* :sparkles: fix external link handling in AboutSection,  add updater capabilities in default.json ([d627ff5](https://github.com/moinulmoin/voicetypr/commit/d627ff5194257d9f1ad91320c51c9f7849fceaac))
+* :sparkles: refactor model management integration in App and OnboardingDesktop components, enhance loading state handling, and improve model status response structure in Tauri commands ([82fd144](https://github.com/moinulmoin/voicetypr/commit/82fd144ee717e79315a7957367878ba2a0498055))
+* :sparkles: remove modelManagement prop from OnboardingDesktop, update useModelManagement hook for onboarding context, and adjust event handling for model downloads ([d0e079c](https://github.com/moinulmoin/voicetypr/commit/d0e079ca154b2f6ce41152856aeb7b4828c8e3bd))
+* :sparkles: show loading while verifying downloads ([1197069](https://github.com/moinulmoin/voicetypr/commit/11970698c976c6728025809633e9ebf775ba8675))
+* :sparkles: streamline model download handling in Tauri commands, enhance logging for download progress, and simplify event emissions in useModelManagement hook ([462ad1d](https://github.com/moinulmoin/voicetypr/commit/462ad1d53658cbe789a1f396ce3aaae2d51f8310))
+
 # [1.1.0](https://github.com/moinulmoin/voicetypr/compare/v1.0.0...v1.1.0) (2025-07-18)
 
 
