@@ -34,6 +34,6 @@ CLAUDE.local.md
 
 agent-reports
 
-release-*
+/release-*
 
 notarized-build-*

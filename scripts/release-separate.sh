@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Release script for VoiceTypr with Universal Binary and Built-in Tauri Notarization
-# Usage: ./scripts/release-universal.sh [patch|minor|major]
+# Release script for VoiceTypr with Separate Architecture Binaries and Built-in Tauri Notarization
+# Usage: ./scripts/release-separate.sh [patch|minor|major]
 
 set -e
 
@@ -88,7 +88,7 @@ fi
 # Set CI mode for non-interactive operation
 export CI=true
 
-echo -e "${GREEN}🚀 Starting VoiceTypr universal release process (${RELEASE_TYPE})${NC}"
+echo -e "${GREEN}🚀 Starting VoiceTypr separate architecture release process (${RELEASE_TYPE})${NC}"
 
 # Check if we're on main branch
 CURRENT_BRANCH=$(git branch --show-current)
@@ -160,53 +160,17 @@ echo -e "${YELLOW}Checking Rust targets...${NC}"
 rustup target add aarch64-apple-darwin 2>/dev/null || true
 rustup target add x86_64-apple-darwin 2>/dev/null || true
 
-# Build universal binary with automatic notarization
-echo -e "${GREEN}🔨 Building universal binary with notarization...${NC}"
-echo -e "${BLUE}This will take some time as it includes notarization...${NC}"
-
-cd src-tauri
-
-# Build universal binary - Tauri will automatically sign and notarize
-cargo tauri build --target universal-apple-darwin --bundles app,dmg
-
-cd ..
-
-# Find build artifacts
-UNIVERSAL_DMG=$(find "src-tauri/target/universal-apple-darwin/release/bundle/dmg" -name "*.dmg" | head -n 1)
-UNIVERSAL_APP_DIR="src-tauri/target/universal-apple-darwin/release/bundle/macos"
-
-# Create app.tar.gz for updater (not automatically created for universal builds)
-echo -e "${YELLOW}Creating updater archive...${NC}"
-if [[ -d "$UNIVERSAL_APP_DIR/voicetypr.app" ]]; then
-    cd "$UNIVERSAL_APP_DIR"
-    tar -czf "VoiceTypr_${NEW_VERSION}_universal.app.tar.gz" voicetypr.app
-    cd - > /dev/null
-    UNIVERSAL_APP_TAR="$UNIVERSAL_APP_DIR/VoiceTypr_${NEW_VERSION}_universal.app.tar.gz"
-else
-    echo -e "${RED}Error: App bundle not found${NC}"
-    exit 1
-fi
-
-if [[ -z "$UNIVERSAL_DMG" ]]; then
-    echo -e "${RED}Error: Universal DMG not found${NC}"
-    exit 1
-fi
-
 # Create output directory
 OUTPUT_DIR="release-${NEW_VERSION}"
 mkdir -p "$OUTPUT_DIR"
 
-# Copy artifacts
-echo -e "${YELLOW}Collecting artifacts...${NC}"
-cp "$UNIVERSAL_DMG" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_universal.dmg"
-cp "$UNIVERSAL_APP_TAR" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_universal.app.tar.gz"
-
-# Sign update artifacts if credentials are available
-if [[ -n "$TAURI_SIGNING_PRIVATE_KEY" ]] || [[ -n "$TAURI_SIGNING_PRIVATE_KEY_PATH" ]]; then
-    echo -e "${YELLOW}Signing update artifacts...${NC}"
-
-    # Find and sign the tar.gz file
-    if [[ -f "$UNIVERSAL_APP_TAR" ]]; then
+# Function to sign update artifacts
+sign_update_artifact() {
+    local FILE_PATH="$1"
+    
+    if [[ -n "$TAURI_SIGNING_PRIVATE_KEY" ]] || [[ -n "$TAURI_SIGNING_PRIVATE_KEY_PATH" ]]; then
+        echo -e "${YELLOW}Signing $(basename "$FILE_PATH")...${NC}"
+        
         # Determine if we have a key path or key content
         if [[ -f "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
             # It's a file path
@@ -220,77 +184,166 @@ if [[ -n "$TAURI_SIGNING_PRIVATE_KEY" ]] || [[ -n "$TAURI_SIGNING_PRIVATE_KEY_PA
             echo "$TAURI_SIGNING_PRIVATE_KEY" > "$TEMP_KEY"
             KEY_PATH="$TEMP_KEY"
         fi
-
+        
         # Sign with proper flags
         if [[ -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]]; then
-            cargo tauri signer sign -f "$KEY_PATH" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$UNIVERSAL_APP_TAR"
+            cargo tauri signer sign -f "$KEY_PATH" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$FILE_PATH"
         else
             # Try with empty password
-            cargo tauri signer sign -f "$KEY_PATH" -p "" "$UNIVERSAL_APP_TAR"
+            cargo tauri signer sign -f "$KEY_PATH" -p "" "$FILE_PATH"
         fi
-
+        
         # Clean up temp file if created
         if [[ -n "${TEMP_KEY:-}" ]] && [[ -f "$TEMP_KEY" ]]; then
             rm -f "$TEMP_KEY"
         fi
-
-        # Copy signature file
-        if [[ -f "${UNIVERSAL_APP_TAR}.sig" ]]; then
-            cp "${UNIVERSAL_APP_TAR}.sig" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_universal.app.tar.gz.sig"
-            echo -e "${GREEN}✓ Signature created successfully${NC}"
+        
+        if [[ -f "${FILE_PATH}.sig" ]]; then
+            echo -e "${GREEN}✓ Signature created for $(basename "$FILE_PATH")${NC}"
+            return 0
         else
-            echo -e "${RED}Warning: Signature file not created${NC}"
+            echo -e "${RED}Warning: Signature file not created for $(basename "$FILE_PATH")${NC}"
+            return 1
         fi
+    else
+        echo -e "${YELLOW}Skipping signature for $(basename "$FILE_PATH") (no signing key)${NC}"
+        return 1
     fi
+}
+
+# Build x86_64 binary with automatic notarization
+echo -e "${GREEN}🔨 Building x86_64 binary with notarization...${NC}"
+echo -e "${BLUE}This will take some time as it includes notarization...${NC}"
+
+cd src-tauri
+cargo tauri build --target x86_64-apple-darwin --bundles app,dmg
+cd ..
+
+# Find x86_64 build artifacts
+X86_DMG=$(find "src-tauri/target/x86_64-apple-darwin/release/bundle/dmg" -name "*.dmg" | head -n 1)
+X86_APP_DIR="src-tauri/target/x86_64-apple-darwin/release/bundle/macos"
+
+# Create app.tar.gz for x86_64
+echo -e "${YELLOW}Creating x86_64 updater archive...${NC}"
+if [[ -d "$X86_APP_DIR/voicetypr.app" ]]; then
+    cd "$X86_APP_DIR"
+    tar -czf "VoiceTypr_${NEW_VERSION}_x64.app.tar.gz" voicetypr.app
+    cd - > /dev/null
+    X86_APP_TAR="$X86_APP_DIR/VoiceTypr_${NEW_VERSION}_x64.app.tar.gz"
 else
-    echo -e "${YELLOW}Skipping update signatures (no signing key provided)${NC}"
+    echo -e "${RED}Error: x86_64 app bundle not found${NC}"
+    exit 1
 fi
 
-# Create latest.json for updater
+if [[ -z "$X86_DMG" ]]; then
+    echo -e "${RED}Error: x86_64 DMG not found${NC}"
+    exit 1
+fi
+
+# Copy x86_64 artifacts
+cp "$X86_DMG" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x64.dmg"
+cp "$X86_APP_TAR" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x64.app.tar.gz"
+
+# Sign x86_64 update artifact
+sign_update_artifact "$X86_APP_TAR"
+if [[ -f "${X86_APP_TAR}.sig" ]]; then
+    cp "${X86_APP_TAR}.sig" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x64.app.tar.gz.sig"
+fi
+
+# Build aarch64 binary with automatic notarization
+echo -e "${GREEN}🔨 Building aarch64 binary with notarization...${NC}"
+echo -e "${BLUE}This will take some time as it includes notarization...${NC}"
+
+cd src-tauri
+cargo tauri build --target aarch64-apple-darwin --bundles app,dmg
+cd ..
+
+# Find aarch64 build artifacts
+AARCH64_DMG=$(find "src-tauri/target/aarch64-apple-darwin/release/bundle/dmg" -name "*.dmg" | head -n 1)
+AARCH64_APP_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
+
+# Create app.tar.gz for aarch64
+echo -e "${YELLOW}Creating aarch64 updater archive...${NC}"
+if [[ -d "$AARCH64_APP_DIR/voicetypr.app" ]]; then
+    cd "$AARCH64_APP_DIR"
+    tar -czf "VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz" voicetypr.app
+    cd - > /dev/null
+    AARCH64_APP_TAR="$AARCH64_APP_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz"
+else
+    echo -e "${RED}Error: aarch64 app bundle not found${NC}"
+    exit 1
+fi
+
+if [[ -z "$AARCH64_DMG" ]]; then
+    echo -e "${RED}Error: aarch64 DMG not found${NC}"
+    exit 1
+fi
+
+# Copy aarch64 artifacts
+cp "$AARCH64_DMG" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.dmg"
+cp "$AARCH64_APP_TAR" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz"
+
+# Sign aarch64 update artifact
+sign_update_artifact "$AARCH64_APP_TAR"
+if [[ -f "${AARCH64_APP_TAR}.sig" ]]; then
+    cp "${AARCH64_APP_TAR}.sig" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig"
+fi
+
+# Create latest.json for updater with both architectures
 echo -e "${YELLOW}Creating latest.json...${NC}"
 
-# Get signature from the sig file if it exists
-if [[ -f "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_universal.app.tar.gz.sig" ]]; then
-    # Read the entire signature file content (it's base64 encoded)
-    # Join all lines into a single line (as expected by Tauri updater)
-    SIGNATURE=$(cat "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_universal.app.tar.gz.sig" | tr -d '\n')
+# Get signatures from the sig files if they exist
+if [[ -f "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x64.app.tar.gz.sig" ]]; then
+    X86_SIGNATURE=$(cat "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x64.app.tar.gz.sig" | tr -d '\n')
 else
-    SIGNATURE="SIGNATURE_PLACEHOLDER"
-    echo -e "${YELLOW}Warning: No signature file found, using placeholder${NC}"
-    echo -e "${YELLOW}The auto-updater will not work without a valid signature${NC}"
+    X86_SIGNATURE="SIGNATURE_PLACEHOLDER"
+    echo -e "${YELLOW}Warning: No x86_64 signature file found${NC}"
 fi
 
-# Create latest.json using printf to avoid heredoc issues
+if [[ -f "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig" ]]; then
+    AARCH64_SIGNATURE=$(cat "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig" | tr -d '\n')
+else
+    AARCH64_SIGNATURE="SIGNATURE_PLACEHOLDER"
+    echo -e "${YELLOW}Warning: No aarch64 signature file found${NC}"
+fi
+
+# Create latest.json with both platforms
 printf '{
   "version": "v%s",
   "notes": "See the release notes for v%s",
   "pub_date": "%s",
   "platforms": {
-    "darwin-universal": {
+    "darwin-x86_64": {
       "signature": "%s",
-      "url": "https://github.com/moinulmoin/voicetypr/releases/download/v%s/VoiceTypr_%s_universal.app.tar.gz"
+      "url": "https://github.com/moinulmoin/voicetypr/releases/download/v%s/VoiceTypr_%s_x64.app.tar.gz"
+    },
+    "darwin-aarch64": {
+      "signature": "%s",
+      "url": "https://github.com/moinulmoin/voicetypr/releases/download/v%s/VoiceTypr_%s_aarch64.app.tar.gz"
     }
   }
-}\n' "$NEW_VERSION" "$NEW_VERSION" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$SIGNATURE" "$NEW_VERSION" "$NEW_VERSION" > "$OUTPUT_DIR/latest.json"
+}\n' "$NEW_VERSION" "$NEW_VERSION" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$X86_SIGNATURE" "$NEW_VERSION" "$NEW_VERSION" "$AARCH64_SIGNATURE" "$NEW_VERSION" "$NEW_VERSION" > "$OUTPUT_DIR/latest.json"
 
 # Verify notarization
 echo -e "${BLUE}✅ Verifying notarization...${NC}"
 
-# Check app bundle notarization (more reliable than DMG check)
-if [[ -d "$UNIVERSAL_APP_DIR/voicetypr.app" ]]; then
-    spctl -a -t exec -vv "$UNIVERSAL_APP_DIR/voicetypr.app" 2>&1 | grep -q "accepted" && {
-        echo -e "${GREEN}✓ App bundle is properly notarized${NC}"
+# Check x86_64 app bundle
+if [[ -d "$X86_APP_DIR/voicetypr.app" ]]; then
+    spctl -a -t exec -vv "$X86_APP_DIR/voicetypr.app" 2>&1 | grep -q "accepted" && {
+        echo -e "${GREEN}✓ x86_64 app bundle is properly notarized${NC}"
     } || {
-        echo -e "${YELLOW}Warning: App bundle notarization check failed${NC}"
+        echo -e "${YELLOW}Warning: x86_64 app bundle notarization check failed${NC}"
     }
 fi
 
-# Check DMG notarization
-spctl -a -t open --context context:primary-signature -v "$UNIVERSAL_DMG" 2>&1 | grep -q "accepted" && {
-    echo -e "${GREEN}✓ DMG is properly notarized${NC}"
-} || {
-    echo -e "${YELLOW}Warning: DMG notarization check failed (this is often a false negative)${NC}"
-}
+# Check aarch64 app bundle
+if [[ -d "$AARCH64_APP_DIR/voicetypr.app" ]]; then
+    spctl -a -t exec -vv "$AARCH64_APP_DIR/voicetypr.app" 2>&1 | grep -q "accepted" && {
+        echo -e "${GREEN}✓ aarch64 app bundle is properly notarized${NC}"
+    } || {
+        echo -e "${YELLOW}Warning: aarch64 app bundle notarization check failed${NC}"
+    }
+fi
 
 # Create GitHub release using gh CLI
 echo -e "${YELLOW}Creating GitHub release draft...${NC}"
@@ -304,28 +357,28 @@ if command -v gh &> /dev/null; then
             /^#+ \[[0-9]+\.[0-9]+\.[0-9]+\]/ && flag {exit}
             flag {print}
         ' CHANGELOG.md)
-
+        
         if [[ -z "$CHANGELOG_CONTENT" ]]; then
             CHANGELOG_CONTENT="See the full changelog at https://github.com/moinulmoin/voicetypr/blob/main/CHANGELOG.md"
         fi
     else
         CHANGELOG_CONTENT="Initial release"
     fi
-
+    
     gh release create "v${NEW_VERSION}" \
         --draft \
         --title "VoiceTypr v${NEW_VERSION}" \
         --notes "$CHANGELOG_CONTENT"
-
+    
     echo -e "${GREEN}✅ Draft release created!${NC}"
     echo -e "${YELLOW}Uploading artifacts...${NC}"
-
+    
     # Upload all artifacts
     for file in "$OUTPUT_DIR"/*; do
         echo -e "  Uploading: $(basename "$file")"
         gh release upload "v${NEW_VERSION}" "$file" --clobber
     done
-
+    
     echo -e "${GREEN}✓ All artifacts uploaded successfully${NC}"
 else
     echo -e "${YELLOW}GitHub CLI not found. Please install it with: brew install gh${NC}"
@@ -347,9 +400,9 @@ done
 echo ""
 echo -e "${YELLOW}📋 Next steps:${NC}"
 echo "1. Review the draft release on GitHub"
-echo "2. Test the notarized universal DMG"
-echo "3. Verify auto-updater works with the new signature"
+echo "2. Test the notarized DMGs for both architectures"
+echo "3. Verify auto-updater works with the new signatures"
 echo "4. Publish the release when ready"
 echo ""
 echo -e "${GREEN}🔗 Release URL: https://github.com/moinulmoin/voicetypr/releases/tag/v${NEW_VERSION}${NC}"
-echo -e "${GREEN}🎉 Your universal app is now fully notarized and ready for distribution!${NC}"
+echo -e "${GREEN}🎉 Your separate architecture apps are now fully notarized and ready for distribution!${NC}"
