@@ -1,5 +1,12 @@
 # Changelog
 
+# [1.2.0](https://github.com/moinulmoin/voicetypr/compare/v1.1.1...v1.2.0) (2025-07-20)
+
+
+### Features
+
+* :sparkles: enhance permissions management in OnboardingDesktop, add automation permission checks, and update sidebar to include advanced section ([ca56910](https://github.com/moinulmoin/voicetypr/commit/ca56910ceec1b686a3fa76ee725017de22a9b52c))
+
 ## [1.1.1](https://github.com/moinulmoin/voicetypr/compare/v1.1.0...v1.1.1) (2025-07-19)
 
 
