@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/moinulmoin/voicetypr/compare/v1.2.1...v1.2.2) (2025-07-20)
+
+
+### Features
+
+* :sparkles: fix download updates ([6d72f2d](https://github.com/moinulmoin/voicetypr/commit/6d72f2d33c650d282e5b701fb49f01f1cacd4b79))
+
 ## [1.2.1](https://github.com/moinulmoin/voicetypr/compare/v1.2.0...v1.2.1) (2025-07-20)
 
 # [1.2.0](https://github.com/moinulmoin/voicetypr/compare/v1.1.1...v1.2.0) (2025-07-20)
