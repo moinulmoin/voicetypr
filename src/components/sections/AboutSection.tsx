@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check } from '@tauri-apps/plugin-updater';
 import { open } from '@tauri-apps/plugin-shell';
+import { ask } from '@tauri-apps/plugin-dialog';
 import { Mail } from "lucide-react";
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
@@ -49,10 +50,28 @@ export function AboutSection() {
     setChecking(true);
     try {
       const update = await check();
+      
       if (update?.available) {
-        // Tauri's dialog will handle the rest
-        await update.downloadAndInstall();
-        await relaunch();
+        // Show dialog asking if user wants to update
+        const yes = await ask(
+          `Update ${update.version} is available!\n\nRelease notes:\n${update.body}\n\nDo you want to download and install it now?`,
+          {
+            title: 'Update Available',
+            kind: 'info',
+            okLabel: 'Update',
+            cancelLabel: 'Later'
+          }
+        );
+        
+        if (yes) {
+          toast.info("Downloading update...");
+          
+          // Download and install
+          await update.downloadAndInstall();
+          
+          // Relaunch the app
+          await relaunch();
+        }
       } else {
         toast.success("You're on the latest version!");
       }

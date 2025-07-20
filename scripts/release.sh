@@ -86,6 +86,10 @@ echo -e "${YELLOW}Building for Apple Silicon (aarch64)...${NC}"
 cargo tauri build --target aarch64-apple-darwin
 cd ..
 
+# Fix archives to remove AppleDouble files
+echo -e "${YELLOW}Fixing archives to prevent updater errors...${NC}"
+./scripts/fix-release-archives.sh
+
 # Create output directory
 OUTPUT_DIR="release-${NEW_VERSION}"
 mkdir -p "$OUTPUT_DIR"

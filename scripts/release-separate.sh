@@ -227,7 +227,7 @@ X86_APP_DIR="src-tauri/target/x86_64-apple-darwin/release/bundle/macos"
 echo -e "${YELLOW}Creating x86_64 updater archive...${NC}"
 if [[ -d "$X86_APP_DIR/voicetypr.app" ]]; then
     cd "$X86_APP_DIR"
-    tar -czf "VoiceTypr_${NEW_VERSION}_x64.app.tar.gz" voicetypr.app
+    COPYFILE_DISABLE=1 tar -czf "VoiceTypr_${NEW_VERSION}_x64.app.tar.gz" --exclude='._*' --exclude='.DS_Store' voicetypr.app
     cd - > /dev/null
     X86_APP_TAR="$X86_APP_DIR/VoiceTypr_${NEW_VERSION}_x64.app.tar.gz"
 else
@@ -266,7 +266,7 @@ AARCH64_APP_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
 echo -e "${YELLOW}Creating aarch64 updater archive...${NC}"
 if [[ -d "$AARCH64_APP_DIR/voicetypr.app" ]]; then
     cd "$AARCH64_APP_DIR"
-    tar -czf "VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz" voicetypr.app
+    COPYFILE_DISABLE=1 tar -czf "VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz" --exclude='._*' --exclude='.DS_Store' voicetypr.app
     cd - > /dev/null
     AARCH64_APP_TAR="$AARCH64_APP_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz"
 else
