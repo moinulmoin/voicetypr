@@ -32,6 +32,7 @@ echo "• Downloaded Whisper models"
 echo "• Transcription history"
 echo "• Cached data"
 echo "• Keychain entries"
+echo "• System permissions (accessibility, microphone, automation)"
 echo ""
 read -p "Are you sure you want to continue? (y/N) " -n 1 -r
 echo
@@ -92,6 +93,24 @@ echo "   • Grant permissions again"
 echo "   • Download Whisper models again"
 echo "   • Reconfigure settings"
 echo ""
+
+# 10. Reset system permissions (requires admin password)
+echo -e "${BLUE}→ Resetting system permissions...${NC}"
+echo -e "${YELLOW}This will require your admin password${NC}"
+
+# Reset accessibility permission
+sudo tccutil reset Accessibility "$APP_ID" 2>/dev/null || true
+
+# Reset microphone permission
+sudo tccutil reset Microphone "$APP_ID" 2>/dev/null || true
+
+# Reset AppleEvents (automation) permission
+sudo tccutil reset AppleEvents "$APP_ID" 2>/dev/null || true
+
+# Reset screen recording permission (if used)
+sudo tccutil reset ScreenCapture "$APP_ID" 2>/dev/null || true
+
+echo -e "${GREEN}✅ System permissions reset${NC}"
 
 # Optional: Show what would be left
 echo -e "${BLUE}Checking for any remaining files...${NC}"

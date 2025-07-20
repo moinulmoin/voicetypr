@@ -96,3 +96,48 @@ pub async fn request_microphone_permission() -> Result<bool, String> {
         Ok(true)
     }
 }
+
+#[tauri::command]
+pub async fn test_automation_permission() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        
+        log::info!("Testing automation permission by simulating Cmd+V");
+        
+        // Try to simulate Cmd+V which will trigger the System Events permission dialog
+        // This is exactly what happens during actual paste operation
+        let script = r#"
+            tell application "System Events"
+                -- Simulate Cmd+V (paste)
+                keystroke "v" using command down
+                return "success"
+            end tell
+        "#;
+        
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .output()
+            .map_err(|e| format!("Failed to run AppleScript: {}", e))?;
+        
+        if output.status.success() {
+            log::info!("Automation permission granted - Cmd+V simulation succeeded");
+            Ok(true)
+        } else {
+            let error = String::from_utf8_lossy(&output.stderr);
+            if error.contains("not allowed assistive access") || error.contains("1743") {
+                log::warn!("Automation permission denied by user: {}", error);
+                Ok(false)
+            } else {
+                log::error!("AppleScript failed with unexpected error: {}", error);
+                Err(format!("AppleScript error: {}", error))
+            }
+        }
+    }
+    
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(true)
+    }
+}

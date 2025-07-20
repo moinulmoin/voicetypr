@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useLicense } from "@/contexts/LicenseContext";
 import { cn } from "@/lib/utils";
-import { Clock, Cpu, Info, Key, Settings2, VerifiedIcon } from "lucide-react";
+import { Clock, Cpu, Info, Key, Layers, Settings2, VerifiedIcon } from "lucide-react";
 
 interface SidebarProps {
   activeSection: string;
@@ -22,6 +22,7 @@ const sections = [
   { id: "models", label: "Models", icon: Cpu },
   { id: "license", label: "License", icon: Key },
   { id: "about", label: "About", icon: Info },
+  { id: "advanced", label: "Advanced", icon: Layers },
 ];
 
 export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {

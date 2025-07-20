@@ -2,21 +2,21 @@ import { HotkeyInput } from "@/components/HotkeyInput";
 import { ModelCard } from "@/components/ModelCard";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import type { useModelManagement } from "@/hooks/useModelManagement";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { cn } from "@/lib/utils";
-import type { useModelManagement } from "@/hooks/useModelManagement";
 import type { AppSettings } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import {
-  Accessibility,
   CheckCircle,
   ChevronLeft,
   ChevronRight,
   Info,
   Keyboard,
   Loader2,
-  Mic
+  Mic,
+  TextCursor
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -36,15 +36,24 @@ const STEPS = [
   { id: "success" as const }
 ];
 
+type PermissionStatus = "checking" | "granted" | "denied" | "error";
+
+interface PermissionState {
+  status: PermissionStatus;
+  error?: string;
+}
+
 export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelManagement }: OnboardingDesktopProps) {
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
-  const [permissions, setPermissions] = useState({
-    microphone: "checking" as "checking" | "granted" | "denied",
-    accessibility: "checking" as "checking" | "granted" | "denied"
+  const [permissions, setPermissions] = useState<Record<string, PermissionState>>({
+    microphone: { status: "checking" },
+    accessibility: { status: "checking" },
+    automation: { status: "checking" }
   });
   const [hotkey, setHotkey] = useState("cmd+shift+space");
   const [isRequesting, setIsRequesting] = useState<string | null>(null);
-  
+  const [checkingPermissions, setCheckingPermissions] = useState<Set<string>>(new Set());
+
   // Get model management from props
   const {
     models,
@@ -58,10 +67,7 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
     cancelDownload,
     isLoading,
   } = modelManagement;
-  
-  console.log("[OnboardingDesktop] models:", models);
-  console.log("[OnboardingDesktop] modelOrder:", modelOrder);
-  console.log("[OnboardingDesktop] isLoading:", isLoading);
+
 
   const steps = STEPS;
 
@@ -69,53 +75,116 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
   // const progress = ((currentIndex + 1) / steps.length) * 100;
 
   useEffect(() => {
-    if (currentStep === "permissions") {
+    if (currentStep !== "permissions") return
       checkPermissions();
-      const interval = setInterval(checkPermissions, 2000);
-      return () => clearInterval(interval);
-    }
+      // No auto-retry - user manually retries via buttons
+
   }, [currentStep]);
-  
+
+  // Add manual recheck when user returns from settings
   useEffect(() => {
-    const hasModel = Object.values(models).some((m) => m.downloaded);
-    if (hasModel && !selectedModel) {
-      // Pre-select the first downloaded model
+    if (currentStep !== "permissions") return
+    const handleFocus = () => {
+        checkPermissions();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [currentStep]);
+
+  useEffect(() => {
+    // Only auto-select if no model is selected yet
+    if (!selectedModel) {
       const downloadedModel = Object.entries(models).find(([_, m]) => m.downloaded);
       if (downloadedModel) {
         setSelectedModel(downloadedModel[0]);
       }
     }
-  }, [models, selectedModel, setSelectedModel]); // Re-check when models change
-  
+  }, [models]); // Only depend on models, not selectedModel to avoid loops
+
 
 
   const checkPermissions = async () => {
-    try {
-      const [mic, accessibility] = await Promise.all([
-        invoke<boolean>("check_microphone_permission"),
-        invoke<boolean>("check_accessibility_permission")
-      ]);
+    // Check microphone and accessibility first
+    await Promise.all([
+      checkSinglePermission("microphone", "check_microphone_permission"),
+      checkSinglePermission("accessibility", "check_accessibility_permission")
+    ]);
 
-      setPermissions({
-        microphone: mic ? "granted" : "denied",
-        accessibility: accessibility ? "granted" : "denied"
-      });
-    } catch (error) {
-      console.error("Failed to check permissions:", error);
+    // Only check automation if accessibility is granted
+    // This prevents the dialog from appearing automatically
+    const accessibilityGranted = permissions.accessibility.status === "granted";
+    if (accessibilityGranted) {
+      // Check automation without triggering the dialog
+      // For initial check, we assume it's denied unless already granted
+      setPermissions(prev => ({
+        ...prev,
+        automation: { status: "denied" }
+      }));
     }
   };
 
-  const requestPermission = async (type: "microphone" | "accessibility") => {
+  const checkSinglePermission = async (type: string, command: string) => {
+    setCheckingPermissions(prev => new Set(prev).add(type));
+
+    try {
+      const granted = await invoke<boolean>(command);
+      setPermissions(prev => ({
+        ...prev,
+        [type]: { status: granted ? "granted" : "denied" }
+      }));
+    } catch (error) {
+      console.error(`Failed to check ${type} permission:`, error);
+      setPermissions(prev => ({
+        ...prev,
+        [type]: {
+          status: "error",
+          error: `Failed to check ${type} permission`
+        }
+      }));
+    } finally {
+      setCheckingPermissions(prev => {
+        const next = new Set(prev);
+        next.delete(type);
+        return next;
+      });
+    }
+  };
+
+  const requestPermission = async (type: "microphone" | "accessibility" | "automation") => {
     setIsRequesting(type);
     try {
       if (type === "microphone") {
         const granted = await invoke<boolean>("request_microphone_permission");
+        setPermissions(prev => ({
+          ...prev,
+          microphone: { status: granted ? "granted" : "denied" }
+        }));
         if (!granted) {
           await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
         }
-      } else {
+      } else if (type === "accessibility") {
         await invoke("request_accessibility_permission");
         await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+        // For accessibility, we need to check the status after opening settings
+        // as the permission dialog is handled differently
+        const granted = await invoke<boolean>("check_accessibility_permission");
+        setPermissions(prev => ({
+          ...prev,
+          accessibility: { status: granted ? "granted" : "denied" }
+        }));
+      } else if (type === "automation") {
+        // This will trigger the system dialog for automation permission
+        const granted = await invoke<boolean>("test_automation_permission");
+        // Update the permission state immediately based on the result
+        setPermissions(prev => ({
+          ...prev,
+          automation: { status: granted ? "granted" : "denied" }
+        }));
+        if (!granted) {
+          // Open automation settings if permission denied
+          await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation");
+        }
       }
     } catch (error) {
       console.error(`Failed to request ${type} permission:`, error);
@@ -181,7 +250,9 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
   const canProceed = () => {
     switch (currentStep) {
       case "permissions":
-        return permissions.microphone === "granted" && permissions.accessibility === "granted";
+        return permissions.microphone.status === "granted" &&
+               permissions.accessibility.status === "granted" &&
+               permissions.automation.status === "granted";
       case "models":
         // User can proceed if they have selected a model that is downloaded
         return selectedModel !== null && models[selectedModel]?.downloaded === true;
@@ -251,55 +322,95 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
                   <p className="text-muted-foreground">Grant required permissions to continue</p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="flex flex-col justify-center items-center gap-4">
                   {[
                     {
                       type: "microphone" as const,
                       icon: Mic,
                       title: "Microphone",
                       desc: "Record your voice",
-                      status: permissions.microphone
+                      ...permissions.microphone
                     },
                     {
                       type: "accessibility" as const,
-                      icon: Accessibility,
+                      icon: Keyboard,
                       title: "Accessibility",
-                      desc: "Insert text at cursor",
-                      status: permissions.accessibility
-                    }
+                      desc: "Global hotkeys",
+                      ...permissions.accessibility
+                    },
+                    ...(permissions.accessibility.status === "granted" ? [{
+                      type: "automation" as const,
+                      icon: TextCursor,
+                      title: "Automation",
+                      desc: "Auto-paste text",
+                      ...permissions.automation
+                    }] : [])
                   ].map((perm) => (
                     <Card
                       key={perm.type}
                       className={cn(
-                        "p-6 transition-colors",
-                        perm.status === "granted" && "bg-green-500/5 border-green-500/50"
+                        "p-2.5 transition-colors max-w-fit",
+                        perm.status === "granted" && "bg-green-500/5 "
                       )}
                     >
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-4">
                         <div className="flex items-center gap-3">
                           <div
                             className={cn(
-                              "p-2 rounded-lg",
+                              "p-2.5 rounded-lg",
                               perm.status === "granted"
                                 ? "bg-green-500/10 text-green-500"
+                                : perm.status === "error"
+                                ? "bg-red-500/10 text-red-500"
                                 : "bg-primary/10 text-primary"
                             )}
                           >
                             <perm.icon className="h-5 w-5" />
                           </div>
                           <div>
-                            <h3 className="font-medium">{perm.title}</h3>
+                            <h3 className="font-medium w-30">{perm.title}</h3>
                             <p className="text-sm text-muted-foreground">{perm.desc}</p>
+                            {perm.status === "error" && perm.error && (
+                              <p className="text-xs text-red-500 mt-1">{perm.error}</p>
+                            )}
                           </div>
                         </div>
 
                         <div className="flex items-center">
-                          {perm.status === "checking" ? (
+                          {checkingPermissions.has(perm.type) ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
                           ) : perm.status === "granted" ? (
                             <div className="flex items-center gap-2 text-green-500">
                               <CheckCircle className="h-4 w-4" />
                               <span className="text-sm">Granted</span>
+                            </div>
+                          ) : perm.status === "error" ? (
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => checkSinglePermission(
+                                  perm.type,
+                                  perm.type === "microphone" ? "check_microphone_permission" :
+                                  perm.type === "accessibility" ? "check_accessibility_permission" :
+                                  "test_automation_permission"
+                                )}
+                                disabled={checkingPermissions.has(perm.type)}
+                              >
+                                Retry
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => requestPermission(perm.type)}
+                                disabled={isRequesting === perm.type}
+                              >
+                                {isRequesting === perm.type ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  "Grant"
+                                )}
+                              </Button>
                             </div>
                           ) : (
                             <Button
