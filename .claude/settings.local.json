@@ -6,7 +6,8 @@
       "Bash(pnpm test:*)",
       "mcp__deepwiki__read_wiki_contents",
       "mcp__deepwiki__ask_question",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(find:*)"
     ],
     "deny": []
   },

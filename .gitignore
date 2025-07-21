@@ -37,3 +37,5 @@ agent-reports
 /release-*
 
 notarized-build-*
+
+.claudedocs/

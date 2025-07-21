@@ -15,7 +15,7 @@ use tokio::io::AsyncWriteExt;
 pub struct ModelSize(u64);
 
 impl ModelSize {
-    const MAX_MODEL_SIZE: u64 = 2 * 1024 * 1024 * 1024; // 2GB max as per your requirement
+    const MAX_MODEL_SIZE: u64 = 3584 * 1024 * 1024; // 3.5GB max
     const MIN_MODEL_SIZE: u64 = 10 * 1024 * 1024; // 10MB min (reasonable for smallest model)
 
     pub fn new(size: u64) -> Result<Self, String> {
@@ -28,7 +28,7 @@ impl ModelSize {
         }
         if size > Self::MAX_MODEL_SIZE {
             return Err(format!(
-                "Model size {} bytes ({:.1}GB) exceeds maximum allowed size of 2GB",
+                "Model size {} bytes ({:.1}GB) exceeds maximum allowed size of 3.5GB",
                 size,
                 size as f64 / 1024.0 / 1024.0 / 1024.0
             ));
@@ -65,6 +65,22 @@ pub struct WhisperManager {
 }
 
 impl WhisperManager {
+    /// Validate model name to prevent path traversal and ensure it's a known model
+    fn is_valid_model_name(&self, model_name: &str) -> bool {
+        // First check if it's a known model
+        if !self.models.contains_key(model_name) {
+            return false;
+        }
+        
+        // Additional safety check for path traversal
+        if model_name.contains('/') || model_name.contains('\\') || model_name.contains("..") {
+            return false;
+        }
+        
+        // Only allow alphanumeric, dash, underscore, and dot
+        model_name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    }
+
     pub fn new(models_dir: PathBuf) -> Self {
         let mut models = HashMap::new();
 
@@ -144,17 +160,17 @@ impl WhisperManager {
 
     fn check_downloaded_models(&mut self) {
         log::info!("[check_downloaded_models] Checking models directory: {:?}", self.models_dir);
-        
+
         // Check each known model directly instead of scanning directory
         for (model_name, model_info) in self.models.iter_mut() {
             let model_path = self.models_dir.join(format!("{}.bin", model_name));
             let exists = model_path.exists();
-            
+
             if exists {
                 // Double-check with metadata to ensure file is actually accessible
                 if let Ok(metadata) = std::fs::metadata(&model_path) {
                     if metadata.len() > 0 {
-                        log::info!("[check_downloaded_models] Model '{}' found at {:?} (size: {} bytes)", 
+                        log::info!("[check_downloaded_models] Model '{}' found at {:?} (size: {} bytes)",
                             model_name, model_path, metadata.len());
                         model_info.downloaded = true;
                     } else {
@@ -178,17 +194,31 @@ impl WhisperManager {
         }
     }
 
+    /// Download a model (wrapper that validates and delegates to download_model_file)
     pub async fn download_model(
         &self,
         model_name: &str,
         cancel_flag: Option<Arc<AtomicBool>>,
         progress_callback: impl Fn(u64, u64),
     ) -> Result<(), String> {
-        log::info!("WhisperManager: Downloading model {}", model_name);
+        // Get model info with validation
+        let (model_info, output_path) = self.get_model_info(model_name)?;
+        
+        // Download the model file
+        Self::download_model_file(
+            &model_info,
+            &output_path,
+            &self.models_dir,
+            cancel_flag,
+            progress_callback,
+        ).await
+    }
 
-        // Sanitize model name to prevent path traversal
-        if model_name.contains('/') || model_name.contains('\\') || model_name.contains("..") {
-            return Err("Invalid model name: path traversal characters not allowed".to_string());
+    /// Get model info needed for download (doesn't hold lock during download)
+    pub fn get_model_info(&self, model_name: &str) -> Result<(ModelInfo, PathBuf), String> {
+        // Use centralized validation
+        if !self.is_valid_model_name(model_name) {
+            return Err(format!("Invalid model name: '{}'", model_name));
         }
 
         let model = self.models.get(model_name).ok_or(format!(
@@ -197,39 +227,50 @@ impl WhisperManager {
         ))?;
 
         // Validate model size before downloading
-        let validated_size = model.validated_size()?;
+        let _ = model.validated_size()?;
 
-        log::debug!("Model URL: {}", model.url);
-        log::debug!(
-            "Model size: {} bytes (validated)",
-            validated_size.as_bytes()
-        );
+        let output_path = self.models_dir.join(format!("{}.bin", model_name));
+        
+        Ok((model.clone(), output_path))
+    }
+
+    /// Download a model file (should be called without holding the manager lock)
+    pub async fn download_model_file(
+        model_info: &ModelInfo,
+        output_path: &PathBuf,
+        models_dir: &PathBuf,
+        cancel_flag: Option<Arc<AtomicBool>>,
+        progress_callback: impl Fn(u64, u64),
+    ) -> Result<(), String> {
+        log::info!("Downloading model {}", model_info.name);
+
+        log::debug!("Model URL: {}", model_info.url);
+        log::debug!("Model size: {} bytes", model_info.size);
 
         // Create models directory if it doesn't exist
-        fs::create_dir_all(&self.models_dir)
+        fs::create_dir_all(models_dir)
             .await
             .map_err(|e| format!("Failed to create models directory: {}", e))?;
 
-        let output_path = self.models_dir.join(format!("{}.bin", model_name));
         log::info!("[download_model] Output path: {:?}", output_path);
-        log::info!("[download_model] File name will be: {}.bin", model_name);
+        log::info!("[download_model] File name will be: {}.bin", model_info.name);
 
         // Download the model
         let client = reqwest::Client::new();
         let response = client
-            .get(&model.url)
+            .get(&model_info.url)
             .send()
             .await
             .map_err(|e| e.to_string())?;
 
-        let total_size = response.content_length().unwrap_or(model.size);
+        let total_size = response.content_length().unwrap_or(model_info.size);
 
         // Validate reported size matches expected size (allow 10% variance for compression)
-        let size_variance = (total_size as f64 - model.size as f64).abs() / model.size as f64;
+        let size_variance = (total_size as f64 - model_info.size as f64).abs() / model_info.size as f64;
         if size_variance > 0.1 {
             return Err(format!(
                 "Model size mismatch: expected {} bytes, server reports {} bytes ({}% difference)",
-                model.size,
+                model_info.size,
                 total_size,
                 (size_variance * 100.0) as u32
             ));
@@ -251,7 +292,7 @@ impl WhisperManager {
             // Check for cancellation
             if let Some(ref flag) = cancel_flag {
                 if flag.load(Ordering::Relaxed) {
-                    log::info!("Download cancelled by user for model: {}", model_name);
+                    log::info!("Download cancelled by user for model: {}", model_info.name);
                     // Clean up partial download
                     drop(file);
                     let _ = fs::remove_file(&output_path).await;
@@ -290,7 +331,7 @@ impl WhisperManager {
         // Force OS to write to physical disk
         file.sync_all().await.map_err(|e| format!("Failed to sync file to disk: {}", e))?;
         drop(file);
-        
+
         // Also sync the parent directory to ensure directory entry is visible
         if let Some(parent) = output_path.parent() {
             if let Ok(dir) = std::fs::File::open(parent) {
@@ -304,41 +345,41 @@ impl WhisperManager {
         }
 
         // Verify checksum if available
-        if !model.sha256.is_empty() {
+        if !model_info.sha256.is_empty() {
             log::info!("Verifying model checksum...");
-            match model.sha256.len() {
+            match model_info.sha256.len() {
                 40 => {
                     // SHA1 checksum (legacy from whisper.cpp)
-                    self.verify_sha1_checksum(&output_path, &model.sha256)
+                    Self::verify_sha1_checksum(&output_path, &model_info.sha256)
                         .await?;
                 }
                 64 => {
                     // SHA256 checksum (preferred)
-                    self.verify_sha256_checksum(&output_path, &model.sha256)
+                    Self::verify_sha256_checksum(&output_path, &model_info.sha256)
                         .await?;
                 }
                 _ => {
                     log::warn!(
                         "Invalid checksum length for {}. Skipping verification.",
-                        model_name
+                        model_info.name
                     );
                     log::warn!(
                         "Expected SHA1 (40 chars) or SHA256 (64 chars), got {} chars.",
-                        model.sha256.len()
+                        model_info.sha256.len()
                     );
                 }
             }
         } else {
             log::warn!(
                 "No checksum available for {}. Skipping verification.",
-                model_name
+                model_info.name
             );
             log::warn!("File integrity cannot be guaranteed without checksum verification.");
         }
-        
+
         // Log what files are in the directory after download
         log::info!("[download_model] Download complete. Listing models directory:");
-        if let Ok(entries) = std::fs::read_dir(&self.models_dir) {
+        if let Ok(entries) = std::fs::read_dir(models_dir) {
             for entry in entries.flatten() {
                 if let Some(name) = entry.file_name().to_str() {
                     log::info!("[download_model]   Found file: {}", name);
@@ -351,7 +392,6 @@ impl WhisperManager {
 
     /// Verify the SHA256 checksum of a downloaded file
     async fn verify_sha256_checksum(
-        &self,
         file_path: &PathBuf,
         expected_checksum: &str,
     ) -> Result<(), String> {
@@ -398,7 +438,6 @@ impl WhisperManager {
 
     /// Verify the SHA1 checksum of a downloaded file (legacy support for whisper.cpp models)
     async fn verify_sha1_checksum(
-        &self,
         file_path: &PathBuf,
         expected_checksum: &str,
     ) -> Result<(), String> {
@@ -446,14 +485,14 @@ impl WhisperManager {
     pub fn get_models_dir(&self) -> &PathBuf {
         &self.models_dir
     }
-    
+
     pub fn get_model_path(&self, model_name: &str) -> Option<PathBuf> {
-        // Sanitize model name to prevent path traversal
-        if model_name.contains('/') || model_name.contains('\\') || model_name.contains("..") {
-            log::warn!("Rejected model name with path traversal characters: {}", model_name);
+        // Use centralized validation
+        if !self.is_valid_model_name(model_name) {
+            log::warn!("Rejected invalid model name: {}", model_name);
             return None;
         }
-        
+
         if self.models.get(model_name)?.downloaded {
             Some(self.models_dir.join(format!("{}.bin", model_name)))
         } else {
@@ -464,17 +503,17 @@ impl WhisperManager {
     pub fn get_models_status(&self) -> HashMap<String, ModelInfo> {
         self.models.clone()
     }
-    
+
     /// Get a reference to the models map for internal use (avoids cloning)
     pub fn models(&self) -> &HashMap<String, ModelInfo> {
         &self.models
     }
-    
+
     /// Check if any models are downloaded (efficient, no cloning)
     pub fn has_downloaded_models(&self) -> bool {
         self.models.values().any(|info| info.downloaded)
     }
-    
+
     /// Get list of downloaded model names (efficient, minimal allocation)
     pub fn get_downloaded_model_names(&self) -> Vec<String> {
         self.models
@@ -486,16 +525,16 @@ impl WhisperManager {
 
     pub fn refresh_downloaded_status(&mut self) {
         log::info!("[refresh_downloaded_status] Starting refresh");
-        
+
         // Reset all to not downloaded
         for (name, model) in self.models.iter_mut() {
             log::debug!("[refresh_downloaded_status] Resetting {} to not downloaded", name);
             model.downloaded = false;
         }
-        
+
         // Check again
         self.check_downloaded_models();
-        
+
         // Log final status
         log::info!("[refresh_downloaded_status] Final status:");
         for (name, model) in &self.models {
@@ -503,29 +542,27 @@ impl WhisperManager {
         }
     }
 
-    /// Returns the names of every `.bin` file currently present in the models directory
-    /// – even ones the manager doesn't actively track.
+    /// Returns the names of downloaded model files that are recognized by the manager
+    /// This prevents exposing arbitrary .bin files that may exist in the models directory
     pub fn list_downloaded_files(&self) -> Vec<String> {
-        let mut names = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&self.models_dir) {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.ends_with(".bin") {
-                        names.push(name.trim_end_matches(".bin").to_string());
-                    }
-                }
-            }
-        }
-        names
+        // Only return files that correspond to known models
+        self.models
+            .iter()
+            .filter(|(name, _)| {
+                let path = self.models_dir.join(format!("{}.bin", name));
+                path.exists()
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
     /// Delete a model file from disk and refresh the downloaded status map.
     pub fn delete_model_file(&mut self, model_name: &str) -> Result<(), String> {
-        // Sanitize model name to prevent path traversal
-        if model_name.contains('/') || model_name.contains('\\') || model_name.contains("..") {
-            return Err("Invalid model name: path traversal characters not allowed".to_string());
+        // Use centralized validation
+        if !self.is_valid_model_name(model_name) {
+            return Err(format!("Invalid model name: '{}'", model_name));
         }
-        
+
         let path = self.models_dir.join(format!("{}.bin", model_name));
         if !path.exists() {
             return Err("Model file not found".to_string());

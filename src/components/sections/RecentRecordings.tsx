@@ -1,11 +1,10 @@
-import { Mic, Trash2 } from "lucide-react";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { formatHotkey } from "@/lib/hotkey-utils";
 import { TranscriptionHistory } from "@/types";
-import { useState } from "react";
-import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { formatHotkey } from "@/lib/hotkey-utils";
+import { Mic, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
 
 interface RecentRecordingsProps {
   history: TranscriptionHistory[];
@@ -15,29 +14,29 @@ interface RecentRecordingsProps {
 
 export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistoryUpdate }: RecentRecordingsProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  
+
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
     toast.success("Copied to clipboard");
   };
-  
+
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    
+
     try {
       // Show confirmation dialog
       const confirmed = await ask("Are you sure you want to delete this transcription?", {
         title: "Delete Transcription",
         kind: "warning"
       });
-      
+
       if (!confirmed) return;
-      
+
       // Call the delete command with the timestamp (id)
       await invoke("delete_transcription_entry", { timestamp: id });
-      
+
       toast.success("Transcription deleted");
-      
+
       // Refresh the history
       if (onHistoryUpdate) {
         onHistoryUpdate();
@@ -47,13 +46,14 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       toast.error("Failed to delete transcription");
     }
   };
-  
+
   return (
-    <div className="flex-1 flex flex-col p-6">
+    <div className="flex-1 w-full flex flex-col p-6">
       <h2 className="text-lg font-semibold mb-4">Recent Transcriptions</h2>
+      <div className="">
       {history.length > 0 ? (
-        <ScrollArea className="flex-1">
-          <div className="space-y-3 pr-4">
+        // <ScrollArea className="flex-1">
+          <div className="flex flex-col gap-2.5">
             {history.map((item) => (
               <div
                 key={item.id}
@@ -63,7 +63,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                 onMouseLeave={() => setHoveredId(null)}
                 title="Click to copy"
               >
-                <p className="text-sm leading-relaxed pr-8 text-card-foreground">{item.text}</p>
+                <p className="text-sm pr-8 text-card-foreground break-words ">{item.text}</p>
                 {hoveredId === item.id && (
                   <button
                     onClick={(e) => handleDelete(e, item.id)}
@@ -76,7 +76,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
               </div>
             ))}
           </div>
-        </ScrollArea>
+        // </ScrollArea>
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
@@ -88,6 +88,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

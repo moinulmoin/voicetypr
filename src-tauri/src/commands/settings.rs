@@ -4,12 +4,14 @@ use serde_json::json;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use tauri_plugin_store::StoreExt;
+use crate::whisper::languages::{SUPPORTED_LANGUAGES, validate_language};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub hotkey: String,
     pub current_model: String,
     pub language: String,
+    pub translate_to_english: bool,
     pub theme: String,
     pub transcription_cleanup_days: Option<u32>,
     pub pill_position: Option<(f64, f64)>,
@@ -24,6 +26,7 @@ impl Default for Settings {
             hotkey: "CommandOrControl+Shift+Space".to_string(),
             current_model: "".to_string(), // Empty means auto-select
             language: "en".to_string(),
+            translate_to_english: false,      // Default to transcribe mode
             theme: "system".to_string(),
             transcription_cleanup_days: None, // None means keep forever
             pill_position: None,              // No saved position initially
@@ -51,6 +54,10 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("language")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().language),
+        translate_to_english: store
+            .get("translate_to_english")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().translate_to_english),
         theme: store
             .get("theme")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -102,7 +109,12 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
-    store.set("language", json!(settings.language));
+    
+    // Validate language before saving
+    let validated_language = validate_language(Some(&settings.language));
+    store.set("language", json!(validated_language));
+    store.set("translate_to_english", json!(settings.translate_to_english));
+    
     store.set("theme", json!(settings.theme));
     store.set(
         "transcription_cleanup_days",
@@ -125,7 +137,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     // Preload new model if it changed
     if !settings.current_model.is_empty() && old_model != settings.current_model {
         use crate::commands::model::preload_model;
-        use tauri::async_runtime::Mutex as AsyncMutex;
+        use tauri::async_runtime::RwLock as AsyncRwLock;
 
         log::info!(
             "Model changed from '{}' to '{}', preloading new model",
@@ -137,7 +149,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         let model_name = settings.current_model.clone();
         tokio::spawn(async move {
             let whisper_state =
-                app_clone.state::<AsyncMutex<crate::whisper::manager::WhisperManager>>();
+                app_clone.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
             match preload_model(app_clone.clone(), model_name.clone(), whisper_state).await {
                 Ok(_) => log::info!("Successfully preloaded new model: {}", model_name),
                 Err(e) => log::warn!("Failed to preload new model: {}", e),
@@ -179,4 +191,34 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
     store.save().map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[derive(Serialize)]
+pub struct LanguageInfo {
+    pub code: String,
+    pub name: String,
+}
+
+#[tauri::command]
+pub async fn get_supported_languages() -> Result<Vec<LanguageInfo>, String> {
+    let mut languages: Vec<LanguageInfo> = SUPPORTED_LANGUAGES
+        .iter()
+        .map(|(code, lang)| LanguageInfo {
+            code: code.to_string(),
+            name: lang.name.to_string(),
+        })
+        .collect();
+    
+    // Sort by name for better UX, but keep "Auto Detect" first
+    languages.sort_by(|a, b| {
+        if a.code == "auto" {
+            std::cmp::Ordering::Less
+        } else if b.code == "auto" {
+            std::cmp::Ordering::Greater
+        } else {
+            a.name.cmp(&b.name)
+        }
+    });
+    
+    Ok(languages)
 }

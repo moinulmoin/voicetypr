@@ -11,8 +11,8 @@ mod tests {
         assert!(too_small.is_err());
         assert!(too_small.unwrap_err().contains("too small"));
 
-        // Test maximum size validation (2GB)
-        let too_large = ModelSize::new(3 * 1024 * 1024 * 1024); // 3GB
+        // Test maximum size validation (3.5GB)
+        let too_large = ModelSize::new(4 * 1024 * 1024 * 1024); // 4GB
         assert!(too_large.is_err());
         assert!(too_large.unwrap_err().contains("exceeds maximum"));
 
@@ -21,9 +21,9 @@ mod tests {
         assert!(valid_small.is_ok());
         assert_eq!(valid_small.unwrap().as_bytes(), 50 * 1024 * 1024);
 
-        let valid_large = ModelSize::new(1 * 1024 * 1024 * 1024); // 1GB
+        let valid_large = ModelSize::new(3 * 1024 * 1024 * 1024); // 3GB
         assert!(valid_large.is_ok());
-        assert_eq!(valid_large.unwrap().as_bytes(), 1 * 1024 * 1024 * 1024);
+        assert_eq!(valid_large.unwrap().as_bytes(), 3 * 1024 * 1024 * 1024);
     }
 
     #[test]
@@ -276,11 +276,11 @@ mod tests {
         assert!(base_en.size > 100 * 1024 * 1024); // > 100MB
         assert!(base_en.size < 200 * 1024 * 1024); // < 200MB
 
-        // Note: large-v3 is actually 2.9GB, which exceeds the 2GB limit
-        // but it's defined in the manager for compatibility
+        // Note: large-v3 is actually 2.9GB, well within our 3.5GB limit
         let large = models.get("large-v3").unwrap();
         assert!(large.size > base_en.size); // Large should be larger than base
         assert!(large.size > 2 * 1024 * 1024 * 1024); // > 2GB
+        assert!(large.size < 3584 * 1024 * 1024); // < 3.5GB
     }
 
     #[test]

@@ -4,11 +4,12 @@ use crate::audio::recorder::AudioRecorder;
 use crate::commands::license::check_license_status_internal;
 use crate::license::LicenseState;
 use crate::whisper::cache::TranscriberCache;
+use crate::whisper::languages::validate_language;
 use crate::whisper::manager::WhisperManager;
 use crate::{emit_to_window, update_recording_state, AppState, RecordingState};
 use serde_json;
 use std::sync::Mutex;
-use tauri::async_runtime::Mutex as AsyncMutex;
+use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_store::StoreExt;
 
@@ -48,7 +49,12 @@ fn select_best_fallback_model(available_models: &[String], requested: &str) -> S
     }
 
     // If no priority model found, return first available
-    available_models.first().unwrap().clone()
+    available_models.first().map(|s| s.clone()).unwrap_or_else(|| {
+        log::error!("No models available for fallback selection");
+        // This should never happen as we check for empty models before calling this function
+        // But return a default to prevent panic
+        "tiny".to_string()
+    })
 }
 
 #[tauri::command]
@@ -57,8 +63,8 @@ pub async fn start_recording(
     state: State<'_, RecorderState>,
 ) -> Result<(), String> {
     // Check if we have any models BEFORE starting to record
-    let whisper_manager = app.state::<AsyncMutex<WhisperManager>>();
-    let has_models = whisper_manager.lock().await.has_downloaded_models();
+    let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
+    let has_models = whisper_manager.read().await.has_downloaded_models();
 
     if !has_models {
         log::error!("Cannot start recording - no models downloaded");
@@ -423,8 +429,8 @@ pub async fn stop_recording(
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
     // Get available models
-    let whisper_manager = app.state::<AsyncMutex<WhisperManager>>();
-    let downloaded_models = whisper_manager.lock().await.get_downloaded_model_names();
+    let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
+    let downloaded_models = whisper_manager.read().await.get_downloaded_model_names();
 
     log::debug!("Downloaded models: {:?}", downloaded_models);
 
@@ -515,7 +521,7 @@ pub async fn stop_recording(
     log::info!("Using model for transcription: {}", model_name);
 
     let model_path = whisper_manager
-        .lock()
+        .read()
         .await
         .get_model_path(&model_name)
         .ok_or(format!("Model '{}' path not found", model_name))?;
@@ -525,6 +531,13 @@ pub async fn stop_recording(
     let language = store
         .get("language")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
+    
+    let translate_to_english = store
+        .get("translate_to_english")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    
+    log::info!("[LANGUAGE] stop_recording: language={:?}, translate={}", language, translate_to_english);
 
     // clone for move into task
     let audio_path_clone = audio_path.clone();
@@ -593,6 +606,7 @@ pub async fn stop_recording(
             result = transcriber.transcribe_with_cancellation(
                 &audio_path_clone,
                 language.as_deref(),
+                translate_to_english,
                 || app_state.is_cancellation_requested(),
             );
 
@@ -919,12 +933,31 @@ pub async fn transcribe_audio(
     std::fs::write(&temp_path, audio_data).map_err(|e| e.to_string())?;
 
     // Get model path
-    let whisper_manager = app.state::<AsyncMutex<WhisperManager>>();
+    let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
     let model_path = whisper_manager
-        .lock()
+        .read()
         .await
         .get_model_path(&model_name)
         .ok_or("Model not found")?;
+
+    // Get language and translation settings
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    let language = {
+        let lang = store
+            .get("language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "en".to_string());
+        
+        // Validate using centralized function
+        validate_language(Some(&lang))
+    };
+    
+    let translate_to_english = store
+        .get("translate_to_english")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    log::info!("[LANGUAGE] transcribe_audio using language: {}, translate: {}", language, translate_to_english);
 
     // Transcribe (cached)
     let transcriber = {
@@ -933,7 +966,7 @@ pub async fn transcribe_audio(
         cache.get_or_create(&model_path)?
     };
 
-    let text = transcriber.transcribe(&temp_path, None)?;
+    let text = transcriber.transcribe_with_translation(&temp_path, Some(&language), translate_to_english)?;
 
     // Clean up
     if let Err(e) = std::fs::remove_file(&temp_path) {

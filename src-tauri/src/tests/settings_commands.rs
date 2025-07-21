@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::commands::settings::Settings;
+    use crate::commands::settings::{Settings, get_supported_languages};
     use serde_json::json;
 
     #[test]
@@ -28,6 +28,7 @@ mod tests {
             launch_at_startup: false,
             onboarding_completed: true,
             compact_recording_status: true,
+            translate_to_english: false,
         };
 
         // Test serialization
@@ -78,6 +79,7 @@ mod tests {
             launch_at_startup: true,
             onboarding_completed: false,
             compact_recording_status: false,
+            translate_to_english: true,
         };
 
         let cloned = settings.clone();
@@ -191,5 +193,32 @@ mod tests {
         let normal_hotkey = "CommandOrControl+Shift+Alt+A";
         assert!(!normal_hotkey.is_empty());
         assert!(normal_hotkey.len() <= 100);
+    }
+
+    #[tokio::test]
+    async fn test_get_supported_languages() {
+        let languages = get_supported_languages().await.unwrap();
+        
+        // Should have multiple languages
+        assert!(languages.len() > 50);
+        
+        // Auto detect should be first
+        assert_eq!(languages[0].code, "auto");
+        assert_eq!(languages[0].name, "Auto Detect");
+        
+        // Should contain common languages
+        let codes: Vec<String> = languages.iter().map(|l| l.code.clone()).collect();
+        assert!(codes.contains(&"en".to_string()));
+        assert!(codes.contains(&"es".to_string()));
+        assert!(codes.contains(&"fr".to_string()));
+        assert!(codes.contains(&"zh".to_string()));
+        
+        // Should be sorted by name (except auto which is first)
+        for i in 2..languages.len() {
+            assert!(
+                languages[i-1].name <= languages[i].name,
+                "Languages should be sorted by name"
+            );
+        }
     }
 }

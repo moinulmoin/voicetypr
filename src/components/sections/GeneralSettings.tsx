@@ -200,6 +200,23 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
         </Select>
       </div>
 
+      {/* Translation Setting - Show only when language is not English */}
+      {settings.language !== 'en' && (
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-1">
+            <Label htmlFor="translate" className="text-sm font-medium">Translate to English</Label>
+            <p className="text-xs text-muted-foreground">
+              Translate transcriptions to English
+            </p>
+          </div>
+          <Switch
+            id="translate"
+            checked={settings.translate_to_english || false}
+            onCheckedChange={(checked) => onSettingsChange({ ...settings, translate_to_english: checked })}
+          />
+        </div>
+      )}
+
       {/* Launch at Startup Setting */}
       <div className="flex items-center justify-between gap-4">
         <div className="space-y-1">

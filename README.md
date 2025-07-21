@@ -49,8 +49,9 @@ VoiceTypr is open source ai voice to text dictation tool, alternative to Wispr F
 
 ### Requirements
 - macOS 13.0 (Ventura) or later
-- 2GB free disk space (for AI models)
+- 3/4 GB free disk space (for AI models)
 - Microphone access permission
+- Accessibility access permission
 
 ### Quick Install
 

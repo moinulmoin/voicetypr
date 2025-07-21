@@ -14,6 +14,9 @@ mod transcription_history;
 mod regression_tests;
 
 #[cfg(test)]
+mod language_tests;
+
+#[cfg(test)]
 mod integration_tests {
     use crate::whisper::manager::{ModelSize, WhisperManager};
     use tempfile::TempDir;
@@ -24,8 +27,8 @@ mod integration_tests {
         let too_small = ModelSize::new(5 * 1024 * 1024); // 5MB
         assert!(too_small.is_err());
 
-        // Test maximum size validation (2GB)
-        let too_large = ModelSize::new(3 * 1024 * 1024 * 1024); // 3GB
+        // Test maximum size validation (3.5GB)
+        let too_large = ModelSize::new(4 * 1024 * 1024 * 1024); // 4GB
         assert!(too_large.is_err());
 
         // Test valid sizes
@@ -33,7 +36,7 @@ mod integration_tests {
         assert!(valid_small.is_ok());
         assert_eq!(valid_small.unwrap().as_bytes(), 50 * 1024 * 1024);
 
-        let valid_large = ModelSize::new(1 * 1024 * 1024 * 1024); // 1GB
+        let valid_large = ModelSize::new(3 * 1024 * 1024 * 1024); // 3GB
         assert!(valid_large.is_ok());
     }
 

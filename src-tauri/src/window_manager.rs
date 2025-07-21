@@ -49,6 +49,13 @@ impl WindowManager {
         self.get_pill_window().is_some()
     }
 
+    /// Store the pill window reference
+    pub fn set_pill_window(&self, window: WebviewWindow) {
+        let mut pill_guard = self.pill_window.lock().unwrap();
+        *pill_guard = Some(window);
+        log::debug!("Stored pill window reference");
+    }
+
     /// Show the pill window, creating it if necessary (with retry logic)
     pub async fn show_pill_window(&self) -> Result<(), String> {
         const MAX_RETRIES: u32 = 3;

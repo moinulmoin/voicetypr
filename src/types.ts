@@ -11,6 +11,7 @@ export interface AppSettings {
   hotkey: string;
   current_model: string;
   language: string;
+  translate_to_english?: boolean;
   theme: string;
   transcription_cleanup_days?: number | null;
   launch_at_startup?: boolean;

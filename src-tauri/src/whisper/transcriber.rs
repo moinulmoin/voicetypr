@@ -28,13 +28,18 @@ impl Transcriber {
     }
 
     pub fn transcribe(&self, audio_path: &Path, language: Option<&str>) -> Result<String, String> {
-        self.transcribe_with_cancellation(audio_path, language, || false)
+        self.transcribe_with_cancellation(audio_path, language, false, || false)
+    }
+    
+    pub fn transcribe_with_translation(&self, audio_path: &Path, language: Option<&str>, translate: bool) -> Result<String, String> {
+        self.transcribe_with_cancellation(audio_path, language, translate, || false)
     }
 
     pub fn transcribe_with_cancellation<F>(
         &self,
         audio_path: &Path,
         language: Option<&str>,
+        translate: bool,
         should_cancel: F,
     ) -> Result<String, String>
     where
@@ -144,31 +149,39 @@ impl Transcriber {
             patience: -1.0,
         });
 
-        // Set language - default to English instead of auto
+        // Set language - use centralized validation
+        log::info!("[LANGUAGE] Received language: {:?}", language);
+
         let final_lang = if let Some(lang) = language {
             if lang == "auto" {
-                // If explicitly set to auto, use English as default
-                "en"
+                log::info!("[LANGUAGE] Auto-detection enabled");
+                None
             } else {
-                // Validate language code
-                match lang {
-                    "en" | "es" | "fr" | "de" | "it" | "pt" | "ru" | "ja" | "ko" | "zh" => lang,
-                    _ => {
-                        log::warn!("Invalid language code '{}', defaulting to English", lang);
-                        "en"
-                    }
-                }
+                let validated = super::languages::validate_language(Some(lang));
+                log::info!("[LANGUAGE] Using language: {}", validated);
+                Some(validated)
             }
         } else {
-            // Default to English
-            "en"
+            log::info!("[LANGUAGE] No language specified, using English");
+            Some("en")
         };
 
-        log::info!("Using language for transcription: {}", final_lang);
-        params.set_language(Some(final_lang));
+        if let Some(lang) = final_lang {
+            log::info!("[LANGUAGE] Final language set to: {}", lang);
+            params.set_language(Some(lang));
+        } else {
+            log::info!("[LANGUAGE] Final: Auto-detect mode");
+            params.set_detect_language(true);
+        }
 
-        // Explicitly set to transcribe mode (not translate)
-        params.set_translate(false);
+        // Set translate mode
+        if translate {
+            log::info!("[LANGUAGE] Translation mode enabled - will translate to English");
+            params.set_translate(true);
+        } else {
+            log::info!("[LANGUAGE] Transcription mode - will transcribe in original language");
+            params.set_translate(false);
+        }
 
         params.set_no_context(true);
         params.set_print_special(false);
@@ -177,7 +190,7 @@ impl Transcriber {
         params.set_print_timestamps(false);
 
         // Don't suppress tokens - let Whisper decide
-        // params.set_suppress_nst(true);
+        params.set_suppress_nst(false);
 
         // Run transcription
         log::info!("[TRANSCRIPTION_DEBUG] Creating Whisper state...");

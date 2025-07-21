@@ -5,14 +5,14 @@ use crate::whisper::manager::{ModelInfo, WhisperManager};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use tauri::async_runtime::Mutex;
+use tauri::async_runtime::RwLock;
 use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 pub async fn download_model(
     app: AppHandle,
     model_name: String,
-    state: State<'_, Mutex<WhisperManager>>,
+    state: State<'_, RwLock<WhisperManager>>,
     active_downloads: State<'_, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>,
 ) -> Result<(), String> {
     // Validate model name
@@ -107,7 +107,7 @@ pub async fn download_model(
             model_name
         );
 
-        let manager = state.lock().await;
+        let manager = state.read().await;
         let progress_tx_clone = progress_tx.clone();
         download_result = manager
             .download_model(
@@ -184,7 +184,7 @@ pub async fn download_model(
             
             // Refresh the manager's status to reflect the new download
             {
-                let mut manager = state.lock().await;
+                let mut manager = state.write().await;
                 manager.refresh_downloaded_status();
             }
             
@@ -221,10 +221,10 @@ pub struct ModelEntry {
 
 #[tauri::command]
 pub async fn get_model_status(
-    state: State<'_, Mutex<WhisperManager>>,
+    state: State<'_, RwLock<WhisperManager>>,
 ) -> Result<ModelStatusResponse, String> {
     // Force refresh before returning status
-    let mut manager = state.lock().await;
+    let mut manager = state.write().await;
     log::info!("[GET_MODEL_STATUS] Refreshing downloaded status...");
     manager.refresh_downloaded_status();
     let models = manager.get_models_status();
@@ -248,17 +248,17 @@ pub async fn get_model_status(
 #[tauri::command]
 pub async fn delete_model(
     model_name: String,
-    state: State<'_, Mutex<WhisperManager>>,
+    state: State<'_, RwLock<WhisperManager>>,
 ) -> Result<(), String> {
-    let mut manager = state.lock().await;
+    let mut manager = state.write().await;
     manager.delete_model_file(&model_name)
 }
 
 #[tauri::command]
 pub async fn list_downloaded_models(
-    state: State<'_, Mutex<WhisperManager>>,
+    state: State<'_, RwLock<WhisperManager>>,
 ) -> Result<Vec<String>, String> {
-    let manager = state.lock().await;
+    let manager = state.read().await;
     Ok(manager.list_downloaded_files())
 }
 
@@ -293,7 +293,7 @@ pub async fn cancel_download(
 pub async fn preload_model(
     app: AppHandle,
     model_name: String,
-    state: State<'_, Mutex<WhisperManager>>,
+    state: State<'_, RwLock<WhisperManager>>,
 ) -> Result<(), String> {
     use crate::whisper::cache::TranscriberCache;
     use tauri::async_runtime::Mutex as AsyncMutex;
@@ -312,7 +312,7 @@ pub async fn preload_model(
 
     // Get model path
     let model_path = {
-        let manager = state.lock().await;
+        let manager = state.read().await;
         manager
             .get_model_path(&model_name)
             .ok_or(format!("Model '{}' not found", model_name))?

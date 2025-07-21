@@ -2,7 +2,7 @@ use serde_json;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::async_runtime::Mutex as AsyncMutex;
+use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_store::StoreExt;
@@ -88,12 +88,21 @@ impl AppState {
     }
 
     pub fn set_window_manager(&self, manager: WindowManager) {
-        let mut wm_guard = self.window_manager.lock().unwrap();
-        *wm_guard = Some(manager);
+        if let Ok(mut wm_guard) = self.window_manager.lock() {
+            *wm_guard = Some(manager);
+        } else {
+            log::error!("Failed to acquire window manager lock");
+        }
     }
 
     pub fn get_window_manager(&self) -> Option<WindowManager> {
-        self.window_manager.lock().unwrap().clone()
+        match self.window_manager.lock() {
+            Ok(guard) => guard.clone(),
+            Err(e) => {
+                log::error!("Failed to acquire window manager lock: {}", e);
+                None
+            }
+        }
     }
 
     /// Transition recording state with validation
@@ -490,7 +499,7 @@ pub fn run() {
                 .map_err(|e| format!("Failed to create models directory: {}", e))?;
 
             let whisper_manager = whisper::manager::WhisperManager::new(models_dir);
-            app.manage(AsyncMutex::new(whisper_manager));
+            app.manage(AsyncRwLock::new(whisper_manager));
             
             // Manage active downloads for cancellation
             app.manage(Arc::new(Mutex::new(HashMap::<String, Arc<AtomicBool>>::new())));
@@ -621,9 +630,9 @@ pub fn run() {
                         log::info!("Attempting to preload model on startup: {}", current_model);
 
                         // Get model path from WhisperManager
-                        let whisper_state = app_handle.state::<AsyncMutex<whisper::manager::WhisperManager>>();
+                        let whisper_state = app_handle.state::<AsyncRwLock<whisper::manager::WhisperManager>>();
                         let model_path = {
-                            let manager = whisper_state.lock().await;
+                            let manager = whisper_state.read().await;
                             manager.get_model_path(&current_model)
                         };
                         
@@ -671,7 +680,14 @@ pub fn run() {
                 use tauri_nspanel::WebviewWindowExt;
                 pill_window.to_panel().map_err(|e| format!("Failed to convert to NSPanel: {:?}", e))?;
 
-                log::info!("Created pill window as NSPanel");
+                // Store the pill window reference in WindowManager
+                let app_state = app.state::<AppState>();
+                if let Some(window_manager) = app_state.get_window_manager() {
+                    window_manager.set_pill_window(pill_window);
+                    log::info!("Created pill window as NSPanel and stored in WindowManager");
+                } else {
+                    log::warn!("Could not store pill window reference - WindowManager not available");
+                }
             }
 
             // Sync autostart state with saved settings
@@ -744,6 +760,7 @@ pub fn run() {
             get_settings,
             save_settings,
             set_global_shortcut,
+            get_supported_languages,
             insert_text,
             delete_model,
             list_downloaded_models,
@@ -772,8 +789,11 @@ pub fn run() {
                     // Only hide the window instead of closing it (except for pill)
                     if window.label() == "main" {
                         api.prevent_close();
-                        window.hide().unwrap();
-                        log::info!("Main window hidden instead of closed");
+                        if let Err(e) = window.hide() {
+                            log::error!("Failed to hide main window: {}", e);
+                        } else {
+                            log::info!("Main window hidden instead of closed");
+                        }
                     }
                 }
                 _ => {}
