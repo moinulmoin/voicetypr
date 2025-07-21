@@ -20,8 +20,12 @@ impl Transcriber {
             .to_str()
             .ok_or_else(|| format!("Model path contains invalid UTF-8: {:?}", model_path))?;
 
+        // Enable GPU acceleration for better performance
+        let mut ctx_params = WhisperContextParameters::default();
+        ctx_params.use_gpu(true); // Enable Metal on macOS
+        
         let ctx =
-            WhisperContext::new_with_params(model_path_str, WhisperContextParameters::default())
+            WhisperContext::new_with_params(model_path_str, ctx_params)
                 .map_err(|e| format!("Failed to load model: {}", e))?;
 
         Ok(Self { context: ctx })
@@ -182,6 +186,13 @@ impl Transcriber {
             log::info!("[LANGUAGE] Transcription mode - will transcribe in original language");
             params.set_translate(false);
         }
+
+        // Use all available CPU cores for multi-threaded processing
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get() as i32)
+            .unwrap_or(4); // Default to 4 threads if detection fails
+        params.set_n_threads(threads);
+        log::info!("[PERFORMANCE] Using {} threads for transcription", threads);
 
         params.set_no_context(true);
         params.set_print_special(false);
