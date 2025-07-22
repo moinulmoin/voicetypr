@@ -23,7 +23,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
-  
+
   // Use the new model management hook
   const modelManagement = useModelManagement({ windowId: "main", showToasts: true });
   const {
@@ -144,7 +144,7 @@ export default function App() {
   const handleDeleteModel = useCallback(
     async (modelName: string) => {
       await deleteModel(modelName);
-      
+
       // If deleted model was the current one, clear selection in settings
       if (settings?.current_model === modelName) {
         await saveSettings({ ...settings, current_model: "" });
@@ -260,7 +260,7 @@ export default function App() {
                 onSectionChange={setActiveSection}
               />
               <SidebarInset>
-                <div className="h-full overflow-auto">{renderSectionContent()}</div>
+                <div className="h-full flex flex-col">{renderSectionContent()}</div>
               </SidebarInset>
             </div>
           </SidebarProvider>

@@ -1,3 +1,4 @@
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { TranscriptionHistory } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -47,27 +48,66 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     }
   };
 
+  const handleClearAll = async () => {
+    if (history.length === 0) return;
+
+    try {
+      // Show confirmation dialog
+      const confirmed = await ask(`Are you sure you want to delete all ${history.length} transcriptions? This action cannot be undone.`, {
+        title: "Clear All Transcriptions",
+        kind: "warning"
+      });
+
+      if (!confirmed) return;
+
+      // Call the clear all command
+      await invoke("clear_all_transcriptions");
+
+      toast.success("All transcriptions cleared");
+
+      // Refresh the history
+      if (onHistoryUpdate) {
+        onHistoryUpdate();
+      }
+    } catch (error) {
+      console.error("Failed to clear all transcriptions:", error);
+      toast.error("Failed to clear all transcriptions");
+    }
+  };
+
   return (
-    <div className="flex-1 w-full flex flex-col p-6">
-      <h2 className="text-lg font-semibold mb-4">Recent Transcriptions</h2>
-      <div className="">
+    <div className="h-full flex flex-col p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold">Recent Transcriptions</h2>
+        {history.length > 0 && (
+          <button
+            onClick={handleClearAll}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 rounded-md transition-colors"
+            title="Clear all transcriptions"
+          >
+
+            Clear All
+          </button>
+        )}
+      </div>
+      <div className="flex-1 min-h-0">
       {history.length > 0 ? (
-        // <ScrollArea className="flex-1">
+        <ScrollArea className="h-full">
           <div className="flex flex-col gap-2.5">
             {history.map((item) => (
               <div
                 key={item.id}
-                className="group relative p-3 rounded-lg cursor-pointer bg-card hover:bg-accent/50 border border-border hover:border-accent transition-all duration-200"
+                className="group flex items-center relative p-2 rounded-lg cursor-pointer bg-card hover:bg-accent/50 border border-border hover:border-accent transition-all duration-200"
                 onClick={() => handleCopy(item.text)}
                 onMouseEnter={() => setHoveredId(item.id)}
                 onMouseLeave={() => setHoveredId(null)}
                 title="Click to copy"
               >
-                <p className="text-sm pr-8 text-card-foreground break-words ">{item.text}</p>
+                <p className="text-sm text-card-foreground transcription-text pr-4">{item.text}</p>
                 {hoveredId === item.id && (
                   <button
                     onClick={(e) => handleDelete(e, item.id)}
-                    className="absolute top-3 right-3 p-1 rounded hover:bg-destructive/10 transition-colors"
+                    className="absolute top-0 right-0 m-1 p-1 rounded hover:bg-destructive/10 transition-colors"
                     title="Delete"
                   >
                     <Trash2 className="w-4 h-4 text-destructive" />
@@ -76,7 +116,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
               </div>
             ))}
           </div>
-        // </ScrollArea>
+        </ScrollArea>
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">

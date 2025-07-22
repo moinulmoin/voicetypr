@@ -2,7 +2,6 @@
 mod tests {
     use crate::whisper::manager::{ModelInfo, ModelSize, WhisperManager};
     use tempfile::TempDir;
-    use tokio::fs;
 
     #[test]
     fn test_model_size_validation() {
@@ -94,13 +93,13 @@ mod tests {
         assert!(json.contains("\"accuracy_score\":8"));
     }
 
-    #[tokio::test]
-    async fn test_whisper_manager_models_dir() {
+    #[test]
+    fn test_whisper_manager_models_dir() {
         let temp_dir = TempDir::new().unwrap();
         let models_dir = temp_dir.path().join("models");
 
         // Create the models directory
-        fs::create_dir_all(&models_dir).await.unwrap();
+        std::fs::create_dir_all(&models_dir).unwrap();
 
         let _manager = WhisperManager::new(models_dir.clone());
 
@@ -108,40 +107,43 @@ mod tests {
         assert!(models_dir.exists());
     }
 
-    #[tokio::test]
-    async fn test_list_downloaded_files() {
+    #[test]
+    fn test_list_downloaded_files() {
         let temp_dir = TempDir::new().unwrap();
         let models_dir = temp_dir.path().join("models");
-        fs::create_dir_all(&models_dir).await.unwrap();
+        std::fs::create_dir_all(&models_dir).unwrap();
 
-        // Create some dummy model files
-        let model_files = vec!["tiny.bin", "base.bin", "small.bin"];
-        for file in &model_files {
-            let file_path = models_dir.join(file);
-            fs::write(&file_path, b"dummy model data").await.unwrap();
+        // Create a WhisperManager with known models
+        let manager = WhisperManager::new(models_dir.clone());
+        
+        // Create model files for known models only
+        for model_name in ["base.en", "large-v3", "large-v3-q5_0"] {
+            let file_path = models_dir.join(format!("{}.bin", model_name));
+            std::fs::write(&file_path, b"dummy model data").unwrap();
         }
 
         // Create a non-model file that should be ignored
-        fs::write(models_dir.join("readme.txt"), b"not a model")
-            .await
-            .unwrap();
+        std::fs::write(models_dir.join("readme.txt"), b"not a model").unwrap();
+        
+        // Also create a .bin file that's not a known model - should be ignored
+        std::fs::write(models_dir.join("unknown.bin"), b"unknown model").unwrap();
 
-        let manager = WhisperManager::new(models_dir);
         let downloaded = manager.list_downloaded_files();
 
-        // Should only list .bin files (without extension)
+        // Should only list known models that have .bin files
         assert_eq!(downloaded.len(), 3);
-        assert!(downloaded.contains(&"tiny".to_string()));
-        assert!(downloaded.contains(&"base".to_string()));
-        assert!(downloaded.contains(&"small".to_string()));
+        assert!(downloaded.contains(&"base.en".to_string()));
+        assert!(downloaded.contains(&"large-v3".to_string()));
+        assert!(downloaded.contains(&"large-v3-q5_0".to_string()));
         assert!(!downloaded.contains(&"readme".to_string()));
+        assert!(!downloaded.contains(&"unknown".to_string()));
     }
 
-    #[tokio::test]
-    async fn test_get_model_path() {
+    #[test]
+    fn test_get_model_path() {
         let temp_dir = TempDir::new().unwrap();
         let models_dir = temp_dir.path().join("models");
-        fs::create_dir_all(&models_dir).await.unwrap();
+        std::fs::create_dir_all(&models_dir).unwrap();
 
         let mut manager = WhisperManager::new(models_dir.clone());
 
@@ -150,9 +152,7 @@ mod tests {
         assert!(path.is_none()); // Not downloaded yet
 
         // Create the model file to simulate download
-        fs::write(models_dir.join("base.en.bin"), b"dummy model")
-            .await
-            .unwrap();
+        std::fs::write(models_dir.join("base.en.bin"), b"dummy model").unwrap();
 
         // Refresh status
         manager.refresh_downloaded_status();
@@ -167,21 +167,21 @@ mod tests {
         assert!(path.is_none());
     }
 
-    #[tokio::test]
-    async fn test_delete_model_file() {
+    #[test]
+    fn test_delete_model_file() {
         let temp_dir = TempDir::new().unwrap();
         let models_dir = temp_dir.path().join("models");
-        fs::create_dir_all(&models_dir).await.unwrap();
+        std::fs::create_dir_all(&models_dir).unwrap();
 
         // Create a model file
-        let model_file = models_dir.join("tiny.bin");
-        fs::write(&model_file, b"dummy model data").await.unwrap();
+        let model_file = models_dir.join("base.en.bin");
+        std::fs::write(&model_file, b"dummy model data").unwrap();
         assert!(model_file.exists());
 
         let mut manager = WhisperManager::new(models_dir);
 
         // Delete the model
-        let result = manager.delete_model_file("tiny");
+        let result = manager.delete_model_file("base.en");
         assert!(result.is_ok());
         assert!(!model_file.exists());
 
@@ -194,10 +194,7 @@ mod tests {
     fn test_model_validation() {
         // Test valid model names
         let valid_models = vec![
-            "tiny",
-            "base",
-            "small",
-            "medium",
+            "base.en",
             "large-v3",
             "large-v3-q5_0",
             "large-v3-turbo",
@@ -215,11 +212,11 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_refresh_downloaded_status() {
+    #[test]
+    fn test_refresh_downloaded_status() {
         let temp_dir = TempDir::new().unwrap();
         let models_dir = temp_dir.path().join("models");
-        fs::create_dir_all(&models_dir).await.unwrap();
+        std::fs::create_dir_all(&models_dir).unwrap();
 
         let mut manager = WhisperManager::new(models_dir.clone());
 
@@ -230,9 +227,7 @@ mod tests {
         }
 
         // Create a model file
-        fs::write(models_dir.join("base.en.bin"), b"dummy model")
-            .await
-            .unwrap();
+        std::fs::write(models_dir.join("base.en.bin"), b"dummy model").unwrap();
 
         // Refresh status
         manager.refresh_downloaded_status();

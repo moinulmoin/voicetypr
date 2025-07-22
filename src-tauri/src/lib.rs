@@ -376,7 +376,7 @@ pub fn run() {
                     } else {
                         // Debug log all shortcuts
                         log::debug!("Non-recording shortcut triggered: {:?}", shortcut);
-                        
+
                         // Check if this is the ESC key
                         let escape_shortcut: tauri_plugin_global_shortcut::Shortcut = match "Escape".parse() {
                             Ok(s) => s,
@@ -385,39 +385,39 @@ pub fn run() {
                                 return;
                             }
                         };
-                        
+
                         log::debug!("Comparing shortcuts - received: {:?}, escape: {:?}", shortcut, escape_shortcut);
-                        
+
                         if shortcut == &escape_shortcut {
                             log::info!("ESC key detected in global handler");
-                            
+
                             // Handle ESC key for recording cancellation
                             let current_state = get_recording_state(&app_handle);
                             log::debug!("Current recording state: {:?}", current_state);
-                            
+
                             // Only handle ESC during recording or transcribing
                             if matches!(current_state, RecordingState::Recording | RecordingState::Transcribing | RecordingState::Starting | RecordingState::Stopping) {
                             let app_state = app_handle.state::<AppState>();
                             let was_pressed_once = app_state.esc_pressed_once.load(Ordering::SeqCst);
-                            
+
                             if !was_pressed_once {
                                 // First ESC press
                                 log::info!("First ESC press detected during recording");
                                 app_state.esc_pressed_once.store(true, Ordering::SeqCst);
-                                
+
                                 // Emit event to pill for feedback
                                 let _ = emit_to_window(&app_handle, "pill", "esc-first-press", "Press ESC again to stop recording");
-                                
+
                                 // Set timeout to reset ESC state
                                 let app_for_timeout = app_handle.clone();
                                 let timeout_handle = tauri::async_runtime::spawn(async move {
                                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                                    
+
                                     let app_state = app_for_timeout.state::<AppState>();
                                     app_state.esc_pressed_once.store(false, Ordering::SeqCst);
                                     log::debug!("ESC timeout expired, resetting state");
                                 });
-                                
+
                                 // Store timeout handle
                                 if let Ok(mut timeout_guard) = app_state.esc_timeout_handle.lock() {
                                     *timeout_guard = Some(timeout_handle);
@@ -425,17 +425,17 @@ pub fn run() {
                             } else {
                                 // Second ESC press - cancel recording
                                 log::info!("Second ESC press detected, cancelling recording");
-                                
+
                                 // Cancel timeout
                                 if let Ok(mut timeout_guard) = app_state.esc_timeout_handle.lock() {
                                     if let Some(handle) = timeout_guard.take() {
                                         handle.abort();
                                     }
                                 }
-                                
+
                                 // Reset ESC state
                                 app_state.esc_pressed_once.store(false, Ordering::SeqCst);
-                                
+
                                 // Cancel recording
                                 let app_for_cancel = app_handle.clone();
                                 tauri::async_runtime::spawn(async move {
@@ -456,19 +456,19 @@ pub fn run() {
                 log::error!("PANIC: {:?}", panic_info);
                 eprintln!("Application panic: {:?}", panic_info);
             }));
-            
+
             // Set activation policy on macOS to prevent focus stealing
             #[cfg(target_os = "macos")]
             {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 log::info!("Set macOS activation policy to Accessory");
-                
+
                 // Check accessibility permissions at startup
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     // Small delay to ensure app is fully initialized
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    
+
                     // Check and request accessibility permission for keyboard simulation
                     match app_handle.emit("check-accessibility-permission", ()) {
                         Ok(_) => log::info!("Emitted accessibility permission check event"),
@@ -500,7 +500,7 @@ pub fn run() {
 
             let whisper_manager = whisper::manager::WhisperManager::new(models_dir);
             app.manage(AsyncRwLock::new(whisper_manager));
-            
+
             // Manage active downloads for cancellation
             app.manage(Arc::new(Mutex::new(HashMap::<String, Arc<AtomicBool>>::new())));
 
@@ -635,12 +635,12 @@ pub fn run() {
                             let manager = whisper_state.read().await;
                             manager.get_model_path(&current_model)
                         };
-                        
+
                         if let Some(model_path) = model_path {
                             // Load model into cache
                             let cache_state = app_handle.state::<AsyncMutex<TranscriberCache>>();
                             let mut cache = cache_state.lock().await;
-                            
+
                             match cache.get_or_create(&model_path) {
                                 Ok(_) => {
                                     log::info!("Successfully preloaded model '{}' into cache", current_model);
@@ -695,16 +695,16 @@ pub fn run() {
                 let saved_autostart = store.get("launch_at_startup")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                
+
                 // Check actual autostart state and sync if needed
                 use tauri_plugin_autostart::ManagerExt;
                 let autolaunch = app.autolaunch();
-                
+
                 match autolaunch.is_enabled() {
                     Ok(actual_enabled) => {
                         if actual_enabled != saved_autostart {
                             log::info!("Syncing autostart state: saved={}, actual={}", saved_autostart, actual_enabled);
-                            
+
                             // Settings are source of truth
                             if saved_autostart {
                                 if let Err(e) = autolaunch.enable() {
@@ -768,6 +768,7 @@ pub fn run() {
             cleanup_old_transcriptions,
             get_transcription_history,
             delete_transcription_entry,
+            clear_all_transcriptions,
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,

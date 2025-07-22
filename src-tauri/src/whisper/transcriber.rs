@@ -2,8 +2,6 @@ use std::path::Path;
 use whisper_rs::{
     convert_integer_to_float_audio,
     convert_stereo_to_mono_audio,
-    // crate version <0.15 does not provide a helper for arbitrary resampling,
-    // we implement a lightweight linear-interpolation resampler below.
     FullParams,
     SamplingStrategy,
     WhisperContext,
@@ -129,11 +127,10 @@ impl Transcriber {
         }
 
         /* ----------------------------------------------
-        4) resample to 16 000 Hz  (model's native rate)
+        4) Let Whisper handle resampling internally
         ---------------------------------------------- */
-        if spec.sample_rate != 16_000 {
-            audio = resample_linear(&audio, spec.sample_rate as usize, 16_000);
-        }
+        // Whisper will resample to 16kHz internally if needed
+        // No need for us to do it manually
 
         // Check cancellation after resampling
         if should_cancel() {
@@ -262,58 +259,3 @@ impl Transcriber {
     }
 }
 
-/// Naive linear-interpolation resampler for mono f32 audio.
-/// Good enough for converting 48 kHz → 16 kHz speech.
-fn resample_linear(input: &[f32], in_rate: usize, out_rate: usize) -> Vec<f32> {
-    if in_rate == out_rate {
-        return input.to_vec();
-    }
-
-    // Fast path for exact 3:1 downsampling (48kHz → 16kHz)
-    if in_rate == 48000 && out_rate == 16000 {
-        return downsample_3x(input);
-    }
-
-    let ratio = out_rate as f64 / in_rate as f64;
-    let out_len = ((input.len() as f64) * ratio).round() as usize;
-    let mut output = Vec::with_capacity(out_len);
-
-    for i in 0..out_len {
-        let pos = (i as f64) / ratio;
-        let idx = pos.floor() as usize;
-        let frac = pos - (idx as f64);
-
-        let sample = if idx + 1 < input.len() {
-            // linear interp
-            input[idx] * (1.0 - frac as f32) + input[idx + 1] * (frac as f32)
-        } else {
-            input[idx]
-        };
-        output.push(sample);
-    }
-    output
-}
-
-/// Fast 3:1 downsampling for 48kHz → 16kHz conversion
-/// Uses simple averaging which is good enough for speech
-fn downsample_3x(input: &[f32]) -> Vec<f32> {
-    let out_len = input.len() / 3;
-    let mut output = Vec::with_capacity(out_len);
-
-    // Process in chunks of 3 samples
-    for chunk in input.chunks_exact(3) {
-        // Average 3 consecutive samples
-        let avg = (chunk[0] + chunk[1] + chunk[2]) / 3.0;
-        output.push(avg);
-    }
-
-    // Handle any remaining samples (if input length not divisible by 3)
-    let remainder = input.len() % 3;
-    if remainder > 0 {
-        let start_idx = input.len() - remainder;
-        let sum: f32 = input[start_idx..].iter().sum();
-        output.push(sum / remainder as f32);
-    }
-
-    output
-}
