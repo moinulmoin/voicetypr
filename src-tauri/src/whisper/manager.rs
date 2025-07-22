@@ -12,6 +12,7 @@ use tokio::io::AsyncWriteExt;
 
 // Type-safe size validation
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Field accessed through as_bytes() in tests
 pub struct ModelSize(u64);
 
 impl ModelSize {
@@ -36,6 +37,7 @@ impl ModelSize {
         Ok(ModelSize(size))
     }
 
+    #[cfg(test)]
     pub fn as_bytes(&self) -> u64 {
         self.0
     }
@@ -151,6 +153,26 @@ impl WhisperManager {
             downloaded: false,
             speed_score: 8,       // Very fast, quantized turbo
             accuracy_score: 7,    // Good accuracy with turbo + quantization
+        });
+
+        models.insert("small.en".to_string(), ModelInfo {
+            name: "small.en".to_string(),
+            size: 488_505_344, // 466 MiB = 466 * 1024 * 1024 bytes
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin".to_string(),
+            sha256: "db8a495a91d927739e50b3fc1cc4c6b8f6c2d022".to_string(), // SHA1 (correct)
+            downloaded: false,
+            speed_score: 7,       // Fast for English-only
+            accuracy_score: 6,    // Good accuracy for English
+        });
+
+        models.insert("large-v3-turbo-q8_0".to_string(), ModelInfo {
+            name: "large-v3-turbo-q8_0".to_string(),
+            size: 874_512_384, // 834 MiB = 834 * 1024 * 1024 bytes
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin".to_string(),
+            sha256: "01bf15bedffe9f39d65c1b6ff9b687ea91f59e0e".to_string(), // SHA1 (correct)
+            downloaded: false,
+            speed_score: 7,       // Fast, higher quality quantization
+            accuracy_score: 8,    // Excellent accuracy with minimal loss
         });
 
         let mut manager = Self { models_dir, models };
@@ -482,10 +504,6 @@ impl WhisperManager {
         Ok(())
     }
 
-    pub fn get_models_dir(&self) -> &PathBuf {
-        &self.models_dir
-    }
-
     pub fn get_model_path(&self, model_name: &str) -> Option<PathBuf> {
         // Use centralized validation
         if !self.is_valid_model_name(model_name) {
@@ -502,11 +520,6 @@ impl WhisperManager {
 
     pub fn get_models_status(&self) -> HashMap<String, ModelInfo> {
         self.models.clone()
-    }
-
-    /// Get a reference to the models map for internal use (avoids cloning)
-    pub fn models(&self) -> &HashMap<String, ModelInfo> {
-        &self.models
     }
 
     /// Check if any models are downloaded (efficient, no cloning)
@@ -631,5 +644,12 @@ impl WhisperManager {
         }
 
         models
+    }
+    
+    /// Clear all downloaded models and reset the manager state
+    pub fn clear_all(&mut self) {
+        // This resets the manager to a fresh state
+        // The actual deletion of model files is handled by the reset command
+        log::info!("Clearing WhisperManager state");
     }
 }

@@ -17,6 +17,7 @@ export interface AppSettings {
   launch_at_startup?: boolean;
   onboarding_completed?: boolean;
   compact_recording_status?: boolean;
+  check_updates_automatically?: boolean;
 }
 
 export interface TranscriptionHistory {

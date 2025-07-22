@@ -1,4 +1,5 @@
 import { ModelCard } from "@/components/ModelCard";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { ModelInfo } from "@/types";
 
 interface ModelsSectionProps {
@@ -23,13 +24,15 @@ onCancelDownload,
   onSelect
 }: ModelsSectionProps) {
   return (
-    <div className="p-6">
-      <h2 className="text-lg font-semibold mb-4">Models</h2>
-      <p className="text-sm text-muted-foreground mb-6">
-        Download and manage models for transcription
-      </p>
+    <div className="h-full flex flex-col p-6">
+      <div className="flex-shrink-0">
+        <h2 className="text-lg font-semibold mb-4">Models</h2>
+        <p className="text-sm text-muted-foreground mb-6">
+          Download and manage models for transcription
+        </p>
+      </div>
 
-      {/* <ScrollArea className="h-[calc(100vh-200px)]"> */}
+      <ScrollArea className="flex-1 min-h-0">
         <div className="space-y-3 pr-4">
           {models.map(([name, model]) => (
             <ModelCard
@@ -51,7 +54,7 @@ onCancelDownload,
             />
           ))}
         </div>
-      {/* </ScrollArea> */}
+      </ScrollArea>
     </div>
   );
 }

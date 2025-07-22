@@ -248,6 +248,21 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
         />
       </div>
 
+      {/* Automatic Updates Setting - Commented out for now, defaults to true */}
+      {/* <div className="flex items-center justify-between gap-4">
+        <div className="space-y-1">
+          <Label htmlFor="auto-updates" className="text-sm font-medium">Check for updates automatically</Label>
+          <p className="text-xs text-muted-foreground">
+            Check for app updates on startup and daily
+          </p>
+        </div>
+        <Switch
+          id="auto-updates"
+          checked={settings.check_updates_automatically !== false}
+          onCheckedChange={(checked) => onSettingsChange({ ...settings, check_updates_automatically: checked })}
+        />
+      </div> */}
+
       {/* Tips Section */}
       <Alert className="mt-8">
         <Info className="h-4 w-4" />

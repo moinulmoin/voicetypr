@@ -13,10 +13,17 @@ export function RecordingPill() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [feedbackMessage, setFeedbackMessage] = useState<string>("");
   const [isCompact, setIsCompact] = useState(true);
+  const [, forceUpdate] = useState({});
   
   // Track timer IDs for cleanup
   const feedbackTimerRef = useRef<NodeJS.Timeout | null>(null);
   const mountedRef = useRef(true);
+  const feedbackMessageRef = useRef<string>("");
+  
+  // Debug re-renders
+  useEffect(() => {
+    console.log("RecordingPill: Component re-rendered, feedbackMessage:", feedbackMessage, "ref:", feedbackMessageRef.current);
+  });
 
   const isRecording = recording.state === "recording";
   const isTranscribing = recording.state === "transcribing";
@@ -33,23 +40,32 @@ export function RecordingPill() {
   
   // Helper function to set feedback message with auto-hide
   const setFeedbackWithTimeout = (message: string, timeout: number) => {
+    console.log("RecordingPill: Setting feedback message:", message, "for", timeout, "ms", "mountedRef:", mountedRef.current);
+    
     // Clear any existing timer
     if (feedbackTimerRef.current) {
       clearTimeout(feedbackTimerRef.current);
     }
     
-    // Only update state if component is still mounted
-    if (mountedRef.current) {
-      setFeedbackMessage(message);
-      
-      // Set new timer
-      feedbackTimerRef.current = setTimeout(() => {
-        if (mountedRef.current) {
-          setFeedbackMessage("");
-        }
-        feedbackTimerRef.current = null;
-      }, timeout);
-    }
+    // Remove the mounted check - just set the state directly
+    // Update ref
+    feedbackMessageRef.current = message;
+    
+    // Force a fresh state update
+    setFeedbackMessage(message);
+    // Also force update to ensure re-render
+    forceUpdate({});
+    
+    console.log("RecordingPill: Updated state and ref to:", message);
+    
+    // Set new timer
+    feedbackTimerRef.current = setTimeout(() => {
+      console.log("RecordingPill: Clearing feedback message");
+      feedbackMessageRef.current = "";
+      setFeedbackMessage("");
+      forceUpdate({});
+      feedbackTimerRef.current = null;
+    }, timeout);
   };
 
   // Fetch settings on mount
@@ -82,6 +98,7 @@ export function RecordingPill() {
     // Listen for empty transcription
     unlisteners.push(
       listen<string>("transcription-empty", (event) => {
+        console.log("RecordingPill: Received transcription-empty event", event.payload);
         setFeedbackWithTimeout(event.payload, 2000);
       })
     );
@@ -89,6 +106,7 @@ export function RecordingPill() {
     // Listen for recording stopped due to silence
     unlisteners.push(
       listen("recording-stopped-silence", () => {
+        console.log("RecordingPill: Received recording-stopped-silence event");
         setFeedbackWithTimeout("Recording stopped - no sound detected", 2000);
       })
     );
@@ -96,6 +114,7 @@ export function RecordingPill() {
     // Listen for ESC first press from backend
     unlisteners.push(
       listen<string>("esc-first-press", (event) => {
+        console.log("RecordingPill: Received esc-first-press event", event.payload);
         setFeedbackWithTimeout(event.payload, 3000);
       })
     );
@@ -141,19 +160,18 @@ export function RecordingPill() {
 
   return (
     <div className="fixed inset-0 flex items-end justify-center pointer-events-none">
-      <div className="relative">
-        {/* Feedback message - white background with alert icon */}
+      <div className="relative pb-4">
+
+        {/* Feedback message as overlay */}
         {feedbackMessage && (
-          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 pointer-events-auto animate-in fade-in slide-in-from-bottom-2 duration-200">
-            <div className="bg-white border border-gray-200 rounded-lg shadow-md overflow-hidden whitespace-nowrap">
-              <div className="flex items-center gap-3 px-4 py-3">
-                <AlertCircle className="size-4 text-amber-500 flex-shrink-0" />
-                <span className="text-sm text-gray-700 font-medium whitespace-nowrap">{feedbackMessage}</span>
-              </div>
+          <div className="absolute inset-x-0 bottom-full mb-2 flex justify-center pointer-events-none z-50">
+            <div className="bg-gray-900 text-white text-sm px-4 py-2 rounded-md shadow-lg whitespace-nowrap flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-400" />
+              <span>{feedbackMessage}</span>
             </div>
           </div>
         )}
-
+        
         <Button
           // onClick={handleClick}
           variant="default"

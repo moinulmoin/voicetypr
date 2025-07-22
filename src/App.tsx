@@ -15,6 +15,7 @@ import { LicenseProvider } from "./contexts/LicenseContext";
 import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { useModelManagement } from "./hooks/useModelManagement";
 import { AppSettings, TranscriptionHistory } from "./types";
+import { updateService } from "./services/updateService";
 
 // Main App Component
 export default function App() {
@@ -23,7 +24,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
-  
+
   // Use the new model management hook
   const modelManagement = useModelManagement({ windowId: "main", showToasts: true });
   const {
@@ -34,7 +35,6 @@ export default function App() {
     deleteModel,
     sortedModels
   } = modelManagement;
-
 
   // Load history function
   const loadHistory = useCallback(async () => {
@@ -77,6 +77,9 @@ export default function App() {
         // Load initial transcription history
         await loadHistory();
 
+        // Initialize update service for automatic update checks
+        await updateService.initialize(appSettings);
+
         // All recording event handling is now managed by the useRecording hook
 
         // Listen for no-models event to redirect to onboarding
@@ -99,6 +102,26 @@ export default function App() {
         registerEvent("navigate-to-settings", () => {
           console.log("Navigate to settings requested from tray menu");
           setActiveSection("settings");
+        });
+        
+        // Listen for model changes from tray menu
+        registerEvent("model-changed", (event) => {
+          console.log("Model changed from tray menu:", event.payload);
+          // Force refresh of settings by reloading them
+          invoke<AppSettings>("get_settings").then(setSettings);
+        });
+        
+        // Listen for language changes from tray menu
+        registerEvent("language-changed", (event) => {
+          console.log("Language changed from tray menu:", event.payload);
+          // Force refresh of settings by reloading them
+          invoke<AppSettings>("get_settings").then(setSettings);
+        });
+        
+        // Listen for tray action errors
+        registerEvent("tray-action-error", (event) => {
+          console.error("Tray action error:", event.payload);
+          toast.error(event.payload as string);
         });
 
         // Listen for license-required event
@@ -131,6 +154,7 @@ export default function App() {
 
         return () => {
           window.removeEventListener("no-models-available", handleNoModels);
+          updateService.dispose();
         };
       } catch (error) {
         console.error("Failed to initialize:", error);
@@ -144,7 +168,7 @@ export default function App() {
   const handleDeleteModel = useCallback(
     async (modelName: string) => {
       await deleteModel(modelName);
-      
+
       // If deleted model was the current one, clear selection in settings
       if (settings?.current_model === modelName) {
         await saveSettings({ ...settings, current_model: "" });
@@ -252,19 +276,12 @@ export default function App() {
   return (
     <AppErrorBoundary>
       <LicenseProvider>
-        <div className="h-screen flex flex-col">
-          <SidebarProvider>
-            <div className="flex-1 flex overflow-hidden">
-              <Sidebar
-                activeSection={activeSection}
-                onSectionChange={setActiveSection}
-              />
-              <SidebarInset>
-                <div className="h-full overflow-auto">{renderSectionContent()}</div>
-              </SidebarInset>
-            </div>
-          </SidebarProvider>
-        </div>
+        <SidebarProvider>
+          <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
+          <SidebarInset>
+            <div className="h-full flex flex-col">{renderSectionContent()}</div>
+          </SidebarInset>
+        </SidebarProvider>
         <Toaster
           position="top-center"
           toastOptions={{

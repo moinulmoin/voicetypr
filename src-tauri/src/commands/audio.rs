@@ -205,8 +205,8 @@ pub async fn start_recording(
             std::thread::spawn(move || {
                 let mut last_emit = std::time::Instant::now();
                 let emit_interval = std::time::Duration::from_millis(100); // Throttle to 10fps
-                let mut last_emitted_level = 0.0f32;
-                const LEVEL_CHANGE_THRESHOLD: f32 = 0.05; // Only emit if change > 5%
+                let mut last_emitted_level = 0.0f64;
+                const LEVEL_CHANGE_THRESHOLD: f64 = 0.05; // Only emit if change > 5%
 
                 while let Ok(level) = audio_level_rx.recv() {
                     // Check both time throttling and significant change
@@ -531,12 +531,12 @@ pub async fn stop_recording(
     let language = store
         .get("language")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
-    
+
     let translate_to_english = store
         .get("translate_to_english")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    
+
     log::info!("[LANGUAGE] stop_recording: language={:?}, translate={}", language, translate_to_english);
 
     // clone for move into task
@@ -947,11 +947,11 @@ pub async fn transcribe_audio(
             .get("language")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| "en".to_string());
-        
+
         // Validate using centralized function
         validate_language(Some(&lang))
     };
-    
+
     let translate_to_english = store
         .get("translate_to_english")
         .and_then(|v| v.as_bool())
@@ -1058,8 +1058,32 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
         log::error!("Failed to hide pill window: {}", e);
     }
 
-    // Transition directly to Idle
-    update_recording_state(&app, RecordingState::Idle, None);
+    // Properly transition through states based on current state
+    match current_state {
+        RecordingState::Recording => {
+            // First transition to Stopping
+            update_recording_state(&app, RecordingState::Stopping, None);
+            // Then transition to Idle
+            update_recording_state(&app, RecordingState::Idle, None);
+        }
+        RecordingState::Starting => {
+            // Starting can go directly to Idle
+            update_recording_state(&app, RecordingState::Idle, None);
+        }
+        RecordingState::Stopping => {
+            // Already stopping, just go to Idle
+            update_recording_state(&app, RecordingState::Idle, None);
+        }
+        RecordingState::Transcribing => {
+            // Can't go directly to Idle from Transcribing, need to go through Error
+            update_recording_state(&app, RecordingState::Error, Some("Transcription cancelled".to_string()));
+            update_recording_state(&app, RecordingState::Idle, None);
+        }
+        _ => {
+            // For other states (Idle, Error), try to transition to Idle
+            update_recording_state(&app, RecordingState::Idle, None);
+        }
+    }
 
     log::info!("=== CANCEL RECORDING COMPLETED ===");
     Ok(())
@@ -1093,5 +1117,33 @@ pub async fn delete_transcription_entry(app: AppHandle, timestamp: String) -> Re
     let _ = emit_to_window(&app, "main", "history-updated", ());
 
     log::info!("Deleted transcription entry: {}", timestamp);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn clear_all_transcriptions(app: AppHandle) -> Result<(), String> {
+    log::info!("[Clear All] Clearing all transcriptions");
+
+    let store = app
+        .store("transcriptions")
+        .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
+
+    // Get all keys and delete them
+    let keys: Vec<String> = store.keys().into_iter().map(|k| k.to_string()).collect();
+    let count = keys.len();
+
+    for key in keys {
+        store.delete(&key);
+    }
+
+    // Save the store
+    store
+        .save()
+        .map_err(|e| format!("Failed to save store after clearing: {}", e))?;
+
+    // Emit event to update UI
+    let _ = emit_to_window(&app, "main", "history-updated", ());
+
+    log::info!("Cleared all transcription entries: {} items", count);
     Ok(())
 }
