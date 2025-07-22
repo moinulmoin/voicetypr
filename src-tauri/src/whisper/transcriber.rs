@@ -193,8 +193,11 @@ impl Transcriber {
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
 
-        // Don't suppress tokens - let Whisper decide
-        params.set_suppress_nst(false);
+        // Suppress blank outputs to avoid empty transcriptions
+        params.set_suppress_blank(true);
+        
+        // Suppress non-speech tokens like [MUSIC], [SOUND] for cleaner output
+        params.set_suppress_nst(true);
 
         // Run transcription
         log::info!("[TRANSCRIPTION_DEBUG] Creating Whisper state...");

@@ -1,7 +1,7 @@
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Emitter};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use tauri_plugin_store::StoreExt;
 use crate::whisper::languages::{SUPPORTED_LANGUAGES, validate_language};
@@ -18,6 +18,7 @@ pub struct Settings {
     pub launch_at_startup: bool,
     pub onboarding_completed: bool,
     pub compact_recording_status: bool,
+    pub check_updates_automatically: bool,
 }
 
 impl Default for Settings {
@@ -33,6 +34,7 @@ impl Default for Settings {
             launch_at_startup: false,         // Default to not launching at startup
             onboarding_completed: false,      // Default to not completed
             compact_recording_status: true,   // Default to compact mode
+            check_updates_automatically: true, // Default to automatic updates enabled
         }
     }
 }
@@ -90,6 +92,10 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("compact_recording_status")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().compact_recording_status),
+        check_updates_automatically: store
+            .get("check_updates_automatically")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().check_updates_automatically),
     };
 
     // Pill position is already loaded from store, no need for duplicate state
@@ -125,6 +131,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set(
         "compact_recording_status",
         json!(settings.compact_recording_status),
+    );
+    store.set(
+        "check_updates_automatically",
+        json!(settings.check_updates_automatically),
     );
 
     // Save pill position if provided
@@ -221,4 +231,70 @@ pub async fn get_supported_languages() -> Result<Vec<LanguageInfo>, String> {
     });
     
     Ok(languages)
+}
+
+#[tauri::command]
+pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(), String> {
+    // Get current settings
+    let mut settings = get_settings(app.clone()).await?;
+    
+    // Update the model
+    settings.current_model = model_name.clone();
+    
+    // Save settings (this will also preload the model)
+    save_settings(app.clone(), settings).await?;
+    
+    // Update the tray menu to reflect the new selection
+    update_tray_menu(app.clone()).await?;
+    
+    // Emit event to update UI only after successful tray menu update
+    if let Err(e) = app.emit("model-changed", &model_name) {
+        log::warn!("Failed to emit model-changed event: {}", e);
+        // Return error to caller so they know the UI might be out of sync
+        return Err(format!("Failed to emit model-changed event: {}", e));
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_language_from_tray(app: AppHandle, language_code: String) -> Result<(), String> {
+    // Get current settings
+    let mut settings = get_settings(app.clone()).await?;
+    
+    // Update the language
+    settings.language = language_code.clone();
+    
+    // Save settings
+    save_settings(app.clone(), settings).await?;
+    
+    // Update the tray menu to reflect the new selection
+    update_tray_menu(app.clone()).await?;
+    
+    // Emit event to update UI only after successful tray menu update
+    if let Err(e) = app.emit("language-changed", &language_code) {
+        log::warn!("Failed to emit language-changed event: {}", e);
+        // Return error to caller so they know the UI might be out of sync
+        return Err(format!("Failed to emit language-changed event: {}", e));
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
+    // Build the new menu
+    let new_menu = crate::build_tray_menu(&app).await
+        .map_err(|e| format!("Failed to build tray menu: {}", e))?;
+    
+    // Update the tray menu
+    if let Some(tray) = app.tray_by_id("main") {
+        tray.set_menu(Some(new_menu))
+            .map_err(|e| format!("Failed to set tray menu: {}", e))?;
+        log::info!("Tray menu updated successfully");
+    } else {
+        log::warn!("Tray icon not found");
+    }
+    
+    Ok(())
 }

@@ -1,7 +1,6 @@
 use tauri::{AppHandle, Manager, Emitter};
 use tauri_plugin_store::StoreExt;
 use std::fs;
-use std::path::PathBuf;
 
 #[tauri::command]
 pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
