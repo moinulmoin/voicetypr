@@ -35,7 +35,6 @@ export default function App() {
     sortedModels
   } = modelManagement;
 
-
   // Load history function
   const loadHistory = useCallback(async () => {
     try {
@@ -252,19 +251,12 @@ export default function App() {
   return (
     <AppErrorBoundary>
       <LicenseProvider>
-        <div className="h-screen flex flex-col">
-          <SidebarProvider>
-            <div className="flex-1 flex overflow-hidden">
-              <Sidebar
-                activeSection={activeSection}
-                onSectionChange={setActiveSection}
-              />
-              <SidebarInset>
-                <div className="h-full flex flex-col">{renderSectionContent()}</div>
-              </SidebarInset>
-            </div>
-          </SidebarProvider>
-        </div>
+        <SidebarProvider>
+          <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
+          <SidebarInset>
+            <div className="h-full flex flex-col">{renderSectionContent()}</div>
+          </SidebarInset>
+        </SidebarProvider>
         <Toaster
           position="top-center"
           toastOptions={{

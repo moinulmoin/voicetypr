@@ -30,9 +30,4 @@ impl SilenceDetector {
             self.last_voice_time.elapsed() > self.silence_duration
         }
     }
-    
-    /// Reset the detector
-    pub fn reset(&mut self) {
-        self.last_voice_time = Instant::now();
-    }
 }

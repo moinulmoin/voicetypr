@@ -391,9 +391,9 @@ impl WindowManager {
                 let height = size.height as f64 / scale;
 
                 // Center bottom position with offset
-                let pill_width = 300.0;
+                let pill_width = 350.0;
                 let pill_height = 150.0;
-                let bottom_offset = 10.0; // Increased offset from bottom for better visibility
+                let bottom_offset = 25.0; // Closer to bottom of screen
 
                 let x = (width - pill_width) / 2.0;
                 let y = height - pill_height - bottom_offset;

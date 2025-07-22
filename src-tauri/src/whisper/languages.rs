@@ -128,15 +128,9 @@ pub fn is_language_supported(code: &str) -> bool {
 }
 
 /// Get the language name for a given code
+#[cfg(test)]
 pub fn get_language_name(code: &str) -> Option<&'static str> {
     SUPPORTED_LANGUAGES.get(code).map(|lang| lang.name)
-}
-
-/// Get all supported language codes
-pub fn get_all_language_codes() -> Vec<&'static str> {
-    let mut codes: Vec<_> = SUPPORTED_LANGUAGES.keys().copied().collect();
-    codes.sort();
-    codes
 }
 
 /// Validate and normalize a language code

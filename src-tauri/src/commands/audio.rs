@@ -1058,8 +1058,32 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
         log::error!("Failed to hide pill window: {}", e);
     }
 
-    // Transition directly to Idle
-    update_recording_state(&app, RecordingState::Idle, None);
+    // Properly transition through states based on current state
+    match current_state {
+        RecordingState::Recording => {
+            // First transition to Stopping
+            update_recording_state(&app, RecordingState::Stopping, None);
+            // Then transition to Idle
+            update_recording_state(&app, RecordingState::Idle, None);
+        }
+        RecordingState::Starting => {
+            // Starting can go directly to Idle
+            update_recording_state(&app, RecordingState::Idle, None);
+        }
+        RecordingState::Stopping => {
+            // Already stopping, just go to Idle
+            update_recording_state(&app, RecordingState::Idle, None);
+        }
+        RecordingState::Transcribing => {
+            // Can't go directly to Idle from Transcribing, need to go through Error
+            update_recording_state(&app, RecordingState::Error, Some("Transcription cancelled".to_string()));
+            update_recording_state(&app, RecordingState::Idle, None);
+        }
+        _ => {
+            // For other states (Idle, Error), try to transition to Idle
+            update_recording_state(&app, RecordingState::Idle, None);
+        }
+    }
 
     log::info!("=== CANCEL RECORDING COMPLETED ===");
     Ok(())

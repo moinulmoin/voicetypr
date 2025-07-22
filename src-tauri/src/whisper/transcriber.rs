@@ -29,10 +29,6 @@ impl Transcriber {
         Ok(Self { context: ctx })
     }
 
-    pub fn transcribe(&self, audio_path: &Path, language: Option<&str>) -> Result<String, String> {
-        self.transcribe_with_cancellation(audio_path, language, false, || false)
-    }
-    
     pub fn transcribe_with_translation(&self, audio_path: &Path, language: Option<&str>, translate: bool) -> Result<String, String> {
         self.transcribe_with_cancellation(audio_path, language, translate, || false)
     }

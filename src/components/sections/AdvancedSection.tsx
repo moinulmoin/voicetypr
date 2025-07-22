@@ -1,15 +1,22 @@
 import { PermissionErrorBoundary } from "@/components/PermissionErrorBoundary";
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/hooks/usePermissions";
+import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
   CheckCircle,
   Keyboard,
   Loader2,
   Mic,
-  TextCursor
+  TextCursor,
+  Trash2
 } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
 
 export function AdvancedSection() {
+  const [isResetting, setIsResetting] = useState(false);
   const {
     permissions,
     checkPermissions,
@@ -52,7 +59,7 @@ export function AdvancedSection() {
   return (
     <PermissionErrorBoundary>
       <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
+      <div>
         <div className="space-y-1">
           <h2 className="text-2xl font-semibold flex items-center gap-2">
 
@@ -62,22 +69,6 @@ export function AdvancedSection() {
             System permissions and advanced settings
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={checkPermissions}
-          disabled={isChecking}
-        >
-          {isChecking ? (
-            <>
-              Checking...
-            </>
-          ) : (
-            <>
-              Recheck
-            </>
-          )}
-        </Button>
       </div>
 
       <div className="space-y-6">
@@ -134,11 +125,6 @@ export function AdvancedSection() {
             ))}
           </div>
 
-          {allGranted && (
-            <p className="mt-4 text-sm text-green-600">
-              ✓ All permissions granted
-            </p>
-          )}
         </div>
 
         {!allGranted && (
@@ -153,6 +139,67 @@ export function AdvancedSection() {
             </ul>
           </div>
         )}
+
+        <div className="pt-4The permission reset runs asynchronously, so it might still be executing when the app relaunches.">
+          <h3 className="text-lg font-medium mb-4">Reset App</h3>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Reset VoiceTypr to its initial state. This will:
+            </p>
+            <ul className="text-sm text-muted-foreground list-disc list-inside ml-2 space-y-1">
+              <li>Delete all transcription history</li>
+              <li>Remove all downloaded models</li>
+              <li>Clear all settings and preferences</li>
+              <li>Remove saved window positions</li>
+              <li>Clear all cached data and logs</li>
+              <li>Reset system permissions (requires admin password)</li>
+            </ul>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={isResetting}
+              onClick={async () => {
+                const confirmed = await ask(
+                  "This action cannot be undone. This will permanently delete all your VoiceTypr data including transcription history, downloaded models, and settings.\n\nYou will be prompted for your admin password to reset system permissions.\n\nThe app will restart after reset.\n\nAre you absolutely sure?",
+                  {
+                    title: "Reset App Data",
+                    okLabel: "Reset Everything",
+                    cancelLabel: "Cancel",
+                    kind: "warning"
+                  }
+                );
+
+                if (confirmed) {
+                  setIsResetting(true);
+                  try {
+                    await invoke("reset_app_data");
+                    toast.success("App data reset successfully. Restarting...");
+                    // Wait a bit for the toast to show
+                    setTimeout(() => {
+                      relaunch();
+                    }, 1000);
+                  } catch (error) {
+                    console.error("Failed to reset app data:", error);
+                    toast.error("Failed to reset app data");
+                    setIsResetting(false);
+                  }
+                }
+              }}
+            >
+              {isResetting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Resetting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Reset App Data
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
       </div>
       </div>
     </PermissionErrorBoundary>

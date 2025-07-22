@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.3",
+    "@sentry/react": "^9.40.0",
     "@tailwindcss/vite": "^4.1.11",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-autostart": "^2.5.0",
@@ -46,7 +47,8 @@
     "tailwind-merge": "^3.3.1",
     "tailwindcss": "^4.1.11",
     "tauri-plugin-cache-api": "^0.1.5",
-    "tauri-plugin-macos-permissions-api": "^2.3.0"
+    "tauri-plugin-macos-permissions-api": "^2.3.0",
+    "tauri-plugin-sentry-api": "^0.4.1"
   },
   "devDependencies": {
     "@release-it/conventional-changelog": "^10.0.1",

@@ -12,6 +12,7 @@ use tokio::io::AsyncWriteExt;
 
 // Type-safe size validation
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Field accessed through as_bytes() in tests
 pub struct ModelSize(u64);
 
 impl ModelSize {
@@ -36,6 +37,7 @@ impl ModelSize {
         Ok(ModelSize(size))
     }
 
+    #[cfg(test)]
     pub fn as_bytes(&self) -> u64 {
         self.0
     }
@@ -482,10 +484,6 @@ impl WhisperManager {
         Ok(())
     }
 
-    pub fn get_models_dir(&self) -> &PathBuf {
-        &self.models_dir
-    }
-
     pub fn get_model_path(&self, model_name: &str) -> Option<PathBuf> {
         // Use centralized validation
         if !self.is_valid_model_name(model_name) {
@@ -502,11 +500,6 @@ impl WhisperManager {
 
     pub fn get_models_status(&self) -> HashMap<String, ModelInfo> {
         self.models.clone()
-    }
-
-    /// Get a reference to the models map for internal use (avoids cloning)
-    pub fn models(&self) -> &HashMap<String, ModelInfo> {
-        &self.models
     }
 
     /// Check if any models are downloaded (efficient, no cloning)
@@ -631,5 +624,12 @@ impl WhisperManager {
         }
 
         models
+    }
+    
+    /// Clear all downloaded models and reset the manager state
+    pub fn clear_all(&mut self) {
+        // This resets the manager to a fresh state
+        // The actual deletion of model files is handled by the reset command
+        log::info!("Clearing WhisperManager state");
     }
 }

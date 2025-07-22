@@ -6,6 +6,7 @@ use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_store::StoreExt;
+use tauri_plugin_sentry::{minidump, sentry};
 
 mod audio;
 mod commands;
@@ -28,6 +29,7 @@ use commands::{
         preload_model,
     },
     permissions::{check_accessibility_permission, check_microphone_permission, request_accessibility_permission, request_microphone_permission, test_automation_permission},
+    reset::reset_app_data,
     settings::*,
     text::*,
     window::*,
@@ -267,7 +269,53 @@ pub fn run() {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     }
 
+    // Load .env file if it exists (for development)
+    match dotenv::dotenv() {
+        Ok(path) => log::debug!("Loaded .env file from: {:?}", path),
+        Err(e) => log::debug!("No .env file found or error loading it: {}", e),
+    }
+
     log::info!("Starting VoiceTypr application");
+    
+    // Initialize Sentry if DSN is provided
+    let _sentry_guard = if let Ok(dsn) = std::env::var("SENTRY_DSN") {
+        if !dsn.is_empty() && dsn != "__YOUR_SENTRY_DSN__" {
+            log::info!("Initializing Sentry error tracking");
+            let client = sentry::init((
+                dsn,
+                sentry::ClientOptions {
+                    release: sentry::release_name!(),
+                    // Disable session tracking for privacy
+                    auto_session_tracking: false,
+                    // Set environment based on build mode
+                    environment: Some(if cfg!(debug_assertions) {
+                        "development"
+                    } else {
+                        "production"
+                    }.into()),
+                    // Sample rate for performance monitoring (0.0 to 1.0)
+                    traces_sample_rate: 0.1,
+                    // Attach stack traces to messages
+                    attach_stacktrace: true,
+                    // Privacy: Don't send user information
+                    send_default_pii: false,
+                    ..Default::default()
+                },
+            ));
+
+            // Initialize minidump for native crash reporting (not on iOS)
+            #[cfg(not(target_os = "ios"))]
+            let _minidump_guard = minidump::init(&client);
+            
+            Some(client)
+        } else {
+            log::warn!("Sentry DSN not configured. Error tracking disabled.");
+            None
+        }
+    } else {
+        log::info!("SENTRY_DSN environment variable not set. Error tracking disabled.");
+        None
+    };
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_cache::init())
@@ -289,6 +337,11 @@ pub fn run() {
         builder = builder
             .plugin(tauri_nspanel::init())
             .plugin(tauri_plugin_macos_permissions::init());
+    }
+    
+    // Add Sentry plugin if initialized
+    if let Some(ref client) = _sentry_guard {
+        builder = builder.plugin(tauri_plugin_sentry::init(client));
     }
 
     builder
@@ -672,7 +725,7 @@ pub fn run() {
                     .always_on_top(true)
                     .skip_taskbar(true)
                     .transparent(true)
-                    .inner_size(250.0, 120.0)  // Increased height to accommodate tooltip
+                    .inner_size(350.0, 150.0)  // Match window_manager.rs size
                     .visible(false) // Start hidden
                     .build()?;
 
@@ -783,6 +836,7 @@ pub fn run() {
             activate_license,
             deactivate_license,
             open_purchase_page,
+            reset_app_data,
         ])
         .on_window_event(|window, event| {
             match event {
