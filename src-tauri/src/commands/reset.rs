@@ -79,7 +79,32 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
         }
     }
     
-    // 5. Clear additional system data
+    // 5. Clear app preferences (macOS defaults system)
+    log::info!("Clearing app preferences...");
+    match std::process::Command::new("defaults")
+        .args(&["delete", "com.ideaplexa.voicetypr"])
+        .output()
+    {
+        Ok(_) => log::info!("Cleared defaults preferences"),
+        Err(e) => log::debug!("No defaults to clear: {}", e),
+    }
+    
+    // Also remove the preferences plist file
+    if let Ok(home_dir) = app.path().home_dir() {
+        let prefs_path = home_dir
+            .join("Library")
+            .join("Preferences")
+            .join("com.ideaplexa.voicetypr.plist");
+        if prefs_path.exists() {
+            if let Err(e) = fs::remove_file(&prefs_path) {
+                log::warn!("Failed to remove preferences plist: {}", e);
+            } else {
+                log::info!("Removed preferences plist file");
+            }
+        }
+    }
+    
+    // 6. Clear additional system data
     if let Ok(home_dir) = app.path().home_dir() {
         // Clear saved application state (window positions, etc)
         let saved_state_path = home_dir
@@ -119,13 +144,29 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
                 log::info!("Cleared WebKit data");
             }
         }
+        
+        // Clear NSURLSession downloads cache
+        let nsurlsession_path = home_dir
+            .join("Library")
+            .join("Caches")
+            .join("com.apple.nsurlsessiond")
+            .join("Downloads")
+            .join("com.ideaplexa.voicetypr");
+        if nsurlsession_path.exists() {
+            if let Err(e) = fs::remove_dir_all(&nsurlsession_path) {
+                log::warn!("Failed to clear NSURLSession cache: {}", e);
+            } else {
+                log::info!("Cleared NSURLSession downloads cache");
+            }
+        }
     }
     
-    // 6. Reset system permissions using osascript with admin privileges
+    // 7. Reset system permissions using osascript with admin privileges
     log::info!("Attempting to reset system permissions...");
     
     // Create AppleScript that will prompt for admin password
-    let reset_script = r#"do shell script "tccutil reset Accessibility com.ideaplexa.voicetypr; tccutil reset Microphone com.ideaplexa.voicetypr; tccutil reset AppleEvents com.ideaplexa.voicetypr; tccutil reset ScreenCapture com.ideaplexa.voicetypr" with administrator privileges"#;
+    // Using 'tccutil reset All' to reset all permissions at once
+    let reset_script = r#"do shell script "tccutil reset All com.ideaplexa.voicetypr" with administrator privileges"#;
     
     // Execute the script and wait for completion
     match tokio::process::Command::new("osascript")
@@ -137,9 +178,15 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
         Ok(output) => {
             if output.status.success() {
                 log::info!("Successfully reset system permissions");
+                // Log the output for debugging
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if !stdout.is_empty() {
+                    log::info!("tccutil output: {}", stdout);
+                }
             } else {
                 let error = String::from_utf8_lossy(&output.stderr);
-                log::warn!("Failed to reset permissions: {}", error);
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                log::warn!("Failed to reset permissions - stderr: {}, stdout: {}", error, stdout);
                 // User might have cancelled the password prompt - continue with reset
             }
         }
@@ -149,7 +196,7 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
         }
     }
     
-    // 7. Clear any runtime state
+    // 8. Clear any runtime state
     // Reset the whisper manager state
     use tauri::async_runtime::RwLock as AsyncRwLock;
     let whisper_state = app.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
@@ -157,10 +204,20 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
     whisper_manager.clear_all();
     drop(whisper_manager);
     
-    // 8. Transcriber cache will be cleared when app restarts
+    // 9. Transcriber cache will be cleared when app restarts
     // The cache is in-memory only and doesn't persist between app launches
     
-    // 9. Emit reset event to frontend
+    // 10. Kill cfprefsd to ensure preference changes take effect
+    log::info!("Refreshing preferences daemon...");
+    match std::process::Command::new("killall")
+        .arg("cfprefsd")
+        .output()
+    {
+        Ok(_) => log::info!("Refreshed cfprefsd"),
+        Err(e) => log::debug!("Could not refresh cfprefsd: {}", e),
+    }
+    
+    // 11. Emit reset event to frontend
     app.emit("app-reset", ()).map_err(|e| e.to_string())?;
     
     log::info!("App data reset completed - app is now in fresh install state");

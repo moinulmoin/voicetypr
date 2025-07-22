@@ -15,8 +15,7 @@ import {
   Info,
   Keyboard,
   Loader2,
-  Mic,
-  TextCursor
+  Mic
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -47,8 +46,8 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
   const [permissions, setPermissions] = useState<Record<string, PermissionState>>({
     microphone: { status: "checking" },
-    accessibility: { status: "checking" },
-    automation: { status: "checking" }
+    accessibility: { status: "checking" }
+    // automation: { status: "checking" } // Removed for now, can be re-enabled later
   });
   const [hotkey, setHotkey] = useState("cmd+shift+space");
   const [isRequesting, setIsRequesting] = useState<string | null>(null);
@@ -105,23 +104,14 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
 
 
   const checkPermissions = async () => {
-    // Check microphone and accessibility first
+    // Check microphone and accessibility
     await Promise.all([
       checkSinglePermission("microphone", "check_microphone_permission"),
       checkSinglePermission("accessibility", "check_accessibility_permission")
     ]);
 
-    // Only check automation if accessibility is granted
-    // This prevents the dialog from appearing automatically
-    const accessibilityGranted = permissions.accessibility.status === "granted";
-    if (accessibilityGranted) {
-      // Check automation without triggering the dialog
-      // For initial check, we assume it's denied unless already granted
-      setPermissions(prev => ({
-        ...prev,
-        automation: { status: "denied" }
-      }));
-    }
+    // Automation check removed for now
+    // Can be re-enabled later if needed
   };
 
   const checkSinglePermission = async (type: string, command: string) => {
@@ -251,8 +241,8 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
     switch (currentStep) {
       case "permissions":
         return permissions.microphone.status === "granted" &&
-               permissions.accessibility.status === "granted" &&
-               permissions.automation.status === "granted";
+               permissions.accessibility.status === "granted";
+               // automation check removed for now
       case "models":
         // User can proceed if they have selected a model that is downloaded
         return selectedModel !== null && models[selectedModel]?.downloaded === true;
@@ -337,14 +327,9 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
                       title: "Accessibility",
                       desc: "Global hotkeys",
                       ...permissions.accessibility
-                    },
-                    ...(permissions.accessibility.status === "granted" ? [{
-                      type: "automation" as const,
-                      icon: TextCursor,
-                      title: "Automation",
-                      desc: "Auto-paste text",
-                      ...permissions.automation
-                    }] : [])
+                    }
+                    // Automation permission removed for now
+                    // Can be re-enabled later if needed
                   ].map((perm) => (
                     <Card
                       key={perm.type}

@@ -155,6 +155,26 @@ impl WhisperManager {
             accuracy_score: 7,    // Good accuracy with turbo + quantization
         });
 
+        models.insert("small.en".to_string(), ModelInfo {
+            name: "small.en".to_string(),
+            size: 488_505_344, // 466 MiB = 466 * 1024 * 1024 bytes
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin".to_string(),
+            sha256: "db8a495a91d927739e50b3fc1cc4c6b8f6c2d022".to_string(), // SHA1 (correct)
+            downloaded: false,
+            speed_score: 7,       // Fast for English-only
+            accuracy_score: 6,    // Good accuracy for English
+        });
+
+        models.insert("large-v3-turbo-q8_0".to_string(), ModelInfo {
+            name: "large-v3-turbo-q8_0".to_string(),
+            size: 874_512_384, // 834 MiB = 834 * 1024 * 1024 bytes
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin".to_string(),
+            sha256: "01bf15bedffe9f39d65c1b6ff9b687ea91f59e0e".to_string(), // SHA1 (correct)
+            downloaded: false,
+            speed_score: 7,       // Fast, higher quality quantization
+            accuracy_score: 8,    // Excellent accuracy with minimal loss
+        });
+
         let mut manager = Self { models_dir, models };
         manager.check_downloaded_models();
         manager

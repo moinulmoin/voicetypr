@@ -9,7 +9,6 @@ import {
   Keyboard,
   Loader2,
   Mic,
-  TextCursor,
   Trash2
 } from "lucide-react";
 import { useState } from "react";
@@ -19,9 +18,7 @@ export function AdvancedSection() {
   const [isResetting, setIsResetting] = useState(false);
   const {
     permissions,
-    checkPermissions,
     requestPermission,
-    isChecking,
     isRequesting,
     error,
     allGranted
@@ -45,14 +42,16 @@ export function AdvancedSection() {
       title: "Accessibility",
       description: "For global hotkeys to trigger recording",
       status: permissions.accessibility
-    },
-    {
-      type: "automation" as const,
-      icon: TextCursor,
-      title: "Automation",
-      description: "To automatically paste transcribed text at cursor",
-      status: permissions.automation
     }
+    // Automation permission removed for now
+    // Can be re-enabled later if needed:
+    // {
+    //   type: "automation" as const,
+    //   icon: TextCursor,
+    //   title: "Automation",
+    //   description: "To automatically paste transcribed text at cursor",
+    //   status: permissions.automation
+    // }
   ];
 
 
@@ -135,7 +134,6 @@ export function AdvancedSection() {
             <ul className="list-disc list-inside space-y-1 ml-2">
               <li>Microphone: Required for voice recording</li>
               <li>Accessibility: Required for global hotkeys</li>
-              <li>Automation: Required for auto-paste at cursor</li>
             </ul>
           </div>
         )}
