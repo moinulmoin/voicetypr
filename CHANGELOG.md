@@ -1,5 +1,17 @@
 # Changelog
 
+# [1.3.0](https://github.com/moinulmoin/voicetypr/compare/v1.2.2...v1.3.0) (2025-07-22)
+
+
+### Features
+
+* :sparkles: add automatic update checks and tray menu functionality, suppress blank and non speech voice ([c812355](https://github.com/moinulmoin/voicetypr/commit/c81235554cc99d282965a89ebf0f5e4510821024))
+* :sparkles: add huge perf improvement and improved audio level meter and silence detection ([aa2601a](https://github.com/moinulmoin/voicetypr/commit/aa2601a279d27646812609f43a7f0811c767c514))
+* :sparkles: add new models, keep only 2 permission, add reset app data ([3d3dd56](https://github.com/moinulmoin/voicetypr/commit/3d3dd5613588f9512202316ad6eee06b8ecdc7ed))
+* :sparkles: add sentry, fix esc not stopping, add pill tooltip feedback ([82c88b1](https://github.com/moinulmoin/voicetypr/commit/82c88b151a377cb0ce0b520cc6363aa1b9db8781))
+* :sparkles: add translation, make download and read seperate action ([3e9e61a](https://github.com/moinulmoin/voicetypr/commit/3e9e61a294f6c0363da92ba64682f2226471f0d3))
+* :sparkles: enable GPU acceleration and multi-threading for improved transcription performance ([1f3c1b3](https://github.com/moinulmoin/voicetypr/commit/1f3c1b39e570790b4f3424bed4be4e2d77db63c8))
+
 ## [1.2.2](https://github.com/moinulmoin/voicetypr/compare/v1.2.1...v1.2.2) (2025-07-20)
 
 
