@@ -5,5 +5,6 @@ pub mod model;
 pub mod permissions;
 pub mod reset;
 pub mod settings;
+pub mod test_sentry;
 pub mod text;
 pub mod window;

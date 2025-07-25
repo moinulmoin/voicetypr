@@ -445,6 +445,24 @@ impl WhisperManager {
 
         // Compare checksums
         if calculated_checksum != expected_checksum {
+            // Capture to Sentry - file integrity failure
+            use crate::{capture_sentry_with_context, utils::sentry_helper::{create_context_from_map, sanitize_path}};
+            let mut context_map = std::collections::BTreeMap::new();
+            context_map.insert("expected".to_string(), serde_json::Value::from(expected_checksum.clone()));
+            context_map.insert("calculated".to_string(), serde_json::Value::from(calculated_checksum.clone()));
+            context_map.insert("file_path".to_string(), serde_json::Value::from(sanitize_path(file_path)));
+            
+            capture_sentry_with_context!(
+                "Model file integrity check failed (SHA256)",
+                tauri_plugin_sentry::sentry::Level::Error,
+                tags: {
+                    "error.type" => "checksum_mismatch",
+                    "component" => "model_manager",
+                    "checksum.type" => "sha256"
+                },
+                context: "integrity", create_context_from_map(context_map)
+            );
+            
             // Delete the corrupted file
             let _ = fs::remove_file(file_path).await;
             return Err(format!(
@@ -491,6 +509,24 @@ impl WhisperManager {
 
         // Compare checksums
         if calculated_checksum != expected_checksum {
+            // Capture to Sentry - file integrity failure
+            use crate::{capture_sentry_with_context, utils::sentry_helper::{create_context_from_map, sanitize_path}};
+            let mut context_map = std::collections::BTreeMap::new();
+            context_map.insert("expected".to_string(), serde_json::Value::from(expected_checksum.clone()));
+            context_map.insert("calculated".to_string(), serde_json::Value::from(calculated_checksum.clone()));
+            context_map.insert("file_path".to_string(), serde_json::Value::from(sanitize_path(file_path)));
+            
+            capture_sentry_with_context!(
+                "Model file integrity check failed (SHA1)",
+                tauri_plugin_sentry::sentry::Level::Error,
+                tags: {
+                    "error.type" => "checksum_mismatch",
+                    "component" => "model_manager",
+                    "checksum.type" => "sha1"
+                },
+                context: "integrity", create_context_from_map(context_map)
+            );
+            
             // Delete the corrupted file
             let _ = fs::remove_file(file_path).await;
             return Err(format!(

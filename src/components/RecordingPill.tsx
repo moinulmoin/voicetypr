@@ -153,10 +153,10 @@ export function RecordingPill() {
   //   }
   // };
 
-  // // Only show pill when recording or transcribing
-  // if (!isRecording && !isTranscribing) {
-  //   return null;
-  // }
+  // Only show pill when recording or transcribing
+  if (!isRecording && !isTranscribing) {
+    return null;
+  }
 
   return (
     <div className="fixed inset-0 flex items-end justify-center pointer-events-none">

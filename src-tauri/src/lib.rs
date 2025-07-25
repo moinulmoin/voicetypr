@@ -13,6 +13,7 @@ mod commands;
 mod license;
 mod state;
 mod state_machine;
+mod utils;
 mod whisper;
 mod window_manager;
 
@@ -31,6 +32,7 @@ use commands::{
     permissions::{check_accessibility_permission, check_microphone_permission, request_accessibility_permission, request_microphone_permission, test_automation_permission},
     reset::reset_app_data,
     settings::*,
+    test_sentry::test_sentry_errors,
     text::*,
     window::*,
 };
@@ -437,7 +439,12 @@ pub fn run() {
     log::info!("Starting VoiceTypr application");
     
     // Initialize Sentry if DSN is provided
-    let _sentry_guard = if let Ok(dsn) = std::env::var("SENTRY_DSN") {
+    // Try compile-time env var first, then runtime
+    let sentry_dsn = option_env!("SENTRY_DSN")
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("SENTRY_DSN").ok());
+    
+    let _sentry_guard = if let Some(dsn) = sentry_dsn {
         if !dsn.is_empty() && dsn != "__YOUR_SENTRY_DSN__" {
             log::info!("Initializing Sentry error tracking");
             let client = sentry::init((
@@ -901,7 +908,7 @@ pub fn run() {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
                 // Create the pill window with extra height for tooltip
-                let pill_window = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
+                let mut pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
                     .title("Recording")
                     .resizable(false)
                     .decorations(false)
@@ -909,8 +916,15 @@ pub fn run() {
                     .skip_taskbar(true)
                     .transparent(true)
                     .inner_size(350.0, 150.0)  // Match window_manager.rs size
-                    .visible(false) // Start hidden
-                    .build()?;
+                    .visible(false); // Start hidden
+                
+                // Disable context menu only in production builds
+                #[cfg(not(debug_assertions))]
+                {
+                    pill_builder = pill_builder.initialization_script("document.addEventListener('contextmenu', e => e.preventDefault());");
+                }
+                
+                let pill_window = pill_builder.build()?;
 
                 // Convert to NSPanel to prevent focus stealing
                 use tauri_nspanel::WebviewWindowExt;
@@ -1023,6 +1037,7 @@ pub fn run() {
             deactivate_license,
             open_purchase_page,
             reset_app_data,
+            test_sentry_errors,
         ])
         .on_window_event(|window, event| {
             match event {

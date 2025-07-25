@@ -86,14 +86,42 @@ pub async fn start_recording(
         );
     }
 
+    // Update state to starting BEFORE license check to show user feedback
+    update_recording_state(&app, RecordingState::Starting, None);
+
     // Check license status before allowing recording
     log::info!("[Recording] Checking license status before start_recording");
-    let license_status = check_license_status_internal(&app).await?;
+    let license_status = match check_license_status_internal(&app).await {
+        Ok(status) => status,
+        Err(e) => {
+            log::error!("License check failed: {}", e);
+            // Reset state to idle on license check failure
+            update_recording_state(&app, RecordingState::Idle, None);
+            
+            // Use same license-required event but with different message
+            let _ = emit_to_window(
+                &app,
+                "main",
+                "license-required",
+                serde_json::json!({
+                    "title": "License Verification Failed",
+                    "message": "Unable to verify your license. Please check your license status.",
+                    "action": "open-license"
+                }),
+            );
+            
+            return Err(format!("License check failed: {}", e));
+        }
+    };
+
     if matches!(
         license_status.status,
         LicenseState::Expired | LicenseState::None
     ) {
         log::error!("Cannot start recording - license required");
+        
+        // Reset state to idle
+        update_recording_state(&app, RecordingState::Idle, None);
 
         // Emit error event with guidance
         let _ = emit_to_window(
@@ -112,9 +140,6 @@ pub async fn start_recording(
                 .to_string(),
         );
     }
-
-    // Update state to starting
-    update_recording_state(&app, RecordingState::Starting, None);
     // Get app data directory for recordings
     let recordings_dir = app
         .path()
@@ -164,6 +189,19 @@ pub async fn start_recording(
                 // Verify recording actually started
                 if !recorder.is_recording() {
                     log::error!("Recording failed to start!");
+                    
+                    // Capture to Sentry
+                    use crate::capture_sentry_message;
+                    capture_sentry_message!(
+                        "Recording failed to start after successful initialization",
+                        tauri_plugin_sentry::sentry::Level::Error,
+                        tags: {
+                            "error.type" => "recording_start_failure",
+                            "component" => "audio_recorder",
+                            "operation" => "start_recording"
+                        }
+                    );
+                    
                     update_recording_state(
                         &app,
                         RecordingState::Error,
@@ -179,6 +217,29 @@ pub async fn start_recording(
             }
             Err(e) => {
                 log::error!("Failed to start recording: {}", e);
+                
+                // Categorize and capture error to Sentry
+                use crate::capture_sentry_message;
+                let error_type = if e.contains("permission") || e.contains("access") {
+                    "permission_denied"
+                } else if e.contains("device") || e.contains("not found") {
+                    "device_not_found"
+                } else if e.contains("in use") || e.contains("busy") {
+                    "device_busy"
+                } else {
+                    "unknown"
+                };
+                
+                capture_sentry_message!(
+                    &format!("Audio recording failed: {}", e),
+                    tauri_plugin_sentry::sentry::Level::Error,
+                    tags: {
+                        "error.type" => error_type,
+                        "component" => "audio_recorder",
+                        "operation" => "start_recording"
+                    }
+                );
+                
                 update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
 
                 // Provide specific error messages for common issues
@@ -333,7 +394,21 @@ pub async fn stop_recording(
             return Ok("".to_string());
         }
 
-        let stop_message = recorder.stop_recording()?;
+        let stop_message = recorder.stop_recording().map_err(|e| {
+            // Capture stop recording failures to Sentry
+            use crate::capture_sentry_message;
+            capture_sentry_message!(
+                &format!("Failed to stop recording: {}", e),
+                tauri_plugin_sentry::sentry::Level::Error,
+                tags: {
+                    "error.type" => "recording_stop_failure",
+                    "component" => "audio_recorder",
+                    "operation" => "stop_recording"
+                }
+            );
+            
+            format!("Failed to stop recording: {}", e)
+        })?;
         log::info!("{}", stop_message);
 
         // Emit event if recording was stopped due to silence

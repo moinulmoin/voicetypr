@@ -20,8 +20,7 @@ export function AdvancedSection() {
     permissions,
     requestPermission,
     isRequesting,
-    error,
-    allGranted
+    error
   } = usePermissions({
     checkOnMount: true,
     checkInterval: 0, // No auto-refresh, user can manually recheck
@@ -126,7 +125,7 @@ export function AdvancedSection() {
 
         </div>
 
-        {!allGranted && (
+        {(permissions.microphone !== 'granted' || permissions.accessibility !== 'granted') && (
           <div className="text-sm text-muted-foreground space-y-2">
             <p>
               <strong>Note:</strong> Without all permissions, some features may not work properly.

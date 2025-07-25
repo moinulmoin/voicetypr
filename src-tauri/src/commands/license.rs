@@ -471,6 +471,16 @@ async fn activate_license_internal(
             if response.success {
                 // Save the license to keychain
                 keychain::save_license(&license_key)?;
+                
+                // Immediately read it back to trigger macOS keychain permission prompt
+                // This ensures the user grants permission during activation, not during first recording
+                match keychain::get_license()? {
+                    Some(_) => log::info!("License saved and verified in keychain"),
+                    None => {
+                        log::error!("License was saved but could not be read back");
+                        return Err("Failed to verify license storage".to_string());
+                    }
+                }
 
                 log::info!("License activated successfully");
 

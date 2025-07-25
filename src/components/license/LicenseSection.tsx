@@ -97,6 +97,9 @@ export function LicenseSection() {
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Have a license key?
               </label>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                Note: You may be prompted for your password to securely store the license in your system keychain
+              </p>
               <div className="flex gap-2">
                 <Input
                   placeholder="Enter license key"

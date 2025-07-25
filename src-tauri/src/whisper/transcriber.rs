@@ -52,6 +52,21 @@ impl Transcriber {
         if !audio_path.exists() {
             let error = format!("Audio file does not exist: {:?}", audio_path);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            
+            // Capture to Sentry
+            use crate::capture_sentry_message;
+            use crate::utils::sentry_helper::sanitize_path;
+            capture_sentry_message!(
+                &format!("Transcription failed: Audio file does not exist ({})", 
+                    sanitize_path(audio_path)),
+                tauri_plugin_sentry::sentry::Level::Error,
+                tags: {
+                    "error.type" => "file_not_found",
+                    "component" => "transcriber",
+                    "operation" => "transcribe"
+                }
+            );
+            
             return Err(error);
         }
 
@@ -76,6 +91,20 @@ impl Transcriber {
         let mut reader = hound::WavReader::open(audio_path).map_err(|e| {
             let error = format!("Failed to open WAV file: {}", e);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            
+            // Capture to Sentry
+            use crate::{capture_sentry_with_context, utils::sentry_helper::create_safe_file_context};
+            capture_sentry_with_context!(
+                &format!("Failed to open WAV file for transcription: {}", e),
+                tauri_plugin_sentry::sentry::Level::Error,
+                tags: {
+                    "error.type" => "wav_read_error",
+                    "component" => "transcriber",
+                    "operation" => "open_wav"
+                },
+                context: "file", create_safe_file_context(audio_path, Some(file_size), audio_path.exists())
+            );
+            
             error
         })?;
 
@@ -204,6 +233,24 @@ impl Transcriber {
         let mut state = self.context.create_state().map_err(|e| {
             let error = format!("Failed to create Whisper state: {}", e);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            
+            // Capture to Sentry - this is often an out-of-memory error
+            use crate::{capture_sentry_with_context, utils::sentry_helper::create_context_from_map};
+            let mut context_map = std::collections::BTreeMap::new();
+            context_map.insert("threads".to_string(), serde_json::Value::from(threads));
+            context_map.insert("audio_duration_seconds".to_string(), 
+                serde_json::Value::from(audio.len() as f32 / 16_000_f32));
+            
+            capture_sentry_with_context!(
+                &format!("Failed to create Whisper state: {}", e),
+                tauri_plugin_sentry::sentry::Level::Error,
+                tags: {
+                    "error.type" => "whisper_state_creation",
+                    "component" => "transcriber"
+                },
+                context: "system", create_context_from_map(context_map)
+            );
+            
             error
         })?;
 
@@ -214,6 +261,26 @@ impl Transcriber {
         state.full(params, &audio).map_err(|e| {
             let error = format!("Whisper inference failed: {}", e);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+            
+            // Capture to Sentry - critical inference failure
+            use crate::{capture_sentry_with_context, utils::sentry_helper::create_context_from_map};
+            let mut context_map = std::collections::BTreeMap::new();
+            context_map.insert("language".to_string(), serde_json::Value::from(language.unwrap_or("auto")));
+            context_map.insert("translate".to_string(), serde_json::Value::from(translate));
+            context_map.insert("audio_duration_seconds".to_string(), 
+                serde_json::Value::from(audio.len() as f32 / 16_000_f32));
+            context_map.insert("audio_samples".to_string(), serde_json::Value::from(audio.len()));
+            
+            capture_sentry_with_context!(
+                &format!("Whisper inference failed: {}", e),
+                tauri_plugin_sentry::sentry::Level::Error,
+                tags: {
+                    "error.type" => "inference_failure",
+                    "component" => "transcriber"
+                },
+                context: "transcription", create_context_from_map(context_map)
+            );
+            
             error
         })?;
 
