@@ -32,7 +32,6 @@ use commands::{
     permissions::{check_accessibility_permission, check_microphone_permission, request_accessibility_permission, request_microphone_permission, test_automation_permission},
     reset::reset_app_data,
     settings::*,
-    test_sentry::test_sentry_errors,
     text::*,
     window::*,
 };
@@ -1037,7 +1036,6 @@ pub fn run() {
             deactivate_license,
             open_purchase_page,
             reset_app_data,
-            test_sentry_errors,
         ])
         .on_window_event(|window, event| {
             match event {

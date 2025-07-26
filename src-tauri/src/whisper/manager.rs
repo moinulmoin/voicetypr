@@ -448,7 +448,7 @@ impl WhisperManager {
             // Capture to Sentry - file integrity failure
             use crate::{capture_sentry_with_context, utils::sentry_helper::{create_context_from_map, sanitize_path}};
             let mut context_map = std::collections::BTreeMap::new();
-            context_map.insert("expected".to_string(), serde_json::Value::from(expected_checksum.clone()));
+            context_map.insert("expected".to_string(), serde_json::Value::from(expected_checksum));
             context_map.insert("calculated".to_string(), serde_json::Value::from(calculated_checksum.clone()));
             context_map.insert("file_path".to_string(), serde_json::Value::from(sanitize_path(file_path)));
             
@@ -512,7 +512,7 @@ impl WhisperManager {
             // Capture to Sentry - file integrity failure
             use crate::{capture_sentry_with_context, utils::sentry_helper::{create_context_from_map, sanitize_path}};
             let mut context_map = std::collections::BTreeMap::new();
-            context_map.insert("expected".to_string(), serde_json::Value::from(expected_checksum.clone()));
+            context_map.insert("expected".to_string(), serde_json::Value::from(expected_checksum));
             context_map.insert("calculated".to_string(), serde_json::Value::from(calculated_checksum.clone()));
             context_map.insert("file_path".to_string(), serde_json::Value::from(sanitize_path(file_path)));
             

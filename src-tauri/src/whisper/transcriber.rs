@@ -227,6 +227,13 @@ impl Transcriber {
         
         // Suppress non-speech tokens like [MUSIC], [SOUND] for cleaner output
         params.set_suppress_nst(true);
+        
+        // Quality thresholds with temperature fallback
+        // If entropy of last 32 tokens < 2.4 (too repetitive), retry with higher temperature
+        params.set_entropy_thold(2.4);
+        
+        // If average log probability < -1.0 (low confidence), retry with higher temperature
+        params.set_logprob_thold(-1.0);
 
         // Run transcription
         log::info!("[TRANSCRIPTION_DEBUG] Creating Whisper state...");
