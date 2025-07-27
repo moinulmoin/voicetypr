@@ -8,6 +8,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_store::StoreExt;
 use tauri_plugin_sentry::{minidump, sentry};
 
+mod ai;
 mod audio;
 mod commands;
 mod license;
@@ -22,6 +23,7 @@ mod tests;
 
 use audio::recorder::AudioRecorder;
 use commands::{
+    ai::*,
     audio::*,
     debug::{debug_transcription_flow, test_transcription_event},
     license::*,
@@ -1036,6 +1038,12 @@ pub fn run() {
             deactivate_license,
             open_purchase_page,
             reset_app_data,
+            get_ai_settings,
+            get_ai_settings_for_provider,
+            save_ai_api_key,
+            remove_ai_api_key,
+            update_ai_settings,
+            enhance_transcription,
         ])
         .on_window_event(|window, event| {
             match event {

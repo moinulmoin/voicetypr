@@ -6865,6 +6865,7 @@ name = "voicetypr"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "async-trait",
  "chrono",
  "cpal 0.16.0",
  "dotenv",
@@ -6873,9 +6874,11 @@ dependencies = [
  "futures-util",
  "hound",
  "keyring",
+ "lazy_static",
  "log",
  "once_cell",
  "rdev",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -6898,6 +6901,7 @@ dependencies = [
  "tauri-plugin-store",
  "tauri-plugin-updater",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "whisper-rs",
 ]

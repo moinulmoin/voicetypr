@@ -25,6 +25,7 @@
     "release:major": "release-it major"
   },
   "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.14",
     "@radix-ui/react-slot": "^1.2.3",
     "@sentry/react": "^9.40.0",
     "@tailwindcss/vite": "^4.1.11",

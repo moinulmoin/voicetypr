@@ -1,0 +1,129 @@
+import React, { useState } from 'react';
+import { Button } from './ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Loader2, ExternalLink } from 'lucide-react';
+
+interface ApiKeyModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSubmit: (apiKey: string) => void;
+  providerName: string;
+  isLoading?: boolean;
+}
+
+export function ApiKeyModal({
+  isOpen,
+  onClose,
+  onSubmit,
+  providerName,
+  isLoading = false,
+}: ApiKeyModalProps) {
+  const [apiKey, setApiKey] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (apiKey.trim()) {
+      onSubmit(apiKey);
+    }
+  };
+
+  const handleClose = () => {
+    setApiKey('');
+    onClose();
+  };
+  
+  // Clear input when modal closes
+  React.useEffect(() => {
+    if (!isOpen) {
+      setApiKey('');
+    }
+  }, [isOpen]);
+
+  const getProviderUrl = () => {
+    switch (providerName.toLowerCase()) {
+      case 'groq':
+        return 'https://console.groq.com/keys';
+      default:
+        return '';
+    }
+  };
+
+  const providerUrl = getProviderUrl();
+
+  return (
+    <Dialog open={isOpen} onOpenChange={handleClose}>
+      <DialogContent className="sm:max-w-[425px]">
+        <form onSubmit={handleSubmit}>
+          <DialogHeader>
+            <DialogTitle>Add {providerName} API Key</DialogTitle>
+            <DialogDescription>
+              Enter your API key to enable AI enhancement. Your key is stored securely in the macOS Keychain.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="apiKey">API Key</Label>
+              <Input
+                id="apiKey"
+                type="password"
+                placeholder={`Enter your ${providerName} API key`}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                disabled={isLoading}
+                autoFocus
+              />
+            </div>
+            
+            {providerUrl && (
+              <div className="text-sm text-muted-foreground">
+                <a
+                  href={providerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 hover:underline"
+                >
+                  Get your {providerName} API key
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+            )}
+          </div>
+          
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleClose}
+              disabled={isLoading}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              disabled={!apiKey.trim() || isLoading}
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                'Save API Key'
+              )}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}

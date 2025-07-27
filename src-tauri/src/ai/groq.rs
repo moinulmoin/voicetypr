@@ -1,0 +1,224 @@
+use super::{AIEnhancementRequest, AIEnhancementResponse, AIError, AIProvider};
+use async_trait::async_trait;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::Duration;
+
+const DEFAULT_TEMPERATURE: f32 = 0.5;  // Balanced between creativity and accuracy
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
+const MAX_RETRIES: u32 = 3;
+const RETRY_DELAY_MS: u64 = 1000;
+
+// Supported models with validation
+const SUPPORTED_MODELS: &[&str] = &[
+    "llama-3.1-8b-instant"
+];
+
+pub struct GroqProvider {
+    #[allow(dead_code)]
+    api_key: String,  // Keep but don't expose
+    model: String,
+    client: Client,
+    base_url: String,
+    options: HashMap<String, serde_json::Value>,
+}
+
+impl GroqProvider {
+    pub fn new(api_key: String, model: String, options: HashMap<String, serde_json::Value>) -> Result<Self, AIError> {
+        // Validate model
+        if !SUPPORTED_MODELS.contains(&model.as_str()) {
+            return Err(AIError::ValidationError(format!("Unsupported model: {}", model)));
+        }
+        
+        // Validate API key format (basic check)
+        if api_key.trim().is_empty() || api_key.len() < 10 {
+            return Err(AIError::ValidationError("Invalid API key format".to_string()));
+        }
+        
+        let client = Client::builder()
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+            
+        Ok(Self {
+            api_key,
+            model,
+            client,
+            base_url: "https://api.groq.com/openai/v1/chat/completions".to_string(),
+            options,
+        })
+    }
+    
+    pub(crate) fn build_enhancement_prompt(text: &str, context: Option<&str>) -> String {
+        let mut prompt = format!(
+            "You are a transcription enhancement assistant. Your task is to improve the following transcribed text while preserving its original meaning and language.
+
+Instructions:
+1. Correct grammar and spelling errors
+2. Add appropriate punctuation
+3. Fix obvious transcription mistakes
+4. Maintain the original tone and style
+5. Keep the same language as the input
+6. Do not add or remove content
+7. Do not translate to another language
+
+IMPORTANT: Return ONLY the enhanced text without any explanations, introductions, or conclusions.
+
+Transcribed text:
+{}",
+            text.trim()
+        );
+        
+        if let Some(ctx) = context {
+            prompt.push_str(&format!("\n\nAdditional context: {}", ctx));
+        }
+        
+        prompt
+    }
+    
+    async fn make_request_with_retry(&self, request: &GroqRequest) -> Result<GroqResponse, AIError> {
+        let mut last_error = None;
+        
+        for attempt in 1..=MAX_RETRIES {
+            match self.make_single_request(request).await {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    log::warn!("API request attempt {} failed: {}", attempt, e);
+                    last_error = Some(e);
+                    
+                    if attempt < MAX_RETRIES {
+                        tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64)).await;
+                    }
+                }
+            }
+        }
+        
+        Err(last_error.unwrap_or_else(|| AIError::NetworkError("Unknown error".to_string())))
+    }
+    
+    async fn make_single_request(&self, request: &GroqRequest) -> Result<GroqResponse, AIError> {
+        let response = self.client
+            .post(&self.base_url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(request)
+            .send()
+            .await
+            .map_err(|e| AIError::NetworkError(e.to_string()))?;
+            
+        let status = response.status();
+        
+        // Handle rate limiting
+        if status.as_u16() == 429 {
+            return Err(AIError::RateLimitExceeded);
+        }
+        
+        if !status.is_success() {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(AIError::ApiError(format!("API returned {}: {}", status, error_text)));
+        }
+        
+        response.json()
+            .await
+            .map_err(|e| AIError::InvalidResponse(e.to_string()))
+    }
+}
+
+#[derive(Serialize)]
+struct GroqRequest {
+    model: String,
+    messages: Vec<Message>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Message {
+    role: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct GroqResponse {
+    choices: Vec<Choice>,
+}
+
+#[derive(Deserialize)]
+struct Choice {
+    message: Message,
+}
+
+#[async_trait]
+impl AIProvider for GroqProvider {
+    async fn enhance_text(&self, request: AIEnhancementRequest) -> Result<AIEnhancementResponse, AIError> {
+        // Validate request
+        request.validate()?;
+        
+        let prompt = Self::build_enhancement_prompt(&request.text, request.context.as_deref());
+        
+        let temperature = self.options.get("temperature")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32)
+            .unwrap_or(DEFAULT_TEMPERATURE);
+            
+        let max_tokens = self.options.get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        
+        let groq_request = GroqRequest {
+            model: self.model.clone(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: prompt,
+            }],
+            temperature: Some(temperature.clamp(0.0, 2.0)),  // Clamp to valid range
+            max_tokens,
+        };
+        
+        let groq_response = self.make_request_with_retry(&groq_request).await?;
+        
+        let enhanced_text = groq_response.choices
+            .first()
+            .ok_or_else(|| AIError::InvalidResponse("No choices in response".to_string()))?
+            .message
+            .content
+            .trim()
+            .to_string();
+            
+        // Validate that we got a reasonable response
+        if enhanced_text.is_empty() {
+            return Err(AIError::InvalidResponse("Empty response from API".to_string()));
+        }
+            
+        Ok(AIEnhancementResponse {
+            enhanced_text,
+            original_text: request.text,
+            provider: self.name().to_string(),
+            model: self.model.clone(),
+        })
+    }
+    
+    fn name(&self) -> &str {
+        "groq"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_provider_creation() {
+        let result = GroqProvider::new("".to_string(), "llama-3.1-8b-instant".to_string(), HashMap::new());
+        assert!(result.is_err());
+        
+        let result = GroqProvider::new("test_key_12345".to_string(), "invalid-model".to_string(), HashMap::new());
+        assert!(result.is_err());
+        
+        let result = GroqProvider::new("test_key_12345".to_string(), "llama-3.1-8b-instant".to_string(), HashMap::new());
+        assert!(result.is_ok());
+    }
+}

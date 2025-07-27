@@ -7,6 +7,7 @@ import { LicenseSection } from "./components/license";
 import { OnboardingDesktop } from "./components/onboarding/OnboardingDesktop";
 import { AboutSection } from "./components/sections/AboutSection";
 import { AdvancedSection } from "./components/sections/AdvancedSection";
+import { EnhancementsSection } from "./components/sections/EnhancementsSection";
 import { GeneralSettings } from "./components/sections/GeneralSettings";
 import { ModelsSection } from "./components/sections/ModelsSection";
 import { RecentRecordings } from "./components/sections/RecentRecordings";
@@ -257,6 +258,9 @@ export default function App() {
 
       case "advanced":
         return <AdvancedSection />;
+
+      case "enhancements":
+        return <EnhancementsSection />;
 
       case "about":
         return <AboutSection />;

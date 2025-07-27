@@ -785,8 +785,36 @@ pub async fn stop_recording(
                     // 2. Wait for pill to be fully hidden and system to stabilize
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-                    // 3. Use original text without enhancement
-                    let final_text = text_for_process.clone();
+                    // 3. Check if AI enhancement is enabled before calling
+                    let final_text = {
+                        let ai_enabled = match app_for_process.store("settings") {
+                            Ok(store) => store.get("ai_enabled")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false),
+                            Err(_) => false
+                        };
+
+                        if ai_enabled {
+                            match crate::commands::ai::enhance_transcription(
+                                text_for_process.clone(),
+                                app_for_process.clone()
+                            ).await {
+                                Ok(enhanced) => {
+                                    if enhanced != text_for_process {
+                                        log::info!("AI enhancement applied successfully");
+                                    }
+                                    enhanced
+                                },
+                                Err(e) => {
+                                    log::warn!("AI enhancement failed, using original text: {}", e);
+                                    text_for_process.clone() // Fall back to original text
+                                }
+                            }
+                        } else {
+                            log::debug!("AI enhancement is disabled, using original text");
+                            text_for_process.clone()
+                        }
+                    };
 
                     // 4. NOW handle text insertion - pill is gone, system is stable
                     // Always insert text at cursor position (this also copies to clipboard)
