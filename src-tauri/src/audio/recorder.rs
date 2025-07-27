@@ -212,10 +212,14 @@ impl AudioRecorder {
                         .build_input_stream(
                             &config.config(),
                             move |data: &[f32], _: &_| {
-                                // Convert F32 to I16
+                                // Convert F32 to I16 with proper clamping to avoid distortion
                                 let i16_samples: Vec<i16> = data
                                     .iter()
-                                    .map(|&sample| (sample * i16::MAX as f32) as i16)
+                                    .map(|&sample| {
+                                        // Clamp to avoid overflow and use 32767.0 for symmetric conversion
+                                        let clamped = sample.clamp(-1.0, 1.0);
+                                        (clamped * 32767.0) as i16
+                                    })
                                     .collect();
                                 
                                 // Process audio

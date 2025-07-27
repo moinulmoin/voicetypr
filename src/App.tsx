@@ -36,6 +36,7 @@ export default function App() {
     sortedModels
   } = modelManagement;
 
+
   // Load history function
   const loadHistory = useCallback(async () => {
     try {
@@ -177,6 +178,7 @@ export default function App() {
     [deleteModel, settings]
   );
 
+
   // Save settings
   const saveSettings = useCallback(
     async (newSettings: AppSettings) => {
@@ -251,6 +253,7 @@ export default function App() {
             }}
           />
         );
+
 
       case "advanced":
         return <AdvancedSection />;

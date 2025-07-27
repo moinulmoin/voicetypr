@@ -216,7 +216,7 @@ impl Transcriber {
         params.set_n_threads(threads);
         log::info!("[PERFORMANCE] Using {} threads for transcription", threads);
 
-        params.set_no_context(true);
+        params.set_no_context(false);  // Enable context for better word recognition
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -225,8 +225,11 @@ impl Transcriber {
         // Suppress blank outputs to avoid empty transcriptions
         params.set_suppress_blank(true);
         
-        // Suppress non-speech tokens like [MUSIC], [SOUND] for cleaner output
-        params.set_suppress_nst(true);
+        // Don't suppress non-speech tokens - they help with timing and context
+        params.set_suppress_nst(false);
+        
+        // Adjust speech detection threshold
+        params.set_no_speech_thold(0.6);  // Standard threshold for no speech detection
         
         // Quality thresholds with temperature fallback
         // If entropy of last 32 tokens < 2.4 (too repetitive), retry with higher temperature

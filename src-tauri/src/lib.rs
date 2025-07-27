@@ -907,7 +907,7 @@ pub fn run() {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
                 // Create the pill window with extra height for tooltip
-                let mut pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
+                let pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
                     .title("Recording")
                     .resizable(false)
                     .decorations(false)

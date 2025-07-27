@@ -785,9 +785,12 @@ pub async fn stop_recording(
                     // 2. Wait for pill to be fully hidden and system to stabilize
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-                    // 3. NOW handle text insertion - pill is gone, system is stable
+                    // 3. Use original text without enhancement
+                    let final_text = text_for_process.clone();
+
+                    // 4. NOW handle text insertion - pill is gone, system is stable
                     // Always insert text at cursor position (this also copies to clipboard)
-                    match crate::commands::text::insert_text(text_for_process.clone()).await {
+                    match crate::commands::text::insert_text(final_text.clone()).await {
                         Ok(_) => log::debug!("Text inserted at cursor successfully"),
                         Err(e) => log::error!("Failed to insert text: {}", e),
                     }
@@ -795,7 +798,7 @@ pub async fn stop_recording(
                     // 5. Save transcription to history
                     match save_transcription(
                         app_for_process.clone(),
-                        text_for_process,
+                        final_text,
                         model_for_process,
                     )
                     .await
