@@ -106,6 +106,18 @@ mod tests {
     }
     
     #[test]
+    fn test_gemini_provider_prompt_generation() {
+        let prompt = gemini::GeminiProvider::build_enhancement_prompt(
+            "hello world",
+            Some("Casual conversation")
+        );
+        
+        assert!(prompt.contains("hello world"));
+        assert!(prompt.contains("Casual conversation"));
+        assert!(prompt.contains("transcription enhancement assistant"));
+    }
+    
+    #[test]
     fn test_ai_model_serialization() {
         let model = AIModel {
             id: "test-model".to_string(),

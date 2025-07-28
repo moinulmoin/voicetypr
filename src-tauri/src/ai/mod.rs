@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod groq;
+pub mod gemini;
 
 #[cfg(test)]
 mod tests;
@@ -102,12 +103,17 @@ impl AIProviderFactory {
                 config.model.clone(),
                 config.options.clone(),
             )?)),
+            "gemini" => Ok(Box::new(gemini::GeminiProvider::new(
+                config.api_key.clone(),
+                config.model.clone(),
+                config.options.clone(),
+            )?)),
             provider => Err(AIError::ProviderNotFound(provider.to_string())),
         }
     }
     
     fn is_valid_provider(provider: &str) -> bool {
-        matches!(provider, "groq")
+        matches!(provider, "groq" | "gemini")
     }
 }
 

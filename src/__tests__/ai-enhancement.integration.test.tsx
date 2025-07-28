@@ -71,7 +71,8 @@ describe('AI Enhancement Integration', () => {
     });
     
     await waitFor(() => {
-      expect(screen.getByText(/Enhance your transcriptions/)).toBeInTheDocument();
+      // The text depends on the state - we're looking for the AI Models section
+      expect(screen.getByText('AI Models')).toBeInTheDocument();
     });
   });
 
@@ -86,12 +87,14 @@ describe('AI Enhancement Integration', () => {
     
     // Wait for the section to load
     await waitFor(() => {
-      expect(screen.getByText(/Enhance your transcriptions/)).toBeInTheDocument();
+      // The text depends on the state - we're looking for the AI Models section
+      expect(screen.getByText('AI Models')).toBeInTheDocument();
     });
     
     // Wait for models to load
     await waitFor(() => {
       expect(screen.getByText('Llama 3.1 8B Instant')).toBeInTheDocument();
+      expect(screen.getByText('Gemini 2.5 Flash Lite')).toBeInTheDocument();
     });
     
     // Find key button using getByRole with accessible name
@@ -131,7 +134,7 @@ describe('AI Enhancement Integration', () => {
     
     // Enter API key
     await waitFor(() => {
-      const input = screen.getByPlaceholderText(/Enter your Groq API key/);
+      const input = screen.getByPlaceholderText(/Enter your (Groq|Gemini) API key/);
       expect(input).toBeInTheDocument();
       fireEvent.change(input, { target: { value: 'gsk_test_key_12345' } });
       

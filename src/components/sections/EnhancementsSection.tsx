@@ -42,6 +42,12 @@ export function EnhancementsSection() {
       name: "Llama 3.1 8B Instant",
       provider: "groq",
       description: "Fast and efficient model for instant responses"
+    },
+    {
+      id: "gemini-2.5-flash-lite",
+      name: "Gemini 2.5 Flash Lite",
+      provider: "gemini",
+      description: "Google's lightweight flash model for quick processing"
     }
   ];
 
@@ -171,7 +177,8 @@ export function EnhancementsSection() {
 
   const getProviderDisplayName = (provider: string) => {
     const names: Record<string, string> = {
-      groq: "Groq"
+      groq: "Groq",
+      gemini: "Gemini"
     };
     return names[provider] || provider;
   };
