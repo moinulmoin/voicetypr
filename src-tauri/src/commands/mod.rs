@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod audio;
 pub mod debug;
+pub mod keyring;
 pub mod license;
 pub mod model;
 pub mod permissions;

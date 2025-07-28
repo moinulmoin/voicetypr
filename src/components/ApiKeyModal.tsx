@@ -1,3 +1,4 @@
+import { ExternalLink, Loader2 } from 'lucide-react';
 import React, { useState } from 'react';
 import { Button } from './ui/button';
 import {
@@ -10,7 +11,6 @@ import {
 } from './ui/dialog';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Loader2, ExternalLink } from 'lucide-react';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
@@ -40,7 +40,7 @@ export function ApiKeyModal({
     setApiKey('');
     onClose();
   };
-  
+
   // Clear input when modal closes
   React.useEffect(() => {
     if (!isOpen) {
@@ -66,10 +66,10 @@ export function ApiKeyModal({
           <DialogHeader>
             <DialogTitle>Add {providerName} API Key</DialogTitle>
             <DialogDescription>
-              Enter your API key to enable AI enhancement. Your key is stored securely in the macOS Keychain.
+              Enter your API key to enable AI enhancement. Your key is stored securely in the system keychain
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
               <Label htmlFor="apiKey">API Key</Label>
@@ -83,7 +83,7 @@ export function ApiKeyModal({
                 autoFocus
               />
             </div>
-            
+
             {providerUrl && (
               <div className="text-sm text-muted-foreground">
                 <a
@@ -98,7 +98,7 @@ export function ApiKeyModal({
               </div>
             )}
           </div>
-          
+
           <DialogFooter>
             <Button
               type="button"
@@ -114,7 +114,7 @@ export function ApiKeyModal({
             >
               {isLoading ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" />
                   Saving...
                 </>
               ) : (

@@ -1,4 +1,4 @@
-import { Key, Sparkles, Brain } from 'lucide-react';
+import { Brain, Key, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 
@@ -15,6 +15,7 @@ interface EnhancementModelCardProps {
   isSelected: boolean;
   onSetupApiKey: () => void;
   onSelect: () => void;
+  onRemoveApiKey: () => void;
 }
 
 export function EnhancementModelCard({
@@ -23,6 +24,7 @@ export function EnhancementModelCard({
   isSelected,
   onSetupApiKey,
   onSelect,
+  onRemoveApiKey,
 }: EnhancementModelCardProps) {
   const getProviderBadge = () => {
     const badges: Record<string, { name: string; className: string }> = {
@@ -67,10 +69,20 @@ export function EnhancementModelCard({
 
           <div className="flex-shrink-0 flex items-center gap-2">
             {hasApiKey ? (
-              <div className="flex items-center gap-1">
-                <Sparkles className="w-4 h-4 text-primary" />
-                <span className="text-sm text-muted-foreground">Ready</span>
-              </div>
+              <>
+                <Button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemoveApiKey();
+                  }}
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 hover:bg-destructive/10"
+                  title="Remove API key"
+                >
+                  <Trash2 className="w-4 h-4 text-destructive" />
+                </Button>
+              </>
             ) : (
               <Button
                 onClick={(e) => {
@@ -80,6 +92,7 @@ export function EnhancementModelCard({
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
+                title="Add API key"
               >
                 <Key className="w-5 h-5" />
               </Button>

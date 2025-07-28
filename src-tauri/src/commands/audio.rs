@@ -807,6 +807,33 @@ pub async fn stop_recording(
                                 },
                                 Err(e) => {
                                     log::warn!("AI enhancement failed, using original text: {}", e);
+                                    
+                                    // Check if it's an authentication error and notify frontend
+                                    let error_message = e.to_string();
+                                    if error_message.contains("401") || error_message.contains("Unauthorized") {
+                                        let _ = emit_to_window(
+                                            &app_for_process,
+                                            "main",
+                                            "ai-enhancement-auth-error",
+                                            "Invalid API key. Please check your AI settings.",
+                                        );
+                                    } else if error_message.contains("429") {
+                                        let _ = emit_to_window(
+                                            &app_for_process,
+                                            "main",
+                                            "ai-enhancement-error",
+                                            "Rate limit exceeded. Please try again later.",
+                                        );
+                                    } else {
+                                        // Generic enhancement error
+                                        let _ = emit_to_window(
+                                            &app_for_process,
+                                            "main",
+                                            "ai-enhancement-error",
+                                            "AI enhancement failed. Using original text.",
+                                        );
+                                    }
+                                    
                                     text_for_process.clone() // Fall back to original text
                                 }
                             }

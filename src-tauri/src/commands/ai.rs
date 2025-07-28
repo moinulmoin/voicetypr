@@ -2,6 +2,15 @@ use crate::ai::{AIProviderConfig, AIProviderFactory, AIEnhancementRequest};
 use serde::{Deserialize, Serialize};
 use tauri_plugin_store::StoreExt;
 use regex::Regex;
+use std::sync::Mutex;
+use std::collections::HashMap;
+use once_cell::sync::Lazy;
+
+// In-memory cache for API keys to avoid system password prompts
+// Keys are stored in Stronghold by frontend and cached here for backend use
+static API_KEY_CACHE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| {
+    Mutex::new(HashMap::new())
+});
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AISettings {
@@ -48,10 +57,12 @@ pub async fn get_ai_settings(app: tauri::AppHandle) -> Result<AISettings, String
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "".to_string()); // Empty by default
     
-    // Check if API key exists in keychain
-    let has_api_key = keyring::Entry::new(&format!("voicetypr_ai_{}", provider), "api_key")
-        .map(|entry| entry.get_password().is_ok())
-        .unwrap_or(false);
+    // Check if API key exists in cache
+    // Frontend will check Stronghold and update this via cache_ai_api_key
+    let has_api_key = {
+        let cache = API_KEY_CACHE.lock().map_err(|_| "Failed to access cache".to_string())?;
+        cache.contains_key(&format!("ai_api_key_{}", provider))
+    };
     
     Ok(AISettings {
         enabled,
@@ -78,10 +89,12 @@ pub async fn get_ai_settings_for_provider(
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "".to_string()); // Empty by default
     
-    // Check if API key exists for this provider
-    let has_api_key = keyring::Entry::new(&format!("voicetypr_ai_{}", provider), "api_key")
-        .map(|entry| entry.get_password().is_ok())
-        .unwrap_or(false);
+    // Check if API key exists in cache
+    // Frontend will check Stronghold and update this via cache_ai_api_key
+    let has_api_key = {
+        let cache = API_KEY_CACHE.lock().map_err(|_| "Failed to access cache".to_string())?;
+        cache.contains_key(&format!("ai_api_key_{}", provider))
+    };
     
     Ok(AISettings {
         enabled,
@@ -91,8 +104,10 @@ pub async fn get_ai_settings_for_provider(
     })
 }
 
+// Frontend is responsible for saving API keys to Stronghold
+// This command caches the key for backend use
 #[tauri::command]
-pub async fn save_ai_api_key(
+pub async fn cache_ai_api_key(
     provider: String,
     api_key: String,
 ) -> Result<(), String> {
@@ -102,34 +117,25 @@ pub async fn save_ai_api_key(
         return Err("API key cannot be empty".to_string());
     }
     
-    // Basic API key format validation
-    if api_key.len() < 10 || api_key.len() > 200 {
-        return Err("Invalid API key format".to_string());
-    }
+    // Store API key in memory cache
+    let mut cache = API_KEY_CACHE.lock().map_err(|_| "Failed to access cache".to_string())?;
+    cache.insert(format!("ai_api_key_{}", provider), api_key);
     
-    let entry = keyring::Entry::new(&format!("voicetypr_ai_{}", provider), "api_key")
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
-    entry.set_password(&api_key)
-        .map_err(|e| format!("Failed to save API key: {}", e))?;
-    
-    log::info!("API key saved for provider: {}", provider);
+    log::info!("API key cached for provider: {}", provider);
     Ok(())
 }
 
+// Frontend is responsible for removing API keys from Stronghold
+// This command clears the cache
 #[tauri::command]
-pub async fn remove_ai_api_key(provider: String) -> Result<(), String> {
+pub async fn clear_ai_api_key_cache(provider: String) -> Result<(), String> {
     validate_provider_name(&provider)?;
     
-    let entry = keyring::Entry::new(&format!("voicetypr_ai_{}", provider), "api_key")
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
-    match entry.delete_password() {
-        Ok(_) => {
-            log::info!("API key removed for provider: {}", provider);
-            Ok(())
-        },
-        Err(keyring::Error::NoEntry) => Ok(()), // Already removed
-        Err(e) => Err(format!("Failed to remove API key: {}", e)),
-    }
+    let mut cache = API_KEY_CACHE.lock().map_err(|_| "Failed to access cache".to_string())?;
+    cache.remove(&format!("ai_api_key_{}", provider));
+    
+    log::info!("API key cache cleared for provider: {}", provider);
+    Ok(())
 }
 
 #[tauri::command]
@@ -161,6 +167,19 @@ pub async fn update_ai_settings(
         .map_err(|e| format!("Failed to save AI settings: {}", e))?;
     
     log::info!("AI settings updated: enabled={}, provider={}, model={}", enabled, provider, model);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn disable_ai_enhancement(app: tauri::AppHandle) -> Result<(), String> {
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    
+    store.set("ai_enabled", serde_json::Value::Bool(false));
+    
+    store.save()
+        .map_err(|e| format!("Failed to save AI settings: {}", e))?;
+    
+    log::info!("AI enhancement disabled");
     Ok(())
 }
 
@@ -200,11 +219,13 @@ pub async fn enhance_transcription(
         return Ok(text);
     }
     
-    // Get API key from keychain
-    let entry = keyring::Entry::new(&format!("voicetypr_ai_{}", provider), "api_key")
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
-    let api_key = entry.get_password()
-        .map_err(|_| "API key not found".to_string())?;
+    // Get API key from cache
+    let api_key = {
+        let cache = API_KEY_CACHE.lock().map_err(|_| "Failed to access cache".to_string())?;
+        cache.get(&format!("ai_api_key_{}", provider))
+            .ok_or_else(|| "API key not found in cache".to_string())?
+            .clone()
+    };
     
     drop(store); // Release lock before async operation
     
@@ -259,7 +280,7 @@ mod tests {
     
     #[test]
     fn test_model_validation() {
-        assert!(validate_model_name("llama-3.3-70b").is_ok());
+        assert!(validate_model_name("llama-3.1-8b-instant").is_ok());
         assert!(validate_model_name("gpt-4").is_ok());
         assert!(validate_model_name("model.v1").is_ok());
         

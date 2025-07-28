@@ -17,6 +17,7 @@ import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { useModelManagement } from "./hooks/useModelManagement";
 import { AppSettings, TranscriptionHistory } from "./types";
 import { updateService } from "./services/updateService";
+import { loadApiKeysToCache } from "./utils/keyring";
 
 // Main App Component
 export default function App() {
@@ -81,6 +82,14 @@ export default function App() {
 
         // Initialize update service for automatic update checks
         await updateService.initialize(appSettings);
+        
+        // Load API keys from Stronghold to backend cache
+        // Small delay to ensure Stronghold is ready
+        setTimeout(() => {
+          loadApiKeysToCache().catch(error => {
+            console.error('Failed to load API keys to cache:', error);
+          });
+        }, 100);
 
         // All recording event handling is now managed by the useRecording hook
 
@@ -124,6 +133,23 @@ export default function App() {
         registerEvent("tray-action-error", (event) => {
           console.error("Tray action error:", event.payload);
           toast.error(event.payload as string);
+        });
+        
+        // Listen for AI enhancement errors
+        registerEvent("ai-enhancement-auth-error", (event) => {
+          console.error("AI authentication error:", event.payload);
+          toast.error(event.payload as string, {
+            description: "Navigate to Enhancements to update your API key",
+            action: {
+              label: "Go to Settings",
+              onClick: () => setActiveSection("enhancements")
+            }
+          });
+        });
+        
+        registerEvent("ai-enhancement-error", (event) => {
+          console.warn("AI enhancement error:", event.payload);
+          toast.warning(event.payload as string);
         });
 
         // Listen for license-required event

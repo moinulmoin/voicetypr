@@ -6,6 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { saveApiKey, hasApiKey, removeApiKey } from "@/utils/keyring";
 
 interface AIModel {
   id: string;
@@ -53,16 +54,38 @@ export function EnhancementsSection() {
       const settings = await invoke<AISettings>("get_ai_settings");
       setAISettings(settings);
 
-      // Check API keys for all unique providers
+      // Check API keys for all unique providers using Stronghold
       const providers = [...new Set(models.map(m => m.provider))];
       const keyStatus: Record<string, boolean> = {};
 
       for (const provider of providers) {
-        const providerSettings = await invoke<AISettings>("get_ai_settings_for_provider", { provider });
-        keyStatus[provider] = providerSettings.hasApiKey;
+        // Check Stronghold for API key
+        const hasKey = await hasApiKey(provider);
+        keyStatus[provider] = hasKey;
+        
+        if (hasKey) {
+          console.log(`[AI Settings] Found ${provider} API key in keyring`);
+        }
+        
+        // Update backend cache state
+        if (hasKey) {
+          const providerSettings = await invoke<AISettings>("get_ai_settings_for_provider", { provider });
+          // If backend doesn't know about the key, it's not cached yet
+          if (!providerSettings.hasApiKey) {
+            // This will be handled by App.tsx on startup
+            // API key exists in keyring but not cached yet
+          }
+        }
       }
 
       setProviderApiKeys(keyStatus);
+      
+      // Update settings with correct hasApiKey status from Stronghold
+      // The enabled state is already persisted in the backend
+      setAISettings({
+        ...settings,
+        hasApiKey: keyStatus[settings.provider] || false
+      });
     } catch (error) {
       console.error("Failed to load AI settings:", error);
     }
@@ -91,15 +114,18 @@ export function EnhancementsSection() {
   const handleApiKeySubmit = async (apiKey: string) => {
     setIsLoading(true);
     try {
-      await invoke("save_ai_api_key", {
-        provider: selectedProvider,
-        apiKey: apiKey.trim()
-      });
+      // Save API key using Stronghold
+      await saveApiKey(selectedProvider, apiKey.trim());
+      
+      // Close modal first to give feedback
+      setShowApiKeyModal(false);
+      toast.success("API key saved securely");
+      
+      // Small delay to ensure Stronghold save is complete
+      await new Promise(resolve => setTimeout(resolve, 500));
 
       // Reload settings to get updated hasApiKey status
       await loadAISettings();
-      setShowApiKeyModal(false);
-      toast.success("API key saved successfully");
     } catch (error) {
       toast.error(`Failed to save API key: ${error}`);
     } finally {
@@ -130,6 +156,16 @@ export function EnhancementsSection() {
       toast.success("Model selected");
     } catch (error) {
       toast.error(`Failed to select model: ${error}`);
+    }
+  };
+
+  const handleRemoveApiKey = async (provider: string) => {
+    try {
+      await removeApiKey(provider);
+      await loadAISettings();
+      toast.success("API key removed");
+    } catch (error) {
+      toast.error(`Failed to remove API key: ${error}`);
     }
   };
 
@@ -187,6 +223,7 @@ export function EnhancementsSection() {
               isSelected={aiSettings.model === model.id && providerApiKeys[model.provider]}
               onSetupApiKey={() => handleSetupApiKey(model.provider)}
               onSelect={() => handleModelSelect(model.id, model.provider)}
+              onRemoveApiKey={() => handleRemoveApiKey(model.provider)}
             />
           ))}
         </div>

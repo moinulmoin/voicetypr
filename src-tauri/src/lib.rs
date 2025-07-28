@@ -23,9 +23,10 @@ mod tests;
 
 use audio::recorder::AudioRecorder;
 use commands::{
-    ai::*,
+    ai::{get_ai_settings, get_ai_settings_for_provider, cache_ai_api_key, clear_ai_api_key_cache, update_ai_settings, enhance_transcription, disable_ai_enhancement},
     audio::*,
     debug::{debug_transcription_flow, test_transcription_event},
+    keyring::{keyring_set, keyring_get, keyring_delete, keyring_has},
     license::*,
     model::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
@@ -671,6 +672,9 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // Keyring is now used instead of Stronghold for API keys
+            // Much faster and uses OS-native secure storage
+            
             // Set up panic handler to catch crashes
             std::panic::set_hook(Box::new(|panic_info| {
                 log::error!("PANIC: {:?}", panic_info);
@@ -1040,10 +1044,15 @@ pub fn run() {
             reset_app_data,
             get_ai_settings,
             get_ai_settings_for_provider,
-            save_ai_api_key,
-            remove_ai_api_key,
+            cache_ai_api_key,
+            clear_ai_api_key_cache,
             update_ai_settings,
             enhance_transcription,
+            disable_ai_enhancement,
+            keyring_set,
+            keyring_get,
+            keyring_delete,
+            keyring_has,
         ])
         .on_window_event(|window, event| {
             match event {
