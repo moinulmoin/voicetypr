@@ -75,7 +75,7 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
             Err(_) => ("".to_string(), "en".to_string())
         }
     };
-    
+
     // Get downloaded models
     let downloaded_models = {
         let whisper_state = app.state::<AsyncRwLock<whisper::manager::WhisperManager>>();
@@ -86,12 +86,12 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
             .map(|(name, _)| name)
             .collect::<Vec<_>>()
     };
-    
+
     // Create model submenu if there are downloaded models
     let model_submenu = if !downloaded_models.is_empty() {
         let mut model_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
         let mut model_check_items = Vec::new();
-        
+
         for model_name in downloaded_models {
             let display_name = format_model_name(&model_name);
             let is_selected = model_name == current_settings.0;
@@ -105,18 +105,18 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
             )?;
             model_check_items.push(model_item);
         }
-        
+
         // Convert to trait objects
         for item in &model_check_items {
             model_items.push(item);
         }
-        
+
         let current_model_display = if current_settings.0.is_empty() {
             "Model: None".to_string()
         } else {
             format!("Model: {}", format_model_name(&current_settings.0))
         };
-        
+
         Some(Submenu::with_id_and_items(
             app,
             "models",
@@ -127,21 +127,21 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
     } else {
         None
     };
-    
+
     // Get supported languages
     let languages = crate::whisper::languages::SUPPORTED_LANGUAGES
         .iter()
         .map(|(code, lang)| (code.to_string(), lang.name.to_string()))
         .collect::<Vec<_>>();
-    
+
     // Create language submenu
     let mut lang_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
     let mut lang_check_items = Vec::new();
-    
+
     // Sort languages by name (auto-detect removed)
     let mut sorted_languages = languages;
     sorted_languages.sort_by(|a, b| a.1.cmp(&b.1));
-    
+
     for (code, name) in sorted_languages {
         let is_selected = code == current_settings.1;
         let lang_item = CheckMenuItem::with_id(
@@ -154,12 +154,12 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
         )?;
         lang_check_items.push(lang_item);
     }
-    
+
     // Convert to trait objects
     for item in &lang_check_items {
         lang_items.push(item);
     }
-    
+
     let current_lang_name = crate::whisper::languages::SUPPORTED_LANGUAGES
         .get(current_settings.1.as_str())
         .map(|l| l.name)
@@ -174,16 +174,16 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
 
     // Create menu items
     let separator1 = PredefinedMenuItem::separator(app)?;
-    let settings_i = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
+    let settings_i = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit_i = MenuItem::with_id(app, "quit", "Quit VoiceTypr", true, None::<&str>)?;
 
     let mut menu_builder = MenuBuilder::new(app);
-    
+
     if let Some(model_submenu) = model_submenu {
         menu_builder = menu_builder.item(&model_submenu);
     }
-    
+
     let menu = menu_builder
         .item(&lang_submenu)
         .item(&separator1)
@@ -191,7 +191,7 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
         .item(&separator2)
         .item(&quit_i)
         .build()?;
-        
+
     Ok(menu)
 }
 
@@ -435,18 +435,18 @@ pub fn run() {
     }
 
     log::info!("Starting VoiceTypr application");
-    
+
     // Initialize encryption key for secure storage
     if let Err(e) = secure_store::initialize_encryption_key() {
         log::error!("Failed to initialize encryption: {}", e);
     }
-    
+
     // Initialize Sentry if DSN is provided
     // Try compile-time env var first, then runtime
     let sentry_dsn = option_env!("SENTRY_DSN")
         .map(|s| s.to_string())
         .or_else(|| std::env::var("SENTRY_DSN").ok());
-    
+
     let _sentry_guard = if let Some(dsn) = sentry_dsn {
         if !dsn.is_empty() && dsn != "__YOUR_SENTRY_DSN__" {
             log::info!("Initializing Sentry error tracking");
@@ -475,7 +475,7 @@ pub fn run() {
             // Initialize minidump for native crash reporting (not on iOS)
             #[cfg(not(target_os = "ios"))]
             let _minidump_guard = minidump::init(&client);
-            
+
             Some(client)
         } else {
             log::warn!("Sentry DSN not configured. Error tracking disabled.");
@@ -507,7 +507,7 @@ pub fn run() {
             .plugin(tauri_nspanel::init())
             .plugin(tauri_plugin_macos_permissions::init());
     }
-    
+
     // Add Sentry plugin if initialized
     if let Some(ref client) = _sentry_guard {
         builder = builder.plugin(tauri_plugin_sentry::init(client));
@@ -525,7 +525,7 @@ pub fn run() {
 
                     let app_handle = app.app_handle();
                     let app_state = app_handle.state::<AppState>();
-                    
+
                     // Only handle press events for toggle recording
                     if event.state() != ShortcutState::Pressed {
                         return;
@@ -583,7 +583,7 @@ pub fn run() {
                                     match stop_recording(app_handle.clone(), recorder_state).await {
                                         Ok(_) => {
                                             log::info!("Toggle: Recording stopped successfully");
-                                            
+
                                             // Apply pending shortcut after recording stops
                                             match apply_pending_shortcut(app_handle.clone()).await {
                                                 Ok(applied) => {
@@ -690,7 +690,7 @@ pub fn run() {
         .setup(|app| {
             // Keyring is now used instead of Stronghold for API keys
             // Much faster and uses OS-native secure storage
-            
+
             // Set up panic handler to catch crashes
             std::panic::set_hook(Box::new(|panic_info| {
                 log::error!("PANIC: {:?}", panic_info);
@@ -764,7 +764,7 @@ pub fn run() {
 
             // Create tray icon
             use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-            
+
             // Build the tray menu using our helper function
             // Note: We need to block here since setup is sync
             let menu = tauri::async_runtime::block_on(build_tray_menu(&app.app_handle()))?;
@@ -782,7 +782,7 @@ pub fn run() {
                 .on_menu_event(move |app, event| {
                     log::info!("Tray menu event: {:?}", event.id);
                     let event_id = event.id.as_ref();
-                    
+
                     if event_id == "settings" {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
@@ -796,7 +796,7 @@ pub fn run() {
                         // Handle model selection
                         let model_name = event_id.strip_prefix("model_").unwrap().to_string();
                         let app_handle = app.app_handle().clone();
-                        
+
                         tauri::async_runtime::spawn(async move {
                             match crate::commands::settings::set_model_from_tray(app_handle.clone(), model_name.clone()).await {
                                 Ok(_) => {
@@ -813,7 +813,7 @@ pub fn run() {
                         // Handle language selection
                         let lang_code = event_id.strip_prefix("lang_").unwrap().to_string();
                         let app_handle = app.app_handle().clone();
-                        
+
                         tauri::async_runtime::spawn(async move {
                             match crate::commands::settings::set_language_from_tray(app_handle.clone(), lang_code.clone()).await {
                                 Ok(_) => {
@@ -862,7 +862,7 @@ pub fn run() {
             };
 
             log::info!("Loading hotkey: {}", hotkey_str);
-            
+
             // Normalize the hotkey for Tauri
             let normalized_hotkey = crate::commands::key_normalizer::normalize_shortcut_keys(&hotkey_str);
 
@@ -941,13 +941,13 @@ pub fn run() {
                     .transparent(true)
                     .inner_size(350.0, 150.0)  // Match window_manager.rs size
                     .visible(false); // Start hidden
-                
+
                 // Disable context menu only in production builds
                 #[cfg(not(debug_assertions))]
                 {
                     pill_builder = pill_builder.initialization_script("document.addEventListener('contextmenu', e => e.preventDefault());");
                 }
-                
+
                 let pill_window = pill_builder.build()?;
 
                 // Convert to NSPanel to prevent focus stealing

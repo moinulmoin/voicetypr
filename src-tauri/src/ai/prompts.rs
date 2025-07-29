@@ -36,14 +36,14 @@ pub fn build_enhancement_prompt(
         EnhancementPreset::Commit => COMMIT_PROMPT,
         EnhancementPreset::Notes => NOTES_PROMPT,
     };
-    
+
     let mut prompt = format!("{}\n\nTranscribed text:\n{}", base_prompt, text.trim());
-    
+
     // Add context if provided
     if let Some(ctx) = context {
         prompt.push_str(&format!("\n\nContext: {}", ctx));
     }
-    
+
     // Add custom vocabulary
     if !options.custom_vocabulary.is_empty() {
         prompt.push_str(&format!(
@@ -51,33 +51,39 @@ pub fn build_enhancement_prompt(
             options.custom_vocabulary.join(", ")
         ));
     }
-    
+
     prompt
 }
 
-const DEFAULT_PROMPT: &str = r#"Fix spelling, grammar, and punctuation. Correct technical terms. Remove excessive filler words. Keep the original meaning and tone.
+const DEFAULT_PROMPT: &str = r#"Fix ONLY spelling, grammar, and punctuation errors. Correct technical terms. Remove filler words like "um", "uh", "like".
+
+IMPORTANT: Do NOT change the meaning, rephrase sentences, or interpret what the speaker meant. Keep the exact same words and structure, just fix errors.
 
 Examples:
 "um so i'm using java script and python" → "So I'm using JavaScript and Python."
 "the a p i returns jason data" → "The API returns JSON data."
+"how long are you doing man" → "How long are you doing, man?"
+"is everything okay is everything good" → "Is everything okay? Is everything good?"
 
-Return ONLY the enhanced text."#;
+Return ONLY the corrected text without any interpretation or rephrasing."#;
 
-const PROMPTS_PROMPT: &str = r#"Transform this into a clear, detailed prompt for an AI assistant. Add context, specific requirements, and desired output format. Make vague requests specific.
+const PROMPTS_PROMPT: &str = r#"Transform this into a clear, actionable prompt. Add minimal context to make it specific but keep it concise.
 
 Examples:
-"fix the bug" → "Please investigate and fix the bug. Provide: 1) Root cause analysis, 2) The solution implemented, 3) Steps to verify the fix works correctly."
+"fix the bug" → "Fix the bug and explain what caused it."
 
-"make a todo app" → "Create a todo app with the following features: 1) Add/edit/delete tasks, 2) Mark tasks as complete, 3) Filter by status (all/active/completed). Please provide the implementation code with clear comments."
+"make a todo app" → "Create a todo app with add/edit/delete tasks and status filtering."
 
-"explain this" → "Please analyze this and provide: 1) A clear explanation of what it does, 2) How it works step-by-step, 3) Any potential issues or improvements you notice."
+"explain this" → "Explain what this does and how it works."
+
+"implement dark mode" → "Add dark mode toggle to the app with system preference detection."
 
 Return ONLY the enhanced prompt."#;
 
 const EMAIL_PROMPT: &str = r#"Convert this into a professional email with proper structure. Add greeting, organize the content clearly, and include appropriate closing. Maintain professional tone.
 
 Examples:
-"need the report by friday please send it" → 
+"need the report by friday please send it" →
 "Subject: Report Request
 
 Hi [Recipient],
@@ -112,7 +118,7 @@ Return ONLY the commit message."#;
 const NOTES_PROMPT: &str = r#"Format this as organized notes. Detect lists and create bullets or numbers. Identify sections and add headers. Keep it scannable.
 
 Examples:
-"groceries milk bread eggs cheese" → 
+"groceries milk bread eggs cheese" →
 "Groceries:
 • Milk
 • Bread

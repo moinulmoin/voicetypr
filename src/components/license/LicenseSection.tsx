@@ -27,7 +27,7 @@ export function LicenseSection() {
       case 'trial':
         return status.trial_days_left !== undefined
           ? status.trial_days_left > 0
-            ? `Trial - ${status.trial_days_left} days remaining`
+            ? `Trial - ${status.trial_days_left} day${status.trial_days_left > 1 ? 's' : ''}`
             : 'Trial expires today'
           : 'Trial (3-day limit)';
       case 'expired':
