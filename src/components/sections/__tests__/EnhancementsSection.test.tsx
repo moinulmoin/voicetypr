@@ -32,14 +32,21 @@ describe('EnhancementsSection', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (invoke as any).mockResolvedValue(mockAISettings);
+    (invoke as any).mockImplementation((cmd: string) => {
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({
+          preset: 'Default',
+          custom_vocabulary: []
+        });
+      }
+      return Promise.resolve(mockAISettings);
+    });
   });
 
   it('renders the enhancements section', async () => {
     render(<EnhancementsSection />);
     
-    expect(screen.getByText('Enhancements')).toBeInTheDocument();
-    expect(screen.getByText(/Add an API key below to enable/)).toBeInTheDocument();
+    expect(screen.getByText('AI Enhancement')).toBeInTheDocument();
     
     // Wait for models to load
     await waitFor(() => {
@@ -291,7 +298,7 @@ describe('EnhancementsSection', () => {
     });
     
     // Try to enable through the handler directly
-    const component = screen.getByText('Enhancements').closest('div');
+    const component = screen.getByText('AI Enhancement').closest('div');
     expect(component).toBeInTheDocument();
     
     // The switch is disabled, so we can't actually click it to trigger the error

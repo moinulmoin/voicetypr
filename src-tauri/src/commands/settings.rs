@@ -1,4 +1,5 @@
-use crate::AppState;
+use crate::{AppState, RecordingState};
+use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_combination};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Manager, Emitter};
@@ -176,31 +177,102 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
     if shortcut.is_empty() || shortcut.len() > 100 {
         return Err("Invalid shortcut format".to_string());
     }
-    let shortcuts = app.global_shortcut();
-
-    // Unregister all existing shortcuts
-    shortcuts.unregister_all().map_err(|e| e.to_string())?;
-
-    // Register new shortcut
-    let shortcut_obj: Shortcut = shortcut
+    
+    // Validate key combination
+    validate_key_combination(&shortcut)?;
+    
+    // Normalize the shortcut keys
+    let normalized_shortcut = normalize_shortcut_keys(&shortcut);
+    
+    // Validate that shortcut can be parsed
+    let _new_shortcut: Shortcut = normalized_shortcut
         .parse()
-        .map_err(|_| "Invalid shortcut format".to_string())?;
-    shortcuts
-        .register(shortcut_obj.clone())
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| format!("Invalid shortcut format: {}", normalized_shortcut))?;
 
-    // Update the recording shortcut in managed state
+    // Store the pending shortcut in app state (normalized version)
     let app_state = app.state::<AppState>();
-    if let Ok(mut shortcut_guard) = app_state.recording_shortcut.lock() {
-        *shortcut_guard = Some(shortcut_obj);
+    
+    match app_state.pending_shortcut.lock() {
+        Ok(mut pending_guard) => {
+            *pending_guard = Some(normalized_shortcut.clone());
+            log::info!("Pending shortcut set to: {} (normalized from: {})", normalized_shortcut, shortcut);
+        }
+        Err(e) => {
+            log::error!("Failed to acquire pending shortcut lock: {}", e);
+            return Err("Failed to update shortcut state".to_string());
+        }
     }
 
-    // Save to settings
+    // Save to settings (original version for display)
     let store = app.store("settings").map_err(|e| e.to_string())?;
     store.set("hotkey", json!(shortcut));
     store.save().map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn apply_pending_shortcut(app: AppHandle) -> Result<bool, String> {
+    let app_state = app.state::<AppState>();
+    
+    // Check if we're in idle state (safe to update shortcuts)
+    let current_state = app_state.get_current_state();
+    if current_state != RecordingState::Idle {
+        log::info!("Cannot apply shortcut while recording state is: {:?}", current_state);
+        return Ok(false);
+    }
+    
+    // Check if there's a pending shortcut
+    let pending_shortcut = {
+        let pending_guard = app_state.pending_shortcut.lock()
+            .map_err(|e| format!("Failed to lock pending shortcut: {}", e))?;
+        pending_guard.clone()
+    };
+    
+    if let Some(shortcut_str) = pending_shortcut {
+        log::info!("Applying pending shortcut: {}", shortcut_str);
+        
+        let shortcuts = app.global_shortcut();
+        
+        // Unregister all existing shortcuts
+        shortcuts.unregister_all().map_err(|e| e.to_string())?;
+        
+        // Parse and register new shortcut
+        let shortcut_obj: Shortcut = shortcut_str
+            .parse()
+            .map_err(|_| "Invalid shortcut format".to_string())?;
+        shortcuts
+            .register(shortcut_obj.clone())
+            .map_err(|e| e.to_string())?;
+        
+        // Update the recording shortcut in managed state
+        match app_state.recording_shortcut.lock() {
+            Ok(mut shortcut_guard) => {
+                *shortcut_guard = Some(shortcut_obj);
+            }
+            Err(e) => {
+                log::error!("Failed to acquire recording shortcut lock: {}", e);
+                return Err("Failed to update recording shortcut".to_string());
+            }
+        }
+        
+        // Clear the pending shortcut
+        match app_state.pending_shortcut.lock() {
+            Ok(mut pending_guard) => {
+                *pending_guard = None;
+            }
+            Err(e) => {
+                log::error!("Failed to acquire pending shortcut lock: {}", e);
+                // Don't fail here as the shortcut was already applied
+                log::warn!("Continuing despite lock failure");
+            }
+        }
+        
+        log::info!("Successfully applied shortcut: {}", shortcut_str);
+        return Ok(true);
+    }
+    
+    Ok(false)
 }
 
 #[derive(Serialize)]
@@ -219,16 +291,8 @@ pub async fn get_supported_languages() -> Result<Vec<LanguageInfo>, String> {
         })
         .collect();
     
-    // Sort by name for better UX, but keep "Auto Detect" first
-    languages.sort_by(|a, b| {
-        if a.code == "auto" {
-            std::cmp::Ordering::Less
-        } else if b.code == "auto" {
-            std::cmp::Ordering::Greater
-        } else {
-            a.name.cmp(&b.name)
-        }
-    });
+    // Sort by name for better UX (auto-detect removed)
+    languages.sort_by(|a, b| a.name.cmp(&b.name));
     
     Ok(languages)
 }

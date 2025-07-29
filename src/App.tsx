@@ -15,8 +15,8 @@ import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { LicenseProvider } from "./contexts/LicenseContext";
 import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { useModelManagement } from "./hooks/useModelManagement";
-import { AppSettings, TranscriptionHistory } from "./types";
 import { updateService } from "./services/updateService";
+import { AppSettings, TranscriptionHistory } from "./types";
 import { loadApiKeysToCache } from "./utils/keyring";
 
 // Main App Component
@@ -82,7 +82,7 @@ export default function App() {
 
         // Initialize update service for automatic update checks
         await updateService.initialize(appSettings);
-        
+
         // Load API keys from Stronghold to backend cache
         // Small delay to ensure Stronghold is ready
         setTimeout(() => {
@@ -114,27 +114,27 @@ export default function App() {
           console.log("Navigate to settings requested from tray menu");
           setActiveSection("settings");
         });
-        
+
         // Listen for model changes from tray menu
         registerEvent("model-changed", (event) => {
           console.log("Model changed from tray menu:", event.payload);
           // Force refresh of settings by reloading them
           invoke<AppSettings>("get_settings").then(setSettings);
         });
-        
+
         // Listen for language changes from tray menu
         registerEvent("language-changed", (event) => {
           console.log("Language changed from tray menu:", event.payload);
           // Force refresh of settings by reloading them
           invoke<AppSettings>("get_settings").then(setSettings);
         });
-        
+
         // Listen for tray action errors
         registerEvent("tray-action-error", (event) => {
           console.error("Tray action error:", event.payload);
           toast.error(event.payload as string);
         });
-        
+
         // Listen for AI enhancement errors
         registerEvent("ai-enhancement-auth-error", (event) => {
           console.error("AI authentication error:", event.payload);
@@ -146,7 +146,7 @@ export default function App() {
             }
           });
         });
-        
+
         registerEvent("ai-enhancement-error", (event) => {
           console.warn("AI enhancement error:", event.payload);
           toast.warning(event.payload as string);
@@ -317,11 +317,6 @@ export default function App() {
         </SidebarProvider>
         <Toaster
           position="top-center"
-          toastOptions={{
-            classNames: {
-              toast: "!w-fit"
-            }
-          }}
         />
       </LicenseProvider>
     </AppErrorBoundary>

@@ -2,16 +2,28 @@ use tauri::{AppHandle, Manager, Emitter};
 use tauri_plugin_store::StoreExt;
 use std::fs;
 
+#[derive(serde::Serialize)]
+pub struct ResetResult {
+    pub success: bool,
+    pub errors: Vec<String>,
+    pub cleared_items: Vec<String>,
+}
+
 #[tauri::command]
-pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
+pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
     log::info!("Starting app data reset");
+    
+    let mut errors = Vec::new();
+    let mut cleared_items = Vec::new();
     
     // 1. Clear all stores and delete the store files
     // Clear settings store
     if let Ok(store) = app.store("settings") {
         store.clear();
         if let Err(e) = store.save() {
-            log::error!("Failed to save cleared settings store: {}", e);
+            errors.push(format!("Failed to save cleared settings store: {}", e));
+        } else {
+            cleared_items.push("Settings store".to_string());
         }
     }
     
@@ -19,7 +31,9 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
     if let Ok(store) = app.store("transcriptions") {
         store.clear();
         if let Err(e) = store.save() {
-            log::error!("Failed to save cleared transcriptions store: {}", e);
+            errors.push(format!("Failed to save cleared transcriptions store: {}", e));
+        } else {
+            cleared_items.push("Transcriptions store".to_string());
         }
     }
     
@@ -28,9 +42,9 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
         let stores_dir = app_data_dir.join("stores");
         if stores_dir.exists() {
             if let Err(e) = fs::remove_dir_all(&stores_dir) {
-                log::warn!("Failed to delete stores directory: {}", e);
+                errors.push(format!("Failed to delete stores directory: {}", e));
             } else {
-                log::info!("Deleted stores directory");
+                cleared_items.push("Stores directory".to_string());
             }
         }
     }
@@ -41,9 +55,9 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
         let models_dir = app_data_dir.join("models");
         if models_dir.exists() {
             if let Err(e) = fs::remove_dir_all(&models_dir) {
-                log::error!("Failed to delete models directory: {}", e);
+                errors.push(format!("Failed to delete models directory: {}", e));
             } else {
-                log::info!("Deleted models directory");
+                cleared_items.push("Downloaded models".to_string());
             }
         }
         
@@ -51,41 +65,59 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
         let recordings_dir = app_data_dir.join("recordings");
         if recordings_dir.exists() {
             if let Err(e) = fs::remove_dir_all(&recordings_dir) {
-                log::error!("Failed to delete recordings directory: {}", e);
+                errors.push(format!("Failed to delete recordings directory: {}", e));
             } else {
-                log::info!("Deleted recordings directory");
+                cleared_items.push("Audio recordings".to_string());
             }
         }
     }
     
-    // 3. Clear license data from keychain
-    log::info!("Clearing license data");
-    if let Err(e) = keyring::Entry::new("com.ideaplexa.voicetypr", "license")
-        .and_then(|entry| entry.delete_password())
-    {
-        log::warn!("Failed to clear license from keychain: {}", e);
-        // Don't fail the whole reset if keychain clear fails
+    // 3. Clear license data from secure store
+    if let Err(e) = crate::secure_store::secure_delete(&app, "license") {
+        // Only push error if it's not a "store doesn't exist" error
+        if !e.contains("Store access failed") {
+            errors.push(format!("Failed to clear license: {}", e));
+        }
+    } else {
+        cleared_items.push("License data".to_string());
+    }
+    
+    // 3.5. Clear the secure.dat file itself
+    if let Ok(app_data_dir) = app.path().app_data_dir() {
+        let secure_store_path = app_data_dir.join("secure.dat");
+        if secure_store_path.exists() {
+            if let Err(e) = fs::remove_file(&secure_store_path) {
+                errors.push(format!("Failed to remove secure storage: {}", e));
+            } else {
+                cleared_items.push("Secure storage (API keys)".to_string());
+            }
+        }
     }
     
     // 4. Clear cache data (license validation cache)
     if let Ok(cache_dir) = app.path().cache_dir() {
         if cache_dir.exists() {
             if let Err(e) = fs::remove_dir_all(&cache_dir) {
-                log::warn!("Failed to clear cache directory: {}", e);
+                errors.push(format!("Failed to clear cache: {}", e));
             } else {
-                log::info!("Cleared cache directory");
+                cleared_items.push("Cache directory".to_string());
             }
         }
     }
     
     // 5. Clear app preferences (macOS defaults system)
-    log::info!("Clearing app preferences...");
     match std::process::Command::new("defaults")
         .args(&["delete", "com.ideaplexa.voicetypr"])
         .output()
     {
-        Ok(_) => log::info!("Cleared defaults preferences"),
-        Err(e) => log::debug!("No defaults to clear: {}", e),
+        Ok(output) => {
+            if output.status.success() {
+                cleared_items.push("System preferences".to_string());
+            }
+        }
+        Err(_) => {
+            // No defaults to clear is not an error
+        }
     }
     
     // Also remove the preferences plist file
@@ -96,9 +128,9 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
             .join("com.ideaplexa.voicetypr.plist");
         if prefs_path.exists() {
             if let Err(e) = fs::remove_file(&prefs_path) {
-                log::warn!("Failed to remove preferences plist: {}", e);
+                errors.push(format!("Failed to remove preferences file: {}", e));
             } else {
-                log::info!("Removed preferences plist file");
+                cleared_items.push("Preferences plist".to_string());
             }
         }
     }
@@ -112,9 +144,9 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
             .join("com.ideaplexa.voicetypr.savedState");
         if saved_state_path.exists() {
             if let Err(e) = fs::remove_dir_all(&saved_state_path) {
-                log::warn!("Failed to clear saved state: {}", e);
+                errors.push(format!("Failed to clear saved state: {}", e));
             } else {
-                log::info!("Cleared saved application state");
+                cleared_items.push("Window state".to_string());
             }
         }
         
@@ -125,9 +157,9 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
             .join("com.ideaplexa.voicetypr");
         if logs_path.exists() {
             if let Err(e) = fs::remove_dir_all(&logs_path) {
-                log::warn!("Failed to clear logs: {}", e);
+                errors.push(format!("Failed to clear logs: {}", e));
             } else {
-                log::info!("Cleared application logs");
+                cleared_items.push("Application logs".to_string());
             }
         }
         
@@ -138,9 +170,9 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
             .join("com.ideaplexa.voicetypr");
         if webkit_path.exists() {
             if let Err(e) = fs::remove_dir_all(&webkit_path) {
-                log::warn!("Failed to clear WebKit data: {}", e);
+                errors.push(format!("Failed to clear WebKit data: {}", e));
             } else {
-                log::info!("Cleared WebKit data");
+                cleared_items.push("WebKit data".to_string());
             }
         }
         
@@ -153,21 +185,16 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
             .join("com.ideaplexa.voicetypr");
         if nsurlsession_path.exists() {
             if let Err(e) = fs::remove_dir_all(&nsurlsession_path) {
-                log::warn!("Failed to clear NSURLSession cache: {}", e);
+                errors.push(format!("Failed to clear download cache: {}", e));
             } else {
-                log::info!("Cleared NSURLSession downloads cache");
+                cleared_items.push("Download cache".to_string());
             }
         }
     }
     
     // 7. Reset system permissions using osascript with admin privileges
-    log::info!("Attempting to reset system permissions...");
-    
-    // Create AppleScript that will prompt for admin password
-    // Using 'tccutil reset All' to reset all permissions at once
     let reset_script = r#"do shell script "tccutil reset All com.ideaplexa.voicetypr" with administrator privileges"#;
     
-    // Execute the script and wait for completion
     match tokio::process::Command::new("osascript")
         .arg("-e")
         .arg(reset_script)
@@ -176,49 +203,54 @@ pub async fn reset_app_data(app: AppHandle) -> Result<(), String> {
     {
         Ok(output) => {
             if output.status.success() {
-                log::info!("Successfully reset system permissions");
-                // Log the output for debugging
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if !stdout.is_empty() {
-                    log::info!("tccutil output: {}", stdout);
-                }
+                cleared_items.push("System permissions".to_string());
             } else {
-                let error = String::from_utf8_lossy(&output.stderr);
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                log::warn!("Failed to reset permissions - stderr: {}, stdout: {}", error, stdout);
-                // User might have cancelled the password prompt - continue with reset
+                // User might have cancelled - not a critical error
+                log::info!("User cancelled permission reset");
             }
         }
         Err(e) => {
-            log::warn!("Could not execute permission reset: {}", e);
-            // Continue with reset even if this fails
+            errors.push(format!("Could not reset permissions: {}", e));
         }
     }
     
     // 8. Clear any runtime state
-    // Reset the whisper manager state
     use tauri::async_runtime::RwLock as AsyncRwLock;
     let whisper_state = app.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
     let mut whisper_manager = whisper_state.write().await;
     whisper_manager.clear_all();
     drop(whisper_manager);
+    cleared_items.push("Runtime state".to_string());
     
-    // 9. Transcriber cache will be cleared when app restarts
-    // The cache is in-memory only and doesn't persist between app launches
-    
-    // 10. Kill cfprefsd to ensure preference changes take effect
-    log::info!("Refreshing preferences daemon...");
+    // 9. Kill cfprefsd to ensure preference changes take effect
     match std::process::Command::new("killall")
         .arg("cfprefsd")
         .output()
     {
-        Ok(_) => log::info!("Refreshed cfprefsd"),
-        Err(e) => log::debug!("Could not refresh cfprefsd: {}", e),
+        Ok(_) => {
+            log::info!("Refreshed cfprefsd");
+        }
+        Err(_) => {
+            // Not critical
+        }
     }
     
-    // 11. Emit reset event to frontend
-    app.emit("app-reset", ()).map_err(|e| e.to_string())?;
+    // 10. Emit reset event to frontend
+    if let Err(e) = app.emit("app-reset", ()) {
+        errors.push(format!("Failed to emit reset event: {}", e));
+    }
     
-    log::info!("App data reset completed - app is now in fresh install state");
-    Ok(())
+    let success = errors.is_empty();
+    
+    if success {
+        log::info!("App data reset completed successfully");
+    } else {
+        log::warn!("App data reset completed with {} errors", errors.len());
+    }
+    
+    Ok(ResetResult {
+        success,
+        errors,
+        cleared_items,
+    })
 }

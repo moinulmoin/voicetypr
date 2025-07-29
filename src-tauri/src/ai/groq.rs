@@ -1,14 +1,10 @@
-use super::{AIEnhancementRequest, AIEnhancementResponse, AIError, AIProvider};
+use super::{AIEnhancementRequest, AIEnhancementResponse, AIError, AIProvider, prompts};
+use super::config::*;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
-
-const DEFAULT_TEMPERATURE: f32 = 0.5;  // Balanced between creativity and accuracy
-const DEFAULT_TIMEOUT_SECS: u64 = 30;
-const MAX_RETRIES: u32 = 3;
-const RETRY_DELAY_MS: u64 = 1000;
 
 // Supported models with validation
 const SUPPORTED_MODELS: &[&str] = &[
@@ -32,7 +28,7 @@ impl GroqProvider {
         }
         
         // Validate API key format (basic check)
-        if api_key.trim().is_empty() || api_key.len() < 10 {
+        if api_key.trim().is_empty() || api_key.len() < MIN_API_KEY_LENGTH {
             return Err(AIError::ValidationError("Invalid API key format".to_string()));
         }
         
@@ -50,32 +46,6 @@ impl GroqProvider {
         })
     }
     
-    pub(crate) fn build_enhancement_prompt(text: &str, context: Option<&str>) -> String {
-        let mut prompt = format!(
-            "You are a transcription enhancement assistant. Your task is to improve the following transcribed text while preserving its original meaning and language.
-
-Instructions:
-1. Correct grammar and spelling errors
-2. Add appropriate punctuation
-3. Fix obvious transcription mistakes
-4. Maintain the original tone and style
-5. Keep the same language as the input
-6. Do not add or remove content
-7. Do not translate to another language
-
-IMPORTANT: Return ONLY the enhanced text without any explanations, introductions, or conclusions.
-
-Transcribed text:
-{}",
-            text.trim()
-        );
-        
-        if let Some(ctx) = context {
-            prompt.push_str(&format!("\n\nAdditional context: {}", ctx));
-        }
-        
-        prompt
-    }
     
     async fn make_request_with_retry(&self, request: &GroqRequest) -> Result<GroqResponse, AIError> {
         let mut last_error = None;
@@ -88,7 +58,7 @@ Transcribed text:
                     last_error = Some(e);
                     
                     if attempt < MAX_RETRIES {
-                        tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64)).await;
+                        tokio::time::sleep(Duration::from_millis(RETRY_BASE_DELAY_MS * attempt as u64)).await;
                     }
                 }
             }
@@ -157,7 +127,11 @@ impl AIProvider for GroqProvider {
         // Validate request
         request.validate()?;
         
-        let prompt = Self::build_enhancement_prompt(&request.text, request.context.as_deref());
+        let prompt = prompts::build_enhancement_prompt(
+            &request.text, 
+            request.context.as_deref(),
+            &request.options.unwrap_or_default()
+        );
         
         let temperature = self.options.get("temperature")
             .and_then(|v| v.as_f64())

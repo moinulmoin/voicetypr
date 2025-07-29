@@ -191,10 +191,21 @@ impl WhisperManager {
             if exists {
                 // Double-check with metadata to ensure file is actually accessible
                 if let Ok(metadata) = std::fs::metadata(&model_path) {
-                    if metadata.len() > 0 {
-                        log::info!("[check_downloaded_models] Model '{}' found at {:?} (size: {} bytes)",
-                            model_name, model_path, metadata.len());
+                    let file_size = metadata.len();
+                    let expected_size = model_info.size;
+                    
+                    // Allow 5% tolerance for size differences
+                    let size_tolerance = (expected_size as f64 * 0.05) as u64;
+                    let min_size = expected_size.saturating_sub(size_tolerance);
+                    
+                    if file_size >= min_size {
+                        log::info!("[check_downloaded_models] Model '{}' found at {:?} (size: {} bytes, expected: {} bytes)",
+                            model_name, model_path, file_size, expected_size);
                         model_info.downloaded = true;
+                    } else if file_size > 0 {
+                        log::warn!("[check_downloaded_models] Model '{}' exists but appears incomplete: {} bytes (expected: {} bytes)", 
+                            model_name, file_size, expected_size);
+                        model_info.downloaded = false;
                     } else {
                         log::warn!("[check_downloaded_models] Model '{}' exists but has 0 bytes", model_name);
                         model_info.downloaded = false;
@@ -273,6 +284,38 @@ impl WhisperManager {
         fs::create_dir_all(models_dir)
             .await
             .map_err(|e| format!("Failed to create models directory: {}", e))?;
+            
+        // Check if the file already exists and is corrupted
+        if output_path.exists() {
+            if let Ok(metadata) = fs::metadata(&output_path).await {
+                let file_size = metadata.len();
+                let expected_size = model_info.size;
+                
+                // Allow 5% tolerance for size differences
+                let size_tolerance = (expected_size as f64 * 0.05) as u64;
+                let min_size = expected_size.saturating_sub(size_tolerance);
+                
+                if file_size < min_size {
+                    log::warn!(
+                        "Found incomplete/corrupted model file for '{}': {} bytes (expected: {} bytes). Removing...",
+                        model_info.name, file_size, expected_size
+                    );
+                    
+                    // Delete the corrupted file
+                    if let Err(e) = fs::remove_file(&output_path).await {
+                        log::error!("Failed to remove corrupted model file: {}", e);
+                        return Err(format!("Failed to remove corrupted model file: {}", e));
+                    }
+                    
+                    log::info!("Corrupted model file removed successfully");
+                } else {
+                    return Err(format!(
+                        "Model '{}' already exists with correct size. Delete it manually if you want to re-download.",
+                        model_info.name
+                    ));
+                }
+            }
+        }
 
         log::info!("[download_model] Output path: {:?}", output_path);
         log::info!("[download_model] File name will be: {}.bin", model_info.name);

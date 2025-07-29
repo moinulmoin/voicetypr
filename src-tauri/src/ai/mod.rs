@@ -4,13 +4,14 @@ use std::collections::HashMap;
 
 pub mod groq;
 pub mod gemini;
+pub mod prompts;
+pub mod config;
+
+pub use prompts::EnhancementOptions;
+pub use config::{MAX_TEXT_LENGTH, MAX_CUSTOM_VOCABULARY, MAX_VOCABULARY_TERM_LENGTH};
 
 #[cfg(test)]
 mod tests;
-
-// Constants for validation
-pub const MAX_TEXT_LENGTH: usize = 10_000;
-pub const MIN_TEXT_LENGTH: usize = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AIProviderConfig {
@@ -27,6 +28,8 @@ pub struct AIProviderConfig {
 pub struct AIEnhancementRequest {
     pub text: String,
     pub context: Option<String>,
+    #[serde(default)]
+    pub options: Option<EnhancementOptions>,
 }
 
 impl AIEnhancementRequest {

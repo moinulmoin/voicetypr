@@ -189,7 +189,7 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
     let device_hash = device::get_device_hash()?;
 
     // First, check if we have a stored license
-    if let Some(license_key) = keychain::get_license()? {
+    if let Some(license_key) = keychain::get_license(&app)? {
         log::info!("Found stored license, validating...");
 
         // Try to validate the stored license
@@ -239,7 +239,7 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                 } else {
                     log::warn!("Stored license is invalid: {:?}", response.message);
                     // Remove invalid license from keychain
-                    let _ = keychain::delete_license();
+                    let _ = keychain::delete_license(&app);
                 }
             }
             Err(e) => {
@@ -373,7 +373,7 @@ pub async fn restore_license(app: AppHandle) -> Result<LicenseStatus, String> {
 
     // Check if we have a stored license
     let license_key =
-        keychain::get_license()?.ok_or_else(|| "No license found in keychain".to_string())?;
+        keychain::get_license(&app)?.ok_or_else(|| "No license found in keychain".to_string())?;
 
     let device_hash = device::get_device_hash()?;
     let api_client = LicenseApiClient::new()?;
@@ -470,11 +470,11 @@ async fn activate_license_internal(
         Ok(response) => {
             if response.success {
                 // Save the license to keychain
-                keychain::save_license(&license_key)?;
+                keychain::save_license(&app, &license_key)?;
                 
                 // Immediately read it back to trigger macOS keychain permission prompt
                 // This ensures the user grants permission during activation, not during first recording
-                match keychain::get_license()? {
+                match keychain::get_license(&app)? {
                     Some(_) => log::info!("License saved and verified in keychain"),
                     None => {
                         log::error!("License was saved but could not be read back");
@@ -528,7 +528,7 @@ pub async fn deactivate_license(app: AppHandle) -> Result<(), String> {
 
     // Get the stored license
     let license_key =
-        keychain::get_license()?.ok_or_else(|| "No license found to deactivate".to_string())?;
+        keychain::get_license(&app)?.ok_or_else(|| "No license found to deactivate".to_string())?;
 
     let device_hash = device::get_device_hash()?;
     let api_client = LicenseApiClient::new()?;
@@ -540,7 +540,7 @@ pub async fn deactivate_license(app: AppHandle) -> Result<(), String> {
         Ok(response) => {
             if response.success {
                 // Remove from keychain
-                keychain::delete_license()?;
+                keychain::delete_license(&app)?;
 
                 // Clear cache when license is deactivated
                 let cache = app.cache();
@@ -572,7 +572,7 @@ pub async fn deactivate_license(app: AppHandle) -> Result<(), String> {
         Err(e) => {
             log::error!("Failed to deactivate license: {}", e);
             // Even if API fails, remove from keychain
-            keychain::delete_license()?;
+            keychain::delete_license(&app)?;
 
             // Clear cache even on failure
             let cache = app.cache();

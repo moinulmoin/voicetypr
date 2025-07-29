@@ -49,7 +49,7 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
     accessibility: { status: "checking" }
     // automation: { status: "checking" } // Removed for now, can be re-enabled later
   });
-  const [hotkey, setHotkey] = useState("cmd+shift+space");
+  const [hotkey, setHotkey] = useState("CommandOrControl+Shift+Space");
   const [isRequesting, setIsRequesting] = useState<string | null>(null);
   const [checkingPermissions, setCheckingPermissions] = useState<Set<string>>(new Set());
 

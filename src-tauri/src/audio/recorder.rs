@@ -76,6 +76,8 @@ impl AudioRecorder {
     }
 
     pub fn start_recording(&mut self, output_path: &str) -> Result<(), String> {
+        log::info!("AudioRecorder::start_recording called with path: {}", output_path);
+        
         // Check if already recording
         if self
             .recording_handle
@@ -107,6 +109,8 @@ impl AudioRecorder {
             let device = host
                 .default_input_device()
                 .ok_or("No input device available")?;
+                
+            log::info!("Using audio input device: {:?}", device.name());
 
             let config = device.default_input_config().map_err(|e| e.to_string())?;
 
@@ -283,7 +287,12 @@ impl AudioRecorder {
                 }
             };
 
-            stream.play().map_err(|e| e.to_string())?;
+            stream.play().map_err(|e| {
+                log::error!("Failed to start audio stream: {}", e);
+                e.to_string()
+            })?;
+            
+            log::info!("Audio stream started successfully");
 
             // Wait for stop signal
             let stop_reason = stop_rx.recv().ok();

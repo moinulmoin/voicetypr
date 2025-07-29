@@ -31,7 +31,7 @@ describe('App Integration Tests', () => {
   const mockSettings = {
     hotkey: 'CommandOrControl+Shift+Space',
     current_model: 'base',
-    language: 'auto',
+    language: 'en',
     theme: 'system',
   };
 

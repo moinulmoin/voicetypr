@@ -1,12 +1,15 @@
 import { ApiKeyModal } from "@/components/ApiKeyModal";
 import { EnhancementModelCard } from "@/components/EnhancementModelCard";
-import { Label } from "@/components/ui/label";
+import { EnhancementSettings } from "@/components/EnhancementSettings";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
+import type { EnhancementOptions } from "@/types/ai";
+import { fromBackendOptions, toBackendOptions } from "@/types/ai";
+import { hasApiKey, removeApiKey, saveApiKey } from "@/utils/keyring";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { saveApiKey, hasApiKey, removeApiKey } from "@/utils/keyring";
 
 interface AIModel {
   id: string;
@@ -34,6 +37,13 @@ export function EnhancementsSection() {
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [providerApiKeys, setProviderApiKeys] = useState<Record<string, boolean>>({});
+  const [enhancementOptions, setEnhancementOptions] = useState<{
+    preset: "Default" | "Prompts" | "Email" | "Commit" | "Notes";
+    customVocabulary: string[];
+  }>({
+    preset: 'Default',
+    customVocabulary: [],
+  });
 
   // Available models - flat list
   const models: AIModel[] = [
@@ -53,7 +63,39 @@ export function EnhancementsSection() {
 
   useEffect(() => {
     loadAISettings();
+    loadEnhancementOptions();
+
+    // Listen for API key save events
+    const unlisten = listen('api-key-saved', async (event) => {
+      console.log('[AI Settings] API key saved event received:', event.payload);
+      // Reload settings to reflect the new API key
+      await loadAISettings();
+    });
+
+    return () => {
+      unlisten.then(fn => fn());
+    };
   }, []);
+
+  const loadEnhancementOptions = async () => {
+    try {
+      const options = await invoke<EnhancementOptions>("get_enhancement_options");
+      setEnhancementOptions(fromBackendOptions(options));
+    } catch (error) {
+      console.error("Failed to load enhancement options:", error);
+    }
+  };
+
+  const handleEnhancementOptionsChange = async (newOptions: typeof enhancementOptions) => {
+    setEnhancementOptions(newOptions);
+    try {
+      await invoke("update_enhancement_options", {
+        options: toBackendOptions(newOptions)
+      });
+    } catch (error) {
+      toast.error(`Failed to save enhancement options: ${error}`);
+    }
+  };
 
   const loadAISettings = async () => {
     try {
@@ -68,11 +110,11 @@ export function EnhancementsSection() {
         // Check Stronghold for API key
         const hasKey = await hasApiKey(provider);
         keyStatus[provider] = hasKey;
-        
+
         if (hasKey) {
           console.log(`[AI Settings] Found ${provider} API key in keyring`);
         }
-        
+
         // Update backend cache state
         if (hasKey) {
           const providerSettings = await invoke<AISettings>("get_ai_settings_for_provider", { provider });
@@ -85,20 +127,65 @@ export function EnhancementsSection() {
       }
 
       setProviderApiKeys(keyStatus);
-      
-      // Update settings with correct hasApiKey status from Stronghold
-      // The enabled state is already persisted in the backend
-      setAISettings({
-        ...settings,
-        hasApiKey: keyStatus[settings.provider] || false
-      });
+
+      // Auto-select model if only one has API key and no model is currently selected
+      const modelsWithApiKey = models.filter(m => keyStatus[m.provider]);
+      if (!settings.model && modelsWithApiKey.length === 1) {
+        const autoSelectModel = modelsWithApiKey[0];
+        console.log(`[AI Settings] Auto-selecting model: ${autoSelectModel.name}`);
+
+        // Update backend settings with auto-selected model
+        await invoke("update_ai_settings", {
+          enabled: false, // Don't auto-enable, let user decide
+          provider: autoSelectModel.provider,
+          model: autoSelectModel.id
+        });
+
+        // Update local state
+        setAISettings({
+          ...settings,
+          provider: autoSelectModel.provider,
+          model: autoSelectModel.id,
+          hasApiKey: true
+        });
+      } else {
+        // Update settings with correct hasApiKey status from Stronghold
+        // The enabled state is already persisted in the backend
+        const currentModelProvider = settings.model ? models.find(m => m.id === settings.model)?.provider : null;
+        const currentModelHasKey = currentModelProvider ? keyStatus[currentModelProvider] : false;
+
+        // If the selected model no longer has an API key, clear the selection
+        if (settings.model && !currentModelHasKey) {
+          console.log(`[AI Settings] Clearing model selection - model ${settings.model} no longer has API key`);
+          await invoke("update_ai_settings", {
+            enabled: false,
+            provider: settings.provider,
+            model: ""  // Clear the model selection
+          });
+
+          setAISettings({
+            ...settings,
+            enabled: false,
+            model: "",
+            hasApiKey: false
+          });
+        } else {
+          setAISettings({
+            ...settings,
+            hasApiKey: currentModelHasKey
+          });
+        }
+      }
     } catch (error) {
       console.error("Failed to load AI settings:", error);
     }
   };
 
   const handleToggleEnabled = async (enabled: boolean) => {
+    console.log(`[AI Settings] Toggle AI enhancement: ${enabled}, model: ${aiSettings.model}, hasApiKey: ${aiSettings.hasApiKey}`);
+
     if (enabled && (!aiSettings.hasApiKey || !aiSettings.model)) {
+      console.warn(`[AI Settings] Cannot enable AI enhancement - hasApiKey: ${aiSettings.hasApiKey}, model: ${aiSettings.model}`);
       toast.error("Please select a model and add an API key first");
       return;
     }
@@ -113,6 +200,7 @@ export function EnhancementsSection() {
       setAISettings(prev => ({ ...prev, enabled }));
       toast.success(enabled ? "AI enhancement enabled" : "AI enhancement disabled");
     } catch (error) {
+      console.error(`[AI Settings] Failed to update settings:`, error);
       toast.error(`Failed to update settings: ${error}`);
     }
   };
@@ -122,16 +210,12 @@ export function EnhancementsSection() {
     try {
       // Save API key using Stronghold
       await saveApiKey(selectedProvider, apiKey.trim());
-      
+
       // Close modal first to give feedback
       setShowApiKeyModal(false);
       toast.success("API key saved securely");
-      
-      // Small delay to ensure Stronghold save is complete
-      await new Promise(resolve => setTimeout(resolve, 500));
 
-      // Reload settings to get updated hasApiKey status
-      await loadAISettings();
+      // No need for delay - the event listener will handle the reload
     } catch (error) {
       toast.error(`Failed to save API key: ${error}`);
     } finally {
@@ -167,10 +251,25 @@ export function EnhancementsSection() {
 
   const handleRemoveApiKey = async (provider: string) => {
     try {
+      console.log(`[AI Settings] Removing API key for provider: ${provider}`);
       await removeApiKey(provider);
+
+      // If the removed key was for the currently selected model, deselect it
+      const selectedModel = models.find(m => m.id === aiSettings.model);
+      if (selectedModel && selectedModel.provider === provider) {
+        console.log(`[AI Settings] Deselecting model ${selectedModel.id} due to API key removal`);
+        // Deselect model and disable AI enhancement
+        await invoke("update_ai_settings", {
+          enabled: false,
+          provider: aiSettings.provider,
+          model: ""  // Clear model selection
+        });
+      }
+
       await loadAISettings();
       toast.success("API key removed");
     } catch (error) {
+      console.error(`[AI Settings] Failed to remove API key:`, error);
       toast.error(`Failed to remove API key: ${error}`);
     }
   };
@@ -184,25 +283,14 @@ export function EnhancementsSection() {
   };
 
   const hasAnyApiKey = Object.values(providerApiKeys).some(v => v);
-  const hasSelectedModel = Boolean(aiSettings.model);
+  const selectedModelProvider = models.find(m => m.id === aiSettings.model)?.provider;
+  const hasSelectedModel = Boolean(aiSettings.model && selectedModelProvider && providerApiKeys[selectedModelProvider]);
 
   return (
     <div className="h-full flex flex-col p-6">
-      <div className="flex-shrink-0 space-y-6">
-        <h2 className="text-lg font-semibold">Enhancements</h2>
-
-        {/* AI Enhancement Toggle - Minimal Style */}
-        <div className="flex items-center justify-between gap-4">
-          <div className="space-y-1">
-            <Label htmlFor="ai-enhancement" className="text-sm font-medium">AI Enhancement</Label>
-            <p className="text-xs text-muted-foreground">
-              {!hasAnyApiKey
-                ? "Add an API key below to enable"
-                : !hasSelectedModel
-                ? "Select a model below to enable"
-                : "Improve transcriptions with AI"}
-            </p>
-          </div>
+      <div className="flex-shrink-0 space-y-4 mb-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">AI Enhancement</h2>
           <Switch
             id="ai-enhancement"
             checked={aiSettings.enabled}
@@ -210,29 +298,34 @@ export function EnhancementsSection() {
             disabled={!hasAnyApiKey || !hasSelectedModel}
           />
         </div>
-
-        {/* Models Section */}
-        <div className="space-y-2">
-          <Label className="text-sm font-medium">AI Models</Label>
-          <p className="text-xs text-muted-foreground mb-3">
-            Choose an AI model for post-processing
-          </p>
-        </div>
       </div>
 
       <ScrollArea className="flex-1 min-h-0">
-        <div className="space-y-3">
-          {models.map((model) => (
-            <EnhancementModelCard
-              key={model.id}
-              model={model}
-              hasApiKey={providerApiKeys[model.provider] || false}
-              isSelected={aiSettings.model === model.id && providerApiKeys[model.provider]}
-              onSetupApiKey={() => handleSetupApiKey(model.provider)}
-              onSelect={() => handleModelSelect(model.id, model.provider)}
-              onRemoveApiKey={() => handleRemoveApiKey(model.provider)}
-            />
-          ))}
+        <div className="space-y-4">
+          {/* Models */}
+          <div className="space-y-3">
+            {models.map((model) => (
+              <EnhancementModelCard
+                key={model.id}
+                model={model}
+                hasApiKey={providerApiKeys[model.provider] || false}
+                isSelected={aiSettings.model === model.id}
+                onSetupApiKey={() => handleSetupApiKey(model.provider)}
+                onSelect={() => handleModelSelect(model.id, model.provider)}
+                onRemoveApiKey={() => handleRemoveApiKey(model.provider)}
+              />
+            ))}
+          </div>
+
+          {/* Enhancement Settings - Always visible when enabled */}
+          {aiSettings.enabled && (
+            <div className="mt-4 pt-4">
+              <EnhancementSettings
+                settings={enhancementOptions}
+                onSettingsChange={handleEnhancementOptionsChange}
+              />
+            </div>
+          )}
         </div>
       </ScrollArea>
 

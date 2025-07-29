@@ -13,7 +13,12 @@ export function formatHotkey(hotkey: string): React.ReactNode {
     .replace('command', 'cmd')
     .replace('control', 'ctrl')
     .replace('option', 'alt')
-    .replace('meta', 'cmd');
+    .replace('meta', 'cmd')
+    .replace('return', 'enter')
+    .replace('arrowup', 'up')
+    .replace('arrowdown', 'down')
+    .replace('arrowleft', 'left')
+    .replace('arrowright', 'right');
   
   // Split by + and filter out empty strings
   const keys = normalized.split('+').filter(Boolean);
@@ -35,6 +40,22 @@ export function formatHotkey(hotkey: string): React.ReactNode {
     'down': '↓',
     'left': '←',
     'right': '→',
+    'pageup': 'PgUp',
+    'pagedown': 'PgDn',
+    'home': 'Home',
+    'end': 'End',
+    'f1': 'F1',
+    'f2': 'F2',
+    'f3': 'F3',
+    'f4': 'F4',
+    'f5': 'F5',
+    'f6': 'F6',
+    'f7': 'F7',
+    'f8': 'F8',
+    'f9': 'F9',
+    'f10': 'F10',
+    'f11': 'F11',
+    'f12': 'F12',
   };
   
   return (

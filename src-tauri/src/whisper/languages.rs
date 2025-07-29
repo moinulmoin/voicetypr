@@ -14,7 +14,6 @@ pub struct Language {
 // All supported Whisper languages
 pub static SUPPORTED_LANGUAGES: Lazy<HashMap<&'static str, Language>> = Lazy::new(|| {
     let languages = vec![
-        Language { code: "auto", name: "Auto Detect" },
         Language { code: "en", name: "English" },
         Language { code: "zh", name: "Chinese" },
         Language { code: "de", name: "German" },
@@ -159,7 +158,7 @@ mod tests {
     #[test]
     fn test_language_support() {
         assert!(is_language_supported("en"));
-        assert!(is_language_supported("auto"));
+        assert!(!is_language_supported("auto")); // Auto-detect removed
         assert!(is_language_supported("zh"));
         assert!(!is_language_supported("xyz"));
         assert!(!is_language_supported(""));
@@ -168,7 +167,7 @@ mod tests {
     #[test]
     fn test_validate_language() {
         assert_eq!(validate_language(Some("en")), "en");
-        assert_eq!(validate_language(Some("auto")), "auto");
+        assert_eq!(validate_language(Some("auto")), "en"); // Auto-detect removed, defaults to English
         assert_eq!(validate_language(Some("invalid")), "en");
         assert_eq!(validate_language(None), "en");
     }

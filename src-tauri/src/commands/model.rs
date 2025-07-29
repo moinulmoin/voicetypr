@@ -18,10 +18,12 @@ pub async fn download_model(
     // Validate model name
     let valid_models = [
         "base.en",
+        "small.en",
         "large-v3",
         "large-v3-q5_0",
         "large-v3-turbo",
         "large-v3-turbo-q5_0",
+        "large-v3-turbo-q8_0",
     ];
     if !valid_models.contains(&model_name.as_str()) {
         return Err(format!("Invalid model name: {}", model_name));

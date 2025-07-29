@@ -1,6 +1,12 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { EnhancementModelCard } from '../EnhancementModelCard';
+import { ask } from '@tauri-apps/plugin-dialog';
+
+// Mock the dialog plugin
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  ask: vi.fn(),
+}));
 
 describe('EnhancementModelCard', () => {
   const mockModel = {
@@ -16,6 +22,7 @@ describe('EnhancementModelCard', () => {
     isSelected: false,
     onSetupApiKey: vi.fn(),
     onSelect: vi.fn(),
+    onRemoveApiKey: vi.fn(),
   };
 
   it('renders model information', () => {
@@ -34,11 +41,12 @@ describe('EnhancementModelCard', () => {
     expect(keyButton.querySelector('svg')).toBeInTheDocument();
   });
 
-  it('shows ready status when API key exists', () => {
+  it('shows remove button when API key exists', () => {
     render(<EnhancementModelCard {...defaultProps} hasApiKey={true} />);
     
-    expect(screen.getByText('Ready')).toBeInTheDocument();
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    const removeButton = screen.getByRole('button');
+    expect(removeButton).toBeInTheDocument();
+    expect(removeButton.querySelector('svg')).toBeInTheDocument();
   });
 
   it('applies selected styling', () => {
@@ -95,11 +103,43 @@ describe('EnhancementModelCard', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it('displays correct provider badge styling', () => {
+  it('displays correct provider color', () => {
     render(<EnhancementModelCard {...defaultProps} />);
     
-    const badge = screen.getByText('Groq');
-    expect(badge).toHaveClass('bg-orange-100');
-    expect(badge).toHaveClass('text-orange-700');
+    const providerText = screen.getByText('Groq');
+    expect(providerText).toHaveClass('text-orange-600');
+  });
+
+  it('calls onRemoveApiKey when remove button is clicked and confirmed', async () => {
+    const onRemoveApiKey = vi.fn();
+    (ask as any).mockResolvedValue(true);
+    
+    render(<EnhancementModelCard {...defaultProps} hasApiKey={true} onRemoveApiKey={onRemoveApiKey} />);
+    
+    const removeButton = screen.getByRole('button');
+    fireEvent.click(removeButton);
+    
+    await waitFor(() => {
+      expect(ask).toHaveBeenCalledWith(
+        'Remove API key for Groq?',
+        { title: 'Remove API Key', kind: 'warning' }
+      );
+      expect(onRemoveApiKey).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('does not call onRemoveApiKey when removal is cancelled', async () => {
+    const onRemoveApiKey = vi.fn();
+    (ask as any).mockResolvedValue(false);
+    
+    render(<EnhancementModelCard {...defaultProps} hasApiKey={true} onRemoveApiKey={onRemoveApiKey} />);
+    
+    const removeButton = screen.getByRole('button');
+    fireEvent.click(removeButton);
+    
+    await waitFor(() => {
+      expect(ask).toHaveBeenCalled();
+      expect(onRemoveApiKey).not.toHaveBeenCalled();
+    });
   });
 });

@@ -64,19 +64,24 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
     <div className="p-6 space-y-6">
       <h2 className="text-lg font-semibold mb-6">General Settings</h2>
 
-      {/* Hotkey Setting */}
-      <div className="flex items-center justify-between gap-4">
-        <div className="space-y-1">
-          <Label htmlFor="hotkey" className="text-sm font-medium">Hotkey</Label>
-          <p className="text-xs text-muted-foreground">
-            Press anywhere
-          </p>
+      {/* Hotkey Settings Section */}
+      <div className="space-y-4">
+        {/* Recording Hotkey */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-1">
+            <Label htmlFor="hotkey" className="text-sm font-medium">Recording Hotkey</Label>
+            <p className="text-xs text-muted-foreground">
+              Press to start/stop recording
+            </p>
+          </div>
+          <HotkeyInput
+            value={settings.hotkey || ""}
+            onChange={(hotkey) => {
+              onSettingsChange({ ...settings, hotkey });
+            }}
+            placeholder="Click to set hotkey"
+          />
         </div>
-        <HotkeyInput
-          value={settings.hotkey || ""}
-          onChange={(hotkey) => onSettingsChange({ ...settings, hotkey })}
-          placeholder="Click to set hotkey"
-        />
       </div>
 
       {/* Output Setting */}
@@ -95,7 +100,6 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
             <SelectValue placeholder="Select language" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="auto">Auto Detect</SelectItem>
             <SelectItem value="en">English</SelectItem>
             <SelectItem value="zh">Chinese</SelectItem>
             <SelectItem value="de">German</SelectItem>
@@ -264,12 +268,14 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
       </div> */}
 
       {/* Tips Section */}
-      <Alert className="mt-8">
-        <Info className="h-4 w-4" />
-        <AlertDescription className=" flex items-center">
-          While recording, press <kbd className=" inline bg-accent px-1 ">esc</kbd> twice to cancel
-        </AlertDescription>
-      </Alert>
+      <div className="mt-8 space-y-3">
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertDescription className=" flex items-center">
+            While recording, press <kbd className=" inline bg-accent px-1 ">esc</kbd> twice to cancel
+          </AlertDescription>
+        </Alert>
+      </div>
     </div>
   );
 }

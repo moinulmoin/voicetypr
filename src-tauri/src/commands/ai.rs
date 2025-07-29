@@ -1,4 +1,4 @@
-use crate::ai::{AIProviderConfig, AIProviderFactory, AIEnhancementRequest};
+use crate::ai::{AIProviderConfig, AIProviderFactory, AIEnhancementRequest, EnhancementOptions};
 use serde::{Deserialize, Serialize};
 use tauri_plugin_store::StoreExt;
 use regex::Regex;
@@ -154,7 +154,21 @@ pub async fn update_ai_settings(
     
     // Don't allow enabling without a model selected
     if enabled && model.is_empty() {
+        log::warn!("Attempted to enable AI enhancement without a model selected");
         return Err("Please select a model before enabling AI enhancement".to_string());
+    }
+    
+    // Check if API key exists when enabling
+    if enabled {
+        let cache_has_key = {
+            let cache = API_KEY_CACHE.lock().map_err(|_| "Failed to access cache".to_string())?;
+            cache.contains_key(&format!("ai_api_key_{}", provider))
+        };
+        
+        if !cache_has_key {
+            log::warn!("Attempted to enable AI enhancement without cached API key for provider: {}", provider);
+            return Err("API key not found. Please add an API key first.".to_string());
+        }
     }
     
     let store = app.store("settings").map_err(|e| e.to_string())?;
@@ -180,6 +194,54 @@ pub async fn disable_ai_enhancement(app: tauri::AppHandle) -> Result<(), String>
         .map_err(|e| format!("Failed to save AI settings: {}", e))?;
     
     log::info!("AI enhancement disabled");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_enhancement_options(app: tauri::AppHandle) -> Result<EnhancementOptions, String> {
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    
+    // Load from store or return defaults
+    if let Some(options_value) = store.get("enhancement_options") {
+        serde_json::from_value(options_value.clone())
+            .map_err(|e| format!("Failed to parse enhancement options: {}", e))
+    } else {
+        Ok(EnhancementOptions::default())
+    }
+}
+
+#[tauri::command]
+pub async fn update_enhancement_options(
+    options: EnhancementOptions,
+    app: tauri::AppHandle
+) -> Result<(), String> {
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    
+    // Validate custom vocabulary
+    for term in &options.custom_vocabulary {
+        if term.trim().is_empty() {
+            return Err("Custom vocabulary terms cannot be empty".to_string());
+        }
+        if term.len() > crate::ai::MAX_VOCABULARY_TERM_LENGTH {
+            return Err(format!("Custom vocabulary terms must be less than {} characters", 
+                crate::ai::MAX_VOCABULARY_TERM_LENGTH));
+        }
+    }
+    
+    if options.custom_vocabulary.len() > crate::ai::MAX_CUSTOM_VOCABULARY {
+        return Err(format!("Maximum {} custom vocabulary terms allowed", 
+            crate::ai::MAX_CUSTOM_VOCABULARY));
+    }
+    
+    store.set("enhancement_options", serde_json::to_value(&options)
+        .map_err(|e| format!("Failed to serialize options: {}", e))?);
+    
+    store.save()
+        .map_err(|e| format!("Failed to save enhancement options: {}", e))?;
+    
+    log::info!("Enhancement options updated: preset={:?}, vocab_count={}", 
+        options.preset, options.custom_vocabulary.len());
+    
     Ok(())
 }
 
@@ -215,21 +277,30 @@ pub async fn enhance_transcription(
     
     // Don't enhance if no model selected
     if model.is_empty() {
-        log::debug!("No AI model selected, skipping enhancement");
+        log::warn!("AI enhancement enabled but no model selected. Provider: {}", provider);
         return Ok(text);
     }
     
-    // Get API key from cache
+    // Get API key from cache with proper locking
     let api_key = {
         let cache = API_KEY_CACHE.lock().map_err(|_| "Failed to access cache".to_string())?;
-        cache.get(&format!("ai_api_key_{}", provider))
-            .ok_or_else(|| "API key not found in cache".to_string())?
-            .clone()
+        let key_name = format!("ai_api_key_{}", provider);
+        cache.get(&key_name)
+            .cloned() // Clone to release lock early
+            .ok_or_else(|| {
+                log::error!("API key not found in cache for provider: {}. Cache keys: {:?}", 
+                    provider, cache.keys().collect::<Vec<_>>());
+                "API key not found in cache".to_string()
+            })?
     };
     
     drop(store); // Release lock before async operation
     
-    log::info!("Enhancing text with {} model {} (length: {})", provider, model, text.len());
+    // Load enhancement options
+    let enhancement_options = get_enhancement_options(app.clone()).await.ok();
+    
+    log::info!("Enhancing text with {} model {} (length: {}, options: {:?})", 
+        provider, model, text.len(), enhancement_options);
     
     // Create provider config
     let config = AIProviderConfig {
@@ -247,6 +318,7 @@ pub async fn enhance_transcription(
     let request = AIEnhancementRequest {
         text: text.clone(),
         context: None,
+        options: enhancement_options,
     };
     
     match provider.enhance_text(request).await {

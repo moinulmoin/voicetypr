@@ -21,7 +21,7 @@ impl Transcriber {
         // Enable GPU acceleration for better performance
         let mut ctx_params = WhisperContextParameters::default();
         ctx_params.use_gpu(true); // Enable Metal on macOS
-        
+
         let ctx =
             WhisperContext::new_with_params(model_path_str, ctx_params)
                 .map_err(|e| format!("Failed to load model: {}", e))?;
@@ -52,12 +52,12 @@ impl Transcriber {
         if !audio_path.exists() {
             let error = format!("Audio file does not exist: {:?}", audio_path);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
-            
+
             // Capture to Sentry
             use crate::capture_sentry_message;
             use crate::utils::sentry_helper::sanitize_path;
             capture_sentry_message!(
-                &format!("Transcription failed: Audio file does not exist ({})", 
+                &format!("Transcription failed: Audio file does not exist ({})",
                     sanitize_path(audio_path)),
                 tauri_plugin_sentry::sentry::Level::Error,
                 tags: {
@@ -66,7 +66,7 @@ impl Transcriber {
                     "operation" => "transcribe"
                 }
             );
-            
+
             return Err(error);
         }
 
@@ -91,7 +91,7 @@ impl Transcriber {
         let mut reader = hound::WavReader::open(audio_path).map_err(|e| {
             let error = format!("Failed to open WAV file: {}", e);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
-            
+
             // Capture to Sentry
             use crate::{capture_sentry_with_context, utils::sentry_helper::create_safe_file_context};
             capture_sentry_with_context!(
@@ -104,7 +104,7 @@ impl Transcriber {
                 },
                 context: "file", create_safe_file_context(audio_path, Some(file_size), audio_path.exists())
             );
-            
+
             error
         })?;
 
@@ -180,8 +180,9 @@ impl Transcriber {
 
         let final_lang = if let Some(lang) = language {
             if lang == "auto" {
-                log::info!("[LANGUAGE] Auto-detection enabled");
-                None
+                // Auto-detect removed due to 30-second requirement, default to English
+                log::info!("[LANGUAGE] Auto-detection no longer supported, defaulting to English");
+                Some("en")
             } else {
                 let validated = super::languages::validate_language(Some(lang));
                 log::info!("[LANGUAGE] Using language: {}", validated);
@@ -195,9 +196,6 @@ impl Transcriber {
         if let Some(lang) = final_lang {
             log::info!("[LANGUAGE] Final language set to: {}", lang);
             params.set_language(Some(lang));
-        } else {
-            log::info!("[LANGUAGE] Final: Auto-detect mode");
-            params.set_detect_language(true);
         }
 
         // Set translate mode
@@ -224,17 +222,17 @@ impl Transcriber {
 
         // Suppress blank outputs to avoid empty transcriptions
         params.set_suppress_blank(true);
-        
+
         // Don't suppress non-speech tokens - they help with timing and context
-        params.set_suppress_nst(false);
-        
-        // Adjust speech detection threshold
-        params.set_no_speech_thold(0.6);  // Standard threshold for no speech detection
-        
+        params.set_suppress_nst(true);
+
+        // Adjust speech detection threshold - increase to reduce hallucinations
+        params.set_no_speech_thold(0.8);  // Higher threshold to be more strict about detecting speech
+
         // Quality thresholds with temperature fallback
         // If entropy of last 32 tokens < 2.4 (too repetitive), retry with higher temperature
         params.set_entropy_thold(2.4);
-        
+
         // If average log probability < -1.0 (low confidence), retry with higher temperature
         params.set_logprob_thold(-1.0);
 
@@ -243,14 +241,14 @@ impl Transcriber {
         let mut state = self.context.create_state().map_err(|e| {
             let error = format!("Failed to create Whisper state: {}", e);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
-            
+
             // Capture to Sentry - this is often an out-of-memory error
             use crate::{capture_sentry_with_context, utils::sentry_helper::create_context_from_map};
             let mut context_map = std::collections::BTreeMap::new();
             context_map.insert("threads".to_string(), serde_json::Value::from(threads));
-            context_map.insert("audio_duration_seconds".to_string(), 
+            context_map.insert("audio_duration_seconds".to_string(),
                 serde_json::Value::from(audio.len() as f32 / 16_000_f32));
-            
+
             capture_sentry_with_context!(
                 &format!("Failed to create Whisper state: {}", e),
                 tauri_plugin_sentry::sentry::Level::Error,
@@ -260,7 +258,7 @@ impl Transcriber {
                 },
                 context: "system", create_context_from_map(context_map)
             );
-            
+
             error
         })?;
 
@@ -268,19 +266,23 @@ impl Transcriber {
             "[TRANSCRIPTION_DEBUG] Running Whisper inference with {} samples...",
             audio.len()
         );
+
+        let start_time = std::time::Instant::now();
+        log::info!("[TRANSCRIPTION_DEBUG] Starting whisper full() inference...");
+
         state.full(params, &audio).map_err(|e| {
             let error = format!("Whisper inference failed: {}", e);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
-            
+
             // Capture to Sentry - critical inference failure
             use crate::{capture_sentry_with_context, utils::sentry_helper::create_context_from_map};
             let mut context_map = std::collections::BTreeMap::new();
             context_map.insert("language".to_string(), serde_json::Value::from(language.unwrap_or("auto")));
             context_map.insert("translate".to_string(), serde_json::Value::from(translate));
-            context_map.insert("audio_duration_seconds".to_string(), 
+            context_map.insert("audio_duration_seconds".to_string(),
                 serde_json::Value::from(audio.len() as f32 / 16_000_f32));
             context_map.insert("audio_samples".to_string(), serde_json::Value::from(audio.len()));
-            
+
             capture_sentry_with_context!(
                 &format!("Whisper inference failed: {}", e),
                 tauri_plugin_sentry::sentry::Level::Error,
@@ -290,9 +292,14 @@ impl Transcriber {
                 },
                 context: "transcription", create_context_from_map(context_map)
             );
-            
+
             error
         })?;
+
+        log::info!(
+            "[TRANSCRIPTION_DEBUG] Whisper inference completed in {:.2}s",
+            start_time.elapsed().as_secs_f32()
+        );
 
         // Get text
         log::info!("[TRANSCRIPTION_DEBUG] Getting segments from Whisper output...");
@@ -334,4 +341,3 @@ impl Transcriber {
         Ok(result)
     }
 }
-

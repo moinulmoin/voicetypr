@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
 
 /**
  * Save a value to the OS keyring
@@ -44,6 +45,9 @@ export const saveApiKey = async (provider: string, apiKey: string): Promise<void
   await invoke('cache_ai_api_key', { provider, apiKey });
   
   console.log(`[Keyring] API key saved for ${provider}`);
+  
+  // Emit event to notify that API key was saved
+  await emit('api-key-saved', { provider });
 };
 
 export const getApiKey = async (provider: string): Promise<string | null> => {

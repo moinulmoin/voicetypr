@@ -12,6 +12,7 @@ mod ai;
 mod audio;
 mod commands;
 mod license;
+mod secure_store;
 mod state;
 mod state_machine;
 mod utils;
@@ -23,7 +24,7 @@ mod tests;
 
 use audio::recorder::AudioRecorder;
 use commands::{
-    ai::{get_ai_settings, get_ai_settings_for_provider, cache_ai_api_key, clear_ai_api_key_cache, update_ai_settings, enhance_transcription, disable_ai_enhancement},
+    ai::{get_ai_settings, get_ai_settings_for_provider, cache_ai_api_key, clear_ai_api_key_cache, update_ai_settings, enhance_transcription, disable_ai_enhancement, get_enhancement_options, update_enhancement_options},
     audio::*,
     debug::{debug_transcription_flow, test_transcription_event},
     keyring::{keyring_set, keyring_get, keyring_delete, keyring_has},
@@ -137,17 +138,9 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
     let mut lang_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
     let mut lang_check_items = Vec::new();
     
-    // Sort languages by name but keep Auto Detect first
+    // Sort languages by name (auto-detect removed)
     let mut sorted_languages = languages;
-    sorted_languages.sort_by(|a, b| {
-        if a.0 == "auto" {
-            std::cmp::Ordering::Less
-        } else if b.0 == "auto" {
-            std::cmp::Ordering::Greater
-        } else {
-            a.1.cmp(&b.1)
-        }
-    });
+    sorted_languages.sort_by(|a, b| a.1.cmp(&b.1));
     
     for (code, name) in sorted_languages {
         let is_selected = code == current_settings.1;
@@ -224,6 +217,7 @@ pub struct AppState {
     // Recording-related runtime state
     pub recording_state: UnifiedRecordingState,
     pub recording_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
+    pub pending_shortcut: Arc<Mutex<Option<String>>>, // Pending shortcut to be applied
     pub current_recording_path: Arc<Mutex<Option<PathBuf>>>,
     pub transcription_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 
@@ -234,6 +228,7 @@ pub struct AppState {
     pub esc_pressed_once: Arc<AtomicBool>,
     pub esc_timeout_handle: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
 
+
     // Window management runtime state
     pub window_manager: Arc<Mutex<Option<WindowManager>>>,
 }
@@ -243,6 +238,7 @@ impl AppState {
         Self {
             recording_state: UnifiedRecordingState::new(),
             recording_shortcut: Arc::new(Mutex::new(None)),
+            pending_shortcut: Arc::new(Mutex::new(None)),
             current_recording_path: Arc::new(Mutex::new(None)),
             transcription_task: Arc::new(Mutex::new(None)),
             should_cancel_recording: Arc::new(AtomicBool::new(false)),
@@ -440,6 +436,11 @@ pub fn run() {
 
     log::info!("Starting VoiceTypr application");
     
+    // Initialize encryption key for secure storage
+    if let Err(e) = secure_store::initialize_encryption_key() {
+        log::error!("Failed to initialize encryption: {}", e);
+    }
+    
     // Initialize Sentry if DSN is provided
     // Try compile-time env var first, then runtime
     let sentry_dsn = option_env!("SENTRY_DSN")
@@ -522,17 +523,17 @@ pub fn run() {
                         event.state()
                     );
 
-                    // Only handle key press events, ignore release for toggle behavior
+                    let app_handle = app.app_handle();
+                    let app_state = app_handle.state::<AppState>();
+                    
+                    // Only handle press events for toggle recording
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
 
-                    // Check if this is the recording shortcut
-                    let app_handle = app.app_handle();
+                    // Check if this is the toggle recording shortcut
                     let is_recording_shortcut = {
-                        let app_state = app_handle.state::<AppState>();
-                        let result = if let Ok(shortcut_guard) = app_state.recording_shortcut.lock()
-                        {
+                        if let Ok(shortcut_guard) = app_state.recording_shortcut.lock() {
                             if let Some(ref recording_shortcut) = *shortcut_guard {
                                 shortcut == recording_shortcut
                             } else {
@@ -540,9 +541,8 @@ pub fn run() {
                             }
                         } else {
                             false
-                        };
-                        result
-                    }; // Lock dropped here
+                        }
+                    };
 
                     if is_recording_shortcut {
                         // Toggle recording based on current state
@@ -582,7 +582,19 @@ pub fn run() {
                                     let recorder_state = app_handle.state::<RecorderState>();
                                     match stop_recording(app_handle.clone(), recorder_state).await {
                                         Ok(_) => {
-                                            log::info!("Toggle: Recording stopped successfully")
+                                            log::info!("Toggle: Recording stopped successfully");
+                                            
+                                            // Apply pending shortcut after recording stops
+                                            match apply_pending_shortcut(app_handle.clone()).await {
+                                                Ok(applied) => {
+                                                    if applied {
+                                                        log::info!("Applied pending shortcut after recording stopped");
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    log::warn!("Failed to apply pending shortcut: {}", e);
+                                                }
+                                            }
                                         }
                                         Err(e) => {
                                             log::error!("Toggle: Error stopping recording: {}", e)
@@ -639,8 +651,12 @@ pub fn run() {
                                     log::debug!("ESC timeout expired, resetting state");
                                 });
 
-                                // Store timeout handle
+                                // Store timeout handle (abort previous one if exists)
                                 if let Ok(mut timeout_guard) = app_state.esc_timeout_handle.lock() {
+                                    if let Some(old_handle) = timeout_guard.take() {
+                                        old_handle.abort();
+                                        log::debug!("Aborted previous ESC timeout handle");
+                                    }
                                     *timeout_guard = Some(timeout_handle);
                                 }
                             } else {
@@ -846,12 +862,15 @@ pub fn run() {
             };
 
             log::info!("Loading hotkey: {}", hotkey_str);
+            
+            // Normalize the hotkey for Tauri
+            let normalized_hotkey = crate::commands::key_normalizer::normalize_shortcut_keys(&hotkey_str);
 
             // Register global shortcut from settings with fallback
-            let shortcut: tauri_plugin_global_shortcut::Shortcut = match hotkey_str.parse() {
+            let shortcut: tauri_plugin_global_shortcut::Shortcut = match normalized_hotkey.parse() {
                 Ok(s) => s,
                 Err(_) => {
-                    log::warn!("Invalid hotkey format '{}', using default", hotkey_str);
+                    log::warn!("Invalid hotkey format '{}', using default", normalized_hotkey);
                     "CommandOrControl+Shift+Space".parse()
                         .expect("Default shortcut should be valid")
                 }
@@ -1015,6 +1034,7 @@ pub fn run() {
             get_settings,
             save_settings,
             set_global_shortcut,
+            apply_pending_shortcut,
             get_supported_languages,
             set_model_from_tray,
             set_language_from_tray,
@@ -1049,6 +1069,8 @@ pub fn run() {
             update_ai_settings,
             enhance_transcription,
             disable_ai_enhancement,
+            get_enhancement_options,
+            update_enhancement_options,
             keyring_set,
             keyring_get,
             keyring_delete,

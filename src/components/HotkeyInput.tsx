@@ -2,14 +2,28 @@ import { Check, Edit2, X } from "lucide-react";
 import React, { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/button";
 import { formatHotkey } from "@/lib/hotkey-utils";
+import { 
+  normalizeShortcutKeys, 
+  validateKeyCombinationWithRules,
+  formatKeyForDisplay,
+  KeyValidationRules,
+  ValidationPresets 
+} from "@/lib/keyboard-normalizer";
 
 interface HotkeyInputProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  validationRules?: KeyValidationRules;
+  label?: string; // e.g., "Recording Hotkey", "Custom Hotkey"
 }
 
-export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, placeholder }: HotkeyInputProps) {
+export const HotkeyInput = React.memo(function HotkeyInput({ 
+  value, 
+  onChange, 
+  placeholder,
+  validationRules = ValidationPresets.standard()
+}: HotkeyInputProps) {
   const [mode, setMode] = useState<"display" | "edit">("display");
   const [keys, setKeys] = useState<Set<string>>(new Set());
   const [pendingHotkey, setPendingHotkey] = useState("");
@@ -43,14 +57,28 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
       if (!["Control", "Shift", "Alt", "Meta"].includes(key)) {
         if (key === " " || key === "Space") {
           newKeys.add("Space");
+        } else if (key === "Tab") {
+          newKeys.add("Tab");
+        } else if (key === "Enter") {
+          newKeys.add("Return");
+        } else if (key === "Backspace") {
+          newKeys.add("Backspace");
+        } else if (key === "Delete") {
+          newKeys.add("Delete");
+        } else if (key.startsWith("Arrow")) {
+          newKeys.add(key); // ArrowUp, ArrowDown, ArrowLeft, ArrowRight
+        } else if (key.startsWith("F") && key.length <= 3) {
+          newKeys.add(key); // F1-F12
+        } else if (key === "PageUp" || key === "PageDown" || key === "Home" || key === "End") {
+          newKeys.add(key);
         } else {
           newKeys.add(key.length === 1 ? key.toUpperCase() : key);
         }
       }
 
       // Check max keys limit
-      if (newKeys.size > 3) {
-        setValidationError("Maximum 3 keys allowed");
+      if (newKeys.size > validationRules.maxKeys) {
+        setValidationError(`Maximum ${validationRules.maxKeys} keys allowed`);
         return;
       }
 
@@ -77,15 +105,16 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
         // Update current keys display
         const displayKeys = [];
         if (modifiers.includes("CommandOrControl"))
-          displayKeys.push(formatShortcutDisplay("CommandOrControl"));
-        if (modifiers.includes("Alt")) displayKeys.push(formatShortcutDisplay("Alt"));
-        if (modifiers.includes("Shift")) displayKeys.push(formatShortcutDisplay("Shift"));
-        displayKeys.push(...regularKeys.map((k) => (k === "Space" ? "␣" : k)));
+          displayKeys.push(formatKeyForDisplay("CommandOrControl"));
+        if (modifiers.includes("Alt")) displayKeys.push(formatKeyForDisplay("Alt"));
+        if (modifiers.includes("Shift")) displayKeys.push(formatKeyForDisplay("Shift"));
+        displayKeys.push(...regularKeys.map(k => formatKeyForDisplay(k)));
         setCurrentKeysDisplay(displayKeys.join(" + "));
 
-        // Check minimum keys
-        if (newKeys.size < 2) {
-          setValidationError("Minimum 2 keys required");
+        // Validate with rules
+        const validation = validateKeyCombinationWithRules(shortcut, validationRules);
+        if (!validation.valid) {
+          setValidationError(validation.error || "Invalid key combination");
           setPendingHotkey("");
         } else {
           setPendingHotkey(shortcut);
@@ -117,12 +146,13 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
         );
         const shortcut = [...orderedModifiers, ...regularKeys].join("+");
 
-        if (keys.size >= 2 && keys.size <= 3) {
+        const validation = validateKeyCombinationWithRules(shortcut, validationRules);
+        if (validation.valid) {
           setPendingHotkey(shortcut);
           setKeys(new Set());
           setCurrentKeysDisplay("");
         } else {
-          setValidationError(keys.size < 2 ? "Minimum 2 keys required" : "Maximum 3 keys allowed");
+          setValidationError(validation.error || "Invalid key combination");
         }
       }
     };
@@ -136,23 +166,20 @@ export const HotkeyInput = React.memo(function HotkeyInput({ value, onChange, pl
     };
   }, [mode, keys]);
 
-  const formatShortcutDisplay = useCallback((shortcut: string) => {
-    const isMac = navigator.userAgent.toUpperCase().indexOf("MAC") >= 0;
-    return shortcut
-      .split("+")
-      .map(key => key
-        .replace("CommandOrControl", isMac ? "⌘" : "Ctrl")
-        .replace("Shift", "⇧")
-        .replace("Alt", isMac ? "⌥" : "Alt")
-        .replace("Plus", "+")
-        .replace("Space", "␣")
-      )
-      .join(" + ");
-  }, []);
 
   const handleSave = useCallback(() => {
     if (pendingHotkey && !validationError) {
-      onChange(pendingHotkey);
+      // Normalize the shortcut before saving
+      const normalizedShortcut = normalizeShortcutKeys(pendingHotkey);
+      
+      // Final validation
+      const validation = validateKeyCombinationWithRules(normalizedShortcut, validationRules);
+      if (!validation.valid) {
+        setValidationError(validation.error || "Invalid key combination");
+        return;
+      }
+      
+      onChange(normalizedShortcut);
       setSaveStatus("success");
 
       setTimeout(() => {

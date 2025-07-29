@@ -33,7 +33,7 @@ describe('VoiceTypr User Scenarios', () => {
   const mockSettings = {
     hotkey: 'CommandOrControl+Shift+Space',
     current_model: 'base',
-    language: 'auto',
+    language: 'en',
     theme: 'system',
   };
 
@@ -145,7 +145,7 @@ describe('VoiceTypr User Scenarios', () => {
         if (cmd === 'stop_recording') return Promise.resolve();
         if (cmd === 'get_settings') return Promise.resolve({
           hotkey: 'CommandOrControl+Shift+Space',
-          language: 'auto',
+          language: 'en',
           theme: 'system',
           current_model: 'base',
           transcription_cleanup_days: null,

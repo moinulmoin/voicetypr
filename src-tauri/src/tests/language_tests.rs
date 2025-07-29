@@ -8,7 +8,8 @@ mod tests {
         assert_eq!(validate_language(Some("en")), "en");
         assert_eq!(validate_language(Some("es")), "es");
         assert_eq!(validate_language(Some("zh")), "zh");
-        assert_eq!(validate_language(Some("auto")), "auto");
+        // Auto-detect removed, should default to English
+        assert_eq!(validate_language(Some("auto")), "en");
         
         // Invalid languages should default to English
         assert_eq!(validate_language(Some("xyz")), "en");
@@ -20,7 +21,8 @@ mod tests {
     fn test_language_names() {
         assert_eq!(get_language_name("en"), Some("English"));
         assert_eq!(get_language_name("es"), Some("Spanish"));
-        assert_eq!(get_language_name("auto"), Some("Auto Detect"));
+        // Auto-detect removed
+        assert_eq!(get_language_name("auto"), None);
         assert_eq!(get_language_name("invalid"), None);
     }
 
@@ -28,7 +30,7 @@ mod tests {
     fn test_all_frontend_languages_are_supported() {
         // List of all languages from GeneralSettings.tsx
         let frontend_languages = vec![
-            "auto", "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl",
+            "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl",
             "ca", "nl", "ar", "sv", "it", "id", "hi", "fi", "vi", "he", "uk", "el",
             "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt",
             "la", "mi", "ml", "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl",
