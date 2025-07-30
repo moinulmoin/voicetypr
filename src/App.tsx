@@ -3,9 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { AppErrorBoundary } from "./components/ErrorBoundary";
 import { Sidebar } from "./components/Sidebar";
-import { LicenseSection } from "./components/license";
 import { OnboardingDesktop } from "./components/onboarding/OnboardingDesktop";
-import { AboutSection } from "./components/sections/AboutSection";
+import { AccountSection } from "./components/sections/AccountSection";
 import { AdvancedSection } from "./components/sections/AdvancedSection";
 import { EnhancementsSection } from "./components/sections/EnhancementsSection";
 import { GeneralSettings } from "./components/sections/GeneralSettings";
@@ -28,27 +27,33 @@ export default function App() {
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
 
   // Use the new model management hook
-  const modelManagement = useModelManagement({ windowId: "main", showToasts: true });
+  const modelManagement = useModelManagement({
+    windowId: "main",
+    showToasts: true,
+  });
   const {
     downloadProgress,
     verifyingModels,
     downloadModel,
     cancelDownload,
     deleteModel,
-    sortedModels
+    sortedModels,
   } = modelManagement;
-
 
   // Load history function
   const loadHistory = useCallback(async () => {
     try {
-      const storedHistory = await invoke<any[]>("get_transcription_history", { limit: 50 });
-      const formattedHistory: TranscriptionHistory[] = storedHistory.map((item) => ({
-        id: item.timestamp || Date.now().toString(),
-        text: item.text,
-        timestamp: new Date(item.timestamp),
-        model: item.model
-      }));
+      const storedHistory = await invoke<any[]>("get_transcription_history", {
+        limit: 50,
+      });
+      const formattedHistory: TranscriptionHistory[] = storedHistory.map(
+        (item) => ({
+          id: item.timestamp || Date.now().toString(),
+          text: item.text,
+          timestamp: new Date(item.timestamp),
+          model: item.model,
+        }),
+      );
       setHistory(formattedHistory);
     } catch (error) {
       console.error("Failed to load transcription history:", error);
@@ -73,7 +78,7 @@ export default function App() {
         // Run cleanup if enabled
         if (appSettings.transcription_cleanup_days) {
           await invoke("cleanup_old_transcriptions", {
-            days: appSettings.transcription_cleanup_days
+            days: appSettings.transcription_cleanup_days,
           });
         }
 
@@ -86,8 +91,8 @@ export default function App() {
         // Load API keys from Stronghold to backend cache
         // Small delay to ensure Stronghold is ready
         setTimeout(() => {
-          loadApiKeysToCache().catch(error => {
-            console.error('Failed to load API keys to cache:', error);
+          loadApiKeysToCache().catch((error) => {
+            console.error("Failed to load API keys to cache:", error);
           });
         }, 100);
 
@@ -103,7 +108,9 @@ export default function App() {
         // Listen for history updates from backend
         // Backend is the single source of truth for transcription history
         registerEvent("history-updated", async () => {
-          console.log("[EventCoordinator] Main window: reloading history after update");
+          console.log(
+            "[EventCoordinator] Main window: reloading history after update",
+          );
           await loadHistory();
         });
 
@@ -112,7 +119,7 @@ export default function App() {
         // Listen for navigate-to-settings event from tray menu
         registerEvent("navigate-to-settings", () => {
           console.log("Navigate to settings requested from tray menu");
-          setActiveSection("settings");
+          setActiveSection("recordings");
         });
 
         // Listen for model changes from tray menu
@@ -142,8 +149,8 @@ export default function App() {
             description: "Navigate to Enhancements to update your API key",
             action: {
               label: "Go to Settings",
-              onClick: () => setActiveSection("enhancements")
-            }
+              onClick: () => setActiveSection("enhancements"),
+            },
           });
         });
 
@@ -164,12 +171,12 @@ export default function App() {
             // Focus main window and navigate to license section
             try {
               await invoke("focus_main_window");
-              setActiveSection("license");
+              setActiveSection("account");
 
               // Show toast after window is focused to ensure it appears on top
               setTimeout(() => {
                 toast.error(event.message, {
-                  duration: 2000
+                  duration: 2000,
                 });
               }, 200);
             } catch (error) {
@@ -177,7 +184,7 @@ export default function App() {
               // If window focus fails, still show the toast
               toast.error(event.message);
             }
-          }
+          },
         );
 
         return () => {
@@ -202,9 +209,8 @@ export default function App() {
         await saveSettings({ ...settings, current_model: "" });
       }
     },
-    [deleteModel, settings]
+    [deleteModel, settings],
   );
-
 
   // Save settings
   const saveSettings = useCallback(
@@ -215,7 +221,9 @@ export default function App() {
         // Update global shortcut in backend if changed
         if (newSettings.hotkey !== settings?.hotkey) {
           try {
-            await invoke("set_global_shortcut", { shortcut: newSettings.hotkey });
+            await invoke("set_global_shortcut", {
+              shortcut: newSettings.hotkey,
+            });
           } catch (err) {
             console.error("Failed to update hotkey:", err);
             // Still update UI even if hotkey registration fails
@@ -227,7 +235,7 @@ export default function App() {
         console.error("Failed to save settings:", error);
       }
     },
-    [settings]
+    [settings],
   );
 
   // sortedModels is provided by useModelManagement hook
@@ -261,7 +269,12 @@ export default function App() {
         );
 
       case "general":
-        return <GeneralSettings settings={settings} onSettingsChange={saveSettings} />;
+        return (
+          <GeneralSettings
+            settings={settings}
+            onSettingsChange={saveSettings}
+          />
+        );
 
       case "models":
         return (
@@ -281,18 +294,16 @@ export default function App() {
           />
         );
 
-
       case "advanced":
         return <AdvancedSection />;
 
       case "enhancements":
         return <EnhancementsSection />;
 
+      case "account":
       case "about":
-        return <AboutSection />;
-
       case "license":
-        return <LicenseSection />;
+        return <AccountSection />;
 
       default:
         return (
@@ -310,14 +321,15 @@ export default function App() {
     <AppErrorBoundary>
       <LicenseProvider>
         <SidebarProvider>
-          <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
+          <Sidebar
+            activeSection={activeSection}
+            onSectionChange={setActiveSection}
+          />
           <SidebarInset>
             <div className="h-full flex flex-col">{renderSectionContent()}</div>
           </SidebarInset>
         </SidebarProvider>
-        <Toaster
-          position="top-center"
-        />
+        <Toaster position="top-center" />
       </LicenseProvider>
     </AppErrorBoundary>
   );

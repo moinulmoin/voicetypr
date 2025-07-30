@@ -1,14 +1,17 @@
 import { PermissionErrorBoundary } from "@/components/PermissionErrorBoundary";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { usePermissions } from "@/hooks/usePermissions";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   CheckCircle,
+  Key,
   Keyboard,
   Loader2,
   Mic,
+  RefreshCw,
   Trash2
 } from "lucide-react";
 import { useState } from "react";
@@ -54,150 +57,219 @@ export function AdvancedSection() {
   ];
 
 
+  const handleResetOnboarding = async () => {
+    try {
+      const settings = await invoke<any>('get_settings');
+      await invoke('save_settings', {
+        settings: {
+          ...settings,
+          onboarding_completed: false,
+        },
+      });
+      toast.success("Onboarding reset! Restarting the app.");
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
+    } catch (error) {
+      console.error('Failed to reset onboarding:', error);
+      toast.error("Failed to reset onboarding");
+    }
+  };
+
   return (
     <PermissionErrorBoundary>
-      <div className="space-y-6 p-6">
-      <div>
-        <div className="space-y-1">
-          <h2 className="text-2xl font-semibold flex items-center gap-2">
-
-            Advanced
-          </h2>
+      <div className="h-full flex flex-col p-6">
+        <div className="flex-shrink-0 mb-4 space-y-3">
+          <h2 className="text-lg font-semibold">Advanced Settings</h2>
           <p className="text-sm text-muted-foreground">
-            System permissions and advanced settings
+            System permissions and app management
           </p>
         </div>
-      </div>
 
-      <div className="space-y-6">
-        <div>
-          <h3 className="text-lg font-medium mb-4">System Permissions</h3>
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="space-y-6">
+            {/* Permissions Section */}
+            <div className="rounded-lg border bg-card p-4 space-y-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Key className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium">Permissions</h3>
+              </div>
 
-          {error && (
-            <div className="mb-4 text-sm text-red-600">
-              Failed to check permissions. Please try again.
-            </div>
-          )}
+              {error && (
+                <div className="text-sm text-red-600">
+                  Failed to check permissions. Please try again.
+                </div>
+              )}
 
-          <div className="space-y-3">
-            {permissionData.map((perm) => (
-              <div
-                key={perm.type}
-                className="flex items-center justify-between py-3 px-4 rounded-lg border bg-card"
-              >
-                <div className="flex items-center gap-3">
-                  <perm.icon className="h-4 w-4 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium">{perm.title}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {perm.description}
-                    </p>
+              <div className="space-y-3">
+                {permissionData.map((perm) => (
+                  <div
+                    key={perm.type}
+                    className="flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-3">
+                      <perm.icon className="h-4 w-4 text-muted-foreground" />
+                      <div>
+                        <p className="text-sm font-medium">{perm.title}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {perm.description}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center">
+                      {perm.status === "checking" ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      ) : perm.status === "granted" ? (
+                        <div className="flex items-center gap-1.5 text-green-600">
+                          <CheckCircle className="h-4 w-4" />
+                          <span className="text-sm">Granted</span>
+                        </div>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => requestPermission(perm.type)}
+                          disabled={isRequesting === perm.type}
+                        >
+                          {isRequesting === perm.type ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            "Grant"
+                          )}
+                        </Button>
+                      )}
+                    </div>
                   </div>
+                ))}
+              </div>
+
+              {(permissions.microphone !== 'granted' || permissions.accessibility !== 'granted') && (
+                <div className="text-xs text-muted-foreground space-y-1 pt-2">
+                  <p className="font-medium">Missing permissions:</p>
+                  <ul className="list-disc list-inside space-y-0.5 ml-2">
+                    {permissions.microphone !== 'granted' && <li>Microphone: Required for voice recording</li>}
+                    {permissions.accessibility !== 'granted' && <li>Accessibility: Required for global hotkeys</li>}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            {/* Reset Options Section */}
+            <div className="rounded-lg border bg-card p-4 space-y-4">
+              <div className="flex items-center gap-2 mb-2">
+                <RefreshCw className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium">Reset Options</h3>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <p className="text-sm font-medium mb-1">Reset Onboarding</p>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    Re-run the initial setup wizard
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleResetOnboarding}
+                    className="w-full"
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Reset Onboarding
+                  </Button>
                 </div>
 
-                <div className="flex items-center">
-                  {perm.status === "checking" ? (
-                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                  ) : perm.status === "granted" ? (
-                    <div className="flex items-center gap-1.5 text-green-600">
-                      <CheckCircle className="h-4 w-4" />
-                      <span className="text-sm">Granted</span>
-                    </div>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => requestPermission(perm.type)}
-                      disabled={isRequesting === perm.type}
-                      className="text-xs"
-                    >
-                      {isRequesting === perm.type ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        "Grant"
-                      )}
-                    </Button>
-                  )}
+                <div className="pt-3">
+                  <p className="text-sm font-medium mb-1">Reset App Data</p>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Completely reset VoiceTypr to its initial state
+                  </p>
+                  <ul className="text-xs text-muted-foreground list-disc list-inside mb-3 space-y-0.5">
+                    <li>Delete all transcription history</li>
+                    <li>Remove all downloaded models</li>
+                    <li>Clear all settings and preferences</li>
+                    <li>Reset system permissions</li>
+                  </ul>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={isResetting}
+                    onClick={async () => {
+                      const confirmed = await ask(
+                        "This action cannot be undone. This will permanently delete all your VoiceTypr data.\n\nThe app will restart after reset.\n\nAre you absolutely sure?",
+                        {
+                          title: "Reset App Data",
+                          okLabel: "Reset Everything",
+                          cancelLabel: "Cancel",
+                          kind: "warning"
+                        }
+                      );
+
+                      if (confirmed) {
+                        setIsResetting(true);
+                        try {
+                          await invoke("reset_app_data");
+                          toast.success("App data reset successfully. Restarting...");
+                          setTimeout(() => {
+                            relaunch();
+                          }, 1000);
+                        } catch (error) {
+                          console.error("Failed to reset app data:", error);
+                          toast.error("Failed to reset app data");
+                          setIsResetting(false);
+                        }
+                      }
+                    }}
+                    className="w-full"
+                  >
+                    {isResetting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Resetting...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Reset App Data
+                      </>
+                    )}
+                  </Button>
                 </div>
               </div>
-            ))}
+            </div>
+
+            {/* Diagnostics Section */}
+            {/* <div className="rounded-lg border bg-card p-4 space-y-4">
+              <div className="flex items-center gap-2 mb-2">
+                <HelpCircle className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium">Diagnostics</h3>
+              </div>
+
+              <div className="space-y-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      await invoke("open_logs_folder");
+                    } catch (error) {
+                      toast.error("Failed to open logs folder");
+                    }
+                  }}
+                  className="w-full justify-start"
+                >
+                  <FileText className="mr-2 h-4 w-4" />
+                  View Logs
+                </Button>
+
+                <div className="text-xs text-muted-foreground">
+                  <p>Logs location:</p>
+                  <code className="text-xs bg-muted px-1 py-0.5 rounded">~/Library/Logs/com.voicetypr</code>
+                </div>
+              </div>
+            </div> */}
           </div>
-
-        </div>
-
-        {(permissions.microphone !== 'granted' || permissions.accessibility !== 'granted') && (
-          <div className="text-sm text-muted-foreground space-y-2">
-            <p>
-              <strong>Note:</strong> Without all permissions, some features may not work properly.
-            </p>
-            <ul className="list-disc list-inside space-y-1 ml-2">
-              <li>Microphone: Required for voice recording</li>
-              <li>Accessibility: Required for global hotkeys</li>
-            </ul>
-          </div>
-        )}
-
-        <div className="pt-4The permission reset runs asynchronously, so it might still be executing when the app relaunches.">
-          <h3 className="text-lg font-medium mb-4">Reset App</h3>
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Reset VoiceTypr to its initial state. This will:
-            </p>
-            <ul className="text-sm text-muted-foreground list-disc list-inside ml-2 space-y-1">
-              <li>Delete all transcription history</li>
-              <li>Remove all downloaded models</li>
-              <li>Clear all settings and preferences</li>
-              <li>Remove saved window positions</li>
-              <li>Clear all cached data and logs</li>
-              <li>Reset system permissions (requires admin password)</li>
-            </ul>
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={isResetting}
-              onClick={async () => {
-                const confirmed = await ask(
-                  "This action cannot be undone. This will permanently delete all your VoiceTypr data including transcription history, downloaded models, and settings.\n\nYou will be prompted for your admin password to reset system permissions.\n\nThe app will restart after reset.\n\nAre you absolutely sure?",
-                  {
-                    title: "Reset App Data",
-                    okLabel: "Reset Everything",
-                    cancelLabel: "Cancel",
-                    kind: "warning"
-                  }
-                );
-
-                if (confirmed) {
-                  setIsResetting(true);
-                  try {
-                    await invoke("reset_app_data");
-                    toast.success("App data reset successfully. Restarting...");
-                    // Wait a bit for the toast to show
-                    setTimeout(() => {
-                      relaunch();
-                    }, 1000);
-                  } catch (error) {
-                    console.error("Failed to reset app data:", error);
-                    toast.error("Failed to reset app data");
-                    setIsResetting(false);
-                  }
-                }
-              }}
-            >
-              {isResetting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Resetting...
-                </>
-              ) : (
-                <>
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Reset App Data
-                </>
-              )}
-            </Button>
-          </div>
-        </div>
-      </div>
+        </ScrollArea>
       </div>
     </PermissionErrorBoundary>
   );

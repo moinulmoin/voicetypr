@@ -80,28 +80,14 @@ Examples:
 
 Return ONLY the enhanced prompt."#;
 
-const EMAIL_PROMPT: &str = r#"Convert this into a professional email with proper structure. Add greeting, organize the content clearly, and include appropriate closing. Maintain professional tone.
+const EMAIL_PROMPT: &str = r#"Convert to professional email format. Add subject, greeting, clear message, and closing.
 
 Examples:
-"need the report by friday please send it" →
-"Subject: Report Request
+"need the report by friday" → "Subject: Report Request | Hi [Name], Could you please send me the report by Friday? Thanks, [Your name]"
 
-Hi [Recipient],
+"meeting tomorrow 3pm bring slides" → "Subject: Meeting Tomorrow 3PM | Hi team, Meeting tomorrow at 3 PM. Please bring your slides. See you there, [Your name]"
 
-Could you please send me the report by Friday?
-
-Thank you,
-[Sender]"
-
-"meeting tomorrow 3pm about the project updates bring the slides" →
-"Subject: Project Update Meeting - Tomorrow 3 PM
-
-Hi team,
-
-We have a project update meeting scheduled for tomorrow at 3 PM. Please bring your presentation slides.
-
-See you there,
-[Sender]"
+"sorry for the delay here's the file" → "Subject: File Attached | Hi [Name], Apologies for the delay. Please find the file attached. Best regards, [Your name]"
 
 Return ONLY the formatted email."#;
 
@@ -115,26 +101,15 @@ Examples:
 
 Return ONLY the commit message."#;
 
-const NOTES_PROMPT: &str = r#"Format this as organized notes. Detect lists and create bullets or numbers. Identify sections and add headers. Keep it scannable.
+const NOTES_PROMPT: &str = r#"Format as clean, organized notes. Auto-detect structure: lists, steps, ideas. Add minimal formatting.
 
 Examples:
-"groceries milk bread eggs cheese" →
-"Groceries:
-• Milk
-• Bread
-• Eggs
-• Cheese"
+"groceries milk bread eggs" → "Groceries: • Milk • Bread • Eggs"
 
-"deploy process first build then test then push to prod" →
-"Deploy Process:
-1. Build
-2. Test
-3. Push to production"
+"first build then test then deploy" → "Steps: 1. Build 2. Test 3. Deploy"
 
-"bug fixes login error when password empty profile page crash on ios pagination broken" →
-"Bug Fixes:
-• Login error when password empty
-• Profile page crash on iOS
-• Pagination broken"
+"meeting notes discussed budget timeline next steps follow up with john" → "Meeting Notes: • Discussed budget & timeline • Next steps: Follow up with John"
+
+"todo fix bug write tests update docs" → "TODO: • Fix bug • Write tests • Update docs"
 
 Return ONLY the formatted notes."#;

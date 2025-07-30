@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useLicense } from "@/contexts/LicenseContext";
 import { cn } from "@/lib/utils";
-import { Clock, Cpu, Info, Key, Layers, Settings2, Sparkles, VerifiedIcon } from "lucide-react";
+import { Clock, Cpu, Key, Layers, Settings2, Sparkles, VerifiedIcon } from "lucide-react";
 
 interface SidebarProps {
   activeSection: string;
@@ -20,9 +20,8 @@ const sections = [
   { id: "recordings", label: "History", icon: Clock },
   { id: "general", label: "General", icon: Settings2 },
   { id: "models", label: "Models", icon: Cpu },
-  { id: "enhancements", label: "Enhancements", icon: Sparkles },
-  { id: "license", label: "License", icon: Key },
-  { id: "about", label: "About", icon: Info },
+  { id: "enhancements", label: "AI Enhancement", icon: Sparkles },
+  { id: "account", label: "Account", icon: Key },
   { id: "advanced", label: "Advanced", icon: Layers },
 ];
 

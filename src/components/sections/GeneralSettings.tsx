@@ -1,10 +1,11 @@
 import { HotkeyInput } from "@/components/HotkeyInput";
-import { Combobox } from "@/components/ui/combobox";
+import { LanguageSelection } from "@/components/LanguageSelection";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { languages } from "@/lib/languages";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { AppSettings } from "@/types";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
+import { Globe, Mic, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 
 interface GeneralSettingsProps {
@@ -54,79 +55,107 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
   };
 
   return (
-    <div className="p-6 space-y-6">
-      <h2 className="text-lg font-semibold">General Settings</h2>
-
-      {/* Recording Section */}
-      <div className="space-y-4">
-        <h3 className="text-sm font-medium text-muted-foreground">Recording</h3>
-
-        <div className="flex items-center justify-between">
-          <Label htmlFor="hotkey">Hotkey</Label>
-          <HotkeyInput
-            value={settings.hotkey || ""}
-            onChange={(hotkey) => onSettingsChange({ ...settings, hotkey })}
-            placeholder="Click to set"
-          />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <Label htmlFor="compact-recording">Compact status</Label>
-          <Switch
-            id="compact-recording"
-            checked={settings.compact_recording_status !== false}
-            onCheckedChange={(checked) => onSettingsChange({ ...settings, compact_recording_status: checked })}
-          />
-        </div>
+    <div className="h-full flex flex-col p-6">
+      <div className="flex-shrink-0 mb-4 space-y-3">
+        <h2 className="text-lg font-semibold">General Settings</h2>
+        <p className="text-sm text-muted-foreground">
+          Configure your recording preferences and app behavior
+        </p>
       </div>
 
-      {/* Language Section */}
-      <div className="space-y-4">
-        <h3 className="text-sm font-medium text-muted-foreground">Language</h3>
+      <ScrollArea className="flex-1 min-h-0">
+        <div className="space-y-6">
+          {/* Recording Section */}
+          <div className="rounded-lg border bg-card p-4 space-y-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Mic className="h-4 w-4 text-muted-foreground" />
+              <h3 className="text-sm font-medium">Recording</h3>
+            </div>
 
-        <div className="flex items-center justify-between">
-          <Label htmlFor="language">Spoken language</Label>
-          <Combobox
-            options={languages}
-            value={settings.language || "en"}
-            onValueChange={(value) => onSettingsChange({ ...settings, language: value })}
-            placeholder="Select language"
-            searchPlaceholder="Search languages..."
-            className="w-48"
-          />
-        </div>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label htmlFor="hotkey">Hotkey</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Global shortcut to start recording</p>
+                </div>
+                <HotkeyInput
+                  value={settings.hotkey || ""}
+                  onChange={(hotkey) => onSettingsChange({ ...settings, hotkey })}
+                  placeholder="Click to set"
+                />
+              </div>
 
-        {settings.language !== 'en' && (
-          <div className="flex items-center justify-between pl-4">
-            <Label htmlFor="translate" className="text-sm">Translate to English</Label>
-            <Switch
-              id="translate"
-              checked={settings.translate_to_english || false}
-              onCheckedChange={(checked) => onSettingsChange({ ...settings, translate_to_english: checked })}
-            />
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label htmlFor="compact-recording">Compact status</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Show minimal recording indicator</p>
+                </div>
+                <Switch
+                  id="compact-recording"
+                  checked={settings.compact_recording_status !== false}
+                  onCheckedChange={(checked) => onSettingsChange({ ...settings, compact_recording_status: checked })}
+                />
+              </div>
+            </div>
+
+            <div className="text-xs text-muted-foreground pt-2">
+              💡 Tip: Press <kbd className="px-1 py-0.5 rounded text-xs bg-muted">ESC</kbd> twice while recording to cancel
+            </div>
           </div>
-        )}
-      </div>
 
-      {/* System Section */}
-      <div className="space-y-4">
-        <h3 className="text-sm font-medium text-muted-foreground">System</h3>
+          {/* Language Section */}
+          <div className="rounded-lg border bg-card p-4 space-y-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Globe className="h-4 w-4 text-muted-foreground" />
+              <h3 className="text-sm font-medium">Language</h3>
+            </div>
 
-        <div className="flex items-center justify-between">
-          <Label htmlFor="autostart">Launch at startup</Label>
-          <Switch
-            id="autostart"
-            checked={autostartEnabled}
-            onCheckedChange={handleAutostartToggle}
-            disabled={autostartLoading}
-          />
+            <div className="flex items-center justify-between">
+              <div>
+                <Label htmlFor="language">Spoken language</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">Language you speak for transcription</p>
+              </div>
+              <LanguageSelection
+                value={settings.language || "en"}
+                onValueChange={(value) => onSettingsChange({ ...settings, language: value })}
+              />
+            </div>
+
+            {/* {settings.language !== 'en' && (
+              <div className="flex items-center justify-between pl-4">
+                <Label htmlFor="translate" className="text-sm">Translate to English</Label>
+                <Switch
+                  id="translate"
+                  checked={settings.translate_to_english || false}
+                  onCheckedChange={(checked) => onSettingsChange({ ...settings, translate_to_english: checked })}
+                />
+              </div>
+            )} */}
+          </div>
+
+          {/* Startup Section */}
+          <div className="rounded-lg border bg-card p-4 space-y-4">
+            <div className="flex items-center gap-2 mb-2">
+              <RefreshCw className="h-4 w-4 text-muted-foreground" />
+              <h3 className="text-sm font-medium">Startup</h3>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <Label htmlFor="autostart">Launch at startup</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">Start VoiceTypr when you log in</p>
+              </div>
+              <Switch
+                id="autostart"
+                checked={autostartEnabled}
+                onCheckedChange={handleAutostartToggle}
+                disabled={autostartLoading}
+              />
+            </div>
+          </div>
+
         </div>
-      </div>
-
-      {/* Tip - Contextual to recording */}
-      <div className="text-sm text-muted-foreground pt-4">
-        Tip: Press <kbd className="px-1 py-0.5 rounded text-xs">ESC</kbd> twice while recording to cancel
-      </div>
+      </ScrollArea>
     </div>
   );
 }
