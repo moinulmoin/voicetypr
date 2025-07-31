@@ -1,12 +1,12 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
-use crate::commands::license::check_license_status_internal;
-use crate::license::LicenseState;
 use crate::whisper::cache::TranscriberCache;
 use crate::whisper::languages::validate_language;
 use crate::whisper::manager::WhisperManager;
 use crate::{emit_to_window, update_recording_state, AppState, RecordingState};
+use crate::license::LicenseState;
+use crate::commands::license::check_license_status_internal;
 use serde_json;
 use std::sync::Mutex;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
@@ -57,21 +57,17 @@ fn select_best_fallback_model(available_models: &[String], requested: &str) -> S
     })
 }
 
-#[tauri::command]
-pub async fn start_recording(
-    app: AppHandle,
-    state: State<'_, RecorderState>,
-) -> Result<(), String> {
-    // Check if we have any models BEFORE starting to record
+/// Pre-recording validation using the readiness state
+async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> {
+    // Check if any models are downloaded
     let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
     let has_models = whisper_manager.read().await.has_downloaded_models();
-
+    
     if !has_models {
-        log::error!("Cannot start recording - no models downloaded");
-
+        log::error!("No models downloaded");
         // Emit error event with guidance
         let _ = emit_to_window(
-            &app,
+            app,
             "main",
             "no-models-error",
             serde_json::json!({
@@ -80,66 +76,47 @@ pub async fn start_recording(
                 "action": "open-settings"
             }),
         );
-
-        return Err(
-            "No speech recognition models installed. Please download a model first.".to_string(),
-        );
+        return Err("No speech recognition models installed. Please download a model first.".to_string());
     }
-
-    // Update state to starting BEFORE license check to show user feedback
-    update_recording_state(&app, RecordingState::Starting, None);
-
-    // Check license status before allowing recording
-    log::info!("[Recording] Checking license status before start_recording");
-    let license_status = match check_license_status_internal(&app).await {
-        Ok(status) => status,
-        Err(e) => {
-            log::error!("License check failed: {}", e);
-            // Reset state to idle on license check failure
-            update_recording_state(&app, RecordingState::Idle, None);
-            
-            // Use same license-required event but with different message
-            let _ = emit_to_window(
-                &app,
-                "main",
-                "license-required",
-                serde_json::json!({
-                    "title": "License Verification Failed",
-                    "message": "Unable to verify your license. Please check your license status.",
-                    "action": "open-license"
-                }),
-            );
-            
-            return Err(format!("License check failed: {}", e));
+    
+    // Check license status
+    match check_license_status_internal(app).await {
+        Ok(status) => {
+            if matches!(status.status, LicenseState::Expired | LicenseState::None) {
+                log::error!("Invalid license");
+                // Emit error event with guidance
+                let _ = emit_to_window(
+                    app,
+                    "main",
+                    "license-required",
+                    serde_json::json!({
+                        "title": "License Required",
+                        "message": "Your trial has expired. Please purchase a license to continue",
+                        "action": "purchase"
+                    }),
+                );
+                return Err("License required to record".to_string());
+            }
         }
-    };
-
-    if matches!(
-        license_status.status,
-        LicenseState::Expired | LicenseState::None
-    ) {
-        log::error!("Cannot start recording - license required");
-        
-        // Reset state to idle
-        update_recording_state(&app, RecordingState::Idle, None);
-
-        // Emit error event with guidance
-        let _ = emit_to_window(
-            &app,
-            "main",
-            "license-required",
-            serde_json::json!({
-                "title": "License Required",
-                "message": "Your trial has expired. Please purchase a license to continue",
-                "action": "open-purchase"
-            }),
-        );
-
-        return Err(
-            "License required to record. Please purchase a license."
-                .to_string(),
-        );
+        Err(e) => {
+            log::error!("Failed to check license status: {}", e);
+            // Allow recording if license check fails
+        }
     }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_recording(
+    app: AppHandle,
+    state: State<'_, RecorderState>,
+) -> Result<(), String> {
+    // Validate all requirements upfront
+    validate_recording_requirements(&app).await?;
+
+    // All validation passed, update state to starting
+    update_recording_state(&app, RecordingState::Starting, None);
     // Get app data directory for recordings
     let recordings_dir = app
         .path()
@@ -764,29 +741,33 @@ pub async fn stop_recording(
                     return;
                 }
 
+                // Check if AI enhancement is enabled BEFORE spawning task
+                let ai_enabled = match app_for_task.store("settings") {
+                    Ok(store) => store.get("ai_enabled")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    Err(_) => false
+                };
+
+                // If AI is enabled, emit enhancing event NOW while pill is still visible
+                if ai_enabled {
+                    let _ = emit_to_window(
+                        &app_for_task,
+                        "pill",
+                        "enhancing-started",
+                        (),
+                    );
+                }
+
                 // Backend handles the complete flow
                 let app_for_process = app_for_task.clone();
                 let text_for_process = text.clone();
                 let model_for_process = model_name_clone.clone();
 
                 tokio::spawn(async move {
-                    // 1. Hide pill window FIRST
-
-                    // Get window manager through AppState
-                    let app_state = app_for_process.state::<AppState>();
-                    if let Some(window_manager) = app_state.get_window_manager() {
-                        if let Err(e) = window_manager.hide_pill_window().await {
-                            log::error!("Failed to hide pill window: {}", e);
-                        }
-                    } else {
-                        log::error!("WindowManager not initialized");
-                    }
-
-                    // 2. Wait for pill to be fully hidden and system to stabilize
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-                    // 3. Check if AI enhancement is enabled before calling
+                    // 1. Process the transcription and enhancement
                     let final_text = {
+                        // Re-check AI enabled status inside the spawned task
                         let ai_enabled = match app_for_process.store("settings") {
                             Ok(store) => store.get("ai_enabled")
                                 .and_then(|v| v.as_bool())
@@ -795,17 +776,33 @@ pub async fn stop_recording(
                         };
 
                         if ai_enabled {
+
                             match crate::commands::ai::enhance_transcription(
                                 text_for_process.clone(),
                                 app_for_process.clone()
                             ).await {
                                 Ok(enhanced) => {
+                                    // Emit enhancing completed event
+                                    let _ = emit_to_window(
+                                        &app_for_process,
+                                        "pill",
+                                        "enhancing-completed",
+                                        (),
+                                    );
+                                    
                                     if enhanced != text_for_process {
                                         log::info!("AI enhancement applied successfully");
                                     }
                                     enhanced
                                 },
                                 Err(e) => {
+                                    // Emit enhancing failed event
+                                    let _ = emit_to_window(
+                                        &app_for_process,
+                                        "pill",
+                                        "enhancing-failed",
+                                        (),
+                                    );
                                     log::warn!("AI enhancement failed, using original text: {}", e);
                                     
                                     // Check if it's an authentication error and notify frontend
@@ -843,11 +840,59 @@ pub async fn stop_recording(
                         }
                     };
 
+                    // 2. NOW hide the pill window after enhancement is complete
+                    // Get window manager through AppState
+                    let app_state = app_for_process.state::<AppState>();
+                    if let Some(window_manager) = app_state.get_window_manager() {
+                        if let Err(e) = window_manager.hide_pill_window().await {
+                            log::error!("Failed to hide pill window: {}", e);
+                        }
+                    } else {
+                        log::error!("WindowManager not initialized");
+                    }
+
+                    // 3. Wait for pill to be fully hidden and system to stabilize
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
                     // 4. NOW handle text insertion - pill is gone, system is stable
                     // Always insert text at cursor position (this also copies to clipboard)
-                    match crate::commands::text::insert_text(final_text.clone()).await {
+                    match crate::commands::text::insert_text(app_for_process.clone(), final_text.clone()).await {
                         Ok(_) => log::debug!("Text inserted at cursor successfully"),
-                        Err(e) => log::error!("Failed to insert text: {}", e),
+                        Err(e) => {
+                            log::error!("Failed to insert text: {}", e);
+                            
+                            // Check if it's an accessibility permission issue
+                            if e.contains("accessibility") || e.contains("permission") {
+                                // Show the pill window again to notify user
+                                if let Some(window_manager) = app_state.get_window_manager() {
+                                    let _ = window_manager.show_pill_window().await;
+                                }
+                                
+                                // Emit error to pill widget
+                                let _ = emit_to_window(
+                                    &app_for_process,
+                                    "pill",
+                                    "paste-error",
+                                    "Text copied to clipboard. Grant accessibility permission to auto-paste."
+                                );
+                                
+                                // Keep pill visible for 3 seconds with error
+                                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                                
+                                // Then hide it
+                                if let Some(window_manager) = app_state.get_window_manager() {
+                                    let _ = window_manager.hide_pill_window().await;
+                                }
+                            } else {
+                                // Generic paste error
+                                let _ = emit_to_window(
+                                    &app_for_process,
+                                    "main",
+                                    "paste-error",
+                                    format!("Failed to paste text: {}. Text is in clipboard.", e)
+                                );
+                            }
+                        }
                     }
 
                     // 5. Save transcription to history
@@ -957,15 +1002,6 @@ pub async fn cleanup_old_transcriptions(app: AppHandle, days: Option<u32>) -> Re
 
 #[tauri::command]
 pub async fn save_transcription(app: AppHandle, text: String, model: String) -> Result<(), String> {
-    // Check license status before saving
-    log::info!("[Save] Checking license status before save_transcription");
-    let license_status = check_license_status_internal(&app).await?;
-    if matches!(
-        license_status.status,
-        LicenseState::Expired | LicenseState::None
-    ) {
-        return Err("License required to save transcriptions".to_string());
-    }
 
     // Save transcription to store with current timestamp
     let store = app
@@ -998,15 +1034,6 @@ pub async fn get_transcription_history(
     app: AppHandle,
     limit: Option<usize>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    // Check license status before accessing history
-    log::info!("[History] Checking license status before get_transcription_history");
-    let license_status = check_license_status_internal(&app).await?;
-    if matches!(
-        license_status.status,
-        LicenseState::Expired | LicenseState::None
-    ) {
-        return Err("License required to access transcription history".to_string());
-    }
 
     let store = app.store("transcriptions").map_err(|e| e.to_string())?;
 
@@ -1036,19 +1063,8 @@ pub async fn transcribe_audio(
     audio_data: Vec<u8>,
     model_name: String,
 ) -> Result<String, String> {
-    // Check license status before allowing transcription
-    log::info!("[Transcribe] Checking license status before transcribe_audio");
-    let license_status = check_license_status_internal(&app).await?;
-    if matches!(
-        license_status.status,
-        LicenseState::Expired | LicenseState::None
-    ) {
-        log::error!("Cannot transcribe - license required");
-        return Err(
-            "License required to transcribe. Please purchase a license or start a free trial."
-                .to_string(),
-        );
-    }
+    // Validate requirements (includes license check)
+    validate_recording_requirements(&app).await?;
 
     // Save audio data to app data directory
     let recordings_dir = app
@@ -1224,15 +1240,6 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn delete_transcription_entry(app: AppHandle, timestamp: String) -> Result<(), String> {
-    // Check license status before deleting
-    log::info!("[Delete] Checking license status before delete_transcription_entry");
-    let license_status = check_license_status_internal(&app).await?;
-    if matches!(
-        license_status.status,
-        LicenseState::Expired | LicenseState::None
-    ) {
-        return Err("License required to delete transcriptions".to_string());
-    }
 
     let store = app
         .store("transcriptions")
@@ -1279,4 +1286,28 @@ pub async fn clear_all_transcriptions(app: AppHandle) -> Result<(), String> {
 
     log::info!("Cleared all transcription entries: {} items", count);
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct RecordingStateResponse {
+    state: String,
+    error: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_current_recording_state(app: AppHandle) -> RecordingStateResponse {
+    let app_state = app.state::<AppState>();
+    let current_state = app_state.get_current_state();
+    
+    RecordingStateResponse {
+        state: match current_state {
+            RecordingState::Idle => "idle",
+            RecordingState::Starting => "starting",
+            RecordingState::Recording => "recording",
+            RecordingState::Stopping => "stopping",
+            RecordingState::Transcribing => "transcribing",
+            RecordingState::Error => "error",
+        }.to_string(),
+        error: None,
+    }
 }

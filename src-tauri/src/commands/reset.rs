@@ -222,6 +222,13 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
     drop(whisper_manager);
     cleared_items.push("Runtime state".to_string());
     
+    // 8.5. Clear API key cache
+    if let Err(e) = crate::commands::ai::clear_all_api_key_cache() {
+        errors.push(format!("Failed to clear API key cache: {}", e));
+    } else {
+        cleared_items.push("AI API key cache".to_string());
+    }
+    
     // 9. Kill cfprefsd to ensure preference changes take effect
     match std::process::Command::new("killall")
         .arg("cfprefsd")

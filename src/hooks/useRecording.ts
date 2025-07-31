@@ -16,6 +16,21 @@ export function useRecording(): UseRecordingReturn {
   const [state, setState] = useState<RecordingState>('idle');
   const [error, setError] = useState<string | null>(null);
 
+  // Check initial state on mount by requesting current state
+  useEffect(() => {
+    const checkInitialState = async () => {
+      try {
+        const currentState = await invoke<{ state: RecordingState; error: string | null }>('get_current_recording_state');
+        console.log('[Recording Hook] Initial state:', currentState);
+        setState(currentState.state);
+        setError(currentState.error);
+      } catch (err) {
+        console.error('[Recording Hook] Failed to get initial state:', err);
+      }
+    };
+    checkInitialState();
+  }, []);
+
   // Listen to backend events - frontend is purely reactive
   useEffect(() => {
     const unsubscribers: Array<() => void> = [];

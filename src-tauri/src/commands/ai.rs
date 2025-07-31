@@ -108,6 +108,7 @@ pub async fn get_ai_settings_for_provider(
 // This command caches the key for backend use
 #[tauri::command]
 pub async fn cache_ai_api_key(
+    _app: tauri::AppHandle,
     provider: String,
     api_key: String,
 ) -> Result<(), String> {
@@ -122,19 +123,32 @@ pub async fn cache_ai_api_key(
     cache.insert(format!("ai_api_key_{}", provider), api_key);
     
     log::info!("API key cached for provider: {}", provider);
+    
     Ok(())
 }
 
 // Frontend is responsible for removing API keys from Stronghold
 // This command clears the cache
 #[tauri::command]
-pub async fn clear_ai_api_key_cache(provider: String) -> Result<(), String> {
+pub async fn clear_ai_api_key_cache(
+    _app: tauri::AppHandle,
+    provider: String
+) -> Result<(), String> {
     validate_provider_name(&provider)?;
     
     let mut cache = API_KEY_CACHE.lock().map_err(|_| "Failed to access cache".to_string())?;
     cache.remove(&format!("ai_api_key_{}", provider));
     
     log::info!("API key cache cleared for provider: {}", provider);
+    
+    Ok(())
+}
+
+// Clear entire API key cache (for reset)
+pub fn clear_all_api_key_cache() -> Result<(), String> {
+    let mut cache = API_KEY_CACHE.lock().map_err(|_| "Failed to access cache".to_string())?;
+    cache.clear();
+    log::info!("Cleared entire API key cache");
     Ok(())
 }
 
@@ -181,6 +195,7 @@ pub async fn update_ai_settings(
         .map_err(|e| format!("Failed to save AI settings: {}", e))?;
     
     log::info!("AI settings updated: enabled={}, provider={}, model={}", enabled, provider, model);
+    
     Ok(())
 }
 
@@ -194,6 +209,7 @@ pub async fn disable_ai_enhancement(app: tauri::AppHandle) -> Result<(), String>
         .map_err(|e| format!("Failed to save AI settings: {}", e))?;
     
     log::info!("AI enhancement disabled");
+    
     Ok(())
 }
 

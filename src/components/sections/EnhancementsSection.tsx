@@ -6,9 +6,10 @@ import { Switch } from "@/components/ui/switch";
 import type { EnhancementOptions } from "@/types/ai";
 import { fromBackendOptions, toBackendOptions } from "@/types/ai";
 import { hasApiKey, removeApiKey, saveApiKey } from "@/utils/keyring";
+import { useReadinessState } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 
 interface AIModel {
@@ -26,6 +27,8 @@ interface AISettings {
 }
 
 export function EnhancementsSection() {
+  const readiness = useReadinessState();
+  
   const [aiSettings, setAISettings] = useState<AISettings>({
     enabled: false,
     provider: "groq",
@@ -44,6 +47,7 @@ export function EnhancementsSection() {
     preset: 'Default',
     customVocabulary: [],
   });
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   // Available models - flat list
   const models: AIModel[] = [
@@ -61,22 +65,6 @@ export function EnhancementsSection() {
     }
   ];
 
-  useEffect(() => {
-    loadAISettings();
-    loadEnhancementOptions();
-
-    // Listen for API key save events
-    const unlisten = listen('api-key-saved', async (event) => {
-      console.log('[AI Settings] API key saved event received:', event.payload);
-      // Reload settings to reflect the new API key
-      await loadAISettings();
-    });
-
-    return () => {
-      unlisten.then(fn => fn());
-    };
-  }, []);
-
   const loadEnhancementOptions = async () => {
     try {
       const options = await invoke<EnhancementOptions>("get_enhancement_options");
@@ -86,50 +74,39 @@ export function EnhancementsSection() {
     }
   };
 
-  const handleEnhancementOptionsChange = async (newOptions: typeof enhancementOptions) => {
-    setEnhancementOptions(newOptions);
-    try {
-      await invoke("update_enhancement_options", {
-        options: toBackendOptions(newOptions)
-      });
-    } catch (error) {
-      toast.error(`Failed to save enhancement options: ${error}`);
-    }
-  };
-
-  const loadAISettings = async () => {
+  const loadAISettings = useCallback(async () => {
     try {
       const settings = await invoke<AISettings>("get_ai_settings");
       setAISettings(settings);
 
-      // Check API keys for all unique providers using Stronghold
-      const providers = [...new Set(models.map(m => m.provider))];
-      const keyStatus: Record<string, boolean> = {};
-
-      for (const provider of providers) {
-        // Check Stronghold for API key
-        const hasKey = await hasApiKey(provider);
-        keyStatus[provider] = hasKey;
-
-        if (hasKey) {
-          console.log(`[AI Settings] Found ${provider} API key in keyring`);
-        }
-
-        // Update backend cache state
-        if (hasKey) {
-          const providerSettings = await invoke<AISettings>("get_ai_settings_for_provider", { provider });
-          // If backend doesn't know about the key, it's not cached yet
-          if (!providerSettings.hasApiKey) {
-            // This will be handled by App.tsx on startup
-            // API key exists in keyring but not cached yet
-          }
-        }
+      // Use readiness state for quick check
+      if (readiness?.ai_ready) {
+        // AI is ready, so current provider has API key
+        const currentProvider = settings.provider;
+        setProviderApiKeys(prev => ({ ...prev, [currentProvider]: true }));
       }
 
-      setProviderApiKeys(keyStatus);
+      // Only check API keys if not already loaded
+      let currentKeyStatus = providerApiKeys;
+      if (Object.keys(providerApiKeys).length === 0) {
+        const providers = [...new Set(models.map(m => m.provider))];
+        const keyStatus: Record<string, boolean> = {};
+
+        // Batch check API keys
+        await Promise.all(providers.map(async (provider) => {
+          const hasKey = await hasApiKey(provider);
+          keyStatus[provider] = hasKey;
+          if (hasKey) {
+            console.log(`[AI Settings] Found ${provider} API key in keyring`);
+          }
+        }));
+
+        setProviderApiKeys(keyStatus);
+        currentKeyStatus = keyStatus;
+      }
 
       // Auto-select model if only one has API key and no model is currently selected
-      const modelsWithApiKey = models.filter(m => keyStatus[m.provider]);
+      const modelsWithApiKey = models.filter(m => currentKeyStatus[m.provider]);
       if (!settings.model && modelsWithApiKey.length === 1) {
         const autoSelectModel = modelsWithApiKey[0];
         console.log(`[AI Settings] Auto-selecting model: ${autoSelectModel.name}`);
@@ -152,7 +129,7 @@ export function EnhancementsSection() {
         // Update settings with correct hasApiKey status from Stronghold
         // The enabled state is already persisted in the backend
         const currentModelProvider = settings.model ? models.find(m => m.id === settings.model)?.provider : null;
-        const currentModelHasKey = currentModelProvider ? keyStatus[currentModelProvider] : false;
+        const currentModelHasKey = currentModelProvider ? currentKeyStatus[currentModelProvider] : false;
 
         // If the selected model no longer has an API key, clear the selection
         if (settings.model && !currentModelHasKey) {
@@ -178,6 +155,61 @@ export function EnhancementsSection() {
       }
     } catch (error) {
       console.error("Failed to load AI settings:", error);
+    }
+  }, [readiness, providerApiKeys, models]);
+
+  // Load settings only once when component becomes visible
+  useEffect(() => {
+    if (!settingsLoaded) {
+      loadAISettings();
+      loadEnhancementOptions();
+      setSettingsLoaded(true);
+    }
+  }, [settingsLoaded, loadAISettings]);
+
+  // Listen for AI readiness changes from backend
+  useEffect(() => {
+    const unlistenReady = listen('ai-ready', async () => {
+      // Only reload if settings were already loaded
+      if (settingsLoaded) {
+        await loadAISettings();
+      }
+    });
+    
+    const unlistenNotReady = listen('ai-not-ready', async () => {
+      // Update local state to reflect AI is not ready
+      setAISettings(prev => ({ ...prev, enabled: false, hasApiKey: false }));
+    });
+
+    // Listen for API key save events
+    const unlistenApiKey = listen('api-key-saved', async (event) => {
+      console.log('[AI Settings] API key saved event received:', event.payload);
+      // Only reload settings, not API keys check
+      const settings = await invoke<AISettings>("get_ai_settings");
+      setAISettings(settings);
+      
+      // Update provider key status for the specific provider
+      const provider = (event.payload as any).provider;
+      if (provider) {
+        setProviderApiKeys(prev => ({ ...prev, [provider]: true }));
+      }
+    });
+
+    return () => {
+      Promise.all([unlistenReady, unlistenNotReady, unlistenApiKey]).then(fns => {
+        fns.forEach(fn => fn());
+      });
+    };
+  }, [settingsLoaded]);
+
+  const handleEnhancementOptionsChange = async (newOptions: typeof enhancementOptions) => {
+    setEnhancementOptions(newOptions);
+    try {
+      await invoke("update_enhancement_options", {
+        options: toBackendOptions(newOptions)
+      });
+    } catch (error) {
+      toast.error(`Failed to save enhancement options: ${error}`);
     }
   };
 

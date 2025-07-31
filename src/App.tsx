@@ -12,6 +12,8 @@ import { ModelsSection } from "./components/sections/ModelsSection";
 import { RecentRecordings } from "./components/sections/RecentRecordings";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { LicenseProvider } from "./contexts/LicenseContext";
+import { ReadinessProvider } from "./contexts/ReadinessContext";
+import { SettingsProvider, useSettings } from "./contexts/SettingsContext";
 import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { useModelManagement } from "./hooks/useModelManagement";
 import { updateService } from "./services/updateService";
@@ -19,12 +21,12 @@ import { AppSettings, TranscriptionHistory } from "./types";
 import { loadApiKeysToCache } from "./utils/keyring";
 
 // Main App Component
-export default function App() {
+function AppContent() {
   const { registerEvent } = useEventCoordinator("main");
   const [activeSection, setActiveSection] = useState<string>("recordings");
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
+  const { settings, refreshSettings, updateSettings } = useSettings();
 
   // Use the new model management hook
   const modelManagement = useModelManagement({
@@ -64,21 +66,19 @@ export default function App() {
   useEffect(() => {
     const init = async () => {
       try {
-        // Load settings
-        const appSettings = await invoke<AppSettings>("get_settings");
-        setSettings(appSettings);
+        // Settings are loaded by SettingsProvider
 
         // Models are loaded automatically by useModelManagement hook
 
         // Check if onboarding is completed
-        if (!appSettings.onboarding_completed) {
+        if (!settings?.onboarding_completed) {
           setShowOnboarding(true);
         }
 
         // Run cleanup if enabled
-        if (appSettings.transcription_cleanup_days) {
+        if (settings?.transcription_cleanup_days) {
           await invoke("cleanup_old_transcriptions", {
-            days: appSettings.transcription_cleanup_days,
+            days: settings.transcription_cleanup_days,
           });
         }
 
@@ -86,7 +86,9 @@ export default function App() {
         await loadHistory();
 
         // Initialize update service for automatic update checks
-        await updateService.initialize(appSettings);
+        if (settings) {
+          await updateService.initialize(settings);
+        }
 
         // Load API keys from Stronghold to backend cache
         // Small delay to ensure Stronghold is ready
@@ -122,19 +124,7 @@ export default function App() {
           setActiveSection("recordings");
         });
 
-        // Listen for model changes from tray menu
-        registerEvent("model-changed", (event) => {
-          console.log("Model changed from tray menu:", event.payload);
-          // Force refresh of settings by reloading them
-          invoke<AppSettings>("get_settings").then(setSettings);
-        });
-
-        // Listen for language changes from tray menu
-        registerEvent("language-changed", (event) => {
-          console.log("Language changed from tray menu:", event.payload);
-          // Force refresh of settings by reloading them
-          invoke<AppSettings>("get_settings").then(setSettings);
-        });
+        // Settings events are handled by SettingsProvider
 
         // Listen for tray action errors
         registerEvent("tray-action-error", (event) => {
@@ -216,8 +206,6 @@ export default function App() {
   const saveSettings = useCallback(
     async (newSettings: AppSettings) => {
       try {
-        await invoke("save_settings", { settings: newSettings });
-
         // Update global shortcut in backend if changed
         if (newSettings.hotkey !== settings?.hotkey) {
           try {
@@ -230,12 +218,12 @@ export default function App() {
           }
         }
 
-        setSettings(newSettings);
+        await updateSettings(newSettings);
       } catch (error) {
         console.error("Failed to save settings:", error);
       }
     },
-    [settings],
+    [settings, updateSettings],
   );
 
   // sortedModels is provided by useModelManagement hook
@@ -248,7 +236,7 @@ export default function App() {
           onComplete={() => {
             setShowOnboarding(false);
             // Reload settings after onboarding
-            invoke<AppSettings>("get_settings").then(setSettings);
+            refreshSettings();
           }}
           modelManagement={modelManagement}
         />
@@ -269,12 +257,7 @@ export default function App() {
         );
 
       case "general":
-        return (
-          <GeneralSettings
-            settings={settings}
-            onSettingsChange={saveSettings}
-          />
-        );
+        return <GeneralSettings />;
 
       case "models":
         return (
@@ -318,18 +301,28 @@ export default function App() {
 
   // Main App Layout
   return (
+    <SidebarProvider>
+      <Sidebar
+        activeSection={activeSection}
+        onSectionChange={setActiveSection}
+      />
+      <SidebarInset>
+        <div className="h-full flex flex-col">{renderSectionContent()}</div>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+export default function App() {
+  return (
     <AppErrorBoundary>
       <LicenseProvider>
-        <SidebarProvider>
-          <Sidebar
-            activeSection={activeSection}
-            onSectionChange={setActiveSection}
-          />
-          <SidebarInset>
-            <div className="h-full flex flex-col">{renderSectionContent()}</div>
-          </SidebarInset>
-        </SidebarProvider>
-        <Toaster position="top-center" />
+        <SettingsProvider>
+          <ReadinessProvider>
+            <AppContent />
+            <Toaster position="top-center" />
+          </ReadinessProvider>
+        </SettingsProvider>
       </LicenseProvider>
     </AppErrorBoundary>
   );

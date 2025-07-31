@@ -1,9 +1,10 @@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { TranscriptionHistory } from "@/types";
+import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Mic, Trash2 } from "lucide-react";
+import { AlertCircle, Mic, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -15,6 +16,8 @@ interface RecentRecordingsProps {
 
 export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistoryUpdate }: RecentRecordingsProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const canRecord = useCanRecord();
+  const canAutoInsert = useCanAutoInsert();
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -120,11 +123,29 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
-            <Mic className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
-            <p className="text-sm text-muted-foreground">No recordings yet</p>
-            <p className="text-xs text-muted-foreground/70 mt-2">
-              Press {formatHotkey(hotkey)} to start recording
-            </p>
+            {canRecord ? (
+              <>
+                <Mic className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
+                <p className="text-sm text-muted-foreground">No recordings yet</p>
+                {canAutoInsert ? (
+                  <p className="text-xs text-muted-foreground/70 mt-2">
+                    Press {formatHotkey(hotkey)} to start recording
+                  </p>
+                ) : (
+                  <p className="text-xs text-amber-600 mt-2">
+                    Recording available but accessibility permission needed for hotkeys
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                <AlertCircle className="w-12 h-12 text-amber-500/50 mx-auto mb-4" />
+                <p className="text-sm text-muted-foreground">Cannot record yet</p>
+                <p className="text-xs text-amber-600 mt-2">
+                  Check permissions and download a model in Settings
+                </p>
+              </>
+            )}
           </div>
         </div>
       )}

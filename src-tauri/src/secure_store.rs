@@ -30,6 +30,7 @@ pub fn initialize_encryption_key() -> Result<(), String> {
 }
 
 /// Check if migration from keychain is needed (for future use)
+#[allow(dead_code)]
 pub fn check_migration_needed<R: Runtime>(app: &AppHandle<R>) -> bool {
     // Check if secure.dat exists
     let store_exists = app.store("secure.dat").is_ok();

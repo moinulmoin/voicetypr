@@ -1,7 +1,14 @@
 import { PermissionErrorBoundary } from "@/components/PermissionErrorBoundary";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { usePermissions } from "@/hooks/usePermissions";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { useReadiness } from "@/contexts/ReadinessContext";
+import { useSettings } from "@/contexts/SettingsContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -18,17 +25,38 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 export function AdvancedSection() {
+  const { updateSettings } = useSettings();
   const [isResetting, setIsResetting] = useState(false);
+  const [isRequestingPermission, setIsRequestingPermission] = useState<string | null>(null);
   const {
-    permissions,
-    requestPermission,
-    isRequesting,
-    error
-  } = usePermissions({
-    checkOnMount: true,
-    checkInterval: 0, // No auto-refresh, user can manually recheck
-    showToasts: false // No toasts needed, we have visual indicators
-  });
+    hasAccessibilityPermission,
+    hasMicrophonePermission,
+    isLoading,
+    requestAccessibilityPermission,
+    requestMicrophonePermission,
+    checkAccessibilityPermission,
+    checkMicrophonePermission
+  } = useReadiness();
+
+  const handleRequestPermission = async (type: "microphone" | "accessibility") => {
+    setIsRequestingPermission(type);
+    try {
+      if (type === "microphone") {
+        await requestMicrophonePermission();
+      } else {
+        await requestAccessibilityPermission();
+      }
+    } finally {
+      setIsRequestingPermission(null);
+    }
+  };
+
+  const refresh = async () => {
+    await Promise.all([
+      checkAccessibilityPermission(),
+      checkMicrophonePermission()
+    ]);
+  };
 
   const permissionData = [
     {
@@ -36,14 +64,14 @@ export function AdvancedSection() {
       icon: Mic,
       title: "Microphone",
       description: "To record your voice for transcription",
-      status: permissions.microphone
+      status: hasMicrophonePermission ? "granted" : isLoading ? "checking" : "denied"
     },
     {
       type: "accessibility" as const,
       icon: Keyboard,
       title: "Accessibility",
       description: "For global hotkeys to trigger recording",
-      status: permissions.accessibility
+      status: hasAccessibilityPermission ? "granted" : isLoading ? "checking" : "denied"
     }
     // Automation permission removed for now
     // Can be re-enabled later if needed:
@@ -59,12 +87,8 @@ export function AdvancedSection() {
 
   const handleResetOnboarding = async () => {
     try {
-      const settings = await invoke<any>('get_settings');
-      await invoke('save_settings', {
-        settings: {
-          ...settings,
-          onboarding_completed: false,
-        },
+      await updateSettings({
+        onboarding_completed: false,
       });
       toast.success("Onboarding reset! Restarting the app.");
       setTimeout(() => {
@@ -90,16 +114,35 @@ export function AdvancedSection() {
           <div className="space-y-6">
             {/* Permissions Section */}
             <div className="rounded-lg border bg-card p-4 space-y-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Key className="h-4 w-4 text-muted-foreground" />
-                <h3 className="text-sm font-medium">Permissions</h3>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Key className="h-4 w-4 text-muted-foreground" />
+                  <h3 className="text-sm font-medium">Permissions</h3>
+                </div>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => refresh()}
+                        disabled={isLoading}
+                        className="h-8 px-2"
+                      >
+                        {isLoading ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Refresh permission status</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </div>
 
-              {error && (
-                <div className="text-sm text-red-600">
-                  Failed to check permissions. Please try again.
-                </div>
-              )}
 
               <div className="space-y-3">
                 {permissionData.map((perm) => (
@@ -129,10 +172,10 @@ export function AdvancedSection() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => requestPermission(perm.type)}
-                          disabled={isRequesting === perm.type}
+                          onClick={() => handleRequestPermission(perm.type)}
+                          disabled={isRequestingPermission === perm.type}
                         >
-                          {isRequesting === perm.type ? (
+                          {isRequestingPermission === perm.type ? (
                             <Loader2 className="h-3 w-3 animate-spin" />
                           ) : (
                             "Grant"
@@ -144,12 +187,12 @@ export function AdvancedSection() {
                 ))}
               </div>
 
-              {(permissions.microphone !== 'granted' || permissions.accessibility !== 'granted') && (
+              {(hasMicrophonePermission === false || hasAccessibilityPermission === false) && (
                 <div className="text-xs text-muted-foreground space-y-1 pt-2">
                   <p className="font-medium">Missing permissions:</p>
                   <ul className="list-disc list-inside space-y-0.5 ml-2">
-                    {permissions.microphone !== 'granted' && <li>Microphone: Required for voice recording</li>}
-                    {permissions.accessibility !== 'granted' && <li>Accessibility: Required for global hotkeys</li>}
+                    {hasMicrophonePermission === false && <li>Microphone: Required for voice recording</li>}
+                    {hasAccessibilityPermission === false && <li>Accessibility: Required for global hotkeys</li>}
                   </ul>
                 </div>
               )}

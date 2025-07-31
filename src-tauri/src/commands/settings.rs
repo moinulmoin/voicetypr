@@ -362,3 +362,4 @@ pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
     
     Ok(())
 }
+

@@ -207,6 +207,7 @@ pub async fn download_model(
                 manager.refresh_downloaded_status();
             }
             
+            
             // Emit the event - the download_model function already verified the file
             log::info!("Emitting model-downloaded event for {}", model_name);
             if let Err(e) = emit_to_all(&app, "model-downloaded", serde_json::json!({
@@ -266,11 +267,18 @@ pub async fn get_model_status(
 
 #[tauri::command]
 pub async fn delete_model(
+    app: AppHandle,
     model_name: String,
     state: State<'_, RwLock<WhisperManager>>,
 ) -> Result<(), String> {
     let mut manager = state.write().await;
-    manager.delete_model_file(&model_name)
+    manager.delete_model_file(&model_name)?;
+    
+    // Emit model-deleted event
+    use tauri::Emitter;
+    let _ = app.emit("model-deleted", model_name.clone());
+    
+    Ok(())
 }
 
 #[tauri::command]
@@ -345,5 +353,7 @@ pub async fn preload_model(
     cache.get_or_create(&model_path)?;
 
     log::info!("Model '{}' preloaded successfully", model_name);
+    
+    
     Ok(())
 }

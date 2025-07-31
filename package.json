@@ -22,7 +22,9 @@
     "release:dry": "release-it --dry-run",
     "release:patch": "release-it patch",
     "release:minor": "release-it minor",
-    "release:major": "release-it major"
+    "release:major": "release-it major",
+    "quality-gate": "./scripts/quality-gate-check.sh",
+    "benchmark": "node scripts/benchmark-runner.js"
   },
   "dependencies": {
     "@sentry/react": "^9.40.0",

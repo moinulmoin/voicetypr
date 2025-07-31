@@ -1,11 +1,7 @@
 use std::path::Path;
 use whisper_rs::{
-    convert_integer_to_float_audio,
-    convert_stereo_to_mono_audio,
-    FullParams,
-    SamplingStrategy,
-    WhisperContext,
-    WhisperContextParameters,
+    convert_integer_to_float_audio, convert_stereo_to_mono_audio, FullParams, SamplingStrategy,
+    WhisperContext, WhisperContextParameters,
 };
 
 pub struct Transcriber {
@@ -22,14 +18,18 @@ impl Transcriber {
         let mut ctx_params = WhisperContextParameters::default();
         ctx_params.use_gpu(true); // Enable Metal on macOS
 
-        let ctx =
-            WhisperContext::new_with_params(model_path_str, ctx_params)
-                .map_err(|e| format!("Failed to load model: {}", e))?;
+        let ctx = WhisperContext::new_with_params(model_path_str, ctx_params)
+            .map_err(|e| format!("Failed to load model: {}", e))?;
 
         Ok(Self { context: ctx })
     }
 
-    pub fn transcribe_with_translation(&self, audio_path: &Path, language: Option<&str>, translate: bool) -> Result<String, String> {
+    pub fn transcribe_with_translation(
+        &self,
+        audio_path: &Path,
+        language: Option<&str>,
+        translate: bool,
+    ) -> Result<String, String> {
         self.transcribe_with_cancellation(audio_path, language, translate, || false)
     }
 
@@ -214,7 +214,7 @@ impl Transcriber {
         params.set_n_threads(threads);
         log::info!("[PERFORMANCE] Using {} threads for transcription", threads);
 
-        params.set_no_context(false);  // Enable context for better word recognition
+        params.set_no_context(false); // Enable context for better word recognition
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -227,7 +227,7 @@ impl Transcriber {
         params.set_suppress_nst(true);
 
         // Adjust speech detection threshold - increase to reduce hallucinations
-        params.set_no_speech_thold(0.8);  // Higher threshold to be more strict about detecting speech
+        params.set_no_speech_thold(0.7); // Higher threshold to be more strict about detecting speech
 
         // Quality thresholds with temperature fallback
         // If entropy of last 32 tokens < 2.4 (too repetitive), retry with higher temperature
@@ -243,11 +243,15 @@ impl Transcriber {
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
 
             // Capture to Sentry - this is often an out-of-memory error
-            use crate::{capture_sentry_with_context, utils::sentry_helper::create_context_from_map};
+            use crate::{
+                capture_sentry_with_context, utils::sentry_helper::create_context_from_map,
+            };
             let mut context_map = std::collections::BTreeMap::new();
             context_map.insert("threads".to_string(), serde_json::Value::from(threads));
-            context_map.insert("audio_duration_seconds".to_string(),
-                serde_json::Value::from(audio.len() as f32 / 16_000_f32));
+            context_map.insert(
+                "audio_duration_seconds".to_string(),
+                serde_json::Value::from(audio.len() as f32 / 16_000_f32),
+            );
 
             capture_sentry_with_context!(
                 &format!("Failed to create Whisper state: {}", e),
@@ -275,13 +279,23 @@ impl Transcriber {
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
 
             // Capture to Sentry - critical inference failure
-            use crate::{capture_sentry_with_context, utils::sentry_helper::create_context_from_map};
+            use crate::{
+                capture_sentry_with_context, utils::sentry_helper::create_context_from_map,
+            };
             let mut context_map = std::collections::BTreeMap::new();
-            context_map.insert("language".to_string(), serde_json::Value::from(language.unwrap_or("auto")));
+            context_map.insert(
+                "language".to_string(),
+                serde_json::Value::from(language.unwrap_or("auto")),
+            );
             context_map.insert("translate".to_string(), serde_json::Value::from(translate));
-            context_map.insert("audio_duration_seconds".to_string(),
-                serde_json::Value::from(audio.len() as f32 / 16_000_f32));
-            context_map.insert("audio_samples".to_string(), serde_json::Value::from(audio.len()));
+            context_map.insert(
+                "audio_duration_seconds".to_string(),
+                serde_json::Value::from(audio.len() as f32 / 16_000_f32),
+            );
+            context_map.insert(
+                "audio_samples".to_string(),
+                serde_json::Value::from(audio.len()),
+            );
 
             capture_sentry_with_context!(
                 &format!("Whisper inference failed: {}", e),

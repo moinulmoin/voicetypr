@@ -1,8 +1,7 @@
 import { XformerlyTwitter } from "@/assets/icon";
 import { Button } from "@/components/ui/button";
-import type { AppSettings } from '@/types';
+import { useSettings } from '@/contexts/SettingsContext';
 import { getVersion } from '@tauri-apps/api/app';
-import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-shell';
 import { Mail } from "lucide-react";
 import { useEffect, useState } from 'react';
@@ -10,6 +9,7 @@ import { toast } from 'sonner';
 import { updateService } from '@/services/updateService';
 
 export function AboutSection() {
+  const { updateSettings } = useSettings();
   const [checking, setChecking] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [appVersion, setAppVersion] = useState<string>('Loading...');
@@ -21,13 +21,9 @@ export function AboutSection() {
   const handleResetOnboarding = async () => {
     setResetting(true);
     try {
-      // Get current settings and set onboarding_completed to false
-      const settings = await invoke<AppSettings>('get_settings');
-      await invoke('save_settings', {
-        settings: {
-          ...settings,
-          onboarding_completed: false,
-        },
+      // Update settings to set onboarding_completed to false
+      await updateSettings({
+        onboarding_completed: false,
       });
 
       toast.success("Onboarding reset! Restarting the app.");

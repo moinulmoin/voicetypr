@@ -1,4 +1,5 @@
 use crate::license::{api_client::LicenseApiClient, device, keychain, LicenseState, LicenseStatus};
+use crate::AppState;
 use chrono::{DateTime, Utc, Duration};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -392,12 +393,13 @@ pub async fn restore_license(app: AppHandle) -> Result<LicenseStatus, String> {
                 invalidate_license_cache(&app).await;
 
                 // Reset recording state when license is restored
-                let app_state = app.state::<crate::AppState>();
+                let app_state = app.state::<AppState>();
                 if let Err(e) = app_state.recording_state.reset() {
                     log::warn!("Failed to reset recording state during license restore: {}", e);
                 } else {
                     log::info!("Reset recording state to Idle during license restore");
                 }
+                
 
                 Ok(LicenseStatus {
                     status: LicenseState::Licensed,
@@ -445,7 +447,7 @@ pub async fn activate_license(
 
     // Reset recording state to Idle when activating license
     // This ensures we're not stuck in Error state from previous license issues
-    let app_state = app.state::<crate::AppState>();
+    let app_state = app.state::<AppState>();
     if let Err(e) = app_state.recording_state.reset() {
         log::warn!("Failed to reset recording state during license activation: {}", e);
     } else {
@@ -488,12 +490,13 @@ async fn activate_license_internal(
                 invalidate_license_cache(&app).await;
 
                 // Reset recording state when license is successfully activated
-                let app_state = app.state::<crate::AppState>();
+                let app_state = app.state::<AppState>();
                 if let Err(e) = app_state.recording_state.reset() {
                     log::warn!("Failed to reset recording state after successful activation: {}", e);
                 } else {
                     log::info!("Reset recording state to Idle after successful activation");
                 }
+                
 
                 Ok(LicenseStatus {
                     status: LicenseState::Licensed,
@@ -554,13 +557,13 @@ pub async fn deactivate_license(app: AppHandle) -> Result<(), String> {
                 log::info!("License deactivated successfully");
 
                 // Reset recording state when license is deactivated
-                let app_state = app.state::<crate::AppState>();
+                let app_state = app.state::<AppState>();
                 if let Err(e) = app_state.recording_state.reset() {
                     log::warn!("Failed to reset recording state after deactivation: {}", e);
                 } else {
                     log::info!("Reset recording state to Idle after deactivation");
                 }
-
+                
                 Ok(())
             } else {
                 let error_msg = response
@@ -584,13 +587,13 @@ pub async fn deactivate_license(app: AppHandle) -> Result<(), String> {
             let _ = cache.remove(LAST_VALIDATION_KEY);
 
             // Reset recording state even on API failure (since we removed from keychain)
-            let app_state = app.state::<crate::AppState>();
+            let app_state = app.state::<AppState>();
             if let Err(e) = app_state.recording_state.reset() {
                 log::warn!("Failed to reset recording state after deactivation failure: {}", e);
             } else {
                 log::info!("Reset recording state to Idle after deactivation failure");
             }
-
+            
             Err(format!("Failed to deactivate license: {}", e))
         }
     }

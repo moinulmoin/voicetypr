@@ -5,7 +5,9 @@ import { Card } from "@/components/ui/card";
 import type { useModelManagement } from "@/hooks/useModelManagement";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { cn } from "@/lib/utils";
-import type { AppSettings } from "@/types";
+import { useSettings } from "@/contexts/SettingsContext";
+import { useAccessibilityPermission } from "@/hooks/useAccessibilityPermission";
+import { useMicrophonePermission } from "@/hooks/useMicrophonePermission";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import {
@@ -43,15 +45,20 @@ interface PermissionState {
 }
 
 export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelManagement }: OnboardingDesktopProps) {
+  const { updateSettings } = useSettings();
+  const { hasPermission: hasMicPermission, checkPermission: checkMicPermission, requestPermission: requestMicPermission } = useMicrophonePermission();
+  const { hasPermission: hasAccessPermission, checkPermission: checkAccessPermission, requestPermission: requestAccessPermission } = useAccessibilityPermission();
+  
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
-  const [permissions, setPermissions] = useState<Record<string, PermissionState>>({
-    microphone: { status: "checking" },
-    accessibility: { status: "checking" }
-    // automation: { status: "checking" } // Removed for now, can be re-enabled later
-  });
   const [hotkey, setHotkey] = useState("CommandOrControl+Shift+Space");
   const [isRequesting, setIsRequesting] = useState<string | null>(null);
   const [checkingPermissions, setCheckingPermissions] = useState<Set<string>>(new Set());
+  
+  // Convert hook states to onboarding format
+  const permissions = {
+    microphone: { status: hasMicPermission === null ? "checking" : hasMicPermission ? "granted" : "denied" } as PermissionState,
+    accessibility: { status: hasAccessPermission === null ? "checking" : hasAccessPermission ? "granted" : "denied" } as PermissionState
+  };
 
   // Get model management from props
   const {
@@ -187,14 +194,10 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
   const saveSettings = async () => {
     try {
       await invoke("set_global_shortcut", { shortcut: hotkey });
-      const settings = await invoke<AppSettings>("get_settings");
-      await invoke("save_settings", {
-        settings: {
-          ...settings,
-          hotkey: hotkey,
-          current_model: selectedModel,
-          onboarding_completed: true
-        }
+      await updateSettings({
+        hotkey: hotkey,
+        current_model: selectedModel || '',
+        onboarding_completed: true
       });
     } catch (error) {
       console.error("Failed to save settings:", error);

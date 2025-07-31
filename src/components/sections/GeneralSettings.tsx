@@ -3,19 +3,17 @@ import { LanguageSelection } from "@/components/LanguageSelection";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { AppSettings } from "@/types";
+import { useCanAutoInsert } from "@/contexts/ReadinessContext";
+import { useSettings } from "@/contexts/SettingsContext";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { Globe, Mic, RefreshCw } from "lucide-react";
+import { AlertCircle, Globe, Mic, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 
-interface GeneralSettingsProps {
-  settings: AppSettings | null;
-  onSettingsChange: (settings: AppSettings) => void;
-}
-
-export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsProps) {
+export function GeneralSettings() {
+  const { settings, updateSettings } = useSettings();
   const [autostartEnabled, setAutostartEnabled] = useState(false);
   const [autostartLoading, setAutostartLoading] = useState(false);
+  const canAutoInsert = useCanAutoInsert();
 
   useEffect(() => {
     // Check if autostart is enabled on component mount
@@ -44,7 +42,7 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
       setAutostartEnabled(checked);
 
       // Update settings to keep them in sync (backend is source of truth)
-      onSettingsChange({ ...settings, launch_at_startup: checked });
+      await updateSettings({ launch_at_startup: checked });
     } catch (error) {
       console.error('Failed to toggle autostart:', error);
       // Revert the state if there was an error
@@ -80,10 +78,17 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
                 </div>
                 <HotkeyInput
                   value={settings.hotkey || ""}
-                  onChange={(hotkey) => onSettingsChange({ ...settings, hotkey })}
+                  onChange={(hotkey) => updateSettings({ hotkey })}
                   placeholder="Click to set"
                 />
               </div>
+
+              {!canAutoInsert && (
+                <div className="flex items-center gap-2 p-2 text-sm text-amber-600 bg-amber-50 rounded-md">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>Grant accessibility permission in Advanced settings for hotkeys to work</span>
+                </div>
+              )}
 
               <div className="flex items-center justify-between">
                 <div>
@@ -93,7 +98,7 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
                 <Switch
                   id="compact-recording"
                   checked={settings.compact_recording_status !== false}
-                  onCheckedChange={(checked) => onSettingsChange({ ...settings, compact_recording_status: checked })}
+                  onCheckedChange={async (checked) => await updateSettings({ compact_recording_status: checked })}
                 />
               </div>
             </div>
@@ -117,7 +122,7 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
               </div>
               <LanguageSelection
                 value={settings.language || "en"}
-                onValueChange={(value) => onSettingsChange({ ...settings, language: value })}
+                onValueChange={(value) => updateSettings({ language: value })}
               />
             </div>
 
@@ -127,7 +132,7 @@ export function GeneralSettings({ settings, onSettingsChange }: GeneralSettingsP
                 <Switch
                   id="translate"
                   checked={settings.translate_to_english || false}
-                  onCheckedChange={(checked) => onSettingsChange({ ...settings, translate_to_english: checked })}
+                  onCheckedChange={async (checked) => await updateSettings({ ...settings, translate_to_english: checked })}
                 />
               </div>
             )} */}

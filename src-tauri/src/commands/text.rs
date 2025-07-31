@@ -18,7 +18,7 @@ use enigo::{
 static IS_INSERTING: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
-pub async fn insert_text(text: String) -> Result<(), String> {
+pub async fn insert_text(_app: tauri::AppHandle, text: String) -> Result<(), String> {
     // Check if already inserting text
     if IS_INSERTING.swap(true, Ordering::SeqCst) {
         log::warn!("Text insertion already in progress, skipping duplicate request");
@@ -31,16 +31,13 @@ pub async fn insert_text(text: String) -> Result<(), String> {
     // Small delay to ensure the app doesn't interfere with text insertion
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Check accessibility permission on macOS before attempting to paste
+    // Check accessibility permission
     #[cfg(target_os = "macos")]
     let has_accessibility_permission = {
         use crate::commands::permissions::check_accessibility_permission;
-        match check_accessibility_permission().await {
-            Ok(has_perm) => has_perm,
-            Err(_) => false,
-        }
+        check_accessibility_permission().await?
     };
-
+    
     #[cfg(not(target_os = "macos"))]
     let has_accessibility_permission = true;
 
@@ -109,8 +106,8 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Res
     // Check if we have accessibility permissions before attempting to paste
     if !has_accessibility_permission {
         log::warn!("No accessibility permission - text copied to clipboard but cannot paste automatically");
-        // Text is in clipboard, user can paste manually
-        return Ok(());
+        // Return a specific error so the caller knows it's an accessibility issue
+        return Err("No accessibility permission - text copied to clipboard. Please paste manually or grant accessibility permission.".to_string());
     }
 
     // Try to paste using Cmd+V (macOS) with panic protection

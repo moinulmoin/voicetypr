@@ -2,18 +2,18 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-export function useAccessibilityPermission() {
+export function useMicrophonePermission() {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [isChecking, setIsChecking] = useState(false);
 
   const checkPermission = useCallback(async () => {
     setIsChecking(true);
     try {
-      const result = await invoke<boolean>('check_accessibility_permission');
+      const result = await invoke<boolean>('check_microphone_permission');
       setHasPermission(result);
       return result;
     } catch (error) {
-      console.error('Failed to check accessibility permission:', error);
+      console.error('Failed to check microphone permission:', error);
       setHasPermission(false);
       return false;
     } finally {
@@ -23,11 +23,11 @@ export function useAccessibilityPermission() {
 
   const requestPermission = useCallback(async () => {
     try {
-      const result = await invoke<boolean>('request_accessibility_permission');
+      const result = await invoke<boolean>('request_microphone_permission');
       setHasPermission(result);
       return result;
     } catch (error) {
-      console.error('Failed to request accessibility permission:', error);
+      console.error('Failed to request microphone permission:', error);
       return false;
     }
   }, []);
@@ -39,13 +39,13 @@ export function useAccessibilityPermission() {
 
   // Listen for permission changes
   useEffect(() => {
-    const unlistenGranted = listen('accessibility-granted', () => {
-      console.log('[useAccessibilityPermission] Permission granted event received');
+    const unlistenGranted = listen('microphone-granted', () => {
+      console.log('[useMicrophonePermission] Permission granted event received');
       setHasPermission(true);
     });
 
-    const unlistenDenied = listen('accessibility-denied', () => {
-      console.log('[useAccessibilityPermission] Permission denied event received');
+    const unlistenDenied = listen('microphone-denied', () => {
+      console.log('[useMicrophonePermission] Permission denied event received');
       setHasPermission(false);
     });
 

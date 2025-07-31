@@ -212,6 +212,7 @@ impl Default for RecordingState {
     }
 }
 
+
 // Application state - managed by Tauri (runtime state only)
 pub struct AppState {
     // Recording-related runtime state
@@ -227,7 +228,6 @@ pub struct AppState {
     // ESC key handling for recording cancellation
     pub esc_pressed_once: Arc<AtomicBool>,
     pub esc_timeout_handle: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
-
 
     // Window management runtime state
     pub window_manager: Arc<Mutex<Option<WindowManager>>>,
@@ -373,20 +373,25 @@ pub fn update_recording_state(
     };
 
     // Emit state change event with typed payload using the actual final state
-    let _ = app.emit(
-        "recording-state-changed",
-        serde_json::json!({
-            "state": match final_state {
-                RecordingState::Idle => "idle",
-                RecordingState::Starting => "starting",
-                RecordingState::Recording => "recording",
-                RecordingState::Stopping => "stopping",
-                RecordingState::Transcribing => "transcribing",
-                RecordingState::Error => "error",
-            },
-            "error": error
-        }),
-    );
+    let payload = serde_json::json!({
+        "state": match final_state {
+            RecordingState::Idle => "idle",
+            RecordingState::Starting => "starting",
+            RecordingState::Recording => "recording",
+            RecordingState::Stopping => "stopping",
+            RecordingState::Transcribing => "transcribing",
+            RecordingState::Error => "error",
+        },
+        "error": error
+    });
+    
+    // Emit to all windows
+    let _ = app.emit("recording-state-changed", payload.clone());
+    
+    // Also emit specifically to pill window to ensure it receives the event
+    if let Some(pill_window) = app.get_webview_window("pill") {
+        let _ = pill_window.emit("recording-state-changed", payload);
+    }
 }
 
 // Helper function to get current recording state
@@ -730,6 +735,12 @@ pub fn run() {
                 let _ = cache.remove("last_license_validation");
             }
 
+            // Run comprehensive startup checks
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                perform_startup_checks(app_handle).await;
+            });
+
             // Initialize whisper manager
             let models_dir = app.path().app_data_dir()?.join("models");
             log::info!("Models directory: {:?}", models_dir);
@@ -1023,6 +1034,7 @@ pub fn run() {
             start_recording,
             stop_recording,
             cancel_recording,
+            get_current_recording_state,
             debug_transcription_flow,
             test_transcription_event,
             save_transcription,
@@ -1094,4 +1106,104 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Perform essential startup checks
+async fn perform_startup_checks(app: tauri::AppHandle) {
+    log::info!("Performing startup checks...");
+    
+    // Check if any models are downloaded
+    if let Some(whisper_manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>() {
+        let has_models = whisper_manager.read().await.has_downloaded_models();
+        log::info!("Has downloaded models: {}", has_models);
+        
+        if !has_models {
+            log::warn!("No speech recognition models downloaded");
+            // Emit event to frontend to show download prompt
+            let _ = emit_to_window(&app, "main", "no-models-on-startup", ());
+        }
+    }
+    
+    // Validate AI settings if enabled
+    if let Ok(store) = app.store("settings") {
+        let ai_enabled = store.get("ai_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+            
+        if ai_enabled {
+            let provider = store.get("ai_provider")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "groq".to_string());
+                
+            let model = store.get("ai_model")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+                
+            // Check if API key is cached
+            use crate::commands::ai::get_ai_settings;
+            match get_ai_settings(app.clone()).await {
+                Ok(settings) => {
+                    if !settings.has_api_key {
+                        log::warn!("AI enabled but no API key found for provider: {}", provider);
+                        // Disable AI to prevent errors during recording
+                        store.set("ai_enabled", serde_json::Value::Bool(false));
+                        let _ = store.save();
+                        
+                        // Notify frontend
+                        let _ = emit_to_window(&app, "main", "ai-disabled-no-key", 
+                            "AI enhancement disabled - no API key found");
+                    } else if model.is_empty() {
+                        log::warn!("AI enabled but no model selected");
+                        store.set("ai_enabled", serde_json::Value::Bool(false));
+                        let _ = store.save();
+                        
+                        let _ = emit_to_window(&app, "main", "ai-disabled-no-model", 
+                            "AI enhancement disabled - no model selected");
+                    } else {
+                        log::info!("AI enhancement ready: {} with {}", provider, model);
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to check AI settings: {}", e);
+                }
+            }
+        }
+    }
+    
+    // Pre-check recording settings
+    if let Ok(store) = app.store("settings") {
+        // Validate language setting
+        let language = store.get("language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+            
+        if let Some(lang) = language {
+            use crate::whisper::languages::validate_language;
+            let validated = validate_language(Some(&lang));
+            if validated != lang.as_str() {
+                log::warn!("Invalid language '{}' in settings, resetting to '{}'", lang, validated);
+                store.set("language", serde_json::Value::String(validated.to_string()));
+                let _ = store.save();
+            }
+        }
+        
+        // Check current model is still available
+        let mut _model_available = false;
+        if let Some(current_model) = store.get("current_model")
+            .and_then(|v| v.as_str().map(|s| s.to_string())) {
+            if !current_model.is_empty() {
+                if let Some(whisper_manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>() {
+                    let downloaded = whisper_manager.read().await.get_downloaded_model_names();
+                    _model_available = downloaded.contains(&current_model);
+                    if !_model_available {
+                        log::warn!("Current model '{}' no longer available", current_model);
+                        // Clear the selection
+                        store.set("current_model", serde_json::Value::String(String::new()));
+                        let _ = store.save();
+                    }
+                }
+            }
+        }
+    }
+    
+    log::info!("Startup checks completed");
 }
