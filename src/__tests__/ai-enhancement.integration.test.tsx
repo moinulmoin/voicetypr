@@ -2,7 +2,6 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import App from '../App';
 import { invoke } from '@tauri-apps/api/core';
-import { emit, listen } from '@tauri-apps/api/event';
 
 // Mock Tauri API
 vi.mock('@tauri-apps/api/core', () => ({
@@ -130,6 +129,7 @@ describe('AI Enhancement Integration', () => {
     }
     
     expect(keyButton).toBeTruthy();
+    if (!keyButton) throw new Error('Key button not found');
     fireEvent.click(keyButton);
     
     // Enter API key

@@ -36,15 +36,13 @@ interface AppErrorBoundaryProps {
   fallback?: React.ComponentType<ErrorFallbackProps>;
   onError?: (error: Error, errorInfo: React.ErrorInfo) => void;
   onReset?: () => void;
-  isolate?: boolean;
 }
 
 export function AppErrorBoundary({
   children,
   fallback = ErrorFallback,
   onError,
-  onReset,
-  isolate = true
+  onReset
 }: AppErrorBoundaryProps) {
   return (
     <ReactErrorBoundary

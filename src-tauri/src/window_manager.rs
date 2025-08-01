@@ -141,7 +141,7 @@ impl WindowManager {
             position_y
         );
 
-        let pill_builder = WebviewWindowBuilder::new(
+        let mut pill_builder = WebviewWindowBuilder::new(
             &self.app_handle,
             "pill",
             WebviewUrl::App("pill.html".into()),

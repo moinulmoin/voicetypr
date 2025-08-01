@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { AppErrorBoundary } from "./components/ErrorBoundary";
 import { Sidebar } from "./components/Sidebar";
@@ -12,7 +12,7 @@ import { ModelsSection } from "./components/sections/ModelsSection";
 import { RecentRecordings } from "./components/sections/RecentRecordings";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { LicenseProvider } from "./contexts/LicenseContext";
-import { ReadinessProvider } from "./contexts/ReadinessContext";
+import { ReadinessProvider, useReadiness } from "./contexts/ReadinessContext";
 import { SettingsProvider, useSettings } from "./contexts/SettingsContext";
 import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { useModelManagement } from "./hooks/useModelManagement";
@@ -27,6 +27,7 @@ function AppContent() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
   const { settings, refreshSettings, updateSettings } = useSettings();
+  const { checkAccessibilityPermission, checkMicrophonePermission } = useReadiness();
 
   // Use the new model management hook
   const modelManagement = useModelManagement({
@@ -188,6 +189,31 @@ function AppContent() {
 
     init();
   }, [registerEvent, loadHistory, settings]);
+
+  // Use a ref to track if we've just completed onboarding
+  const hasJustCompletedOnboarding = useRef(false);
+  
+  // Mark when onboarding is being shown
+  useEffect(() => {
+    if (showOnboarding) {
+      hasJustCompletedOnboarding.current = true;
+    }
+  }, [showOnboarding]);
+  
+  // Check permissions only when transitioning from onboarding to dashboard
+  useEffect(() => {
+    // Only refresh if we just completed onboarding and are now showing dashboard
+    if (!showOnboarding && hasJustCompletedOnboarding.current && settings?.onboarding_completed) {
+      hasJustCompletedOnboarding.current = false;
+      
+      Promise.all([
+        checkAccessibilityPermission(),
+        checkMicrophonePermission()
+      ]).then(() => {
+        console.log("Permissions refreshed after onboarding completion");
+      });
+    }
+  }, [showOnboarding, settings?.onboarding_completed, checkAccessibilityPermission, checkMicrophonePermission]);
 
   // Handle deleting a model with settings update
   const handleDeleteModel = useCallback(

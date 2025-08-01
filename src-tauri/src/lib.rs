@@ -30,7 +30,7 @@ use commands::{
     debug::{debug_transcription_flow, test_transcription_event},
     keyring::{keyring_set, keyring_get, keyring_delete, keyring_has},
     license::*,
-    logs::{get_log_files, read_log_file, export_logs, clear_old_logs, get_log_directory, open_logs_folder},
+    logs::{clear_old_logs, get_log_directory, open_logs_folder},
     model::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model,
@@ -866,7 +866,7 @@ pub fn run() {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
                 // Create the pill window with extra height for tooltip
-                let pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
+                let mut pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
                     .title("Recording")
                     .resizable(false)
                     .decorations(false)

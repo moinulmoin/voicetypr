@@ -111,34 +111,24 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
 
 
   const checkPermissions = async () => {
-    // Check microphone and accessibility
+    // Use the hook methods to check permissions
     await Promise.all([
-      checkSinglePermission("microphone", "check_microphone_permission"),
-      checkSinglePermission("accessibility", "check_accessibility_permission")
+      checkMicPermission(),
+      checkAccessPermission()
     ]);
-
-    // Automation check removed for now
-    // Can be re-enabled later if needed
   };
 
-  const checkSinglePermission = async (type: string, command: string) => {
+  const checkSinglePermission = async (type: string) => {
     setCheckingPermissions(prev => new Set(prev).add(type));
 
     try {
-      const granted = await invoke<boolean>(command);
-      setPermissions(prev => ({
-        ...prev,
-        [type]: { status: granted ? "granted" : "denied" }
-      }));
+      if (type === "microphone") {
+        await checkMicPermission();
+      } else if (type === "accessibility") {
+        await checkAccessPermission();
+      }
     } catch (error) {
       console.error(`Failed to check ${type} permission:`, error);
-      setPermissions(prev => ({
-        ...prev,
-        [type]: {
-          status: "error",
-          error: `Failed to check ${type} permission`
-        }
-      }));
     } finally {
       setCheckingPermissions(prev => {
         const next = new Set(prev);
@@ -152,32 +142,18 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
     setIsRequesting(type);
     try {
       if (type === "microphone") {
-        const granted = await invoke<boolean>("request_microphone_permission");
-        setPermissions(prev => ({
-          ...prev,
-          microphone: { status: granted ? "granted" : "denied" }
-        }));
+        const granted = await requestMicPermission();
         if (!granted) {
           await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
         }
       } else if (type === "accessibility") {
-        await invoke("request_accessibility_permission");
-        await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
-        // For accessibility, we need to check the status after opening settings
-        // as the permission dialog is handled differently
-        const granted = await invoke<boolean>("check_accessibility_permission");
-        setPermissions(prev => ({
-          ...prev,
-          accessibility: { status: granted ? "granted" : "denied" }
-        }));
+        const granted = await requestAccessPermission();
+        if (!granted) {
+          await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+        }
       } else if (type === "automation") {
         // This will trigger the system dialog for automation permission
         const granted = await invoke<boolean>("test_automation_permission");
-        // Update the permission state immediately based on the result
-        setPermissions(prev => ({
-          ...prev,
-          automation: { status: granted ? "granted" : "denied" }
-        }));
         if (!granted) {
           // Open automation settings if permission denied
           await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation");
@@ -377,12 +353,7 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
                               <Button
                                 size="sm"
                                 variant="ghost"
-                                onClick={() => checkSinglePermission(
-                                  perm.type,
-                                  perm.type === "microphone" ? "check_microphone_permission" :
-                                  perm.type === "accessibility" ? "check_accessibility_permission" :
-                                  "test_automation_permission"
-                                )}
+                                onClick={() => checkSinglePermission(perm.type)}
                                 disabled={checkingPermissions.has(perm.type)}
                               >
                                 Retry

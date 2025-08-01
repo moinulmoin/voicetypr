@@ -127,7 +127,7 @@ impl Transcriber {
         }
 
         // Store original audio length before the move
-        let original_audio_length = audio.len();
+        let _original_audio_length = audio.len();
 
         /* ----------------------------------------------
         4) Resample to 16kHz using high-quality resampler
