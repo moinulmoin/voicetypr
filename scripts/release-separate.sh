@@ -163,9 +163,21 @@ jq --arg version "$NEW_VERSION" '.version = $version' src-tauri/tauri.conf.json 
 jq --arg identity "$APPLE_SIGNING_IDENTITY" '.bundle.macOS.signingIdentity = $identity' src-tauri/tauri.conf.json.tmp > src-tauri/tauri.conf.json
 rm src-tauri/tauri.conf.json.tmp
 
-# Commit the tauri.conf.json change
-git add src-tauri/tauri.conf.json
-git commit -m "chore: update tauri.conf.json version to ${NEW_VERSION}"
+# Update version in Cargo.toml
+echo -e "${YELLOW}Updating Cargo.toml...${NC}"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    sed -i '' "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" src-tauri/Cargo.toml
+else
+    sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" src-tauri/Cargo.toml
+fi
+
+# Update Cargo.lock to reflect the new version
+echo -e "${YELLOW}Updating Cargo.lock...${NC}"
+cd src-tauri && cargo update -p voicetypr && cd ..
+
+# Commit the tauri.conf.json and Cargo.toml changes
+git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+git commit -m "chore: update tauri.conf.json and Cargo.toml version to ${NEW_VERSION}"
 
 # Push changes and tags
 echo -e "${YELLOW}Pushing to GitHub...${NC}"
