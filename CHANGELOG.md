@@ -1,5 +1,30 @@
 # Changelog
 
+# [1.4.0](https://github.com/moinulmoin/voicetypr/compare/v1.3.0...v1.4.0) (2025-08-01)
+
+
+### Bug Fixes
+
+* :bug: test and remove sentry ([57be5a3](https://github.com/moinulmoin/voicetypr/commit/57be5a38df7d6ba86a371158312c5585ee39d3da))
+
+
+### Features
+
+* :sparkles: add AI enhancement integration with API key management and model selection ([994f21b](https://github.com/moinulmoin/voicetypr/commit/994f21b747167cfad5a1fbd080ba423efecdf027))
+* :sparkles: add Gemini provider integration and related tests ([1263503](https://github.com/moinulmoin/voicetypr/commit/1263503745966d0ee7ebca17a31c949274dffbb0))
+* :sparkles: added sentry well ([2f1ceb5](https://github.com/moinulmoin/voicetypr/commit/2f1ceb5d3d7fe45aa79e1878af4764b1f8b959ba))
+* :sparkles: fixes ([682c267](https://github.com/moinulmoin/voicetypr/commit/682c26775badf7ac6fa691c6ea420a0b382a1dc2))
+* :sparkles: implement AI enhancement options and settings management ([843f830](https://github.com/moinulmoin/voicetypr/commit/843f8304da1146ed2028d51c17f05814f9140ac6))
+* :sparkles: implement better key storing ([e6a5344](https://github.com/moinulmoin/voicetypr/commit/e6a5344bde1662cab0540b20d5eaf8013e4e1603))
+* :sparkles: improve checker state ([876fda7](https://github.com/moinulmoin/voicetypr/commit/876fda73688a8b632f944b202903e627e895d01d))
+* :sparkles: improve prompts and ui ([5cd995d](https://github.com/moinulmoin/voicetypr/commit/5cd995d0c2c0a5361b71e85f6d71c6d7f21b2ced))
+* :sparkles: investigating audio issue ([fd70cc9](https://github.com/moinulmoin/voicetypr/commit/fd70cc9d0f9ba8e905193bbbdde898cc28997bb8))
+* :sparkles: little fix and improvements ([d481603](https://github.com/moinulmoin/voicetypr/commit/d48160335a448295db699abd39118068098bd507))
+* :sparkles: refactor audio processing and permission handling ([bdc7f35](https://github.com/moinulmoin/voicetypr/commit/bdc7f35a4c403400ae67862453528dabf84acddb))
+* :sparkles: remove debug logging and add proper resampling ([1b415a2](https://github.com/moinulmoin/voicetypr/commit/1b415a2ed04a825170549d6c630d595691facc26))
+* :sparkles: remove deprecated Sentry test commands and related documentation ([5aab0a7](https://github.com/moinulmoin/voicetypr/commit/5aab0a75443f45ff801a0bd5bb238ecc39e44229))
+* :sparkles: update ai enchance and general settings ([e844915](https://github.com/moinulmoin/voicetypr/commit/e844915a3e2abec9b9983bf25fd58a06d53b66de))
+
 # [1.3.0](https://github.com/moinulmoin/voicetypr/compare/v1.2.2...v1.3.0) (2025-07-22)
 
 
