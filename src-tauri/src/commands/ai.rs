@@ -12,6 +12,75 @@ static API_KEY_CACHE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| {
     Mutex::new(HashMap::new())
 });
 
+/// Validate an API key by making a minimal test request
+async fn validate_api_key(provider: &str, api_key: &str) -> Result<(), String> {
+    match provider {
+        "groq" => {
+            // Make a minimal API call to validate the key
+            let client = reqwest::Client::new();
+            let response = client
+                .post("https://api.groq.com/openai/v1/chat/completions")
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&serde_json::json!({
+                    "model": "llama-3.1-8b-instant",
+                    "messages": [{"role": "user", "content": "1"}],
+                    "max_tokens": 1,
+                    "temperature": 0
+                }))
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_connect() || e.is_timeout() {
+                        "Network error: Unable to connect to Groq API".to_string()
+                    } else {
+                        "Network error".to_string()
+                    }
+                })?;
+            
+            match response.status().as_u16() {
+                401 => Err("Invalid API key".to_string()),
+                200 => Ok(()),
+                429 => Err("Rate limit exceeded. Please try again later.".to_string()),
+                500..=599 => Err("Groq API is temporarily unavailable".to_string()),
+                _ => Err(format!("Unexpected error: {}", response.status()))
+            }
+        }
+        "gemini" => {
+            // Validate Gemini API key - use minimal tokens
+            let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent";
+            let client = reqwest::Client::new();
+            let response = client
+                .post(url)
+                .header("x-goog-api-key", api_key)
+                .json(&serde_json::json!({
+                    "contents": [{"parts": [{"text": "1"}]}],
+                    "generationConfig": {
+                        "maxOutputTokens": 1,
+                        "temperature": 0
+                    }
+                }))
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_connect() || e.is_timeout() {
+                        "Network error: Unable to connect to Gemini API".to_string()
+                    } else {
+                        "Network error".to_string()
+                    }
+                })?;
+                
+            match response.status().as_u16() {
+                400 | 401 | 403 => Err("Invalid API key".to_string()),
+                200 => Ok(()),
+                429 => Err("Rate limit exceeded. Please try again later.".to_string()),
+                500..=599 => Err("Gemini API is temporarily unavailable".to_string()),
+                _ => Err(format!("Unexpected error: {}", response.status()))
+            }
+        }
+        _ => Ok(()) // Unknown providers pass through
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AISettings {
     pub enabled: bool,
@@ -117,6 +186,9 @@ pub async fn cache_ai_api_key(
     if api_key.trim().is_empty() {
         return Err("API key cannot be empty".to_string());
     }
+    
+    // Validate the API key with a test call
+    validate_api_key(&provider, &api_key).await?;
     
     // Store API key in memory cache
     let mut cache = API_KEY_CACHE.lock().map_err(|_| "Failed to access cache".to_string())?;

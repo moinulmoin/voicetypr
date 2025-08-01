@@ -234,4 +234,18 @@ mod tests {
         assert_eq!(decrypt_value(&encrypted1).unwrap(), original);
         assert_eq!(decrypt_value(&encrypted2).unwrap(), original);
     }
+    
+    #[test]
+    fn test_decrypt_with_corrupted_data() {
+        initialize_encryption_key().unwrap();
+        
+        // Test with invalid base64
+        let result = decrypt_value("not-valid-base64!");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Failed to decode"));
+        
+        // Test with valid base64 but corrupted data
+        let result = decrypt_value("dGVzdA=="); // Just "test" in base64
+        assert!(result.is_err());
+    }
 }

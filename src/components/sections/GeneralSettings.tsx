@@ -1,12 +1,13 @@
 import { HotkeyInput } from "@/components/HotkeyInput";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { AlertCircle, Mic, RefreshCw } from "lucide-react";
+import { AlertCircle, Globe, Mic, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
+import { LanguageSelection } from "../LanguageSelection";
 
 export function GeneralSettings() {
   const { settings, updateSettings } = useSettings();
@@ -21,7 +22,7 @@ export function GeneralSettings() {
         const enabled = await isEnabled();
         setAutostartEnabled(enabled);
       } catch (error) {
-        console.error('Failed to check autostart status:', error);
+        console.error("Failed to check autostart status:", error);
       }
     };
     checkAutostart();
@@ -43,7 +44,7 @@ export function GeneralSettings() {
       // Update settings to keep them in sync (backend is source of truth)
       await updateSettings({ launch_at_startup: checked });
     } catch (error) {
-      console.error('Failed to toggle autostart:', error);
+      console.error("Failed to toggle autostart:", error);
       // Revert the state if there was an error
       setAutostartEnabled(!checked);
     } finally {
@@ -73,7 +74,9 @@ export function GeneralSettings() {
               <div className="flex items-center justify-between">
                 <div>
                   <Label htmlFor="hotkey">Hotkey</Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">Global shortcut to start recording</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Global shortcut to start recording
+                  </p>
                 </div>
                 <HotkeyInput
                   value={settings.hotkey || ""}
@@ -85,25 +88,34 @@ export function GeneralSettings() {
               {!canAutoInsert && (
                 <div className="flex items-center gap-2 p-2 text-sm text-amber-600 bg-amber-50 rounded-md">
                   <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                  <span>Grant accessibility permission in Advanced settings for hotkeys to work</span>
+                  <span>
+                    Grant accessibility permission in Advanced settings for
+                    hotkeys to work
+                  </span>
                 </div>
               )}
 
               <div className="flex items-center justify-between">
                 <div>
                   <Label htmlFor="compact-recording">Compact status</Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">Show minimal recording indicator</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Show minimal recording indicator
+                  </p>
                 </div>
                 <Switch
                   id="compact-recording"
                   checked={settings.compact_recording_status !== false}
-                  onCheckedChange={async (checked) => await updateSettings({ compact_recording_status: checked })}
+                  onCheckedChange={async (checked) =>
+                    await updateSettings({ compact_recording_status: checked })
+                  }
                 />
               </div>
             </div>
 
             <div className="text-xs text-muted-foreground pt-2">
-              💡 Tip: Press <kbd className="px-1 py-0.5 rounded text-xs bg-muted">ESC</kbd> twice while recording to cancel
+              💡 Tip: Press{" "}
+              <kbd className="px-1 py-0.5 rounded text-xs bg-muted">ESC</kbd>{" "}
+              twice while recording to cancel
             </div>
           </div>
 
@@ -117,7 +129,9 @@ export function GeneralSettings() {
             <div className="flex items-center justify-between">
               <div>
                 <Label htmlFor="language">Spoken language</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">Language you speak for transcription</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Language you speak for transcription
+                </p>
               </div>
               <LanguageSelection
                 value={settings.language || "en"}
@@ -147,7 +161,9 @@ export function GeneralSettings() {
             <div className="flex items-center justify-between">
               <div>
                 <Label htmlFor="autostart">Launch at startup</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">Start VoiceTypr when you log in</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Start VoiceTypr when you log in
+                </p>
               </div>
               <Switch
                 id="autostart"
@@ -157,7 +173,6 @@ export function GeneralSettings() {
               />
             </div>
           </div>
-
         </div>
       </ScrollArea>
     </div>
