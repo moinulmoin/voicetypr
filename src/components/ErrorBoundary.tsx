@@ -47,6 +47,7 @@ export function AppErrorBoundary({
   onReset,
   isolate = true
 }: AppErrorBoundaryProps) {
+  // Use Sentry's ErrorBoundary which automatically captures errors
   return (
     <Sentry.ErrorBoundary
       fallback={(errorData) => {
@@ -66,25 +67,15 @@ export function AppErrorBoundary({
           });
         }
       }}
+      onError={(error, errorInfo) => {
+        console.error('Error caught by Sentry boundary:', error, errorInfo);
+        if (onError) {
+          onError(error, errorInfo);
+        }
+      }}
+      onReset={onReset}
     >
-      <ReactErrorBoundary
-        FallbackComponent={fallback}
-        onError={(error, errorInfo) => {
-          console.error('Error caught by boundary:', error, errorInfo);
-          // Report to Sentry manually if needed
-          Sentry.withScope((scope) => {
-            scope.setContext('errorInfo', { componentStack: errorInfo.componentStack });
-            Sentry.captureException(error);
-          });
-          if (onError) {
-            onError(error, errorInfo);
-          }
-        }}
-        onReset={onReset}
-        resetKeys={isolate ? [Date.now()] : undefined}
-      >
-        {children}
-      </ReactErrorBoundary>
+      {children}
     </Sentry.ErrorBoundary>
   );
 }
@@ -95,11 +86,9 @@ export function RecordingErrorBoundary({ children }: { children: React.ReactNode
     <AppErrorBoundary
       onError={(error) => {
         console.error('Recording error:', error);
-        // Add context for recording errors
-        Sentry.withScope((scope) => {
+        // Add context for recording errors (Sentry already captures via AppErrorBoundary)
+        Sentry.configureScope((scope) => {
           scope.setTag('feature', 'recording');
-          scope.setLevel('error');
-          Sentry.captureException(error);
         });
       }}
       onReset={() => {
@@ -116,10 +105,9 @@ export function SettingsErrorBoundary({ children }: { children: React.ReactNode 
     <AppErrorBoundary
       onError={(error) => {
         console.error('Settings error:', error);
-        Sentry.withScope((scope) => {
+        Sentry.configureScope((scope) => {
           scope.setTag('feature', 'settings');
           scope.setLevel('warning');
-          Sentry.captureException(error);
         });
       }}
       fallback={({ error, resetErrorBoundary }) => (
@@ -148,10 +136,9 @@ export function ModelManagementErrorBoundary({ children }: { children: React.Rea
     <AppErrorBoundary
       onError={(error) => {
         console.error('Model management error:', error);
-        Sentry.withScope((scope) => {
+        Sentry.configureScope((scope) => {
           scope.setTag('feature', 'model_management');
           scope.setLevel('error');
-          Sentry.captureException(error);
         });
       }}
       fallback={({ resetErrorBoundary }) => (

@@ -15,16 +15,12 @@ pub async fn download_model(
     state: State<'_, RwLock<WhisperManager>>,
     active_downloads: State<'_, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>,
 ) -> Result<(), String> {
-    // Validate model name
-    let valid_models = [
-        "base.en",
-        "large-v3",
-        "large-v3-q5_0",
-        "large-v3-turbo",
-        "large-v3-turbo-q5_0",
-    ];
-    if !valid_models.contains(&model_name.as_str()) {
-        return Err(format!("Invalid model name: {}", model_name));
+    // Validate model name using WhisperManager
+    {
+        let manager = state.read().await;
+        if manager.get_model_path(&model_name).is_none() && !manager.get_models_status().contains_key(&model_name) {
+            return Err(format!("Invalid model name: {}", model_name));
+        }
     }
 
     log::info!("Starting download for model: {}", model_name);
@@ -152,6 +148,23 @@ pub async fn download_model(
                     tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
                 } else {
                     log::error!("Download failed after {} attempts: {}", MAX_RETRIES, e);
+                    
+                    // Capture to Sentry - download failed after all retries
+                    use crate::{capture_sentry_with_context, utils::sentry_helper::create_context_from_map};
+                    let mut context_map = std::collections::BTreeMap::new();
+                    context_map.insert("attempts".to_string(), serde_json::Value::from(MAX_RETRIES));
+                    context_map.insert("last_error".to_string(), serde_json::Value::from(e.to_string()));
+                    
+                    capture_sentry_with_context!(
+                        &format!("Model download failed after {} retries: {}", MAX_RETRIES, e),
+                        tauri_plugin_sentry::sentry::Level::Error,
+                        tags: {
+                            "error.type" => "download_failure",
+                            "component" => "model_manager",
+                            "model" => &model_name
+                        },
+                        context: "download", create_context_from_map(context_map)
+                    );
                 }
             }
         }
@@ -187,6 +200,7 @@ pub async fn download_model(
                 let mut manager = state.write().await;
                 manager.refresh_downloaded_status();
             }
+            
             
             // Emit the event - the download_model function already verified the file
             log::info!("Emitting model-downloaded event for {}", model_name);
@@ -247,11 +261,18 @@ pub async fn get_model_status(
 
 #[tauri::command]
 pub async fn delete_model(
+    app: AppHandle,
     model_name: String,
     state: State<'_, RwLock<WhisperManager>>,
 ) -> Result<(), String> {
     let mut manager = state.write().await;
-    manager.delete_model_file(&model_name)
+    manager.delete_model_file(&model_name)?;
+    
+    // Emit model-deleted event
+    use tauri::Emitter;
+    let _ = app.emit("model-deleted", model_name.clone());
+    
+    Ok(())
 }
 
 #[tauri::command]
@@ -326,5 +347,7 @@ pub async fn preload_model(
     cache.get_or_create(&model_path)?;
 
     log::info!("Model '{}' preloaded successfully", model_name);
+    
+    
     Ok(())
 }

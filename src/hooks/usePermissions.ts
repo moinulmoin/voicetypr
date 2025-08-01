@@ -8,7 +8,6 @@ export type PermissionStatus = 'checking' | 'granted' | 'denied';
 export interface PermissionState {
   microphone: PermissionStatus;
   accessibility: PermissionStatus;
-  automation: PermissionStatus;
 }
 
 export interface UsePermissionsReturn {
@@ -39,7 +38,6 @@ export function usePermissions(options?: {
   const [permissions, setPermissions] = useState<PermissionState>({
     microphone: 'checking',
     accessibility: 'checking',
-    automation: 'checking',
   });
 
   const [isChecking, setIsChecking] = useState(false);
@@ -52,32 +50,39 @@ export function usePermissions(options?: {
   // Calculate if all permissions are granted
   const allGranted = 
     permissions.microphone === 'granted' && 
-    permissions.accessibility === 'granted' && 
-    permissions.automation === 'granted';
+    permissions.accessibility === 'granted';
 
   const checkPermissions = async () => {
     setIsChecking(true);
     setError(null);
     
     try {
-      const [mic, accessibility, automation] = await Promise.all([
-        invoke<boolean>('check_microphone_permission'),
-        invoke<boolean>('check_accessibility_permission'),
-        invoke<boolean>('test_automation_permission'),
-      ]);
+      // Check each permission separately to handle individual failures
+      let mic = false;
+      let accessibility = false;
+
+      try {
+        mic = await invoke<boolean>('check_microphone_permission');
+      } catch (err) {
+        console.error('Failed to check microphone permission:', err);
+      }
+
+      try {
+        accessibility = await invoke<boolean>('check_accessibility_permission');
+      } catch (err) {
+        console.error('Failed to check accessibility permission:', err);
+      }
 
       setPermissions({
         microphone: mic ? 'granted' : 'denied',
         accessibility: accessibility ? 'granted' : 'denied',
-        automation: automation ? 'granted' : 'denied',
       });
 
       // Show success toast only if permissions changed from denied to granted
-      if (showToasts && mic && accessibility && automation) {
+      if (showToasts && mic && accessibility) {
         const hadDeniedPermission = 
           permissions.microphone === 'denied' || 
-          permissions.accessibility === 'denied' || 
-          permissions.automation === 'denied';
+          permissions.accessibility === 'denied';
         
         if (hadDeniedPermission) {
           toast.success('All permissions granted! You\'re ready to use VoiceTypr.');
@@ -116,11 +121,6 @@ export function usePermissions(options?: {
           settingsUrl = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
           break;
 
-        case 'automation':
-          // This will trigger the system dialog for automation permission
-          granted = await invoke<boolean>('test_automation_permission');
-          settingsUrl = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation';
-          break;
       }
 
       // Open settings if permission wasn't granted (except for accessibility which always opens)

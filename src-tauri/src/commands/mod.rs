@@ -1,6 +1,10 @@
+pub mod ai;
 pub mod audio;
 pub mod debug;
+pub mod key_normalizer;
+pub mod keyring;
 pub mod license;
+pub mod logs;
 pub mod model;
 pub mod permissions;
 pub mod reset;

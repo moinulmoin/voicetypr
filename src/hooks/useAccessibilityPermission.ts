@@ -1,78 +1,65 @@
-import { useEffect, useState, useRef } from 'react';
-import { listen, TauriEvent } from '@tauri-apps/api/event';
-import { ask } from '@tauri-apps/plugin-dialog';
-import { 
-  checkAccessibilityPermission, 
-  requestAccessibilityPermission 
-} from 'tauri-plugin-macos-permissions-api';
-import { toast } from 'sonner';
+import { useState, useEffect, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 export function useAccessibilityPermission() {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
-  const hasShownDialog = useRef(false);
-  
+  const [isChecking, setIsChecking] = useState(false);
+
+  const checkPermission = useCallback(async () => {
+    setIsChecking(true);
+    try {
+      const result = await invoke<boolean>('check_accessibility_permission');
+      setHasPermission(result);
+      return result;
+    } catch (error) {
+      console.error('Failed to check accessibility permission:', error);
+      setHasPermission(false);
+      return false;
+    } finally {
+      setIsChecking(false);
+    }
+  }, []);
+
+  const requestPermission = useCallback(async () => {
+    try {
+      const result = await invoke<boolean>('request_accessibility_permission');
+      setHasPermission(result);
+      return result;
+    } catch (error) {
+      console.error('Failed to request accessibility permission:', error);
+      return false;
+    }
+  }, []);
+
+  // Check permission on mount
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let unlistenFocus: (() => void) | undefined;
+    checkPermission();
+  }, [checkPermission]);
 
-    const checkPermissions = async () => {
-      try {
-        const currentPermission = await checkAccessibilityPermission();
-        
-        // If permission changed from false to true, suggest restart
-        if (hasPermission === false && currentPermission === true) {
-          toast.success(
-            'Accessibility permission granted! Please restart VoiceTypr to enable text insertion.',
-            { duration: 8000 }
-          );
-        }
-        
-        setHasPermission(currentPermission);
-        
-        // Only show dialog once per session
-        if (!currentPermission && !hasShownDialog.current) {
-          hasShownDialog.current = true;
-          
-          const shouldOpenSettings = await ask(
-            'VoiceTypr needs accessibility permission to insert text at your cursor position.\n\nWould you like to open System Settings to grant permission?',
-            {
-              title: 'Accessibility Permission Required',
-              okLabel: 'Open Settings',
-              cancelLabel: 'Later'
-            }
-          );
-          
-          if (shouldOpenSettings) {
-            await requestAccessibilityPermission();
-          }
-        }
-      } catch (error) {
-        console.error('Failed to check accessibility permissions:', error);
-      }
-    };
+  // Listen for permission changes
+  useEffect(() => {
+    const unlistenGranted = listen('accessibility-granted', () => {
+      console.log('[useAccessibilityPermission] Permission granted event received');
+      setHasPermission(true);
+    });
 
-    const setupListener = async () => {
-      // Initial check
-      checkPermissions();
-      
-      // Check when app starts
-      unlisten = await listen('check-accessibility-permission', () => {
-        checkPermissions();
-      });
-      
-      // Check when window gains focus (like VoiceInk)
-      unlistenFocus = await listen(TauriEvent.WINDOW_FOCUS, () => {
-        checkPermissions();
-      });
-    };
-
-    setupListener();
+    const unlistenDenied = listen('accessibility-denied', () => {
+      console.log('[useAccessibilityPermission] Permission denied event received');
+      setHasPermission(false);
+    });
 
     return () => {
-      if (unlisten) unlisten();
-      if (unlistenFocus) unlistenFocus();
+      Promise.all([unlistenGranted, unlistenDenied]).then(unsubs => {
+        unsubs.forEach(unsub => unsub());
+      });
     };
-  }, [hasPermission]);
-  
-  return { hasPermission };
+  }, []);
+
+  return {
+    hasPermission,
+    isChecking,
+    checkPermission,
+    requestPermission
+  };
 }

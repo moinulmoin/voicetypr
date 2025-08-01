@@ -3,49 +3,59 @@ import { useCallback, useEffect, useState } from "react";
 import { Toaster, toast } from "sonner";
 import { AppErrorBoundary } from "./components/ErrorBoundary";
 import { Sidebar } from "./components/Sidebar";
-import { LicenseSection } from "./components/license";
 import { OnboardingDesktop } from "./components/onboarding/OnboardingDesktop";
-import { AboutSection } from "./components/sections/AboutSection";
+import { AccountSection } from "./components/sections/AccountSection";
 import { AdvancedSection } from "./components/sections/AdvancedSection";
+import { EnhancementsSection } from "./components/sections/EnhancementsSection";
 import { GeneralSettings } from "./components/sections/GeneralSettings";
 import { ModelsSection } from "./components/sections/ModelsSection";
 import { RecentRecordings } from "./components/sections/RecentRecordings";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { LicenseProvider } from "./contexts/LicenseContext";
+import { ReadinessProvider } from "./contexts/ReadinessContext";
+import { SettingsProvider, useSettings } from "./contexts/SettingsContext";
 import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { useModelManagement } from "./hooks/useModelManagement";
-import { AppSettings, TranscriptionHistory } from "./types";
 import { updateService } from "./services/updateService";
+import { AppSettings, TranscriptionHistory } from "./types";
+import { loadApiKeysToCache } from "./utils/keyring";
 
 // Main App Component
-export default function App() {
+function AppContent() {
   const { registerEvent } = useEventCoordinator("main");
   const [activeSection, setActiveSection] = useState<string>("recordings");
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
+  const { settings, refreshSettings, updateSettings } = useSettings();
 
   // Use the new model management hook
-  const modelManagement = useModelManagement({ windowId: "main", showToasts: true });
+  const modelManagement = useModelManagement({
+    windowId: "main",
+    showToasts: true,
+  });
   const {
     downloadProgress,
     verifyingModels,
     downloadModel,
     cancelDownload,
     deleteModel,
-    sortedModels
+    sortedModels,
   } = modelManagement;
 
   // Load history function
   const loadHistory = useCallback(async () => {
     try {
-      const storedHistory = await invoke<any[]>("get_transcription_history", { limit: 50 });
-      const formattedHistory: TranscriptionHistory[] = storedHistory.map((item) => ({
-        id: item.timestamp || Date.now().toString(),
-        text: item.text,
-        timestamp: new Date(item.timestamp),
-        model: item.model
-      }));
+      const storedHistory = await invoke<any[]>("get_transcription_history", {
+        limit: 50,
+      });
+      const formattedHistory: TranscriptionHistory[] = storedHistory.map(
+        (item) => ({
+          id: item.timestamp || Date.now().toString(),
+          text: item.text,
+          timestamp: new Date(item.timestamp),
+          model: item.model,
+        }),
+      );
       setHistory(formattedHistory);
     } catch (error) {
       console.error("Failed to load transcription history:", error);
@@ -56,21 +66,19 @@ export default function App() {
   useEffect(() => {
     const init = async () => {
       try {
-        // Load settings
-        const appSettings = await invoke<AppSettings>("get_settings");
-        setSettings(appSettings);
+        // Settings are loaded by SettingsProvider
 
         // Models are loaded automatically by useModelManagement hook
 
-        // Check if onboarding is completed
-        if (!appSettings.onboarding_completed) {
+        // Check if onboarding is completed - only check when settings are loaded
+        if (settings && !settings.onboarding_completed) {
           setShowOnboarding(true);
         }
 
         // Run cleanup if enabled
-        if (appSettings.transcription_cleanup_days) {
+        if (settings?.transcription_cleanup_days) {
           await invoke("cleanup_old_transcriptions", {
-            days: appSettings.transcription_cleanup_days
+            days: settings.transcription_cleanup_days,
           });
         }
 
@@ -78,7 +86,17 @@ export default function App() {
         await loadHistory();
 
         // Initialize update service for automatic update checks
-        await updateService.initialize(appSettings);
+        if (settings) {
+          await updateService.initialize(settings);
+        }
+
+        // Load API keys from Stronghold to backend cache
+        // Small delay to ensure Stronghold is ready
+        setTimeout(() => {
+          loadApiKeysToCache().catch((error) => {
+            console.error("Failed to load API keys to cache:", error);
+          });
+        }, 100);
 
         // All recording event handling is now managed by the useRecording hook
 
@@ -92,7 +110,9 @@ export default function App() {
         // Listen for history updates from backend
         // Backend is the single source of truth for transcription history
         registerEvent("history-updated", async () => {
-          console.log("[EventCoordinator] Main window: reloading history after update");
+          console.log(
+            "[EventCoordinator] Main window: reloading history after update",
+          );
           await loadHistory();
         });
 
@@ -101,27 +121,32 @@ export default function App() {
         // Listen for navigate-to-settings event from tray menu
         registerEvent("navigate-to-settings", () => {
           console.log("Navigate to settings requested from tray menu");
-          setActiveSection("settings");
+          setActiveSection("recordings");
         });
-        
-        // Listen for model changes from tray menu
-        registerEvent("model-changed", (event) => {
-          console.log("Model changed from tray menu:", event.payload);
-          // Force refresh of settings by reloading them
-          invoke<AppSettings>("get_settings").then(setSettings);
-        });
-        
-        // Listen for language changes from tray menu
-        registerEvent("language-changed", (event) => {
-          console.log("Language changed from tray menu:", event.payload);
-          // Force refresh of settings by reloading them
-          invoke<AppSettings>("get_settings").then(setSettings);
-        });
-        
+
+        // Settings events are handled by SettingsProvider
+
         // Listen for tray action errors
         registerEvent("tray-action-error", (event) => {
           console.error("Tray action error:", event.payload);
           toast.error(event.payload as string);
+        });
+
+        // Listen for AI enhancement errors
+        registerEvent("ai-enhancement-auth-error", (event) => {
+          console.error("AI authentication error:", event.payload);
+          toast.error(event.payload as string, {
+            description: "Navigate to Enhancements to update your API key",
+            action: {
+              label: "Go to Settings",
+              onClick: () => setActiveSection("enhancements"),
+            },
+          });
+        });
+
+        registerEvent("ai-enhancement-error", (event) => {
+          console.warn("AI enhancement error:", event.payload);
+          toast.warning(event.payload as string);
         });
 
         // Listen for license-required event
@@ -136,12 +161,12 @@ export default function App() {
             // Focus main window and navigate to license section
             try {
               await invoke("focus_main_window");
-              setActiveSection("license");
+              setActiveSection("account");
 
               // Show toast after window is focused to ensure it appears on top
               setTimeout(() => {
                 toast.error(event.message, {
-                  duration: 2000
+                  duration: 2000,
                 });
               }, 200);
             } catch (error) {
@@ -149,7 +174,7 @@ export default function App() {
               // If window focus fails, still show the toast
               toast.error(event.message);
             }
-          }
+          },
         );
 
         return () => {
@@ -162,7 +187,7 @@ export default function App() {
     };
 
     init();
-  }, [registerEvent, loadHistory]);
+  }, [registerEvent, loadHistory, settings]);
 
   // Handle deleting a model with settings update
   const handleDeleteModel = useCallback(
@@ -174,31 +199,31 @@ export default function App() {
         await saveSettings({ ...settings, current_model: "" });
       }
     },
-    [deleteModel, settings]
+    [deleteModel, settings],
   );
 
   // Save settings
   const saveSettings = useCallback(
     async (newSettings: AppSettings) => {
       try {
-        await invoke("save_settings", { settings: newSettings });
-
         // Update global shortcut in backend if changed
         if (newSettings.hotkey !== settings?.hotkey) {
           try {
-            await invoke("set_global_shortcut", { shortcut: newSettings.hotkey });
+            await invoke("set_global_shortcut", {
+              shortcut: newSettings.hotkey,
+            });
           } catch (err) {
             console.error("Failed to update hotkey:", err);
             // Still update UI even if hotkey registration fails
           }
         }
 
-        setSettings(newSettings);
+        await updateSettings(newSettings);
       } catch (error) {
         console.error("Failed to save settings:", error);
       }
     },
-    [settings]
+    [settings, updateSettings],
   );
 
   // sortedModels is provided by useModelManagement hook
@@ -211,7 +236,7 @@ export default function App() {
           onComplete={() => {
             setShowOnboarding(false);
             // Reload settings after onboarding
-            invoke<AppSettings>("get_settings").then(setSettings);
+            refreshSettings();
           }}
           modelManagement={modelManagement}
         />
@@ -232,7 +257,7 @@ export default function App() {
         );
 
       case "general":
-        return <GeneralSettings settings={settings} onSettingsChange={saveSettings} />;
+        return <GeneralSettings />;
 
       case "models":
         return (
@@ -255,11 +280,13 @@ export default function App() {
       case "advanced":
         return <AdvancedSection />;
 
-      case "about":
-        return <AboutSection />;
+      case "enhancements":
+        return <EnhancementsSection />;
 
+      case "account":
+      case "about":
       case "license":
-        return <LicenseSection />;
+        return <AccountSection />;
 
       default:
         return (
@@ -274,22 +301,28 @@ export default function App() {
 
   // Main App Layout
   return (
+    <SidebarProvider>
+      <Sidebar
+        activeSection={activeSection}
+        onSectionChange={setActiveSection}
+      />
+      <SidebarInset>
+        <div className="h-full flex flex-col">{renderSectionContent()}</div>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+export default function App() {
+  return (
     <AppErrorBoundary>
       <LicenseProvider>
-        <SidebarProvider>
-          <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
-          <SidebarInset>
-            <div className="h-full flex flex-col">{renderSectionContent()}</div>
-          </SidebarInset>
-        </SidebarProvider>
-        <Toaster
-          position="top-center"
-          toastOptions={{
-            classNames: {
-              toast: "!w-fit"
-            }
-          }}
-        />
+        <SettingsProvider>
+          <ReadinessProvider>
+            <AppContent />
+            <Toaster position="top-center" />
+          </ReadinessProvider>
+        </SettingsProvider>
       </LicenseProvider>
     </AppErrorBoundary>
   );

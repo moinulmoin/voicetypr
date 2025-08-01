@@ -34,7 +34,7 @@ describe('Critical User Journeys', () => {
         return Promise.resolve({
           hotkey: 'CommandOrControl+Shift+Space',
           current_model: 'base',
-          language: 'auto',
+          language: 'en',
           theme: 'system',
         });
       }
@@ -83,7 +83,7 @@ describe('Critical User Journeys', () => {
         return Promise.resolve({
           hotkey: 'CommandOrControl+Shift+Space',
           current_model: 'base',  
-          language: 'auto',
+          language: 'en',
           theme: 'system',
         });
       }
@@ -161,7 +161,7 @@ describe('Critical User Journeys', () => {
         return Promise.resolve({
           hotkey: 'CommandOrControl+Shift+Space',
           current_model: '',
-          language: 'auto',
+          language: 'en',
           theme: 'system',
         });
       }

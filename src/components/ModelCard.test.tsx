@@ -7,6 +7,7 @@ import { ModelInfo } from '@/types';
 describe('ModelCard', () => {
   const mockModel: ModelInfo = {
     name: 'base',
+    display_name: 'Base',
     size: 157286400, // 150MB
     url: 'https://example.com/model.bin',
     downloaded: false,
@@ -34,8 +35,7 @@ describe('ModelCard', () => {
       />
     );
 
-    expect(screen.getByText('Base')).toBeInTheDocument(); // Name is capitalized
-    expect(screen.getByText(/Speed: 7\/10 • Accuracy: 5\/10 • 150 MB/)).toBeInTheDocument();
+    expect(screen.getByText('Base')).toBeInTheDocument(); // Uses display_name
   });
 
   it('should show download button when not downloaded', () => {
@@ -49,10 +49,10 @@ describe('ModelCard', () => {
       />
     );
 
-    // The button only has an icon, not text
+    // The button has download icon and text
     const downloadButton = screen.getByRole('button');
+    expect(downloadButton).toHaveTextContent('Download');
     expect(downloadButton.querySelector('svg')).toBeInTheDocument();
-    expect(downloadButton).toHaveClass('h-8', 'w-8');
   });
 
   it('should show delete button when downloaded', () => {
@@ -68,9 +68,9 @@ describe('ModelCard', () => {
       />
     );
 
-    // Find the delete button by looking for buttons with Trash2 icon
+    // Find the delete button by looking for buttons with X icon
     const buttons = screen.getAllByRole('button');
-    const deleteButton = buttons.find(btn => btn.querySelector('.lucide-trash2'));
+    const deleteButton = buttons.find(btn => btn.querySelector('.lucide-x'));
     expect(deleteButton).toBeInTheDocument();
   });
 
@@ -126,9 +126,9 @@ describe('ModelCard', () => {
       />
     );
 
-    // Find the delete button by looking for buttons with Trash2 icon
+    // Find the delete button by looking for buttons with X icon
     const buttons = screen.getAllByRole('button');
-    const deleteButton = buttons.find(btn => btn.querySelector('.lucide-trash2'));
+    const deleteButton = buttons.find(btn => btn.querySelector('.lucide-x'));
     if (!deleteButton) throw new Error('Delete button not found');
     await user.click(deleteButton);
 
@@ -156,7 +156,7 @@ describe('ModelCard', () => {
     expect(mockOnCancelDownload).toHaveBeenCalledWith('base');
   });
 
-  it('should show select button when downloaded and callback provided', () => {
+  it('should be clickable when downloaded', () => {
     const downloadedModel = { ...mockModel, downloaded: true };
     
     render(
@@ -170,10 +170,9 @@ describe('ModelCard', () => {
       />
     );
 
-    // The select button has a CheckCircle icon
-    const buttons = screen.getAllByRole('button');
-    const selectButton = buttons.find(btn => btn.querySelector('.lucide-circle-check'));
-    expect(selectButton).toBeInTheDocument();
+    // The card itself becomes clickable when downloaded
+    const card = document.querySelector('[data-slot="card"]');
+    expect(card).toHaveClass('cursor-pointer');
   });
 
   it('should show selected state correctly', () => {
@@ -191,13 +190,14 @@ describe('ModelCard', () => {
       />
     );
 
-    // When selected, it shows a CheckCircle icon (not a button)
-    const checkIcon = document.querySelector('.lucide-circle-check.text-primary');
-    expect(checkIcon).toBeInTheDocument();
+    // When selected, the card has special styling
+    const card = document.querySelector('[data-slot="card"]');
+    expect(card).toHaveClass('border-primary');
+    expect(card).toHaveClass('bg-primary/5');
   });
 
   it('should format large file sizes correctly', () => {
-    const largeModel = { ...mockModel, size: 2147483648 }; // 2GB
+    const largeModel = { ...mockModel, name: 'large', display_name: 'Large', size: 2147483648 }; // 2GB
     
     render(
       <ModelCard
@@ -209,21 +209,25 @@ describe('ModelCard', () => {
       />
     );
 
-    expect(screen.getByText(/Speed: 7\/10 • Accuracy: 5\/10 • 2\.0 GB/)).toBeInTheDocument();
+    // Check the displayed name
+    expect(screen.getByText('Large')).toBeInTheDocument();
+    // Check that model shows size properly in the stats
+    expect(screen.getByText('2.0 GB')).toBeInTheDocument();
   });
 
   it('should display model names correctly', () => {
+    const enModel = { ...mockModel, name: 'base.en', display_name: 'Base (English)' };
     render(
       <ModelCard
         name="base.en"
-        model={mockModel}
+        model={enModel}
         onDownload={mockOnDownload}
         onDelete={mockOnDelete}
         onSelect={mockOnSelect}
       />
     );
 
-    // The component doesn't show "English-only" but shows the formatted name
-    expect(screen.getByText('base.en')).toBeInTheDocument();
+    // The component shows the display_name
+    expect(screen.getByText('Base (English)')).toBeInTheDocument();
   });
 });

@@ -60,7 +60,7 @@ impl LicenseApiClient {
         } else {
             let error: ApiError = response.json().await.unwrap_or(ApiError {
                 success: false,
-                error: "unknown_error".to_string(),
+                error: Some("unknown_error".to_string()),
                 message: "Failed to check trial status".to_string(),
             });
             Err(error.message)
@@ -101,7 +101,7 @@ impl LicenseApiClient {
         } else {
             let error: ApiError = response.json().await.unwrap_or(ApiError {
                 success: false,
-                error: "unknown_error".to_string(),
+                error: Some("unknown_error".to_string()),
                 message: "Failed to validate license".to_string(),
             });
             Err(error.message)
@@ -132,23 +132,23 @@ impl LicenseApiClient {
                 .json::<LicenseActivateResponse>()
                 .await
                 .map_err(|e| format!("Failed to parse response: {}", e))
-        } else if response.status() == 409 {
-            // Conflict - license already activated on another device
+        } else if response.status() == 400 {
+            // Bad request - includes various activation errors from our API
             let error: ApiError = response.json().await.unwrap_or(ApiError {
                 success: false,
-                error: "license_already_activated".to_string(),
-                message: "License is already activated on another device".to_string(),
+                error: Some("activation_failed".to_string()),
+                message: "Failed to activate license".to_string(),
             });
             Ok(LicenseActivateResponse {
                 success: false,
                 data: None,
-                error: Some(error.error),
+                error: error.error.clone(),
                 message: Some(error.message),
             })
         } else {
             let error: ApiError = response.json().await.unwrap_or(ApiError {
                 success: false,
-                error: "unknown_error".to_string(),
+                error: Some("unknown_error".to_string()),
                 message: "Failed to activate license".to_string(),
             });
             Err(error.message)
@@ -182,7 +182,7 @@ impl LicenseApiClient {
         } else {
             let error: ApiError = response.json().await.unwrap_or(ApiError {
                 success: false,
-                error: "unknown_error".to_string(),
+                error: Some("unknown_error".to_string()),
                 message: "Failed to deactivate license".to_string(),
             });
             Err(error.message)

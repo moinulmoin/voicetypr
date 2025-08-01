@@ -2,10 +2,9 @@ import { AudioWaveAnimation } from "@/components/AudioWaveAnimation";
 import IOSSpinner from "@/components/ios-spinner";
 import { Button } from "@/components/ui/button";
 import { useRecording } from "@/hooks/useRecording";
-import { AppSettings } from "@/types";
-import { invoke } from "@tauri-apps/api/core";
+import { useSetting } from "@/contexts/SettingsContext";
 import { listen } from "@tauri-apps/api/event";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 export function RecordingPill() {
@@ -13,6 +12,7 @@ export function RecordingPill() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [feedbackMessage, setFeedbackMessage] = useState<string>("");
   const [isCompact, setIsCompact] = useState(true);
+  const [isEnhancing, setIsEnhancing] = useState(false);
   const [, forceUpdate] = useState({});
   
   // Track timer IDs for cleanup
@@ -68,12 +68,12 @@ export function RecordingPill() {
     }, timeout);
   };
 
-  // Fetch settings on mount
+  // Use settings from context
+  const compactRecordingStatus = useSetting('compact_recording_status');
+  
   useEffect(() => {
-    invoke<AppSettings>("get_settings").then((settings) => {
-      setIsCompact(settings.compact_recording_status !== false);
-    }).catch(console.error);
-  }, []);
+    setIsCompact(compactRecordingStatus !== false);
+  }, [compactRecordingStatus]);
 
   // Listen for audio level events
   useEffect(() => {
@@ -140,6 +140,36 @@ export function RecordingPill() {
       })
     );
 
+    // Listen for enhancing events
+    unlisteners.push(
+      listen("enhancing-started", () => {
+        console.log("RecordingPill: Received enhancing-started event");
+        setIsEnhancing(true);
+      })
+    );
+
+    unlisteners.push(
+      listen("enhancing-completed", () => {
+        console.log("RecordingPill: Received enhancing-completed event");
+        setIsEnhancing(false);
+      })
+    );
+
+    unlisteners.push(
+      listen("enhancing-failed", () => {
+        console.log("RecordingPill: Received enhancing-failed event");
+        setIsEnhancing(false);
+      })
+    );
+
+    // Listen for paste errors (accessibility permission)
+    unlisteners.push(
+      listen<string>("paste-error", (event) => {
+        console.log("RecordingPill: Received paste-error event", event.payload);
+        setFeedbackWithTimeout(event.payload, 4000);
+      })
+    );
+
     return () => {
       unlisteners.forEach((unlisten) => unlisten.then((fn) => fn()));
     };
@@ -153,10 +183,10 @@ export function RecordingPill() {
   //   }
   // };
 
-  // // Only show pill when recording or transcribing
-  // if (!isRecording && !isTranscribing) {
-  //   return null;
-  // }
+  // Only show pill when recording, transcribing, or enhancing
+  if (!isRecording && !isTranscribing && !isEnhancing) {
+    return null;
+  }
 
   return (
     <div className="fixed inset-0 flex items-end justify-center pointer-events-none">
@@ -182,7 +212,12 @@ export function RecordingPill() {
           } flex items-center justify-center`}
           // aria-readonly={isTranscribing}
         >
-          {isTranscribing ? (
+          {isEnhancing ? (
+            <>
+              <Sparkles size={isCompact ? 20 : 16} className="animate-pulse" />
+              {!isCompact && "Enhancing"}
+            </>
+          ) : isTranscribing ? (
             <>
               <IOSSpinner size={isCompact ? 20 : 16} />
               {!isCompact && "Transcribing"}

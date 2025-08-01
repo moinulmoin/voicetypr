@@ -1,3 +1,5 @@
+use tokio::time::{sleep, Duration};
+
 #[tauri::command]
 pub async fn check_accessibility_permission() -> Result<bool, String> {
     #[cfg(target_os = "macos")]
@@ -6,15 +8,30 @@ pub async fn check_accessibility_permission() -> Result<bool, String> {
 
         log::info!("Checking accessibility permissions for keyboard simulation");
 
-        let has_permission = check_accessibility_permission().await;
-
-        if has_permission {
-            log::info!("Accessibility permission is authorized");
-        } else {
-            log::warn!("Accessibility permission is not authorized");
+        // Try checking with a small delay to handle macOS timing issues
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: u8 = 3;
+        
+        loop {
+            attempts += 1;
+            
+            // Check permission
+            let has_permission = check_accessibility_permission().await;
+            
+            // If we got a definitive result or reached max attempts, return
+            if has_permission || attempts >= MAX_ATTEMPTS {
+                if has_permission {
+                    log::info!("Accessibility permission is authorized");
+                } else {
+                    log::warn!("Accessibility permission is not authorized after {} attempts", attempts);
+                }
+                return Ok(has_permission);
+            }
+            
+            // Wait a bit before retry
+            log::debug!("Permission check returned false, retrying... (attempt {}/{})", attempts, MAX_ATTEMPTS);
+            sleep(Duration::from_millis(200)).await;
         }
-
-        Ok(has_permission)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -25,19 +42,50 @@ pub async fn check_accessibility_permission() -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn request_accessibility_permission() -> Result<(), String> {
+pub async fn request_accessibility_permission(app: tauri::AppHandle) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        use tauri_plugin_macos_permissions::request_accessibility_permission;
+        use tauri_plugin_macos_permissions::{request_accessibility_permission, check_accessibility_permission};
+
+        // First check if permission is already granted
+        let already_granted = check_accessibility_permission().await;
+        if already_granted {
+            log::info!("Accessibility permission already granted");
+            
+            // Emit accessibility-granted event for UI update
+            log::info!("Emitting accessibility-granted event");
+            use tauri::Emitter;
+            let _ = app.emit("accessibility-granted", ());
+            
+            // Return true to indicate permission is already granted
+            return Ok(true);
+        }
 
         log::info!("Requesting accessibility permissions");
         request_accessibility_permission().await;
-        Ok(())
+        
+        // Wait a bit for macOS to process the request
+        sleep(Duration::from_millis(500)).await;
+        
+        // Check the permission status after request and update readiness
+        let has_permission = check_accessibility_permission().await;
+        
+        log::info!("Accessibility permission check after request: {}", has_permission);
+        
+        // Emit appropriate event based on permission status
+        use tauri::Emitter;
+        if has_permission {
+            let _ = app.emit("accessibility-granted", ());
+        } else {
+            let _ = app.emit("accessibility-denied", ());
+        }
+        
+        Ok(has_permission)
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -49,15 +97,30 @@ pub async fn check_microphone_permission() -> Result<bool, String> {
 
         log::info!("Checking microphone permissions");
 
-        let has_permission = check_microphone_permission().await;
-
-        if has_permission {
-            log::info!("Microphone permission is authorized");
-        } else {
-            log::warn!("Microphone permission is not authorized");
+        // Try checking with a small delay to handle macOS timing issues
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: u8 = 3;
+        
+        loop {
+            attempts += 1;
+            
+            // Check permission
+            let has_permission = check_microphone_permission().await;
+            
+            // If we got a definitive result or reached max attempts, return
+            if has_permission || attempts >= MAX_ATTEMPTS {
+                if has_permission {
+                    log::info!("Microphone permission is authorized");
+                } else {
+                    log::warn!("Microphone permission is not authorized after {} attempts", attempts);
+                }
+                return Ok(has_permission);
+            }
+            
+            // Wait a bit before retry
+            log::debug!("Permission check returned false, retrying... (attempt {}/{})", attempts, MAX_ATTEMPTS);
+            sleep(Duration::from_millis(200)).await;
         }
-
-        Ok(has_permission)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -68,24 +131,59 @@ pub async fn check_microphone_permission() -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn request_microphone_permission() -> Result<bool, String> {
+pub async fn request_microphone_permission(app: tauri::AppHandle) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        use tauri_plugin_macos_permissions::request_microphone_permission;
+        use tauri_plugin_macos_permissions::{request_microphone_permission, check_microphone_permission};
+
+        // First check if permission is already granted
+        let already_granted = check_microphone_permission().await;
+        if already_granted {
+            log::info!("Microphone permission already granted");
+            
+            // Emit microphone-granted event for UI update
+            log::info!("Emitting microphone-granted event");
+            use tauri::Emitter;
+            let _ = app.emit("microphone-granted", ());
+            
+            return Ok(true);
+        }
 
         log::info!("Requesting microphone permissions");
 
         // Request permission - this will show the system dialog
         let _ = request_microphone_permission().await;
+        
+        // Wait a bit for macOS to process
+        sleep(Duration::from_millis(500)).await;
 
         // After requesting, check the actual permission status
-        use tauri_plugin_macos_permissions::check_microphone_permission;
         let has_permission = check_microphone_permission().await;
 
         if has_permission {
             log::info!("Microphone permission granted");
         } else {
             log::warn!("Microphone permission denied");
+            
+            // Capture to Sentry - permission denial blocks core functionality
+            use crate::capture_sentry_message;
+            capture_sentry_message!(
+                "Microphone permission denied by user",
+                tauri_plugin_sentry::sentry::Level::Warning,
+                tags: {
+                    "permission.type" => "microphone",
+                    "permission.status" => "denied",
+                    "operation" => "request"
+                }
+            );
+        }
+        
+        // Emit appropriate event based on permission status
+        use tauri::Emitter;
+        if has_permission {
+            let _ = app.emit("microphone-granted", ());
+        } else {
+            let _ = app.emit("microphone-denied", ());
         }
 
         Ok(has_permission)
@@ -128,9 +226,34 @@ pub async fn test_automation_permission() -> Result<bool, String> {
             let error = String::from_utf8_lossy(&output.stderr);
             if error.contains("not allowed assistive access") || error.contains("1743") {
                 log::warn!("Automation permission denied by user: {}", error);
+                
+                // Capture to Sentry - accessibility permission needed for paste
+                use crate::capture_sentry_message;
+                capture_sentry_message!(
+                    "Accessibility permission denied for automation",
+                    tauri_plugin_sentry::sentry::Level::Warning,
+                    tags: {
+                        "permission.type" => "accessibility",
+                        "permission.status" => "denied",
+                        "operation" => "test_automation"
+                    }
+                );
+                
                 Ok(false)
             } else {
                 log::error!("AppleScript failed with unexpected error: {}", error);
+                
+                // Capture unexpected AppleScript errors
+                use crate::capture_sentry_message;
+                capture_sentry_message!(
+                    &format!("AppleScript automation test failed: {}", error),
+                    tauri_plugin_sentry::sentry::Level::Error,
+                    tags: {
+                        "error.type" => "applescript_error",
+                        "component" => "permissions"
+                    }
+                );
+                
                 Err(format!("AppleScript error: {}", error))
             }
         }

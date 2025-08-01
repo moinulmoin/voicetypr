@@ -7,12 +7,17 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_store::StoreExt;
 use tauri_plugin_sentry::{minidump, sentry};
+use tauri_plugin_log::{Builder as LogBuilder, Target, TargetKind, RotationStrategy};
+use chrono::Local;
 
+mod ai;
 mod audio;
 mod commands;
 mod license;
+mod secure_store;
 mod state;
 mod state_machine;
+mod utils;
 mod whisper;
 mod window_manager;
 
@@ -21,9 +26,12 @@ mod tests;
 
 use audio::recorder::AudioRecorder;
 use commands::{
+    ai::{get_ai_settings, get_ai_settings_for_provider, cache_ai_api_key, validate_and_cache_api_key, clear_ai_api_key_cache, update_ai_settings, enhance_transcription, disable_ai_enhancement, get_enhancement_options, update_enhancement_options},
     audio::*,
     debug::{debug_transcription_flow, test_transcription_event},
+    keyring::{keyring_set, keyring_get, keyring_delete, keyring_has},
     license::*,
+    logs::{get_log_files, read_log_file, export_logs, clear_old_logs, get_log_directory, open_logs_folder},
     model::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model,
@@ -40,56 +48,41 @@ use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
 use tauri::menu::{MenuBuilder, MenuItem, PredefinedMenuItem, Submenu, CheckMenuItem};
 
-// Helper function to format model names for display
-fn format_model_name(name: &str) -> String {
-    match name {
-        "base.en" => "Base (English)".to_string(),
-        "small.en" => "Small (English)".to_string(),
-        "large-v3" => "Large v3".to_string(),
-        "large-v3-q5_0" => "Large v3 Q5".to_string(),
-        "large-v3-turbo" => "Large v3 Turbo".to_string(),
-        "large-v3-turbo-q5_0" => "Large v3 Turbo Q5".to_string(),
-        _ => name.to_string(),
-    }
-}
 
 // Function to build the tray menu
 async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<tauri::menu::Menu<R>, Box<dyn std::error::Error>> {
     // Get current settings for menu state
-    let current_settings = {
+    let current_model = {
         match app.store("settings") {
             Ok(store) => {
-                let current_model = store.get("current_model")
+                store.get("current_model")
                     .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_default();
-                let current_language = store.get("language")
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "en".to_string());
-                (current_model, current_language)
+                    .unwrap_or_default()
             }
-            Err(_) => ("".to_string(), "en".to_string())
+            Err(_) => "".to_string()
         }
     };
-    
-    // Get downloaded models
-    let downloaded_models = {
+
+    // Get downloaded models with their info
+    let (downloaded_models, models_info) = {
         let whisper_state = app.state::<AsyncRwLock<whisper::manager::WhisperManager>>();
         let manager = whisper_state.read().await;
-        manager.get_models_status()
-            .into_iter()
+        let all_models = manager.get_models_status();
+        let downloaded: Vec<(String, String)> = all_models
+            .iter()
             .filter(|(_, info)| info.downloaded)
-            .map(|(name, _)| name)
-            .collect::<Vec<_>>()
+            .map(|(name, info)| (name.clone(), info.display_name.clone()))
+            .collect();
+        (downloaded, all_models)
     };
-    
+
     // Create model submenu if there are downloaded models
     let model_submenu = if !downloaded_models.is_empty() {
         let mut model_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
         let mut model_check_items = Vec::new();
-        
-        for model_name in downloaded_models {
-            let display_name = format_model_name(&model_name);
-            let is_selected = model_name == current_settings.0;
+
+        for (model_name, display_name) in downloaded_models {
+            let is_selected = model_name == current_model;
             let model_item = CheckMenuItem::with_id(
                 app,
                 &format!("model_{}", model_name),
@@ -100,18 +93,21 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
             )?;
             model_check_items.push(model_item);
         }
-        
+
         // Convert to trait objects
         for item in &model_check_items {
             model_items.push(item);
         }
-        
-        let current_model_display = if current_settings.0.is_empty() {
+
+        let current_model_display = if current_model.is_empty() {
             "Model: None".to_string()
         } else {
-            format!("Model: {}", format_model_name(&current_settings.0))
+            let display_name = models_info.get(&current_model)
+                .map(|info| info.display_name.clone())
+                .unwrap_or_else(|| current_model.clone());
+            format!("Model: {}", display_name)
         };
-        
+
         Some(Submenu::with_id_and_items(
             app,
             "models",
@@ -122,79 +118,27 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
     } else {
         None
     };
-    
-    // Get supported languages
-    let languages = crate::whisper::languages::SUPPORTED_LANGUAGES
-        .iter()
-        .map(|(code, lang)| (code.to_string(), lang.name.to_string()))
-        .collect::<Vec<_>>();
-    
-    // Create language submenu
-    let mut lang_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
-    let mut lang_check_items = Vec::new();
-    
-    // Sort languages by name but keep Auto Detect first
-    let mut sorted_languages = languages;
-    sorted_languages.sort_by(|a, b| {
-        if a.0 == "auto" {
-            std::cmp::Ordering::Less
-        } else if b.0 == "auto" {
-            std::cmp::Ordering::Greater
-        } else {
-            a.1.cmp(&b.1)
-        }
-    });
-    
-    for (code, name) in sorted_languages {
-        let is_selected = code == current_settings.1;
-        let lang_item = CheckMenuItem::with_id(
-            app,
-            &format!("lang_{}", code),
-            &name,
-            true,
-            is_selected,
-            None::<&str>
-        )?;
-        lang_check_items.push(lang_item);
-    }
-    
-    // Convert to trait objects
-    for item in &lang_check_items {
-        lang_items.push(item);
-    }
-    
-    let current_lang_name = crate::whisper::languages::SUPPORTED_LANGUAGES
-        .get(current_settings.1.as_str())
-        .map(|l| l.name)
-        .unwrap_or("Unknown");
-    let lang_submenu = Submenu::with_id_and_items(
-        app,
-        "languages",
-        &format!("Language: {}", current_lang_name),
-        true,
-        &lang_items
-    )?;
+
 
     // Create menu items
     let separator1 = PredefinedMenuItem::separator(app)?;
-    let settings_i = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
+    let settings_i = MenuItem::with_id(app, "settings", "Dashboard", true, None::<&str>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit_i = MenuItem::with_id(app, "quit", "Quit VoiceTypr", true, None::<&str>)?;
 
     let mut menu_builder = MenuBuilder::new(app);
-    
+
     if let Some(model_submenu) = model_submenu {
         menu_builder = menu_builder.item(&model_submenu);
     }
-    
+
     let menu = menu_builder
-        .item(&lang_submenu)
         .item(&separator1)
         .item(&settings_i)
         .item(&separator2)
         .item(&quit_i)
         .build()?;
-        
+
     Ok(menu)
 }
 
@@ -215,11 +159,13 @@ impl Default for RecordingState {
     }
 }
 
+
 // Application state - managed by Tauri (runtime state only)
 pub struct AppState {
     // Recording-related runtime state
     pub recording_state: UnifiedRecordingState,
     pub recording_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
+    pub pending_shortcut: Arc<Mutex<Option<String>>>, // Pending shortcut to be applied
     pub current_recording_path: Arc<Mutex<Option<PathBuf>>>,
     pub transcription_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 
@@ -239,6 +185,7 @@ impl AppState {
         Self {
             recording_state: UnifiedRecordingState::new(),
             recording_shortcut: Arc::new(Mutex::new(None)),
+            pending_shortcut: Arc::new(Mutex::new(None)),
             current_recording_path: Arc::new(Mutex::new(None)),
             transcription_task: Arc::new(Mutex::new(None)),
             should_cancel_recording: Arc::new(AtomicBool::new(false)),
@@ -373,20 +320,25 @@ pub fn update_recording_state(
     };
 
     // Emit state change event with typed payload using the actual final state
-    let _ = app.emit(
-        "recording-state-changed",
-        serde_json::json!({
-            "state": match final_state {
-                RecordingState::Idle => "idle",
-                RecordingState::Starting => "starting",
-                RecordingState::Recording => "recording",
-                RecordingState::Stopping => "stopping",
-                RecordingState::Transcribing => "transcribing",
-                RecordingState::Error => "error",
-            },
-            "error": error
-        }),
-    );
+    let payload = serde_json::json!({
+        "state": match final_state {
+            RecordingState::Idle => "idle",
+            RecordingState::Starting => "starting",
+            RecordingState::Recording => "recording",
+            RecordingState::Stopping => "stopping",
+            RecordingState::Transcribing => "transcribing",
+            RecordingState::Error => "error",
+        },
+        "error": error
+    });
+    
+    // Emit to all windows
+    let _ = app.emit("recording-state-changed", payload.clone());
+    
+    // Also emit specifically to pill window to ensure it receives the event
+    if let Some(pill_window) = app.get_webview_window("pill") {
+        let _ = pill_window.emit("recording-state-changed", payload);
+    }
 }
 
 // Helper function to get current recording state
@@ -416,30 +368,66 @@ pub fn emit_to_all(
         .map_err(|e| format!("Failed to emit to all windows: {}", e))
 }
 
+// Setup logging with daily rotation
+fn setup_logging() -> tauri_plugin_log::Builder {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    
+    LogBuilder::default()
+        .targets([
+            Target::new(TargetKind::Stdout)
+                .filter(|metadata| {
+                    // Filter out noisy logs
+                    let target = metadata.target();
+                    !target.contains("whisper_rs") &&
+                    !target.contains("audio::level_meter") &&
+                    !target.contains("cpal") &&
+                    !target.contains("rubato") &&
+                    !target.contains("hound")
+                }),
+            Target::new(TargetKind::LogDir { 
+                file_name: Some(format!("voicetypr-{}.log", today)) 
+            })
+                .filter(|metadata| {
+                    // Filter out noisy logs from file as well
+                    let target = metadata.target();
+                    !target.contains("whisper_rs") &&
+                    !target.contains("audio::level_meter") &&
+                    !target.contains("cpal") &&
+                    !target.contains("rubato") &&
+                    !target.contains("hound")
+                }),
+        ])
+        .rotation_strategy(RotationStrategy::KeepAll)
+        .max_file_size(10_000_000) // 10MB per file
+        .level(if cfg!(debug_assertions) { 
+            log::LevelFilter::Debug 
+        } else { 
+            log::LevelFilter::Info 
+        })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Initialize logger with appropriate level based on build type
-    #[cfg(debug_assertions)]
-    {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    }
-
     // Load .env file if it exists (for development)
     match dotenv::dotenv() {
-        Ok(path) => log::debug!("Loaded .env file from: {:?}", path),
-        Err(e) => log::debug!("No .env file found or error loading it: {}", e),
+        Ok(path) => println!("Loaded .env file from: {:?}", path),
+        Err(e) => println!("No .env file found or error loading it: {}", e),
     }
 
-    log::info!("Starting VoiceTypr application");
-    
+    // Initialize encryption key for secure storage
+    if let Err(e) = secure_store::initialize_encryption_key() {
+        eprintln!("Failed to initialize encryption: {}", e);
+    }
+
     // Initialize Sentry if DSN is provided
-    let _sentry_guard = if let Ok(dsn) = std::env::var("SENTRY_DSN") {
+    // Try compile-time env var first, then runtime
+    let sentry_dsn = option_env!("SENTRY_DSN")
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("SENTRY_DSN").ok());
+
+    let _sentry_guard = if let Some(dsn) = sentry_dsn {
         if !dsn.is_empty() && dsn != "__YOUR_SENTRY_DSN__" {
-            log::info!("Initializing Sentry error tracking");
+            println!("Initializing Sentry error tracking");
             let client = sentry::init((
                 dsn,
                 sentry::ClientOptions {
@@ -465,18 +453,19 @@ pub fn run() {
             // Initialize minidump for native crash reporting (not on iOS)
             #[cfg(not(target_os = "ios"))]
             let _minidump_guard = minidump::init(&client);
-            
+
             Some(client)
         } else {
-            log::warn!("Sentry DSN not configured. Error tracking disabled.");
+            eprintln!("Sentry DSN not configured. Error tracking disabled.");
             None
         }
     } else {
-        log::info!("SENTRY_DSN environment variable not set. Error tracking disabled.");
+        println!("SENTRY_DSN environment variable not set. Error tracking disabled.");
         None
     };
 
     let mut builder = tauri::Builder::default()
+        .plugin(setup_logging().build())
         .plugin(tauri_plugin_cache::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -497,7 +486,7 @@ pub fn run() {
             .plugin(tauri_nspanel::init())
             .plugin(tauri_plugin_macos_permissions::init());
     }
-    
+
     // Add Sentry plugin if initialized
     if let Some(ref client) = _sentry_guard {
         builder = builder.plugin(tauri_plugin_sentry::init(client));
@@ -513,17 +502,17 @@ pub fn run() {
                         event.state()
                     );
 
-                    // Only handle key press events, ignore release for toggle behavior
+                    let app_handle = app.app_handle();
+                    let app_state = app_handle.state::<AppState>();
+
+                    // Only handle press events for toggle recording
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
 
-                    // Check if this is the recording shortcut
-                    let app_handle = app.app_handle();
+                    // Check if this is the toggle recording shortcut
                     let is_recording_shortcut = {
-                        let app_state = app_handle.state::<AppState>();
-                        let result = if let Ok(shortcut_guard) = app_state.recording_shortcut.lock()
-                        {
+                        if let Ok(shortcut_guard) = app_state.recording_shortcut.lock() {
                             if let Some(ref recording_shortcut) = *shortcut_guard {
                                 shortcut == recording_shortcut
                             } else {
@@ -531,9 +520,8 @@ pub fn run() {
                             }
                         } else {
                             false
-                        };
-                        result
-                    }; // Lock dropped here
+                        }
+                    };
 
                     if is_recording_shortcut {
                         // Toggle recording based on current state
@@ -573,7 +561,19 @@ pub fn run() {
                                     let recorder_state = app_handle.state::<RecorderState>();
                                     match stop_recording(app_handle.clone(), recorder_state).await {
                                         Ok(_) => {
-                                            log::info!("Toggle: Recording stopped successfully")
+                                            log::info!("Toggle: Recording stopped successfully");
+
+                                            // Apply pending shortcut after recording stops
+                                            match apply_pending_shortcut(app_handle.clone()).await {
+                                                Ok(applied) => {
+                                                    if applied {
+                                                        log::info!("Applied pending shortcut after recording stopped");
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    log::warn!("Failed to apply pending shortcut: {}", e);
+                                                }
+                                            }
                                         }
                                         Err(e) => {
                                             log::error!("Toggle: Error stopping recording: {}", e)
@@ -630,8 +630,12 @@ pub fn run() {
                                     log::debug!("ESC timeout expired, resetting state");
                                 });
 
-                                // Store timeout handle
+                                // Store timeout handle (abort previous one if exists)
                                 if let Ok(mut timeout_guard) = app_state.esc_timeout_handle.lock() {
+                                    if let Some(old_handle) = timeout_guard.take() {
+                                        old_handle.abort();
+                                        log::debug!("Aborted previous ESC timeout handle");
+                                    }
                                     *timeout_guard = Some(timeout_handle);
                                 }
                             } else {
@@ -663,11 +667,29 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            // Keyring is now used instead of Stronghold for API keys
+            // Much faster and uses OS-native secure storage
+
             // Set up panic handler to catch crashes
             std::panic::set_hook(Box::new(|panic_info| {
                 log::error!("PANIC: {:?}", panic_info);
                 eprintln!("Application panic: {:?}", panic_info);
             }));
+
+            // Clean up old logs on startup (keep last 30 days)
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match commands::logs::clear_old_logs(app_handle, 30).await {
+                    Ok(deleted) => {
+                        if deleted > 0 {
+                            log::info!("Cleaned up {} old log files", deleted);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to clean up old logs: {}", e);
+                    }
+                }
+            });
 
             // Set activation policy on macOS to prevent focus stealing
             #[cfg(target_os = "macos")]
@@ -701,6 +723,12 @@ pub fn run() {
                 // Also clear the last validation tracker
                 let _ = cache.remove("last_license_validation");
             }
+
+            // Run comprehensive startup checks
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                perform_startup_checks(app_handle).await;
+            });
 
             // Initialize whisper manager
             let models_dir = app.path().app_data_dir()?.join("models");
@@ -736,7 +764,7 @@ pub fn run() {
 
             // Create tray icon
             use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-            
+
             // Build the tray menu using our helper function
             // Note: We need to block here since setup is sync
             let menu = tauri::async_runtime::block_on(build_tray_menu(&app.app_handle()))?;
@@ -754,7 +782,7 @@ pub fn run() {
                 .on_menu_event(move |app, event| {
                     log::info!("Tray menu event: {:?}", event.id);
                     let event_id = event.id.as_ref();
-                    
+
                     if event_id == "settings" {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
@@ -768,7 +796,7 @@ pub fn run() {
                         // Handle model selection
                         let model_name = event_id.strip_prefix("model_").unwrap().to_string();
                         let app_handle = app.app_handle().clone();
-                        
+
                         tauri::async_runtime::spawn(async move {
                             match crate::commands::settings::set_model_from_tray(app_handle.clone(), model_name.clone()).await {
                                 Ok(_) => {
@@ -778,23 +806,6 @@ pub fn run() {
                                     log::error!("Failed to set model from tray: {}", e);
                                     // Emit error event so UI can show notification
                                     let _ = app_handle.emit("tray-action-error", &format!("Failed to change model: {}", e));
-                                }
-                            }
-                        });
-                    } else if event_id.starts_with("lang_") {
-                        // Handle language selection
-                        let lang_code = event_id.strip_prefix("lang_").unwrap().to_string();
-                        let app_handle = app.app_handle().clone();
-                        
-                        tauri::async_runtime::spawn(async move {
-                            match crate::commands::settings::set_language_from_tray(app_handle.clone(), lang_code.clone()).await {
-                                Ok(_) => {
-                                    log::info!("Language changed from tray to: {}", lang_code);
-                                }
-                                Err(e) => {
-                                    log::error!("Failed to set language from tray: {}", e);
-                                    // Emit error event so UI can show notification
-                                    let _ = app_handle.emit("tray-action-error", &format!("Failed to change language: {}", e));
                                 }
                             }
                         });
@@ -835,11 +846,14 @@ pub fn run() {
 
             log::info!("Loading hotkey: {}", hotkey_str);
 
+            // Normalize the hotkey for Tauri
+            let normalized_hotkey = crate::commands::key_normalizer::normalize_shortcut_keys(&hotkey_str);
+
             // Register global shortcut from settings with fallback
-            let shortcut: tauri_plugin_global_shortcut::Shortcut = match hotkey_str.parse() {
+            let shortcut: tauri_plugin_global_shortcut::Shortcut = match normalized_hotkey.parse() {
                 Ok(s) => s,
                 Err(_) => {
-                    log::warn!("Invalid hotkey format '{}', using default", hotkey_str);
+                    log::warn!("Invalid hotkey format '{}', using default", normalized_hotkey);
                     "CommandOrControl+Shift+Space".parse()
                         .expect("Default shortcut should be valid")
                 }
@@ -901,7 +915,7 @@ pub fn run() {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
                 // Create the pill window with extra height for tooltip
-                let pill_window = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
+                let pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
                     .title("Recording")
                     .resizable(false)
                     .decorations(false)
@@ -909,8 +923,15 @@ pub fn run() {
                     .skip_taskbar(true)
                     .transparent(true)
                     .inner_size(350.0, 150.0)  // Match window_manager.rs size
-                    .visible(false) // Start hidden
-                    .build()?;
+                    .visible(false); // Start hidden
+
+                // Disable context menu only in production builds
+                #[cfg(not(debug_assertions))]
+                {
+                    pill_builder = pill_builder.initialization_script("document.addEventListener('contextmenu', e => e.preventDefault());");
+                }
+
+                let pill_window = pill_builder.build()?;
 
                 // Convert to NSPanel to prevent focus stealing
                 use tauri_nspanel::WebviewWindowExt;
@@ -985,10 +1006,12 @@ pub fn run() {
             start_recording,
             stop_recording,
             cancel_recording,
+            get_current_recording_state,
             debug_transcription_flow,
             test_transcription_event,
             save_transcription,
             get_audio_devices,
+            get_current_audio_device,
             download_model,
             get_model_status,
             preload_model,
@@ -996,9 +1019,9 @@ pub fn run() {
             get_settings,
             save_settings,
             set_global_shortcut,
+            apply_pending_shortcut,
             get_supported_languages,
             set_model_from_tray,
-            set_language_from_tray,
             update_tray_menu,
             insert_text,
             delete_model,
@@ -1023,6 +1046,22 @@ pub fn run() {
             deactivate_license,
             open_purchase_page,
             reset_app_data,
+            get_ai_settings,
+            get_ai_settings_for_provider,
+            cache_ai_api_key,
+            validate_and_cache_api_key,
+            clear_ai_api_key_cache,
+            update_ai_settings,
+            enhance_transcription,
+            disable_ai_enhancement,
+            get_enhancement_options,
+            update_enhancement_options,
+            keyring_set,
+            keyring_get,
+            keyring_delete,
+            keyring_has,
+            get_log_directory,
+            open_logs_folder,
         ])
         .on_window_event(|window, event| {
             match event {
@@ -1042,4 +1081,104 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Perform essential startup checks
+async fn perform_startup_checks(app: tauri::AppHandle) {
+    log::info!("Performing startup checks...");
+    
+    // Check if any models are downloaded
+    if let Some(whisper_manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>() {
+        let has_models = whisper_manager.read().await.has_downloaded_models();
+        log::info!("Has downloaded models: {}", has_models);
+        
+        if !has_models {
+            log::warn!("No speech recognition models downloaded");
+            // Emit event to frontend to show download prompt
+            let _ = emit_to_window(&app, "main", "no-models-on-startup", ());
+        }
+    }
+    
+    // Validate AI settings if enabled
+    if let Ok(store) = app.store("settings") {
+        let ai_enabled = store.get("ai_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+            
+        if ai_enabled {
+            let provider = store.get("ai_provider")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "groq".to_string());
+                
+            let model = store.get("ai_model")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+                
+            // Check if API key is cached
+            use crate::commands::ai::get_ai_settings;
+            match get_ai_settings(app.clone()).await {
+                Ok(settings) => {
+                    if !settings.has_api_key {
+                        log::warn!("AI enabled but no API key found for provider: {}", provider);
+                        // Disable AI to prevent errors during recording
+                        store.set("ai_enabled", serde_json::Value::Bool(false));
+                        let _ = store.save();
+                        
+                        // Notify frontend
+                        let _ = emit_to_window(&app, "main", "ai-disabled-no-key", 
+                            "AI enhancement disabled - no API key found");
+                    } else if model.is_empty() {
+                        log::warn!("AI enabled but no model selected");
+                        store.set("ai_enabled", serde_json::Value::Bool(false));
+                        let _ = store.save();
+                        
+                        let _ = emit_to_window(&app, "main", "ai-disabled-no-model", 
+                            "AI enhancement disabled - no model selected");
+                    } else {
+                        log::info!("AI enhancement ready: {} with {}", provider, model);
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to check AI settings: {}", e);
+                }
+            }
+        }
+    }
+    
+    // Pre-check recording settings
+    if let Ok(store) = app.store("settings") {
+        // Validate language setting
+        let language = store.get("language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+            
+        if let Some(lang) = language {
+            use crate::whisper::languages::validate_language;
+            let validated = validate_language(Some(&lang));
+            if validated != lang.as_str() {
+                log::warn!("Invalid language '{}' in settings, resetting to '{}'", lang, validated);
+                store.set("language", serde_json::Value::String(validated.to_string()));
+                let _ = store.save();
+            }
+        }
+        
+        // Check current model is still available
+        let mut _model_available = false;
+        if let Some(current_model) = store.get("current_model")
+            .and_then(|v| v.as_str().map(|s| s.to_string())) {
+            if !current_model.is_empty() {
+                if let Some(whisper_manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>() {
+                    let downloaded = whisper_manager.read().await.get_downloaded_model_names();
+                    _model_available = downloaded.contains(&current_model);
+                    if !_model_available {
+                        log::warn!("Current model '{}' no longer available", current_model);
+                        // Clear the selection
+                        store.set("current_model", serde_json::Value::String(String::new()));
+                        let _ = store.save();
+                    }
+                }
+            }
+        }
+    }
+    
+    log::info!("Startup checks completed");
 }

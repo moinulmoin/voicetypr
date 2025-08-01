@@ -14,10 +14,8 @@
       {
         "title": "VoiceTypr",
         "label": "main",
-        "width": 700,
-        "height": 500,
-        "minWidth": 700,
-        "minHeight": 500,
+        "width": 800,
+        "height": 600,
         "resizable": false,
         "center": true,
         "visible": true,
@@ -28,11 +26,11 @@
     "security": {
       "csp": {
         "default-src": "'self' customprotocol: asset:",
-        "script-src": "'self'",
+        "script-src": "'self' 'unsafe-eval'",
         "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' asset: https: http: data:",
         "font-src": "'self'",
-        "connect-src": "'self' ipc: https: http: asset:",
+        "connect-src": "'self' ipc: https: http: asset: https://*.sentry.io https://*.ingest.sentry.io https://*.ingest.us.sentry.io",
         "media-src": "'self'"
       }
     },
@@ -52,7 +50,7 @@
       "minimumSystemVersion": "13.0",
       "entitlements": "./entitlements.plist",
       "hardenedRuntime": true,
-      "signingIdentity": "Developer ID Application: Ideaplexa LLC (53P98M92V7)"
+      "signingIdentity": "-"
     }
   },
   "plugins": {

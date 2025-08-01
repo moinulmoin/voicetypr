@@ -141,7 +141,7 @@ impl WindowManager {
             position_y
         );
 
-        let pill_window = WebviewWindowBuilder::new(
+        let pill_builder = WebviewWindowBuilder::new(
             &self.app_handle,
             "pill",
             WebviewUrl::App("pill.html".into()),
@@ -160,27 +160,49 @@ impl WindowManager {
         .inner_size(350.0, 150.0)
         .position(position_x, position_y)
         .visible(true) // Start visible
-        .focused(false) // Don't steal focus
-        .build()
-        .map_err(|e| e.to_string())?;
+        .focused(false); // Don't steal focus
 
-        // Show the window first (before NSPanel conversion)
-        pill_window.show().map_err(|e| e.to_string())?;
+        // Disable context menu only in production builds
+        #[cfg(not(debug_assertions))]
+        {
+            pill_builder = pill_builder.initialization_script("document.addEventListener('contextmenu', e => e.preventDefault());");
+        }
+
+        let pill_window = pill_builder.build()
+            .map_err(|e| e.to_string())?;
 
         // Convert to NSPanel on macOS
         #[cfg(target_os = "macos")]
         {
             use tauri_nspanel::WebviewWindowExt;
-
+            
             pill_window
                 .to_panel()
                 .map_err(|e| format!("Failed to convert to NSPanel: {:?}", e))?;
-
+            
             log::info!("Converted pill window to NSPanel");
-
-            // Show again after NSPanel conversion
-            pill_window.show().map_err(|e| e.to_string())?;
         }
+
+        // Show the window after NSPanel conversion
+        pill_window.show().map_err(|e| e.to_string())?;
+        
+        // Set always on top again to ensure it's visible
+        pill_window.set_always_on_top(true).map_err(|e| e.to_string())?;
+        
+        // Emit current recording state to the pill window
+        let app_state = pill_window.app_handle().state::<crate::AppState>();
+        let current_state = app_state.get_current_state();
+        let _ = pill_window.emit("recording-state-changed", serde_json::json!({
+            "state": match current_state {
+                crate::RecordingState::Idle => "idle",
+                crate::RecordingState::Starting => "starting",
+                crate::RecordingState::Recording => "recording",
+                crate::RecordingState::Stopping => "stopping",
+                crate::RecordingState::Transcribing => "transcribing",
+                crate::RecordingState::Error => "error",
+            },
+            "error": null
+        }));
 
         // Store the window reference while still holding the lock
         *pill_guard = Some(pill_window);

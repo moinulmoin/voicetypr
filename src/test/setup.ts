@@ -52,7 +52,7 @@ mockIPC((cmd, args) => {
     case 'get_settings':
       return Promise.resolve({
         hotkey: 'CommandOrControl+Shift+Space',
-        language: 'auto',
+        language: 'en',
         theme: 'system',
         current_model: 'base',
         transcription_cleanup_days: null,

@@ -76,13 +76,16 @@ impl AudioRecorder {
     }
 
     pub fn start_recording(&mut self, output_path: &str) -> Result<(), String> {
-        // Check if already recording
-        if self
+        log::info!("AudioRecorder::start_recording called with path: {}", output_path);
+        
+        // Acquire lock once and hold it through the entire initialization
+        let mut handle_guard = self
             .recording_handle
             .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))?
-            .is_some()
-        {
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
+            
+        // Check if already recording
+        if handle_guard.is_some() {
             return Err("Already recording".to_string());
         }
 
@@ -107,14 +110,30 @@ impl AudioRecorder {
             let device = host
                 .default_input_device()
                 .ok_or("No input device available")?;
+                
+            let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+            log::info!("======================================");
+            log::info!("🎤 AUDIO DEVICE SELECTED: {}", device_name);
+            log::info!("======================================");
 
             let config = device.default_input_config().map_err(|e| e.to_string())?;
 
             log::info!(
-                "Recording with config: sample_rate={}, channels={}",
+                "Audio config: sample_rate={} Hz, channels={}, format={:?}",
                 config.sample_rate().0,
-                config.channels()
+                config.channels(),
+                config.sample_format()
             );
+            
+            // List all available input devices for debugging
+            log::info!("Available input devices:");
+            if let Ok(devices) = host.input_devices() {
+                for (idx, dev) in devices.enumerate() {
+                    if let Ok(name) = dev.name() {
+                        log::info!("  {}. {}", idx + 1, name);
+                    }
+                }
+            }
 
             // Initialize silence detector and level meter
             let silence_detector = Arc::new(Mutex::new(
@@ -212,10 +231,14 @@ impl AudioRecorder {
                         .build_input_stream(
                             &config.config(),
                             move |data: &[f32], _: &_| {
-                                // Convert F32 to I16
+                                // Convert F32 to I16 with proper clamping to avoid distortion
                                 let i16_samples: Vec<i16> = data
                                     .iter()
-                                    .map(|&sample| (sample * i16::MAX as f32) as i16)
+                                    .map(|&sample| {
+                                        // Clamp to avoid overflow and use 32767.0 for symmetric conversion
+                                        let clamped = sample.clamp(-1.0, 1.0);
+                                        (clamped * 32767.0) as i16
+                                    })
                                     .collect();
                                 
                                 // Process audio
@@ -279,7 +302,12 @@ impl AudioRecorder {
                 }
             };
 
-            stream.play().map_err(|e| e.to_string())?;
+            stream.play().map_err(|e| {
+                log::error!("Failed to start audio stream: {}", e);
+                e.to_string()
+            })?;
+            
+            log::info!("Audio stream started successfully");
 
             // Wait for stop signal
             let stop_reason = stop_rx.recv().ok();
@@ -311,10 +339,8 @@ impl AudioRecorder {
             }
         });
 
-        *self
-            .recording_handle
-            .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))? = Some(RecordingHandle {
+        // Set the handle using the guard we already have
+        *handle_guard = Some(RecordingHandle {
             stop_tx,
             thread_handle,
         });

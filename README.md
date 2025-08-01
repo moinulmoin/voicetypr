@@ -39,6 +39,12 @@ VoiceTypr is open source ai voice to text dictation tool, alternative to Wispr F
 - Your recordings stay on your device
 - Open source for full transparency
 
+### 🤖 **AI Enhancement** (NEW)
+- Transform your transcriptions with AI (Groq/Gemini)
+- Smart presets: Email, Commits, Notes
+- Secure API key storage
+- Requires internet connection for enhancement only
+
 ### 🎨 **Clean Design**
 - Clean, user interface
 - Menubar integration for quick access
