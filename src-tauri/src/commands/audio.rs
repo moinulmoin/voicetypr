@@ -397,20 +397,6 @@ pub async fn stop_recording(
         }
     } // MutexGuard dropped here BEFORE any await
     
-    // DEBUG: Verify the audio file exists after recording
-    let app_state = app.state::<AppState>();
-    if let Ok(path_guard) = app_state.current_recording_path.lock() {
-        if let Some(audio_path) = path_guard.as_ref() {
-            if audio_path.exists() {
-                let file_size = std::fs::metadata(audio_path)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                log::info!("DEBUG: Audio file exists at {:?}, size: {} bytes", audio_path, file_size);
-            } else {
-                log::error!("DEBUG: Audio file NOT FOUND at {:?}", audio_path);
-            }
-        }
-    }
 
     // Unregister ESC key
     match "Escape".parse::<tauri_plugin_global_shortcut::Shortcut>() {
@@ -452,11 +438,9 @@ pub async fn stop_recording(
         if let Ok(path_guard) = app_state.current_recording_path.lock() {
             if let Some(audio_path) = path_guard.as_ref() {
                 log::info!("Removing cancelled recording file");
-                // DEBUG: Keeping audio files for debugging
-                // if let Err(e) = std::fs::remove_file(audio_path) {
-                //     log::warn!("Failed to remove cancelled recording: {}", e);
-                // }
-                log::info!("DEBUG: Keeping cancelled audio file at: {:?}", audio_path);
+                if let Err(e) = std::fs::remove_file(audio_path) {
+                    log::warn!("Failed to remove cancelled recording: {}", e);
+                }
             }
         }
 
@@ -516,11 +500,9 @@ pub async fn stop_recording(
         );
 
         // Clean up the recording
-        // DEBUG: Keeping audio files for debugging
-        // if let Err(e) = std::fs::remove_file(&audio_path) {
-        //     log::warn!("Failed to remove audio file: {}", e);
-        // }
-        log::info!("DEBUG: Keeping audio file at: {:?}", audio_path);
+        if let Err(e) = std::fs::remove_file(&audio_path) {
+            log::warn!("Failed to remove audio file: {}", e);
+        }
 
         // Tell user they MUST download a model
         let _ = emit_to_window(
@@ -710,11 +692,9 @@ pub async fn stop_recording(
         }
 
         // Clean up temp file regardless of outcome
-        // DEBUG: Keeping audio files for debugging
-        // if let Err(e) = std::fs::remove_file(&audio_path_clone) {
-        //     log::warn!("Failed to remove temporary audio file: {}", e);
-        // }
-        log::info!("DEBUG: Keeping temporary audio file at: {:?}", audio_path_clone);
+        if let Err(e) = std::fs::remove_file(&audio_path_clone) {
+            log::warn!("Failed to remove temporary audio file: {}", e);
+        }
 
         match result {
             Ok(text) => {
@@ -882,13 +862,6 @@ pub async fn stop_recording(
 
                     // 4. NOW handle text insertion - pill is gone, system is stable
                     
-                    // DEBUG: Log that audio file is being kept
-                    let app_state_debug = app_for_process.state::<AppState>();
-                    if let Ok(path_guard) = app_state_debug.current_recording_path.lock() {
-                        if let Some(audio_path) = path_guard.as_ref() {
-                            log::info!("DEBUG: Transcription complete. Audio file kept at: {:?}", audio_path);
-                        }
-                    }
                     
                     // Always insert text at cursor position (this also copies to clipboard)
                     match crate::commands::text::insert_text(app_for_process.clone(), final_text.clone()).await {
@@ -1163,11 +1136,9 @@ pub async fn transcribe_audio(
     let text = transcriber.transcribe_with_translation(&temp_path, Some(&language), translate_to_english)?;
 
     // Clean up
-    // DEBUG: Keeping audio files for debugging
-    // if let Err(e) = std::fs::remove_file(&temp_path) {
-    //     log::warn!("Failed to remove test audio file: {}", e);
-    // }
-    log::info!("DEBUG: Keeping test audio file at: {:?}", temp_path);
+    if let Err(e) = std::fs::remove_file(&temp_path) {
+        log::warn!("Failed to remove test audio file: {}", e);
+    }
 
     Ok(text)
 }
@@ -1220,11 +1191,9 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
         if let Ok(path_guard) = app_state.current_recording_path.lock() {
             if let Some(audio_path) = path_guard.as_ref() {
                 log::info!("Removing cancelled recording file");
-                // DEBUG: Keeping audio files for debugging
-                // if let Err(e) = std::fs::remove_file(audio_path) {
-                //     log::warn!("Failed to remove cancelled recording: {}", e);
-                // }
-                log::info!("DEBUG: Keeping cancelled audio file at: {:?}", audio_path);
+                if let Err(e) = std::fs::remove_file(audio_path) {
+                    log::warn!("Failed to remove cancelled recording: {}", e);
+                }
             }
         }
     }

@@ -151,11 +151,26 @@ impl Transcriber {
             return Err(format!("Unsupported channel count: {}", spec.channels));
         }
 
+        // Store original audio length before the move
+        let original_audio_length = audio.len();
+
         /* ----------------------------------------------
-        4) Let Whisper handle resampling internally
+        4) Resample to 16kHz using high-quality resampler
         ---------------------------------------------- */
-        // Whisper will resample to 16kHz internally if needed
-        // No need for us to do it manually
+        // Use rubato for high-quality resampling to 16kHz
+        let resampled_audio = if spec.sample_rate != 16_000 {
+            use crate::audio::resampler::resample_to_16khz;
+            
+            log::info!(
+                "[TRANSCRIPTION_DEBUG] Resampling audio from {} Hz to 16000 Hz",
+                spec.sample_rate
+            );
+            
+            resample_to_16khz(&audio, spec.sample_rate)?
+        } else {
+            log::info!("[TRANSCRIPTION_DEBUG] Audio already at 16kHz, no resampling needed");
+            audio
+        };
 
         // Check cancellation after resampling
         if should_cancel() {
@@ -164,9 +179,9 @@ impl Transcriber {
         }
 
         log::debug!(
-            "Audio normalised → mono 16 kHz: {} samples ({:.2}s)",
-            audio.len(),
-            audio.len() as f32 / 16_000_f32
+            "Audio ready for Whisper: {} samples at 16kHz ({:.2}s)",
+            resampled_audio.len(),
+            resampled_audio.len() as f32 / 16_000_f32
         );
 
         // Create transcription parameters - use BeamSearch for better accuracy
@@ -262,7 +277,7 @@ impl Transcriber {
             context_map.insert("threads".to_string(), serde_json::Value::from(threads));
             context_map.insert(
                 "audio_duration_seconds".to_string(),
-                serde_json::Value::from(audio.len() as f32 / 16_000_f32),
+                serde_json::Value::from(resampled_audio.len() as f32 / 16_000_f32),
             );
 
             capture_sentry_with_context!(
@@ -280,13 +295,13 @@ impl Transcriber {
 
         log::info!(
             "[TRANSCRIPTION_DEBUG] Running Whisper inference with {} samples...",
-            audio.len()
+            resampled_audio.len()
         );
 
         let start_time = std::time::Instant::now();
         log::info!("[TRANSCRIPTION_DEBUG] Starting whisper full() inference...");
 
-        state.full(params, &audio).map_err(|e| {
+        state.full(params, &resampled_audio).map_err(|e| {
             let error = format!("Whisper inference failed: {}", e);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
 
@@ -302,11 +317,11 @@ impl Transcriber {
             context_map.insert("translate".to_string(), serde_json::Value::from(translate));
             context_map.insert(
                 "audio_duration_seconds".to_string(),
-                serde_json::Value::from(audio.len() as f32 / 16_000_f32),
+                serde_json::Value::from(resampled_audio.len() as f32 / 16_000_f32),
             );
             context_map.insert(
                 "audio_samples".to_string(),
-                serde_json::Value::from(audio.len()),
+                serde_json::Value::from(original_audio_length),
             );
 
             capture_sentry_with_context!(
