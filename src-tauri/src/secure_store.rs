@@ -34,7 +34,7 @@ pub fn initialize_encryption_key() -> Result<(), String> {
             &mut key
         );
         
-        log::info!("Initialized encryption with PBKDF2-derived device-specific key");
+        println!("Initialized encryption with PBKDF2-derived device-specific key");
         Ok(key)
     }).map(|_| ())
 }

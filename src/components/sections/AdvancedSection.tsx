@@ -19,7 +19,9 @@ import {
   Loader2,
   Mic,
   RefreshCw,
-  Trash2
+  Trash2,
+  HelpCircle,
+  FileText
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -282,7 +284,7 @@ export function AdvancedSection() {
             </div>
 
             {/* Diagnostics Section */}
-            {/* <div className="rounded-lg border bg-card p-4 space-y-4">
+            <div className="rounded-lg border bg-card p-4 space-y-4">
               <div className="flex items-center gap-2 mb-2">
                 <HelpCircle className="h-4 w-4 text-muted-foreground" />
                 <h3 className="text-sm font-medium">Diagnostics</h3>
@@ -296,21 +298,23 @@ export function AdvancedSection() {
                     try {
                       await invoke("open_logs_folder");
                     } catch (error) {
+                      console.error("Failed to open logs folder:", error);
                       toast.error("Failed to open logs folder");
                     }
                   }}
                   className="w-full justify-start"
                 >
                   <FileText className="mr-2 h-4 w-4" />
-                  View Logs
+                  Open Logs Folder
                 </Button>
 
-                <div className="text-xs text-muted-foreground">
-                  <p>Logs location:</p>
-                  <code className="text-xs bg-muted px-1 py-0.5 rounded">~/Library/Logs/com.voicetypr</code>
+                <div className="text-xs text-muted-foreground space-y-1">
+                  <p>• Debug logs are saved automatically with daily rotation</p>
+                  <p>• Logs older than 30 days are automatically deleted</p>
+                  <p>• Share logs when reporting issues</p>
                 </div>
               </div>
-            </div> */}
+            </div>
           </div>
         </ScrollArea>
       </div>

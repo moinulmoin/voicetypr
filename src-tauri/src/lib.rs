@@ -7,6 +7,8 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_store::StoreExt;
 use tauri_plugin_sentry::{minidump, sentry};
+use tauri_plugin_log::{Builder as LogBuilder, Target, TargetKind, RotationStrategy};
+use chrono::Local;
 
 mod ai;
 mod audio;
@@ -29,6 +31,7 @@ use commands::{
     debug::{debug_transcription_flow, test_transcription_event},
     keyring::{keyring_set, keyring_get, keyring_delete, keyring_has},
     license::*,
+    logs::{get_log_files, read_log_file, export_logs, clear_old_logs, get_log_directory, open_logs_folder},
     model::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model,
@@ -365,29 +368,55 @@ pub fn emit_to_all(
         .map_err(|e| format!("Failed to emit to all windows: {}", e))
 }
 
+// Setup logging with daily rotation
+fn setup_logging() -> tauri_plugin_log::Builder {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    
+    LogBuilder::default()
+        .targets([
+            Target::new(TargetKind::Stdout)
+                .filter(|metadata| {
+                    // Filter out noisy logs
+                    let target = metadata.target();
+                    !target.contains("whisper_rs") &&
+                    !target.contains("audio::level_meter") &&
+                    !target.contains("cpal") &&
+                    !target.contains("rubato") &&
+                    !target.contains("hound")
+                }),
+            Target::new(TargetKind::LogDir { 
+                file_name: Some(format!("voicetypr-{}.log", today)) 
+            })
+                .filter(|metadata| {
+                    // Filter out noisy logs from file as well
+                    let target = metadata.target();
+                    !target.contains("whisper_rs") &&
+                    !target.contains("audio::level_meter") &&
+                    !target.contains("cpal") &&
+                    !target.contains("rubato") &&
+                    !target.contains("hound")
+                }),
+        ])
+        .rotation_strategy(RotationStrategy::KeepAll)
+        .max_file_size(10_000_000) // 10MB per file
+        .level(if cfg!(debug_assertions) { 
+            log::LevelFilter::Debug 
+        } else { 
+            log::LevelFilter::Info 
+        })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Initialize logger with appropriate level based on build type
-    #[cfg(debug_assertions)]
-    {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    }
-
     // Load .env file if it exists (for development)
     match dotenv::dotenv() {
-        Ok(path) => log::debug!("Loaded .env file from: {:?}", path),
-        Err(e) => log::debug!("No .env file found or error loading it: {}", e),
+        Ok(path) => println!("Loaded .env file from: {:?}", path),
+        Err(e) => println!("No .env file found or error loading it: {}", e),
     }
-
-    log::info!("Starting VoiceTypr application");
 
     // Initialize encryption key for secure storage
     if let Err(e) = secure_store::initialize_encryption_key() {
-        log::error!("Failed to initialize encryption: {}", e);
+        eprintln!("Failed to initialize encryption: {}", e);
     }
 
     // Initialize Sentry if DSN is provided
@@ -398,7 +427,7 @@ pub fn run() {
 
     let _sentry_guard = if let Some(dsn) = sentry_dsn {
         if !dsn.is_empty() && dsn != "__YOUR_SENTRY_DSN__" {
-            log::info!("Initializing Sentry error tracking");
+            println!("Initializing Sentry error tracking");
             let client = sentry::init((
                 dsn,
                 sentry::ClientOptions {
@@ -427,15 +456,16 @@ pub fn run() {
 
             Some(client)
         } else {
-            log::warn!("Sentry DSN not configured. Error tracking disabled.");
+            eprintln!("Sentry DSN not configured. Error tracking disabled.");
             None
         }
     } else {
-        log::info!("SENTRY_DSN environment variable not set. Error tracking disabled.");
+        println!("SENTRY_DSN environment variable not set. Error tracking disabled.");
         None
     };
 
     let mut builder = tauri::Builder::default()
+        .plugin(setup_logging().build())
         .plugin(tauri_plugin_cache::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -645,6 +675,21 @@ pub fn run() {
                 log::error!("PANIC: {:?}", panic_info);
                 eprintln!("Application panic: {:?}", panic_info);
             }));
+
+            // Clean up old logs on startup (keep last 30 days)
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match commands::logs::clear_old_logs(app_handle, 30).await {
+                    Ok(deleted) => {
+                        if deleted > 0 {
+                            log::info!("Cleaned up {} old log files", deleted);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to clean up old logs: {}", e);
+                    }
+                }
+            });
 
             // Set activation policy on macOS to prevent focus stealing
             #[cfg(target_os = "macos")]
@@ -1015,6 +1060,8 @@ pub fn run() {
             keyring_get,
             keyring_delete,
             keyring_has,
+            get_log_directory,
+            open_logs_folder,
         ])
         .on_window_event(|window, event| {
             match event {
