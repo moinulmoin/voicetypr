@@ -6,7 +6,6 @@ use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_store::StoreExt;
-use tauri_plugin_sentry::{minidump, sentry};
 use tauri_plugin_log::{Builder as LogBuilder, Target, TargetKind, RotationStrategy};
 use chrono::Local;
 
@@ -419,50 +418,6 @@ pub fn run() {
         eprintln!("Failed to initialize encryption: {}", e);
     }
 
-    // Initialize Sentry if DSN is provided
-    // Try compile-time env var first, then runtime
-    let sentry_dsn = option_env!("SENTRY_DSN")
-        .map(|s| s.to_string())
-        .or_else(|| std::env::var("SENTRY_DSN").ok());
-
-    let _sentry_guard = if let Some(dsn) = sentry_dsn {
-        if !dsn.is_empty() && dsn != "__YOUR_SENTRY_DSN__" {
-            println!("Initializing Sentry error tracking");
-            let client = sentry::init((
-                dsn,
-                sentry::ClientOptions {
-                    release: sentry::release_name!(),
-                    // Disable session tracking for privacy
-                    auto_session_tracking: false,
-                    // Set environment based on build mode
-                    environment: Some(if cfg!(debug_assertions) {
-                        "development"
-                    } else {
-                        "production"
-                    }.into()),
-                    // Sample rate for performance monitoring (0.0 to 1.0)
-                    traces_sample_rate: 0.1,
-                    // Attach stack traces to messages
-                    attach_stacktrace: true,
-                    // Privacy: Don't send user information
-                    send_default_pii: false,
-                    ..Default::default()
-                },
-            ));
-
-            // Initialize minidump for native crash reporting (not on iOS)
-            #[cfg(not(target_os = "ios"))]
-            let _minidump_guard = minidump::init(&client);
-
-            Some(client)
-        } else {
-            eprintln!("Sentry DSN not configured. Error tracking disabled.");
-            None
-        }
-    } else {
-        println!("SENTRY_DSN environment variable not set. Error tracking disabled.");
-        None
-    };
 
     let mut builder = tauri::Builder::default()
         .plugin(setup_logging().build())
@@ -487,10 +442,6 @@ pub fn run() {
             .plugin(tauri_plugin_macos_permissions::init());
     }
 
-    // Add Sentry plugin if initialized
-    if let Some(ref client) = _sentry_guard {
-        builder = builder.plugin(tauri_plugin_sentry::init(client));
-    }
 
     builder
         .plugin(

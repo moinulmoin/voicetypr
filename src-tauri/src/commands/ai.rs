@@ -466,10 +466,11 @@ mod tests {
     #[test]
     fn test_provider_validation() {
         assert!(validate_provider_name("groq").is_ok());
-        assert!(validate_provider_name("openai").is_ok());
-        assert!(validate_provider_name("test-provider").is_ok());
-        assert!(validate_provider_name("test_provider").is_ok());
+        assert!(validate_provider_name("gemini").is_ok());
         
+        assert!(validate_provider_name("openai").is_err());
+        assert!(validate_provider_name("test-provider").is_err());
+        assert!(validate_provider_name("test_provider").is_err());
         assert!(validate_provider_name("test provider").is_err());
         assert!(validate_provider_name("test@provider").is_err());
         assert!(validate_provider_name("").is_err());

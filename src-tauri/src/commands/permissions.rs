@@ -164,18 +164,6 @@ pub async fn request_microphone_permission(app: tauri::AppHandle) -> Result<bool
             log::info!("Microphone permission granted");
         } else {
             log::warn!("Microphone permission denied");
-            
-            // Capture to Sentry - permission denial blocks core functionality
-            use crate::capture_sentry_message;
-            capture_sentry_message!(
-                "Microphone permission denied by user",
-                tauri_plugin_sentry::sentry::Level::Warning,
-                tags: {
-                    "permission.type" => "microphone",
-                    "permission.status" => "denied",
-                    "operation" => "request"
-                }
-            );
         }
         
         // Emit appropriate event based on permission status
@@ -227,32 +215,9 @@ pub async fn test_automation_permission() -> Result<bool, String> {
             if error.contains("not allowed assistive access") || error.contains("1743") {
                 log::warn!("Automation permission denied by user: {}", error);
                 
-                // Capture to Sentry - accessibility permission needed for paste
-                use crate::capture_sentry_message;
-                capture_sentry_message!(
-                    "Accessibility permission denied for automation",
-                    tauri_plugin_sentry::sentry::Level::Warning,
-                    tags: {
-                        "permission.type" => "accessibility",
-                        "permission.status" => "denied",
-                        "operation" => "test_automation"
-                    }
-                );
-                
                 Ok(false)
             } else {
                 log::error!("AppleScript failed with unexpected error: {}", error);
-                
-                // Capture unexpected AppleScript errors
-                use crate::capture_sentry_message;
-                capture_sentry_message!(
-                    &format!("AppleScript automation test failed: {}", error),
-                    tauri_plugin_sentry::sentry::Level::Error,
-                    tags: {
-                        "error.type" => "applescript_error",
-                        "component" => "permissions"
-                    }
-                );
                 
                 Err(format!("AppleScript error: {}", error))
             }

@@ -2,7 +2,6 @@ import { AlertCircle, RefreshCw } from 'lucide-react';
 import React from 'react';
 import { ErrorBoundary as ReactErrorBoundary } from 'react-error-boundary';
 import { Button } from './ui/button';
-import * as Sentry from '@sentry/react';
 
 interface ErrorFallbackProps {
   error: Error;
@@ -47,28 +46,11 @@ export function AppErrorBoundary({
   onReset,
   isolate = true
 }: AppErrorBoundaryProps) {
-  // Use Sentry's ErrorBoundary which automatically captures errors
   return (
-    <Sentry.ErrorBoundary
-      fallback={(errorData) => {
-        const FallbackComp = fallback;
-        const error = errorData.error instanceof Error ? errorData.error : new Error(String(errorData.error));
-        return <FallbackComp error={error} resetErrorBoundary={errorData.resetError} />;
-      }}
-      beforeCapture={(scope, error) => {
-        // Add additional context to Sentry
-        scope.setTag('errorBoundary', true);
-        scope.setLevel('error');
-        // Add error details as extra context
-        if (error instanceof Error) {
-          scope.setContext('error_details', {
-            message: error.message,
-            stack: error.stack,
-          });
-        }
-      }}
+    <ReactErrorBoundary
+      FallbackComponent={fallback}
       onError={(error, errorInfo) => {
-        console.error('Error caught by Sentry boundary:', error, errorInfo);
+        console.error('Error caught by boundary:', error, errorInfo);
         if (onError) {
           onError(error, errorInfo);
         }
@@ -76,7 +58,7 @@ export function AppErrorBoundary({
       onReset={onReset}
     >
       {children}
-    </Sentry.ErrorBoundary>
+    </ReactErrorBoundary>
   );
 }
 
@@ -86,10 +68,6 @@ export function RecordingErrorBoundary({ children }: { children: React.ReactNode
     <AppErrorBoundary
       onError={(error) => {
         console.error('Recording error:', error);
-        // Add context for recording errors (Sentry already captures via AppErrorBoundary)
-        Sentry.configureScope((scope) => {
-          scope.setTag('feature', 'recording');
-        });
       }}
       onReset={() => {
         // Could reset recording state here
@@ -105,10 +83,6 @@ export function SettingsErrorBoundary({ children }: { children: React.ReactNode 
     <AppErrorBoundary
       onError={(error) => {
         console.error('Settings error:', error);
-        Sentry.configureScope((scope) => {
-          scope.setTag('feature', 'settings');
-          scope.setLevel('warning');
-        });
       }}
       fallback={({ error, resetErrorBoundary }) => (
         <div className="p-4 border border-destructive/20 rounded-lg bg-destructive/5">
@@ -136,10 +110,6 @@ export function ModelManagementErrorBoundary({ children }: { children: React.Rea
     <AppErrorBoundary
       onError={(error) => {
         console.error('Model management error:', error);
-        Sentry.configureScope((scope) => {
-          scope.setTag('feature', 'model_management');
-          scope.setLevel('error');
-        });
       }}
       fallback={({ resetErrorBoundary }) => (
         <div className="text-center p-4 space-y-2">
@@ -156,4 +126,3 @@ export function ModelManagementErrorBoundary({ children }: { children: React.Rea
     </AppErrorBoundary>
   );
 }
-

@@ -148,23 +148,6 @@ pub async fn download_model(
                     tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
                 } else {
                     log::error!("Download failed after {} attempts: {}", MAX_RETRIES, e);
-                    
-                    // Capture to Sentry - download failed after all retries
-                    use crate::{capture_sentry_with_context, utils::sentry_helper::create_context_from_map};
-                    let mut context_map = std::collections::BTreeMap::new();
-                    context_map.insert("attempts".to_string(), serde_json::Value::from(MAX_RETRIES));
-                    context_map.insert("last_error".to_string(), serde_json::Value::from(e.to_string()));
-                    
-                    capture_sentry_with_context!(
-                        &format!("Model download failed after {} retries: {}", MAX_RETRIES, e),
-                        tauri_plugin_sentry::sentry::Level::Error,
-                        tags: {
-                            "error.type" => "download_failure",
-                            "component" => "model_manager",
-                            "model" => &model_name
-                        },
-                        context: "download", create_context_from_map(context_map)
-                    );
                 }
             }
         }

@@ -151,20 +151,27 @@ mod tests {
         let models_dir = temp_dir.path().join("models");
         std::fs::create_dir_all(&models_dir).unwrap();
 
-        let mut manager = WhisperManager::new(models_dir.clone());
+        let mut manager = WhisperManager::new_for_test(models_dir.clone());
 
         // get_model_path only returns path if model is downloaded
         let path = manager.get_model_path("base.en");
         assert!(path.is_none()); // Not downloaded yet
 
         // Create the model file to simulate download
-        std::fs::write(models_dir.join("base.en.bin"), b"dummy model").unwrap();
+        // For test models, create exactly 1KB file
+        let dummy_data = vec![0u8; 1024];
+        std::fs::write(models_dir.join("base.en.bin"), dummy_data).unwrap();
 
         // Refresh status
         manager.refresh_downloaded_status();
 
+        // Debug: Check the status after refresh
+        let status = manager.get_models_status();
+        println!("Model status after refresh: {:?}", status.get("base.en"));
+
         // Now it should return the path
         let path = manager.get_model_path("base.en");
+        println!("Path returned: {:?}", path);
         assert!(path.is_some());
         assert_eq!(path.unwrap(), models_dir.join("base.en.bin"));
 
@@ -223,7 +230,7 @@ mod tests {
         let models_dir = temp_dir.path().join("models");
         std::fs::create_dir_all(&models_dir).unwrap();
 
-        let mut manager = WhisperManager::new(models_dir.clone());
+        let mut manager = WhisperManager::new_for_test(models_dir.clone());
 
         // Initially no models should be downloaded
         let status = manager.get_models_status();
@@ -232,7 +239,9 @@ mod tests {
         }
 
         // Create a model file
-        std::fs::write(models_dir.join("base.en.bin"), b"dummy model").unwrap();
+        // For test models, create exactly 1KB file
+        let dummy_data = vec![0u8; 1024];
+        std::fs::write(models_dir.join("base.en.bin"), dummy_data).unwrap();
 
         // Refresh status
         manager.refresh_downloaded_status();

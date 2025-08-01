@@ -30,7 +30,7 @@
         "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' asset: https: http: data:",
         "font-src": "'self'",
-        "connect-src": "'self' ipc: https: http: asset: https://*.sentry.io https://*.ingest.sentry.io https://*.ingest.us.sentry.io",
+        "connect-src": "'self' ipc: https: http: asset:",
         "media-src": "'self'"
       }
     },

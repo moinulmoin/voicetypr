@@ -55,17 +55,6 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Res
     // This function handles both copying text to clipboard AND pasting it at cursor
     // Initialize clipboard
     let mut clipboard = Clipboard::new().map_err(|e| {
-        // Capture to Sentry - clipboard initialization failure
-        use crate::capture_sentry_message;
-        capture_sentry_message!(
-            &format!("Failed to initialize clipboard: {}", e),
-            tauri_plugin_sentry::sentry::Level::Error,
-            tags: {
-                "error.type" => "clipboard_init_failure",
-                "component" => "text_insertion",
-                "operation" => "initialize"
-            }
-        );
         format!("Failed to initialize clipboard: {}", e)
     })?;
 
@@ -74,22 +63,6 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Res
 
     // Set new clipboard content
     clipboard.set_text(&text).map_err(|e| {
-        // Capture to Sentry - clipboard set failure
-        use crate::{capture_sentry_with_context, utils::sentry_helper::create_context_from_map};
-        let mut context_map = std::collections::BTreeMap::new();
-        context_map.insert("text_length".to_string(), serde_json::Value::from(text.len()));
-        context_map.insert("has_original".to_string(), serde_json::Value::from(original_clipboard.is_some()));
-        
-        capture_sentry_with_context!(
-            &format!("Failed to set clipboard content: {}", e),
-            tauri_plugin_sentry::sentry::Level::Error,
-            tags: {
-                "error.type" => "clipboard_set_failure",
-                "component" => "text_insertion",
-                "operation" => "set_text"
-            },
-            context: "clipboard", create_context_from_map(context_map)
-        );
         format!("Failed to set clipboard: {}", e)
     })?;
 
@@ -122,19 +95,6 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Res
         }
         Err(e) => {
             log::warn!("rdev paste failed: {}, trying AppleScript fallback", e);
-            
-            // Capture to Sentry - rdev paste failed, trying fallback
-            use crate::capture_sentry_message;
-            capture_sentry_message!(
-                &format!("rdev paste failed, using fallback: {}", e),
-                tauri_plugin_sentry::sentry::Level::Warning,
-                tags: {
-                    "error.type" => "paste_failure",
-                    "component" => "text_insertion",
-                    "method" => "rdev",
-                    "action" => "fallback_to_applescript"
-                }
-            );
 
             // Fallback to AppleScript
             let paste_result = panic::catch_unwind(AssertUnwindSafe(|| try_paste_with_applescript()));
@@ -145,36 +105,12 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Res
                 }
                 Ok(Err(e)) => {
                     log::warn!("AppleScript paste failed: {}, text remains in clipboard", e);
-                    // Capture to Sentry - paste failure but text is in clipboard
-                    use crate::capture_sentry_message;
-                    capture_sentry_message!(
-                        &format!("AppleScript paste failed: {}", e),
-                        tauri_plugin_sentry::sentry::Level::Warning,
-                        tags: {
-                            "error.type" => "paste_failure",
-                            "component" => "text_insertion",
-                            "method" => "applescript",
-                            "outcome" => "clipboard_available"
-                        }
-                    );
                     // Don't fail - text is still in clipboard for manual paste
                 }
                 Err(panic_err) => {
                     log::error!(
                         "PANIC during paste: {:?}, text remains in clipboard",
                         panic_err
-                    );
-                    // Capture to Sentry - panic during paste
-                    use crate::capture_sentry_message;
-                    capture_sentry_message!(
-                        &format!("PANIC during paste operation: {:?}", panic_err),
-                        tauri_plugin_sentry::sentry::Level::Error,
-                        tags: {
-                            "error.type" => "paste_panic",
-                            "component" => "text_insertion",
-                            "method" => "applescript",
-                            "outcome" => "clipboard_available"
-                        }
                     );
                     // Don't fail - text is still in clipboard for manual paste
                 }
@@ -189,17 +125,6 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Res
             if let Ok(mut clipboard) = Clipboard::new() {
                 if let Err(e) = clipboard.set_text(&original) {
                     log::error!("Failed to restore original clipboard: {}", e);
-                    // Capture to Sentry - non-critical but worth tracking
-                    use crate::capture_sentry_message;
-                    capture_sentry_message!(
-                        &format!("Failed to restore original clipboard content: {}", e),
-                        tauri_plugin_sentry::sentry::Level::Warning,
-                        tags: {
-                            "error.type" => "clipboard_restore_failure",
-                            "component" => "text_insertion",
-                            "operation" => "restore_original"
-                        }
-                    );
                 }
             }
         });

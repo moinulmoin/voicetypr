@@ -88,7 +88,7 @@ fi
 # Set CI mode for non-interactive operation
 export CI=true
 
-# Load .env file if it exists to get SENTRY_DSN and other env vars
+# Load .env file if it exists to get env vars
 if [ -f .env ]; then
     echo -e "${YELLOW}Loading environment variables from .env...${NC}"
     # Export all non-comment lines from .env
@@ -96,13 +96,6 @@ if [ -f .env ]; then
     source .env
     set +a
     echo -e "${GREEN}✓ Environment variables loaded${NC}"
-    
-    # Verify SENTRY_DSN is loaded
-    if [[ -n "$SENTRY_DSN" ]] && [[ "$SENTRY_DSN" != "__YOUR_SENTRY_DSN__" ]]; then
-        echo -e "${GREEN}✓ SENTRY_DSN configured${NC}"
-    else
-        echo -e "${YELLOW}Warning: SENTRY_DSN not configured${NC}"
-    fi
 fi
 
 echo -e "${GREEN}🚀 Starting VoiceTypr separate architecture release process (${RELEASE_TYPE})${NC}"

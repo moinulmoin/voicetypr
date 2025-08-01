@@ -111,7 +111,7 @@ mod tests {
         );
         
         assert!(prompt.contains("hello world"));
-        assert!(prompt.contains("Fix spelling, grammar, and punctuation"));
+        assert!(prompt.contains("Fix grammar, spelling, and add punctuation"));
         
         // Test with context
         let prompt_with_context = build_enhancement_prompt(
@@ -143,31 +143,31 @@ mod tests {
         // Test Default preset
         let default_options = EnhancementOptions::default();
         let default_prompt = build_enhancement_prompt(text, None, &default_options);
-        assert!(default_prompt.contains("Fix spelling, grammar, and punctuation"));
+        assert!(default_prompt.contains("Fix grammar, spelling, and add punctuation"));
         
         // Test Prompts preset
         let mut prompts_options = EnhancementOptions::default();
         prompts_options.preset = EnhancementPreset::Prompts;
         let prompts_prompt = build_enhancement_prompt(text, None, &prompts_options);
-        assert!(prompts_prompt.contains("Transform this into a clear, detailed prompt"));
+        assert!(prompts_prompt.contains("Transform this spoken request into a well-structured prompt"));
         
         // Test Email preset
         let mut email_options = EnhancementOptions::default();
         email_options.preset = EnhancementPreset::Email;
         let email_prompt = build_enhancement_prompt(text, None, &email_options);
-        assert!(email_prompt.contains("Convert this into a professional email"));
+        assert!(email_prompt.contains("Convert this spoken message into a properly formatted email"));
         
         // Test Commit preset
         let mut commit_options = EnhancementOptions::default();
         commit_options.preset = EnhancementPreset::Commit;
         let commit_prompt = build_enhancement_prompt(text, None, &commit_options);
-        assert!(commit_prompt.contains("Convert this into a conventional commit message"));
+        assert!(commit_prompt.contains("Convert to a conventional commit message"));
         
         // Test Notes preset
         let mut notes_options = EnhancementOptions::default();
         notes_options.preset = EnhancementPreset::Notes;
         let notes_prompt = build_enhancement_prompt(text, None, &notes_options);
-        assert!(notes_prompt.contains("Format this as organized notes"));
+        assert!(notes_prompt.contains("Convert spoken thoughts into well-structured notes"));
     }
     
     #[test]
