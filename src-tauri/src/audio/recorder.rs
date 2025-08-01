@@ -110,15 +110,29 @@ impl AudioRecorder {
                 .default_input_device()
                 .ok_or("No input device available")?;
                 
-            log::info!("Using audio input device: {:?}", device.name());
+            let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+            log::info!("======================================");
+            log::info!("🎤 AUDIO DEVICE SELECTED: {}", device_name);
+            log::info!("======================================");
 
             let config = device.default_input_config().map_err(|e| e.to_string())?;
 
             log::info!(
-                "Recording with config: sample_rate={}, channels={}",
+                "Audio config: sample_rate={} Hz, channels={}, format={:?}",
                 config.sample_rate().0,
-                config.channels()
+                config.channels(),
+                config.sample_format()
             );
+            
+            // List all available input devices for debugging
+            log::info!("Available input devices:");
+            if let Ok(devices) = host.input_devices() {
+                for (idx, dev) in devices.enumerate() {
+                    if let Ok(name) = dev.name() {
+                        log::info!("  {}. {}", idx + 1, name);
+                    }
+                }
+            }
 
             // Initialize silence detector and level meter
             let silence_detector = Arc::new(Mutex::new(

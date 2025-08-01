@@ -45,46 +45,32 @@ use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
 use tauri::menu::{MenuBuilder, MenuItem, PredefinedMenuItem, Submenu, CheckMenuItem};
 
-// Helper function to format model names for display
-fn format_model_name(name: &str) -> String {
-    match name {
-        "base.en" => "Base (English)".to_string(),
-        "small.en" => "Small (English)".to_string(),
-        "large-v3" => "Large v3".to_string(),
-        "large-v3-q5_0" => "Large v3 Q5".to_string(),
-        "large-v3-turbo" => "Large v3 Turbo".to_string(),
-        "large-v3-turbo-q5_0" => "Large v3 Turbo Q5".to_string(),
-        _ => name.to_string(),
-    }
-}
 
 // Function to build the tray menu
 async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<tauri::menu::Menu<R>, Box<dyn std::error::Error>> {
     // Get current settings for menu state
-    let current_settings = {
+    let current_model = {
         match app.store("settings") {
             Ok(store) => {
-                let current_model = store.get("current_model")
+                store.get("current_model")
                     .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_default();
-                let current_language = store.get("language")
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "en".to_string());
-                (current_model, current_language)
+                    .unwrap_or_default()
             }
-            Err(_) => ("".to_string(), "en".to_string())
+            Err(_) => "".to_string()
         }
     };
 
-    // Get downloaded models
-    let downloaded_models = {
+    // Get downloaded models with their info
+    let (downloaded_models, models_info) = {
         let whisper_state = app.state::<AsyncRwLock<whisper::manager::WhisperManager>>();
         let manager = whisper_state.read().await;
-        manager.get_models_status()
-            .into_iter()
+        let all_models = manager.get_models_status();
+        let downloaded: Vec<(String, String)> = all_models
+            .iter()
             .filter(|(_, info)| info.downloaded)
-            .map(|(name, _)| name)
-            .collect::<Vec<_>>()
+            .map(|(name, info)| (name.clone(), info.display_name.clone()))
+            .collect();
+        (downloaded, all_models)
     };
 
     // Create model submenu if there are downloaded models
@@ -92,9 +78,8 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
         let mut model_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
         let mut model_check_items = Vec::new();
 
-        for model_name in downloaded_models {
-            let display_name = format_model_name(&model_name);
-            let is_selected = model_name == current_settings.0;
+        for (model_name, display_name) in downloaded_models {
+            let is_selected = model_name == current_model;
             let model_item = CheckMenuItem::with_id(
                 app,
                 &format!("model_{}", model_name),
@@ -111,10 +96,13 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
             model_items.push(item);
         }
 
-        let current_model_display = if current_settings.0.is_empty() {
+        let current_model_display = if current_model.is_empty() {
             "Model: None".to_string()
         } else {
-            format!("Model: {}", format_model_name(&current_settings.0))
+            let display_name = models_info.get(&current_model)
+                .map(|info| info.display_name.clone())
+                .unwrap_or_else(|| current_model.clone());
+            format!("Model: {}", display_name)
         };
 
         Some(Submenu::with_id_and_items(
@@ -128,49 +116,6 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
         None
     };
 
-    // Get supported languages
-    let languages = crate::whisper::languages::SUPPORTED_LANGUAGES
-        .iter()
-        .map(|(code, lang)| (code.to_string(), lang.name.to_string()))
-        .collect::<Vec<_>>();
-
-    // Create language submenu
-    let mut lang_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
-    let mut lang_check_items = Vec::new();
-
-    // Sort languages by name (auto-detect removed)
-    let mut sorted_languages = languages;
-    sorted_languages.sort_by(|a, b| a.1.cmp(&b.1));
-
-    for (code, name) in sorted_languages {
-        let is_selected = code == current_settings.1;
-        let lang_item = CheckMenuItem::with_id(
-            app,
-            &format!("lang_{}", code),
-            &name,
-            true,
-            is_selected,
-            None::<&str>
-        )?;
-        lang_check_items.push(lang_item);
-    }
-
-    // Convert to trait objects
-    for item in &lang_check_items {
-        lang_items.push(item);
-    }
-
-    let current_lang_name = crate::whisper::languages::SUPPORTED_LANGUAGES
-        .get(current_settings.1.as_str())
-        .map(|l| l.name)
-        .unwrap_or("Unknown");
-    let lang_submenu = Submenu::with_id_and_items(
-        app,
-        "languages",
-        &format!("Language: {}", current_lang_name),
-        true,
-        &lang_items
-    )?;
 
     // Create menu items
     let separator1 = PredefinedMenuItem::separator(app)?;
@@ -185,7 +130,6 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
     }
 
     let menu = menu_builder
-        .item(&lang_submenu)
         .item(&separator1)
         .item(&settings_i)
         .item(&separator2)
@@ -820,23 +764,6 @@ pub fn run() {
                                 }
                             }
                         });
-                    } else if event_id.starts_with("lang_") {
-                        // Handle language selection
-                        let lang_code = event_id.strip_prefix("lang_").unwrap().to_string();
-                        let app_handle = app.app_handle().clone();
-
-                        tauri::async_runtime::spawn(async move {
-                            match crate::commands::settings::set_language_from_tray(app_handle.clone(), lang_code.clone()).await {
-                                Ok(_) => {
-                                    log::info!("Language changed from tray to: {}", lang_code);
-                                }
-                                Err(e) => {
-                                    log::error!("Failed to set language from tray: {}", e);
-                                    // Emit error event so UI can show notification
-                                    let _ = app_handle.emit("tray-action-error", &format!("Failed to change language: {}", e));
-                                }
-                            }
-                        });
                     }
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -1039,6 +966,7 @@ pub fn run() {
             test_transcription_event,
             save_transcription,
             get_audio_devices,
+            get_current_audio_device,
             download_model,
             get_model_status,
             preload_model,
@@ -1049,7 +977,6 @@ pub fn run() {
             apply_pending_shortcut,
             get_supported_languages,
             set_model_from_tray,
-            set_language_from_tray,
             update_tray_menu,
             insert_text,
             delete_model,

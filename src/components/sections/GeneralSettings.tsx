@@ -1,12 +1,11 @@
 import { HotkeyInput } from "@/components/HotkeyInput";
-import { LanguageSelection } from "@/components/LanguageSelection";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { AlertCircle, Globe, Mic, RefreshCw } from "lucide-react";
+import { AlertCircle, Mic, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 
 export function GeneralSettings() {

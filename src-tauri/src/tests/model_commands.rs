@@ -29,12 +29,14 @@ mod tests {
     fn test_model_info_validated_size() {
         let model = ModelInfo {
             name: "test".to_string(),
+            display_name: "Test Model".to_string(),
             size: 100 * 1024 * 1024, // 100MB
             url: "https://example.com/model.bin".to_string(),
             sha256: "abc123".to_string(),
             downloaded: false,
             speed_score: 5,
             accuracy_score: 5,
+            recommended: false,
         };
 
         let validated = model.validated_size();
@@ -44,12 +46,14 @@ mod tests {
         // Test with invalid size
         let invalid_model = ModelInfo {
             name: "test".to_string(),
+            display_name: "Test Model".to_string(),
             size: 1024, // 1KB - too small
             url: "https://example.com/model.bin".to_string(),
             sha256: "abc123".to_string(),
             downloaded: false,
             speed_score: 5,
             accuracy_score: 5,
+            recommended: false,
         };
 
         let validated = invalid_model.validated_size();
@@ -78,12 +82,14 @@ mod tests {
     fn test_model_info_serialization() {
         let model = ModelInfo {
             name: "test".to_string(),
+            display_name: "Test Model".to_string(),
             size: 100 * 1024 * 1024,
             url: "https://example.com/model.bin".to_string(),
             sha256: "abc123".to_string(),
             downloaded: true,
             speed_score: 7,
             accuracy_score: 8,
+            recommended: false,
         };
 
         let json = serde_json::to_string(&model).unwrap();
@@ -198,7 +204,6 @@ mod tests {
             "large-v3",
             "large-v3-q5_0",
             "large-v3-turbo",
-            "large-v3-turbo-q5_0",
         ];
 
         for model in &valid_models {

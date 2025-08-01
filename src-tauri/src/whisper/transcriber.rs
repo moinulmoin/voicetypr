@@ -226,15 +226,27 @@ impl Transcriber {
         // Don't suppress non-speech tokens - they help with timing and context
         params.set_suppress_nst(true);
 
-        // Adjust speech detection threshold - increase to reduce hallucinations
-        params.set_no_speech_thold(0.7); // Higher threshold to be more strict about detecting speech
+        // Adjust speech detection threshold
+        params.set_no_speech_thold(0.6); // Default value, as higher values can cause issues
 
         // Quality thresholds with temperature fallback
-        // If entropy of last 32 tokens < 2.4 (too repetitive), retry with higher temperature
-        params.set_entropy_thold(2.4);
+        // Lower entropy threshold to be more conservative
+        params.set_entropy_thold(2.0); // Lower than default 2.4 to filter out more uncertain predictions
 
-        // If average log probability < -1.0 (low confidence), retry with higher temperature
-        params.set_logprob_thold(-1.0);
+        // Stricter log probability threshold to enforce quality
+        params.set_logprob_thold(-1.5); // Lower than default -1.0 for stricter probability requirements
+        
+        // Set initial prompt to help with context
+        params.set_initial_prompt(""); // Empty prompt to avoid biasing the model
+        
+        // Temperature settings - slight randomness helps avoid repetitive loops
+        params.set_temperature(0.2); // Small amount of randomness instead of deterministic
+        params.set_temperature_inc(0.2); // Increase by 0.2 on fallback (default)
+        params.set_max_initial_ts(1.0); // Limit initial timestamp search
+        
+        // Limit segment length to prevent runaway hallucinations
+        params.set_max_len(0); // 0 means no limit
+        params.set_length_penalty(-1.0); // Default penalty
 
         // Run transcription
         log::info!("[TRANSCRIPTION_DEBUG] Creating Whisper state...");

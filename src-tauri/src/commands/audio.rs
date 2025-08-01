@@ -1,6 +1,7 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
+use cpal::traits::{DeviceTrait, HostTrait};
 use crate::whisper::cache::TranscriberCache;
 use crate::whisper::languages::validate_language;
 use crate::whisper::manager::WhisperManager;
@@ -17,20 +18,8 @@ use tauri_plugin_store::StoreExt;
 pub struct RecorderState(pub Mutex<AudioRecorder>);
 
 /// Select the best fallback model based on available models
-/// Prioritizes models in order: tiny, base, small, medium, large variants
-fn select_best_fallback_model(available_models: &[String], requested: &str) -> String {
-    // Model priority order (smaller models are often more reliable)
-    const MODEL_PRIORITY: &[&str] = &[
-        "tiny",
-        "base",
-        "small",
-        "medium",
-        "large-v3-turbo-q5_0",
-        "large-v3-turbo",
-        "large-v3-q5_0",
-        "large-v3",
-    ];
-
+/// Prioritizes models by size (smaller to larger for better performance)
+fn select_best_fallback_model(available_models: &[String], requested: &str, model_priority: &[String]) -> String {
     // First try to find a model similar to the requested one
     if !requested.is_empty() {
         // If requested "large-v3", try other large variants first
@@ -41,10 +30,10 @@ fn select_best_fallback_model(available_models: &[String], requested: &str) -> S
         }
     }
 
-    // Otherwise use priority order
-    for priority_model in MODEL_PRIORITY {
-        if available_models.contains(&priority_model.to_string()) {
-            return priority_model.to_string();
+    // Otherwise use priority order from WhisperManager
+    for priority_model in model_priority {
+        if available_models.contains(priority_model) {
+            return priority_model.clone();
         }
     }
 
@@ -53,7 +42,7 @@ fn select_best_fallback_model(available_models: &[String], requested: &str) -> S
         log::error!("No models available for fallback selection");
         // This should never happen as we check for empty models before calling this function
         // But return a default to prevent panic
-        "tiny".to_string()
+        "base.en".to_string()
     })
 }
 
@@ -156,6 +145,20 @@ pub async fn start_recording(
             return Err("Already recording".to_string());
         }
 
+        // Log the current audio device before starting
+        log::info!("🎙️ Checking audio device before recording...");
+        if let Ok(host) = std::panic::catch_unwind(|| cpal::default_host()) {
+            if let Some(device) = host.default_input_device() {
+                if let Ok(name) = device.name() {
+                    log::info!("✅ Will record from: {}", name);
+                } else {
+                    log::warn!("⚠️  Could not get device name, but device is available");
+                }
+            } else {
+                log::error!("❌ No default input device found!");
+            }
+        }
+        
         // Try to start recording with graceful error handling
         match recorder.start_recording(
             audio_path
@@ -393,6 +396,21 @@ pub async fn stop_recording(
             let _ = emit_to_window(&app, "pill", "recording-stopped-silence", ());
         }
     } // MutexGuard dropped here BEFORE any await
+    
+    // DEBUG: Verify the audio file exists after recording
+    let app_state = app.state::<AppState>();
+    if let Ok(path_guard) = app_state.current_recording_path.lock() {
+        if let Some(audio_path) = path_guard.as_ref() {
+            if audio_path.exists() {
+                let file_size = std::fs::metadata(audio_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                log::info!("DEBUG: Audio file exists at {:?}, size: {} bytes", audio_path, file_size);
+            } else {
+                log::error!("DEBUG: Audio file NOT FOUND at {:?}", audio_path);
+            }
+        }
+    }
 
     // Unregister ESC key
     match "Escape".parse::<tauri_plugin_global_shortcut::Shortcut>() {
@@ -434,9 +452,11 @@ pub async fn stop_recording(
         if let Ok(path_guard) = app_state.current_recording_path.lock() {
             if let Some(audio_path) = path_guard.as_ref() {
                 log::info!("Removing cancelled recording file");
-                if let Err(e) = std::fs::remove_file(audio_path) {
-                    log::warn!("Failed to remove cancelled recording: {}", e);
-                }
+                // DEBUG: Keeping audio files for debugging
+                // if let Err(e) = std::fs::remove_file(audio_path) {
+                //     log::warn!("Failed to remove cancelled recording: {}", e);
+                // }
+                log::info!("DEBUG: Keeping cancelled audio file at: {:?}", audio_path);
             }
         }
 
@@ -496,9 +516,11 @@ pub async fn stop_recording(
         );
 
         // Clean up the recording
-        if let Err(e) = std::fs::remove_file(&audio_path) {
-            log::warn!("Failed to remove audio file: {}", e);
-        }
+        // DEBUG: Keeping audio files for debugging
+        // if let Err(e) = std::fs::remove_file(&audio_path) {
+        //     log::warn!("Failed to remove audio file: {}", e);
+        // }
+        log::info!("DEBUG: Keeping audio file at: {:?}", audio_path);
 
         // Tell user they MUST download a model
         let _ = emit_to_window(
@@ -542,7 +564,8 @@ pub async fn stop_recording(
             return Err("No models available".to_string());
         } else {
             // Fallback to best available model
-            let fallback_model = select_best_fallback_model(&downloaded_models, &configured_model);
+            let models_by_size = whisper_manager.read().await.get_models_by_size();
+            let fallback_model = select_best_fallback_model(&downloaded_models, &configured_model, &models_by_size);
             log::info!(
                 "Configured model '{}' not available, falling back to: {}",
                 configured_model,
@@ -565,7 +588,8 @@ pub async fn stop_recording(
     } else {
         // No configured model - auto-select the best available
         // We already checked that downloaded_models is not empty above
-        let best_model = select_best_fallback_model(&downloaded_models, "");
+        let models_by_size = whisper_manager.read().await.get_models_by_size();
+        let best_model = select_best_fallback_model(&downloaded_models, "", &models_by_size);
         log::info!("No model configured, auto-selecting: {}", best_model);
         best_model
     };
@@ -686,9 +710,11 @@ pub async fn stop_recording(
         }
 
         // Clean up temp file regardless of outcome
-        if let Err(e) = std::fs::remove_file(&audio_path_clone) {
-            log::warn!("Failed to remove temporary audio file: {}", e);
-        }
+        // DEBUG: Keeping audio files for debugging
+        // if let Err(e) = std::fs::remove_file(&audio_path_clone) {
+        //     log::warn!("Failed to remove temporary audio file: {}", e);
+        // }
+        log::info!("DEBUG: Keeping temporary audio file at: {:?}", audio_path_clone);
 
         match result {
             Ok(text) => {
@@ -855,6 +881,15 @@ pub async fn stop_recording(
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
                     // 4. NOW handle text insertion - pill is gone, system is stable
+                    
+                    // DEBUG: Log that audio file is being kept
+                    let app_state_debug = app_for_process.state::<AppState>();
+                    if let Ok(path_guard) = app_state_debug.current_recording_path.lock() {
+                        if let Some(audio_path) = path_guard.as_ref() {
+                            log::info!("DEBUG: Transcription complete. Audio file kept at: {:?}", audio_path);
+                        }
+                    }
+                    
                     // Always insert text at cursor position (this also copies to clipboard)
                     match crate::commands::text::insert_text(app_for_process.clone(), final_text.clone()).await {
                         Ok(_) => log::debug!("Text inserted at cursor successfully"),
@@ -973,6 +1008,16 @@ pub async fn stop_recording(
 #[tauri::command]
 pub async fn get_audio_devices() -> Result<Vec<String>, String> {
     Ok(AudioRecorder::get_devices())
+}
+
+/// Get the current default audio input device
+#[tauri::command]
+pub async fn get_current_audio_device() -> Result<String, String> {
+    let host = cpal::default_host();
+    
+    host.default_input_device()
+        .and_then(|device| device.name().ok())
+        .ok_or_else(|| "No default input device found".to_string())
 }
 
 #[tauri::command]
@@ -1118,9 +1163,11 @@ pub async fn transcribe_audio(
     let text = transcriber.transcribe_with_translation(&temp_path, Some(&language), translate_to_english)?;
 
     // Clean up
-    if let Err(e) = std::fs::remove_file(&temp_path) {
-        log::warn!("Failed to remove test audio file: {}", e);
-    }
+    // DEBUG: Keeping audio files for debugging
+    // if let Err(e) = std::fs::remove_file(&temp_path) {
+    //     log::warn!("Failed to remove test audio file: {}", e);
+    // }
+    log::info!("DEBUG: Keeping test audio file at: {:?}", temp_path);
 
     Ok(text)
 }
@@ -1173,9 +1220,11 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
         if let Ok(path_guard) = app_state.current_recording_path.lock() {
             if let Some(audio_path) = path_guard.as_ref() {
                 log::info!("Removing cancelled recording file");
-                if let Err(e) = std::fs::remove_file(audio_path) {
-                    log::warn!("Failed to remove cancelled recording: {}", e);
-                }
+                // DEBUG: Keeping audio files for debugging
+                // if let Err(e) = std::fs::remove_file(audio_path) {
+                //     log::warn!("Failed to remove cancelled recording: {}", e);
+                // }
+                log::info!("DEBUG: Keeping cancelled audio file at: {:?}", audio_path);
             }
         }
     }

@@ -1,10 +1,12 @@
 export interface ModelInfo {
   name: string;
+  display_name: string;
   size: number;
   url: string;
   downloaded: boolean;
   speed_score: number;     // 1-10, 10 being fastest
   accuracy_score: number;  // 1-10, 10 being most accurate
+  recommended?: boolean;   // Whether this model is recommended
 }
 
 export interface AppSettings {

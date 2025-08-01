@@ -46,12 +46,14 @@ impl ModelSize {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct ModelInfo {
     pub name: String,
+    pub display_name: String,
     pub size: u64,
     pub url: String,
     pub sha256: String,
     pub downloaded: bool,
     pub speed_score: u8,    // 1-10, 10 being fastest
     pub accuracy_score: u8, // 1-10, 10 being most accurate
+    pub recommended: bool,  // Whether this model is recommended
 }
 
 impl ModelInfo {
@@ -101,6 +103,7 @@ impl WhisperManager {
             "base.en".to_string(),
             ModelInfo {
                 name: "base.en".to_string(),
+                display_name: "Base (English)".to_string(),
                 size: 148_897_792, // 142 MiB = 142 * 1024 * 1024 bytes
                 url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
                     .to_string(),
@@ -108,6 +111,7 @@ impl WhisperManager {
                 downloaded: false,
                 speed_score: 8,    // Very fast
                 accuracy_score: 5, // Basic accuracy
+                recommended: false,
             },
         );
 
@@ -115,6 +119,7 @@ impl WhisperManager {
             "large-v3".to_string(),
             ModelInfo {
                 name: "large-v3".to_string(),
+                display_name: "Large v3".to_string(),
                 size: 3_117_854_720, // 2.9 GiB = 2.9 * 1024 * 1024 * 1024 bytes
                 url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"
                     .to_string(),
@@ -122,57 +127,57 @@ impl WhisperManager {
                 downloaded: false,
                 speed_score: 2,    // Slowest
                 accuracy_score: 9, // Best accuracy
+                recommended: true, // Recommended model
             },
         );
 
         models.insert("large-v3-q5_0".to_string(), ModelInfo {
             name: "large-v3-q5_0".to_string(),
+            display_name: "Large v3 Q5".to_string(),
             size: 1_181_116_416, // 1.1 GiB = 1.1 * 1024 * 1024 * 1024 bytes
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin".to_string(),
             sha256: "e6e2ed78495d403bef4b7cff42ef4aaadcfea8de".to_string(), // SHA1 (correct)
             downloaded: false,
             speed_score: 4,       // Quantized, faster than full large
             accuracy_score: 8,    // Slight degradation from quantization
+            recommended: false,
         });
 
         models.insert("large-v3-turbo".to_string(), ModelInfo {
             name: "large-v3-turbo".to_string(),
+            display_name: "Large v3 Turbo".to_string(),
             size: 1_610_612_736, // 1.5 GiB = 1.5 * 1024 * 1024 * 1024 bytes
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".to_string(),
             sha256: "4af2b29d7ec73d781377bfd1758ca957a807e941".to_string(), // SHA1 (correct)
             downloaded: false,
             speed_score: 7,       // 6x faster than large-v3
             accuracy_score: 9,    // Comparable to large-v2
+            recommended: true,    // Recommended model
         });
 
-        models.insert("large-v3-turbo-q5_0".to_string(), ModelInfo {
-            name: "large-v3-turbo-q5_0".to_string(),
-            size: 573_571_072, // 547 MiB = 547 * 1024 * 1024 bytes
-            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin".to_string(),
-            sha256: "e050f7970618a659205450ad97eb95a18d69c9ee".to_string(), // SHA1 (correct)
-            downloaded: false,
-            speed_score: 8,       // Very fast, quantized turbo
-            accuracy_score: 7,    // Good accuracy with turbo + quantization
-        });
 
         models.insert("small.en".to_string(), ModelInfo {
             name: "small.en".to_string(),
+            display_name: "Small (English)".to_string(),
             size: 488_505_344, // 466 MiB = 466 * 1024 * 1024 bytes
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin".to_string(),
             sha256: "db8a495a91d927739e50b3fc1cc4c6b8f6c2d022".to_string(), // SHA1 (correct)
             downloaded: false,
             speed_score: 7,       // Fast for English-only
             accuracy_score: 6,    // Good accuracy for English
+            recommended: false,
         });
 
         models.insert("large-v3-turbo-q8_0".to_string(), ModelInfo {
             name: "large-v3-turbo-q8_0".to_string(),
+            display_name: "Large v3 Turbo Q8".to_string(),
             size: 874_512_384, // 834 MiB = 834 * 1024 * 1024 bytes
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin".to_string(),
             sha256: "01bf15bedffe9f39d65c1b6ff9b687ea91f59e0e".to_string(), // SHA1 (correct)
             downloaded: false,
             speed_score: 7,       // Fast, higher quality quantization
             accuracy_score: 8,    // Excellent accuracy with minimal loss
+            recommended: false,
         });
 
         let mut manager = Self { models_dir, models };
@@ -676,6 +681,13 @@ impl WhisperManager {
         // Weighted average: 40% speed, 60% accuracy
         // Most users want accuracy but also care about speed
         (speed as f32 * 0.4 + accuracy as f32 * 0.6) / 10.0 * 100.0
+    }
+
+    /// Get model names ordered by size (smallest to largest)
+    pub fn get_models_by_size(&self) -> Vec<String> {
+        let mut models: Vec<(&String, &ModelInfo)> = self.models.iter().collect();
+        models.sort_by_key(|(_, info)| info.size);
+        models.into_iter().map(|(name, _)| name.clone()).collect()
     }
 
     /// Get models sorted by a specific metric

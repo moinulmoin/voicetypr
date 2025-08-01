@@ -1,7 +1,7 @@
 import { ModelCard } from "@/components/ModelCard";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ModelInfo } from "@/types";
-import { CheckCircle, HardDrive, Zap } from "lucide-react";
+import { CheckCircle, HardDrive, Star, Zap } from "lucide-react";
 
 interface ModelsSectionProps {
   models: [string, ModelInfo][];
@@ -45,6 +45,10 @@ onCancelDownload,
           <span className="flex items-center gap-1">
             <HardDrive className="w-4 h-4" />
             Size
+          </span>
+          <span className="flex items-center gap-1">
+            <Star className="w-4 h-4 fill-yellow-500 text-yellow-500" />
+            Recommended
           </span>
         </div>
       </div>

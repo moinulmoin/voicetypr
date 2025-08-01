@@ -70,8 +70,8 @@ function AppContent() {
 
         // Models are loaded automatically by useModelManagement hook
 
-        // Check if onboarding is completed
-        if (!settings?.onboarding_completed) {
+        // Check if onboarding is completed - only check when settings are loaded
+        if (settings && !settings.onboarding_completed) {
           setShowOnboarding(true);
         }
 
@@ -187,7 +187,7 @@ function AppContent() {
     };
 
     init();
-  }, [registerEvent, loadHistory]);
+  }, [registerEvent, loadHistory, settings]);
 
   // Handle deleting a model with settings update
   const handleDeleteModel = useCallback(

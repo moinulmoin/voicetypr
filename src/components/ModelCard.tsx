@@ -1,4 +1,4 @@
-import { CheckCircle, Download, HardDrive, Loader2, X, Zap } from 'lucide-react';
+import { CheckCircle, Download, HardDrive, Loader2, Star, X, Zap } from 'lucide-react';
 import { ModelInfo } from '../types';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
@@ -29,18 +29,6 @@ export const ModelCard = function ModelCard({
   onCancelDownload,
   showSelectButton = true
 }: ModelCardProps) {
-  const formatModelName = (name: string) => {
-    const nameMap: Record<string, string> = {
-      'base.en': 'Base (English)',
-      'small.en': 'Small (English)',
-      'large-v3': 'Large v3',
-      'large-v3-q5_0': 'Large v3 Q5',
-      'large-v3-turbo': 'Large v3 Turbo',
-      'large-v3-turbo-q5_0': 'Large v3 Turbo Q5',
-      'large-v3-turbo-q8_0': 'Large v3 Turbo Q8'
-    };
-    return nameMap[name] || name;
-  };
 
   const formatSize = () => {
     const sizeInMB = model.size / (1024 * 1024);
@@ -60,7 +48,12 @@ export const ModelCard = function ModelCard({
     >
       <div className="flex items-center justify-between gap-3">
         {/* Model Name */}
-        <h3 className="font-medium flex-shrink-0">{formatModelName(name)}</h3>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <h3 className="font-medium">{model.display_name || name}</h3>
+          {model.recommended && (
+            <Star className="w-4 h-4 fill-yellow-500 text-yellow-500" aria-label="Recommended model" />
+          )}
+        </div>
 
         {/* Centered Stats */}
         <div className="flex items-center justify-center gap-6 flex-1">

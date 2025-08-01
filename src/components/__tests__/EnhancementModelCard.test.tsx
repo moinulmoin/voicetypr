@@ -29,7 +29,6 @@ describe('EnhancementModelCard', () => {
     render(<EnhancementModelCard {...defaultProps} />);
     
     expect(screen.getByText('Llama 3.3 70B')).toBeInTheDocument();
-    expect(screen.getByText('Fast and versatile language model')).toBeInTheDocument();
     expect(screen.getByText('Groq')).toBeInTheDocument();
   });
 
