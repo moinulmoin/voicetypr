@@ -52,6 +52,8 @@ export function ApiKeyModal({
     switch (providerName.toLowerCase()) {
       case 'groq':
         return 'https://console.groq.com/keys';
+      case 'gemini':
+        return 'https://aistudio.google.com/apikey';
       default:
         return '';
     }

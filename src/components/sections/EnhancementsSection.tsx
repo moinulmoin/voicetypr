@@ -5,7 +5,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import type { EnhancementOptions } from "@/types/ai";
 import { fromBackendOptions, toBackendOptions } from "@/types/ai";
-import { hasApiKey, removeApiKey, saveApiKey } from "@/utils/keyring";
+import { hasApiKey, removeApiKey, saveApiKey, getApiKey } from "@/utils/keyring";
 import { useReadinessState } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -76,6 +76,35 @@ export function EnhancementsSection() {
 
   const loadAISettings = useCallback(async () => {
     try {
+      // First, check and cache API keys if not already loaded
+      let currentKeyStatus = providerApiKeys;
+      if (Object.keys(providerApiKeys).length === 0) {
+        const providers = [...new Set(models.map(m => m.provider))];
+        const keyStatus: Record<string, boolean> = {};
+
+        // Batch check API keys and cache them to backend
+        await Promise.all(providers.map(async (provider) => {
+          const hasKey = await hasApiKey(provider);
+          keyStatus[provider] = hasKey;
+          if (hasKey) {
+            console.log(`[AI Settings] Found ${provider} API key in keyring, caching to backend`);
+            // Load the key from keyring and cache it to backend
+            try {
+              const apiKey = await getApiKey(provider);
+              if (apiKey) {
+                await invoke('cache_ai_api_key', { provider, apiKey });
+              }
+            } catch (error) {
+              console.error(`Failed to cache ${provider} API key:`, error);
+            }
+          }
+        }));
+
+        setProviderApiKeys(keyStatus);
+        currentKeyStatus = keyStatus;
+      }
+
+      // Now load settings after API keys are cached
       const settings = await invoke<AISettings>("get_ai_settings");
       setAISettings(settings);
 
@@ -86,25 +115,6 @@ export function EnhancementsSection() {
         setProviderApiKeys(prev => ({ ...prev, [currentProvider]: true }));
       }
 
-      // Only check API keys if not already loaded
-      let currentKeyStatus = providerApiKeys;
-      if (Object.keys(providerApiKeys).length === 0) {
-        const providers = [...new Set(models.map(m => m.provider))];
-        const keyStatus: Record<string, boolean> = {};
-
-        // Batch check API keys
-        await Promise.all(providers.map(async (provider) => {
-          const hasKey = await hasApiKey(provider);
-          keyStatus[provider] = hasKey;
-          if (hasKey) {
-            console.log(`[AI Settings] Found ${provider} API key in keyring`);
-          }
-        }));
-
-        setProviderApiKeys(keyStatus);
-        currentKeyStatus = keyStatus;
-      }
-
       // Auto-select model if only one has API key and no model is currently selected
       const modelsWithApiKey = models.filter(m => currentKeyStatus[m.provider]);
       if (!settings.model && modelsWithApiKey.length === 1) {
@@ -112,8 +122,9 @@ export function EnhancementsSection() {
         console.log(`[AI Settings] Auto-selecting model: ${autoSelectModel.name}`);
 
         // Update backend settings with auto-selected model
+        // Preserve the enabled state from settings
         await invoke("update_ai_settings", {
-          enabled: false, // Don't auto-enable, let user decide
+          enabled: settings.enabled, // Preserve the existing enabled state
           provider: autoSelectModel.provider,
           model: autoSelectModel.id
         });
@@ -121,6 +132,7 @@ export function EnhancementsSection() {
         // Update local state
         setAISettings({
           ...settings,
+          enabled: settings.enabled, // Preserve the existing enabled state
           provider: autoSelectModel.provider,
           model: autoSelectModel.id,
           hasApiKey: true
@@ -131,27 +143,12 @@ export function EnhancementsSection() {
         const currentModelProvider = settings.model ? models.find(m => m.id === settings.model)?.provider : null;
         const currentModelHasKey = currentModelProvider ? currentKeyStatus[currentModelProvider] : false;
 
-        // If the selected model no longer has an API key, clear the selection
-        if (settings.model && !currentModelHasKey) {
-          console.log(`[AI Settings] Clearing model selection - model ${settings.model} no longer has API key`);
-          await invoke("update_ai_settings", {
-            enabled: false,
-            provider: settings.provider,
-            model: ""  // Clear the model selection
-          });
-
-          setAISettings({
-            ...settings,
-            enabled: false,
-            model: "",
-            hasApiKey: false
-          });
-        } else {
-          setAISettings({
-            ...settings,
-            hasApiKey: currentModelHasKey
-          });
-        }
+        // Update the hasApiKey status based on current key status
+        // Don't clear the model or disable AI enhancement just because the key isn't cached yet
+        setAISettings({
+          ...settings,
+          hasApiKey: currentModelHasKey
+        });
       }
     } catch (error) {
       console.error("Failed to load AI settings:", error);
@@ -175,11 +172,6 @@ export function EnhancementsSection() {
         await loadAISettings();
       }
     });
-    
-    const unlistenNotReady = listen('ai-not-ready', async () => {
-      // Update local state to reflect AI is not ready
-      setAISettings(prev => ({ ...prev, enabled: false, hasApiKey: false }));
-    });
 
     // Listen for API key save events
     const unlistenApiKey = listen('api-key-saved', async (event) => {
@@ -196,7 +188,7 @@ export function EnhancementsSection() {
     });
 
     return () => {
-      Promise.all([unlistenReady, unlistenNotReady, unlistenApiKey]).then(fns => {
+      Promise.all([unlistenReady, unlistenApiKey]).then(fns => {
         fns.forEach(fn => fn());
       });
     };
@@ -214,10 +206,7 @@ export function EnhancementsSection() {
   };
 
   const handleToggleEnabled = async (enabled: boolean) => {
-    console.log(`[AI Settings] Toggle AI enhancement: ${enabled}, model: ${aiSettings.model}, hasApiKey: ${aiSettings.hasApiKey}`);
-
     if (enabled && (!aiSettings.hasApiKey || !aiSettings.model)) {
-      console.warn(`[AI Settings] Cannot enable AI enhancement - hasApiKey: ${aiSettings.hasApiKey}, model: ${aiSettings.model}`);
       toast.error("Please select a model and add an API key first");
       return;
     }
@@ -232,7 +221,6 @@ export function EnhancementsSection() {
       setAISettings(prev => ({ ...prev, enabled }));
       toast.success(enabled ? "AI enhancement enabled" : "AI enhancement disabled");
     } catch (error) {
-      console.error(`[AI Settings] Failed to update settings:`, error);
       toast.error(`Failed to update settings: ${error}`);
     }
   };
@@ -262,8 +250,11 @@ export function EnhancementsSection() {
 
   const handleModelSelect = async (modelId: string, provider: string) => {
     try {
+      // When selecting a model, preserve the enabled state unless the provider has no API key
+      const shouldBeEnabled = providerApiKeys[provider] ? aiSettings.enabled : false;
+      
       await invoke("update_ai_settings", {
-        enabled: aiSettings.enabled && providerApiKeys[provider],
+        enabled: shouldBeEnabled,
         provider: provider,
         model: modelId
       });
@@ -348,6 +339,20 @@ export function EnhancementsSection() {
               />
             ))}
           </div>
+
+          {/* Simple setup guide when AI is disabled */}
+          {!aiSettings.enabled && (
+            <div className="bg-muted/50 rounded-lg p-4 space-y-3 mt-4">
+              <h3 className="font-medium text-sm">Quick Setup Guide</h3>
+              <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
+                <li>Click "Add Key" on a model above</li>
+                <li>Visit the provider's website to get your API key</li>
+                <li>Paste the API key and submit</li>
+                <li>Select the model you want to use</li>
+                <li>Toggle the switch above to enable AI enhancement</li>
+              </ol>
+            </div>
+          )}
 
           {/* Enhancement Settings - Always visible when enabled */}
           {aiSettings.enabled && (

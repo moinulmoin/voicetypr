@@ -1,5 +1,6 @@
 use crate::ai::{AIProviderConfig, AIProviderFactory, AIEnhancementRequest, EnhancementOptions};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri_plugin_store::StoreExt;
 use regex::Regex;
 use std::sync::Mutex;
@@ -295,9 +296,9 @@ pub async fn update_ai_settings(
     
     let store = app.store("settings").map_err(|e| e.to_string())?;
     
-    store.set("ai_enabled", serde_json::Value::Bool(enabled));
-    store.set("ai_provider", serde_json::Value::String(provider.clone()));
-    store.set("ai_model", serde_json::Value::String(model.clone()));
+    store.set("ai_enabled", json!(enabled));
+    store.set("ai_provider", json!(provider));
+    store.set("ai_model", json!(model));
     
     store.save()
         .map_err(|e| format!("Failed to save AI settings: {}", e))?;
@@ -311,7 +312,7 @@ pub async fn update_ai_settings(
 pub async fn disable_ai_enhancement(app: tauri::AppHandle) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
     
-    store.set("ai_enabled", serde_json::Value::Bool(false));
+    store.set("ai_enabled", json!(false));
     
     store.save()
         .map_err(|e| format!("Failed to save AI settings: {}", e))?;
