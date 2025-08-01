@@ -74,6 +74,7 @@ pub struct DeactivateData {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ApiError {
     pub success: bool,
-    pub error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     pub message: String,
 }

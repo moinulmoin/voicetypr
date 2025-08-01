@@ -8,23 +8,33 @@ use once_cell::sync::OnceCell;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
 use crate::license::device;
+use pbkdf2::pbkdf2_hmac;
+use sha2::Sha256;
 
 // Encryption key storage - OnceCell ensures thread-safe single initialization
 static ENCRYPTION_KEY: OnceCell<[u8; 32]> = OnceCell::new();
 
-/// Initialize the encryption key using the device hash
+/// Initialize the encryption key using the device hash with PBKDF2
 pub fn initialize_encryption_key() -> Result<(), String> {
     ENCRYPTION_KEY.get_or_try_init(|| {
         // Get the same device hash used for API authentication
         let device_hash = device::get_device_hash()?;
         
-        // The device hash is already a SHA256 hash (64 hex chars = 32 bytes)
-        // Convert it from hex string to bytes
+        // Use PBKDF2 to derive a proper encryption key from the device hash
         let mut key = [0u8; 32];
-        hex::decode_to_slice(&device_hash, &mut key)
-            .map_err(|_| "Failed to decode device hash")?;
         
-        log::info!("Initialized encryption with device-specific key");
+        // Salt: app-specific constant + version for future migration support
+        let salt = b"voicetypr-secure-store-v1";
+        
+        // 100,000 iterations for good security/performance balance
+        pbkdf2_hmac::<Sha256>(
+            device_hash.as_bytes(),
+            salt,
+            100_000,
+            &mut key
+        );
+        
+        log::info!("Initialized encryption with PBKDF2-derived device-specific key");
         Ok(key)
     }).map(|_| ())
 }

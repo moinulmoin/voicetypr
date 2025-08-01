@@ -43,8 +43,12 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       console.error('Failed to restore license:', error);
       if (error.includes('No license found')) {
         toast.error('No license found. Please enter your license key manually.');
-      } else if (error.includes('already activated')) {
+      } else if (error.includes('already activated on another device')) {
         toast.error('This license is already activated on another device');
+      } else if (error.includes('maximum number of devices')) {
+        toast.error('This license has reached its device activation limit');
+      } else if (error.includes('Invalid license key')) {
+        toast.error('Invalid license key');
       } else {
         toast.error(error || 'Failed to restore license');
       }
@@ -58,9 +62,11 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       toast.success('License activated successfully');
     } catch (error: any) {
       console.error('Failed to activate license:', error);
-      if (error.includes('already activated')) {
+      if (error.includes('already activated on another device')) {
         toast.error('This license is already activated on another device');
-      } else if (error.includes('invalid')) {
+      } else if (error.includes('maximum number of devices')) {
+        toast.error('This license has reached its device activation limit');
+      } else if (error.includes('Invalid license key')) {
         toast.error('Invalid license key');
       } else {
         toast.error(error || 'Failed to activate license');

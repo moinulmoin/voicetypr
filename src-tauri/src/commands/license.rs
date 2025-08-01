@@ -506,15 +506,11 @@ async fn activate_license_internal(
                     expires_at: None,
                 })
             } else {
+                // Return the actual error message from the API
                 let error_msg = response
                     .message
                     .unwrap_or_else(|| "Failed to activate license".to_string());
-
-                if response.error == Some("license_already_activated".to_string()) {
-                    Err("This license is already activated on another device".to_string())
-                } else {
-                    Err(error_msg)
-                }
+                Err(error_msg)
             }
         }
         Err(e) => {

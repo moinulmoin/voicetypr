@@ -78,13 +78,14 @@ impl AudioRecorder {
     pub fn start_recording(&mut self, output_path: &str) -> Result<(), String> {
         log::info!("AudioRecorder::start_recording called with path: {}", output_path);
         
-        // Check if already recording
-        if self
+        // Acquire lock once and hold it through the entire initialization
+        let mut handle_guard = self
             .recording_handle
             .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))?
-            .is_some()
-        {
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
+            
+        // Check if already recording
+        if handle_guard.is_some() {
             return Err("Already recording".to_string());
         }
 
@@ -338,10 +339,8 @@ impl AudioRecorder {
             }
         });
 
-        *self
-            .recording_handle
-            .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))? = Some(RecordingHandle {
+        // Set the handle using the guard we already have
+        *handle_guard = Some(RecordingHandle {
             stop_tx,
             thread_handle,
         });

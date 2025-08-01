@@ -96,10 +96,21 @@ lazy_static::lazy_static! {
     static ref MODEL_REGEX: Regex = Regex::new(r"^[a-zA-Z0-9_.-]+$").unwrap();
 }
 
+// Supported AI providers
+const ALLOWED_PROVIDERS: &[&str] = &["groq", "gemini"];
+
 fn validate_provider_name(provider: &str) -> Result<(), String> {
+    // First check format
     if !PROVIDER_REGEX.is_match(provider) {
         return Err("Invalid provider name format".to_string());
     }
+    
+    // Then check against allowlist
+    if !ALLOWED_PROVIDERS.contains(&provider) {
+        return Err(format!("Unsupported provider: {}. Supported providers: {:?}", 
+            provider, ALLOWED_PROVIDERS));
+    }
+    
     Ok(())
 }
 
@@ -187,14 +198,39 @@ pub async fn cache_ai_api_key(
         return Err("API key cannot be empty".to_string());
     }
     
-    // Validate the API key with a test call
-    validate_api_key(&provider, &api_key).await?;
+    // Don't validate here - this is called on startup when user might be offline
+    // Validation happens when saving new keys in a separate command
     
     // Store API key in memory cache
     let mut cache = API_KEY_CACHE.lock().map_err(|_| "Failed to access cache".to_string())?;
     cache.insert(format!("ai_api_key_{}", provider), api_key);
     
     log::info!("API key cached for provider: {}", provider);
+    
+    Ok(())
+}
+
+// Validate and save a new API key
+#[tauri::command]
+pub async fn validate_and_cache_api_key(
+    _app: tauri::AppHandle,
+    provider: String,
+    api_key: String,
+) -> Result<(), String> {
+    validate_provider_name(&provider)?;
+    
+    if api_key.trim().is_empty() {
+        return Err("API key cannot be empty".to_string());
+    }
+    
+    // Validate the API key with a test call
+    validate_api_key(&provider, &api_key).await?;
+    
+    // If validation passes, cache it
+    let mut cache = API_KEY_CACHE.lock().map_err(|_| "Failed to access cache".to_string())?;
+    cache.insert(format!("ai_api_key_{}", provider), api_key);
+    
+    log::info!("API key validated and cached for provider: {}", provider);
     
     Ok(())
 }

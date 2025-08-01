@@ -41,10 +41,10 @@ export const saveApiKey = async (provider: string, apiKey: string): Promise<void
   const key = `ai_api_key_${provider}`;
   await keyringSet(key, apiKey);
   
-  // Also cache in backend for fast access during transcription
-  await invoke('cache_ai_api_key', { provider, apiKey });
+  // Validate and cache in backend for fast access during transcription
+  await invoke('validate_and_cache_api_key', { provider, apiKey });
   
-  console.log(`[Keyring] API key saved for ${provider}`);
+  console.log(`[Keyring] API key saved and validated for ${provider}`);
   
   // Emit event to notify that API key was saved
   await emit('api-key-saved', { provider });

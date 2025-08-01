@@ -24,7 +24,7 @@ mod tests;
 
 use audio::recorder::AudioRecorder;
 use commands::{
-    ai::{get_ai_settings, get_ai_settings_for_provider, cache_ai_api_key, clear_ai_api_key_cache, update_ai_settings, enhance_transcription, disable_ai_enhancement, get_enhancement_options, update_enhancement_options},
+    ai::{get_ai_settings, get_ai_settings_for_provider, cache_ai_api_key, validate_and_cache_api_key, clear_ai_api_key_cache, update_ai_settings, enhance_transcription, disable_ai_enhancement, get_enhancement_options, update_enhancement_options},
     audio::*,
     debug::{debug_transcription_flow, test_transcription_event},
     keyring::{keyring_set, keyring_get, keyring_delete, keyring_has},
@@ -1004,6 +1004,7 @@ pub fn run() {
             get_ai_settings,
             get_ai_settings_for_provider,
             cache_ai_api_key,
+            validate_and_cache_api_key,
             clear_ai_api_key_cache,
             update_ai_settings,
             enhance_transcription,
