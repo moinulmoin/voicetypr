@@ -183,6 +183,32 @@ impl WindowManager {
             log::info!("Converted pill window to NSPanel");
         }
 
+        // Apply Windows-specific window flags to prevent focus stealing
+        #[cfg(target_os = "windows")]
+        {
+            use windows::Win32::UI::WindowsAndMessaging::*;
+            use windows::Win32::Foundation::HWND;
+            
+            if let Ok(hwnd) = pill_window.hwnd() {
+                unsafe {
+                    let hwnd = HWND(hwnd.0 as isize);
+                    
+                    // Get current window style
+                    let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                    
+                    // Add tool window and no-activate flags to prevent focus stealing
+                    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, 
+                        style | WS_EX_TOOLWINDOW as isize | WS_EX_NOACTIVATE as isize);
+                    
+                    // Force window to update with new styles
+                    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, 
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+                    
+                    log::info!("Applied Windows-specific window flags for pill");
+                }
+            }
+        }
+
         // Show the window after NSPanel conversion
         pill_window.show().map_err(|e| e.to_string())?;
         

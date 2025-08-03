@@ -50,7 +50,7 @@
       "minimumSystemVersion": "13.0",
       "entitlements": "./entitlements.plist",
       "hardenedRuntime": true,
-      "signingIdentity": "Developer ID Application: Ideaplexa LLC (53P98M92V7)"
+      "signingIdentity": "-"
     }
   },
   "plugins": {
