@@ -30,7 +30,7 @@ use commands::{
     debug::{debug_transcription_flow, test_transcription_event},
     keyring::{keyring_set, keyring_get, keyring_delete, keyring_has},
     license::*,
-    logs::{clear_old_logs, get_log_directory, open_logs_folder},
+    logs::{get_log_directory, open_logs_folder},
     model::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model,
@@ -427,10 +427,21 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None::<Vec<&str>>,
-        ))
+        .plugin({
+            #[cfg(target_os = "macos")]
+            let autostart = tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                None::<Vec<&str>>,
+            );
+            
+            #[cfg(not(target_os = "macos"))]
+            let autostart = tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent, // This param is ignored on non-macOS
+                None::<Vec<&str>>,
+            );
+            
+            autostart
+        })
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 

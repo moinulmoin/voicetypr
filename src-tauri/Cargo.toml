@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -56,15 +56,18 @@ pbkdf2 = "0.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.14.3", features = ["metal"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 tauri-plugin-macos-permissions = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-whisper-rs = { version = "0.14.3", features = ["cuda"] }
+# CPU-only build for universal Windows compatibility
+# Will use AVX/AVX2/FMA CPU features if available for optimization
+whisper-rs = { version = "0.14.3" }
 windows = { version = "0.51", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
-]}
+] }
 
 [dev-dependencies]
 tempfile = "3.10"

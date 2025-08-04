@@ -33,10 +33,10 @@
         "connect-src": "'self' ipc: https: http: asset:",
         "media-src": "'self'"
       }
-    },
-    "macOSPrivateApi": true
+    }
   },
   "bundle": {
+    "publisher": "Ideaplexa LLC",
     "active": true,
     "targets": "all",
     "icon": [

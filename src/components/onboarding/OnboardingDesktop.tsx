@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useAccessibilityPermission } from "@/hooks/useAccessibilityPermission";
 import { useMicrophonePermission } from "@/hooks/useMicrophonePermission";
+import { usePlatform } from "@/contexts/PlatformContext";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import {
@@ -29,14 +30,6 @@ interface OnboardingDesktopProps {
 
 type Step = "welcome" | "permissions" | "models" | "setup" | "success";
 
-const STEPS = [
-  { id: "welcome" as const },
-  { id: "permissions" as const },
-  { id: "models" as const },
-  { id: "setup" as const },
-  { id: "success" as const }
-];
-
 type PermissionStatus = "checking" | "granted" | "denied" | "error";
 
 interface PermissionState {
@@ -46,6 +39,7 @@ interface PermissionState {
 
 export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelManagement }: OnboardingDesktopProps) {
   const { updateSettings } = useSettings();
+  const { platform, isLoading: isPlatformLoading } = usePlatform();
   const { hasPermission: hasMicPermission, checkPermission: checkMicPermission, requestPermission: requestMicPermission } = useMicrophonePermission();
   const { hasPermission: hasAccessPermission, checkPermission: checkAccessPermission, requestPermission: requestAccessPermission } = useAccessibilityPermission();
   
@@ -75,7 +69,22 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
   } = modelManagement;
 
 
-  const steps = STEPS;
+  // Define steps based on platform
+  // Default to showing permissions until platform is detected
+  const steps = !isPlatformLoading && platform === 'darwin' 
+    ? [
+        { id: "welcome" as const },
+        { id: "permissions" as const },
+        { id: "models" as const },
+        { id: "setup" as const },
+        { id: "success" as const }
+      ]
+    : [
+        { id: "welcome" as const },
+        { id: "models" as const },
+        { id: "setup" as const },
+        { id: "success" as const }
+      ];
 
   const currentIndex = steps.findIndex((s) => s.id === currentStep);
   // const progress = ((currentIndex + 1) / steps.length) * 100;
@@ -219,6 +228,8 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
   const canProceed = () => {
     switch (currentStep) {
       case "permissions":
+        // On Windows, permissions are always granted
+        if (platform !== 'darwin') return true;
         return permissions.microphone.status === "granted" &&
                permissions.accessibility.status === "granted";
                // automation check removed for now
@@ -229,6 +240,15 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
         return true;
     }
   };
+
+  // Show loading state while platform is being detected
+  if (isPlatformLoading) {
+    return (
+      <div className="h-screen flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">

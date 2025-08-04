@@ -105,113 +105,175 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
         }
     }
     
-    // 5. Clear app preferences (macOS defaults system)
-    match std::process::Command::new("defaults")
-        .args(&["delete", "com.ideaplexa.voicetypr"])
-        .output()
+    // 5. Clear app preferences
+    #[cfg(target_os = "macos")]
     {
-        Ok(output) => {
-            if output.status.success() {
-                cleared_items.push("System preferences".to_string());
+        // macOS defaults system
+        match std::process::Command::new("defaults")
+            .args(&["delete", "com.ideaplexa.voicetypr"])
+            .output()
+        {
+            Ok(output) => {
+                if output.status.success() {
+                    cleared_items.push("System preferences".to_string());
+                }
+            }
+            Err(_) => {
+                // No defaults to clear is not an error
             }
         }
-        Err(_) => {
-            // No defaults to clear is not an error
+        
+        // Also remove the preferences plist file
+        if let Ok(home_dir) = app.path().home_dir() {
+            let prefs_path = home_dir
+                .join("Library")
+                .join("Preferences")
+                .join("com.ideaplexa.voicetypr.plist");
+            if prefs_path.exists() {
+                if let Err(e) = fs::remove_file(&prefs_path) {
+                    errors.push(format!("Failed to remove preferences file: {}", e));
+                } else {
+                    cleared_items.push("Preferences plist".to_string());
+                }
+            }
         }
     }
     
-    // Also remove the preferences plist file
-    if let Ok(home_dir) = app.path().home_dir() {
-        let prefs_path = home_dir
-            .join("Library")
-            .join("Preferences")
-            .join("com.ideaplexa.voicetypr.plist");
-        if prefs_path.exists() {
-            if let Err(e) = fs::remove_file(&prefs_path) {
-                errors.push(format!("Failed to remove preferences file: {}", e));
-            } else {
-                cleared_items.push("Preferences plist".to_string());
+    #[cfg(target_os = "windows")]
+    {
+        // Windows Registry cleanup
+        match std::process::Command::new("reg")
+            .args(&["delete", "HKCU\\Software\\com.ideaplexa.voicetypr", "/f"])
+            .output()
+        {
+            Ok(output) => {
+                if output.status.success() {
+                    cleared_items.push("Registry settings".to_string());
+                }
+            }
+            Err(_) => {
+                // Registry key might not exist
             }
         }
     }
     
     // 6. Clear additional system data
-    if let Ok(home_dir) = app.path().home_dir() {
-        // Clear saved application state (window positions, etc)
-        let saved_state_path = home_dir
-            .join("Library")
-            .join("Saved Application State")
-            .join("com.ideaplexa.voicetypr.savedState");
-        if saved_state_path.exists() {
-            if let Err(e) = fs::remove_dir_all(&saved_state_path) {
-                errors.push(format!("Failed to clear saved state: {}", e));
-            } else {
-                cleared_items.push("Window state".to_string());
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home_dir) = app.path().home_dir() {
+            // Clear saved application state (window positions, etc)
+            let saved_state_path = home_dir
+                .join("Library")
+                .join("Saved Application State")
+                .join("com.ideaplexa.voicetypr.savedState");
+            if saved_state_path.exists() {
+                if let Err(e) = fs::remove_dir_all(&saved_state_path) {
+                    errors.push(format!("Failed to clear saved state: {}", e));
+                } else {
+                    cleared_items.push("Window state".to_string());
+                }
             }
-        }
-        
-        // Clear any logs
-        let logs_path = home_dir
-            .join("Library")
-            .join("Logs")
-            .join("com.ideaplexa.voicetypr");
-        if logs_path.exists() {
-            if let Err(e) = fs::remove_dir_all(&logs_path) {
-                errors.push(format!("Failed to clear logs: {}", e));
-            } else {
-                cleared_items.push("Application logs".to_string());
+            
+            // Clear any logs
+            let logs_path = home_dir
+                .join("Library")
+                .join("Logs")
+                .join("com.ideaplexa.voicetypr");
+            if logs_path.exists() {
+                if let Err(e) = fs::remove_dir_all(&logs_path) {
+                    errors.push(format!("Failed to clear logs: {}", e));
+                } else {
+                    cleared_items.push("Application logs".to_string());
+                }
             }
-        }
-        
-        // Clear WebKit data if any
-        let webkit_path = home_dir
-            .join("Library")
-            .join("WebKit")
-            .join("com.ideaplexa.voicetypr");
-        if webkit_path.exists() {
-            if let Err(e) = fs::remove_dir_all(&webkit_path) {
-                errors.push(format!("Failed to clear WebKit data: {}", e));
-            } else {
-                cleared_items.push("WebKit data".to_string());
+            
+            // Clear WebKit data if any
+            let webkit_path = home_dir
+                .join("Library")
+                .join("WebKit")
+                .join("com.ideaplexa.voicetypr");
+            if webkit_path.exists() {
+                if let Err(e) = fs::remove_dir_all(&webkit_path) {
+                    errors.push(format!("Failed to clear WebKit data: {}", e));
+                } else {
+                    cleared_items.push("WebKit data".to_string());
+                }
             }
-        }
-        
-        // Clear NSURLSession downloads cache
-        let nsurlsession_path = home_dir
-            .join("Library")
-            .join("Caches")
-            .join("com.apple.nsurlsessiond")
-            .join("Downloads")
-            .join("com.ideaplexa.voicetypr");
-        if nsurlsession_path.exists() {
-            if let Err(e) = fs::remove_dir_all(&nsurlsession_path) {
-                errors.push(format!("Failed to clear download cache: {}", e));
-            } else {
-                cleared_items.push("Download cache".to_string());
+            
+            // Clear NSURLSession downloads cache
+            let nsurlsession_path = home_dir
+                .join("Library")
+                .join("Caches")
+                .join("com.apple.nsurlsessiond")
+                .join("Downloads")
+                .join("com.ideaplexa.voicetypr");
+            if nsurlsession_path.exists() {
+                if let Err(e) = fs::remove_dir_all(&nsurlsession_path) {
+                    errors.push(format!("Failed to clear download cache: {}", e));
+                } else {
+                    cleared_items.push("Download cache".to_string());
+                }
             }
         }
     }
     
-    // 7. Reset system permissions using osascript with admin privileges
-    let reset_script = r#"do shell script "tccutil reset All com.ideaplexa.voicetypr" with administrator privileges"#;
-    
-    match tokio::process::Command::new("osascript")
-        .arg("-e")
-        .arg(reset_script)
-        .output()
-        .await
+    #[cfg(target_os = "windows")]
     {
-        Ok(output) => {
-            if output.status.success() {
-                cleared_items.push("System permissions".to_string());
-            } else {
-                // User might have cancelled - not a critical error
-                log::info!("User cancelled permission reset");
+        // Clear Windows app data
+        if let Ok(local_data_dir) = app.path().app_local_data_dir() {
+            // Clear logs from AppData\Local
+            let logs_path = local_data_dir.join("logs");
+            if logs_path.exists() {
+                if let Err(e) = fs::remove_dir_all(&logs_path) {
+                    errors.push(format!("Failed to clear logs: {}", e));
+                } else {
+                    cleared_items.push("Application logs".to_string());
+                }
             }
         }
-        Err(e) => {
-            errors.push(format!("Could not reset permissions: {}", e));
+        
+        // Clear Windows WebView2 cache
+        if let Ok(temp_dir) = app.path().temp_dir() {
+            let webview_cache = temp_dir.join("com.ideaplexa.voicetypr.WebView2");
+            if webview_cache.exists() {
+                if let Err(e) = fs::remove_dir_all(&webview_cache) {
+                    errors.push(format!("Failed to clear WebView2 cache: {}", e));
+                } else {
+                    cleared_items.push("WebView2 cache".to_string());
+                }
+            }
         }
+    }
+    
+    // 7. Reset system permissions
+    #[cfg(target_os = "macos")]
+    {
+        let reset_script = r#"do shell script "tccutil reset All com.ideaplexa.voicetypr" with administrator privileges"#;
+        
+        match tokio::process::Command::new("osascript")
+            .arg("-e")
+            .arg(reset_script)
+            .output()
+            .await
+        {
+            Ok(output) => {
+                if output.status.success() {
+                    cleared_items.push("System permissions".to_string());
+                } else {
+                    // User might have cancelled - not a critical error
+                    log::info!("User cancelled permission reset");
+                }
+            }
+            Err(e) => {
+                errors.push(format!("Could not reset permissions: {}", e));
+            }
+        }
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // Windows doesn't have centralized permissions like macOS
+        cleared_items.push("System permissions (N/A on Windows)".to_string());
     }
     
     // 8. Clear any runtime state
@@ -229,16 +291,19 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
         cleared_items.push("AI API key cache".to_string());
     }
     
-    // 9. Kill cfprefsd to ensure preference changes take effect
-    match std::process::Command::new("killall")
-        .arg("cfprefsd")
-        .output()
+    // 9. Refresh preferences daemon
+    #[cfg(target_os = "macos")]
     {
-        Ok(_) => {
-            log::info!("Refreshed cfprefsd");
-        }
-        Err(_) => {
-            // Not critical
+        match std::process::Command::new("killall")
+            .arg("cfprefsd")
+            .output()
+        {
+            Ok(_) => {
+                log::info!("Refreshed cfprefsd");
+            }
+            Err(_) => {
+                // Not critical
+            }
         }
     }
     

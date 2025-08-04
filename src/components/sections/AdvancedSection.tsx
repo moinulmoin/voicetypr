@@ -23,13 +23,15 @@ import {
   HelpCircle,
   FileText
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
+import { isMacOS } from "@/lib/platform";
 
 export function AdvancedSection() {
   const { updateSettings } = useSettings();
   const [isResetting, setIsResetting] = useState(false);
   const [isRequestingPermission, setIsRequestingPermission] = useState<string | null>(null);
+  const [showAccessibility, setShowAccessibility] = useState(true);
   const {
     hasAccessibilityPermission,
     hasMicrophonePermission,
@@ -39,6 +41,10 @@ export function AdvancedSection() {
     checkAccessibilityPermission,
     checkMicrophonePermission
   } = useReadiness();
+
+  useEffect(() => {
+    isMacOS().then(setShowAccessibility);
+  }, []);
 
   const handleRequestPermission = async (type: "microphone" | "accessibility") => {
     setIsRequestingPermission(type);
@@ -68,13 +74,13 @@ export function AdvancedSection() {
       description: "To record your voice for transcription",
       status: hasMicrophonePermission ? "granted" : isLoading ? "checking" : "denied"
     },
-    {
+    ...(showAccessibility ? [{
       type: "accessibility" as const,
       icon: Keyboard,
       title: "Accessibility",
       description: "For global hotkeys to trigger recording",
       status: hasAccessibilityPermission ? "granted" : isLoading ? "checking" : "denied"
-    }
+    }] : [])
     // Automation permission removed for now
     // Can be re-enabled later if needed:
     // {
@@ -189,12 +195,12 @@ export function AdvancedSection() {
                 ))}
               </div>
 
-              {(hasMicrophonePermission === false || hasAccessibilityPermission === false) && (
+              {(hasMicrophonePermission === false || (showAccessibility && hasAccessibilityPermission === false)) && (
                 <div className="text-xs text-muted-foreground space-y-1 pt-2">
                   <p className="font-medium">Missing permissions:</p>
                   <ul className="list-disc list-inside space-y-0.5 ml-2">
                     {hasMicrophonePermission === false && <li>Microphone: Required for voice recording</li>}
-                    {hasAccessibilityPermission === false && <li>Accessibility: Required for global hotkeys</li>}
+                    {showAccessibility && hasAccessibilityPermission === false && <li>Accessibility: Required for global hotkeys</li>}
                   </ul>
                 </div>
               )}

@@ -1,15 +1,18 @@
 import { cn } from '@/lib/utils';
+import { usePlatform } from '@/contexts/PlatformContext';
 
 /**
  * Formats a hotkey string into styled keyboard keys
  * e.g., "cmd+shift+space" -> styled keyboard keys
  */
 export function formatHotkey(hotkey: string): React.ReactNode {
+  const { isMac } = usePlatform();
+  
   if (!hotkey) return null;
   
-  // Normalize the hotkey string
+  // Normalize the hotkey string based on platform
   const normalized = hotkey.toLowerCase()
-    .replace('commandorcontrol', 'cmd')
+    .replace('commandorcontrol', isMac ? 'cmd' : 'ctrl')
     .replace('command', 'cmd')
     .replace('control', 'ctrl')
     .replace('option', 'alt')
@@ -25,7 +28,7 @@ export function formatHotkey(hotkey: string): React.ReactNode {
   
   // Map common key names to display names
   const keyDisplayMap: Record<string, string> = {
-    'cmd': 'cmd',
+    'cmd': isMac ? 'cmd' : 'ctrl',
     'ctrl': 'ctrl',
     'shift': 'shift',
     'alt': 'alt',

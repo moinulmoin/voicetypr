@@ -155,7 +155,7 @@ impl WindowManager {
         .content_protected(true)
         .decorations(false)
         .transparent(true)
-        .shadow(true)
+        .shadow(false) // Disabled to fix Windows transparency issue
         .skip_taskbar(true)
         .inner_size(350.0, 150.0)
         .position(position_x, position_y)
@@ -198,7 +198,7 @@ impl WindowManager {
                     
                     // Add tool window and no-activate flags to prevent focus stealing
                     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, 
-                        style | WS_EX_TOOLWINDOW as isize | WS_EX_NOACTIVATE as isize);
+                        style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize);
                     
                     // Force window to update with new styles
                     SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, 

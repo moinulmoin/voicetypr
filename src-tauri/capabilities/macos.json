@@ -1,7 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Cross-platform default permissions",
+  "identifier": "macos",
+  "description": "macOS-specific permissions",
+  "platforms": ["macOS"],
   "windows": [
     "main",
     "pill"
@@ -26,6 +27,7 @@
     "fs:scope-appdata",
     "shell:allow-open",
     "shell:allow-execute",
+    "macos-permissions:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",

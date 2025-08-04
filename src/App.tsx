@@ -12,6 +12,7 @@ import { ModelsSection } from "./components/sections/ModelsSection";
 import { RecentRecordings } from "./components/sections/RecentRecordings";
 import { SidebarInset, SidebarProvider } from "./components/ui/sidebar";
 import { LicenseProvider } from "./contexts/LicenseContext";
+import { PlatformProvider } from "./contexts/PlatformContext";
 import { ReadinessProvider, useReadiness } from "./contexts/ReadinessContext";
 import { SettingsProvider, useSettings } from "./contexts/SettingsContext";
 import { useEventCoordinator } from "./hooks/useEventCoordinator";
@@ -342,14 +343,16 @@ function AppContent() {
 export default function App() {
   return (
     <AppErrorBoundary>
-      <LicenseProvider>
-        <SettingsProvider>
-          <ReadinessProvider>
-            <AppContent />
-            <Toaster position="top-center" />
-          </ReadinessProvider>
-        </SettingsProvider>
-      </LicenseProvider>
+      <PlatformProvider>
+        <LicenseProvider>
+          <SettingsProvider>
+            <ReadinessProvider>
+              <AppContent />
+              <Toaster position="top-center" />
+            </ReadinessProvider>
+          </SettingsProvider>
+        </LicenseProvider>
+      </PlatformProvider>
     </AppErrorBoundary>
   );
 }
