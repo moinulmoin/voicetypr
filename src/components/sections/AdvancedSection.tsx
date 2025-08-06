@@ -98,10 +98,8 @@ export function AdvancedSection() {
       await updateSettings({
         onboarding_completed: false,
       });
-      toast.success("Onboarding reset! Restarting the app.");
-      setTimeout(() => {
-        window.location.reload();
-      }, 1000);
+      toast.success("Onboarding reset!");
+      // No need to reload - the settings update will trigger the UI change
     } catch (error) {
       console.error('Failed to reset onboarding:', error);
       toast.error("Failed to reset onboarding");
@@ -120,91 +118,93 @@ export function AdvancedSection() {
 
         <ScrollArea className="flex-1 min-h-0">
           <div className="space-y-6">
-            {/* Permissions Section */}
-            <div className="rounded-lg border bg-card p-4 space-y-4">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Key className="h-4 w-4 text-muted-foreground" />
-                  <h3 className="text-sm font-medium">Permissions</h3>
-                </div>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => refresh()}
-                        disabled={isLoading}
-                        className="h-8 px-2"
-                      >
-                        {isLoading ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <RefreshCw className="h-4 w-4" />
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Refresh permission status</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </div>
-
-
-              <div className="space-y-3">
-                {permissionData.map((perm) => (
-                  <div
-                    key={perm.type}
-                    className="flex items-center justify-between"
-                  >
-                    <div className="flex items-center gap-3">
-                      <perm.icon className="h-4 w-4 text-muted-foreground" />
-                      <div>
-                        <p className="text-sm font-medium">{perm.title}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {perm.description}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center">
-                      {perm.status === "checking" ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                      ) : perm.status === "granted" ? (
-                        <div className="flex items-center gap-1.5 text-green-600">
-                          <CheckCircle className="h-4 w-4" />
-                          <span className="text-sm">Granted</span>
-                        </div>
-                      ) : (
+            {/* Permissions Section - Only show on macOS */}
+            {showAccessibility && (
+              <div className="rounded-lg border bg-card p-4 space-y-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Key className="h-4 w-4 text-muted-foreground" />
+                    <h3 className="text-sm font-medium">Permissions</h3>
+                  </div>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
                         <Button
                           size="sm"
-                          variant="outline"
-                          onClick={() => handleRequestPermission(perm.type)}
-                          disabled={isRequestingPermission === perm.type}
+                          variant="ghost"
+                          onClick={() => refresh()}
+                          disabled={isLoading}
+                          className="h-8 px-2"
                         >
-                          {isRequestingPermission === perm.type ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
+                          {isLoading ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
                           ) : (
-                            "Grant"
+                            <RefreshCw className="h-4 w-4" />
                           )}
                         </Button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {(hasMicrophonePermission === false || (showAccessibility && hasAccessibilityPermission === false)) && (
-                <div className="text-xs text-muted-foreground space-y-1 pt-2">
-                  <p className="font-medium">Missing permissions:</p>
-                  <ul className="list-disc list-inside space-y-0.5 ml-2">
-                    {hasMicrophonePermission === false && <li>Microphone: Required for voice recording</li>}
-                    {showAccessibility && hasAccessibilityPermission === false && <li>Accessibility: Required for global hotkeys</li>}
-                  </ul>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Refresh permission status</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
-              )}
-            </div>
+
+
+                <div className="space-y-3">
+                  {permissionData.map((perm) => (
+                    <div
+                      key={perm.type}
+                      className="flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-3">
+                        <perm.icon className="h-4 w-4 text-muted-foreground" />
+                        <div>
+                          <p className="text-sm font-medium">{perm.title}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {perm.description}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center">
+                        {perm.status === "checking" ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        ) : perm.status === "granted" ? (
+                          <div className="flex items-center gap-1.5 text-green-600">
+                            <CheckCircle className="h-4 w-4" />
+                            <span className="text-sm">Granted</span>
+                          </div>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleRequestPermission(perm.type)}
+                            disabled={isRequestingPermission === perm.type}
+                          >
+                            {isRequestingPermission === perm.type ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              "Grant"
+                            )}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {(hasMicrophonePermission === false || (showAccessibility && hasAccessibilityPermission === false)) && (
+                  <div className="text-xs text-muted-foreground space-y-1 pt-2">
+                    <p className="font-medium">Missing permissions:</p>
+                    <ul className="list-disc list-inside space-y-0.5 ml-2">
+                      {hasMicrophonePermission === false && <li>Microphone: Required for voice recording</li>}
+                      {showAccessibility && hasAccessibilityPermission === false && <li>Accessibility: Required for global hotkeys</li>}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Reset Options Section */}
             <div className="rounded-lg border bg-card p-4 space-y-4">
