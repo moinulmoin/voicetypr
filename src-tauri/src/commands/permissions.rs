@@ -1,4 +1,4 @@
-// use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, Duration};
 
 #[tauri::command]
 pub async fn check_accessibility_permission() -> Result<bool, String> {
@@ -49,7 +49,7 @@ pub async fn check_accessibility_permission() -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn request_accessibility_permission(_app: tauri::AppHandle) -> Result<bool, String> {
+pub async fn request_accessibility_permission(app: tauri::AppHandle) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
         use tauri_plugin_macos_permissions::{
@@ -150,7 +150,7 @@ pub async fn check_microphone_permission() -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn request_microphone_permission(_app: tauri::AppHandle) -> Result<bool, String> {
+pub async fn request_microphone_permission(app: tauri::AppHandle) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
         use tauri_plugin_macos_permissions::{

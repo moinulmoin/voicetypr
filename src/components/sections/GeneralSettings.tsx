@@ -4,11 +4,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
+import { isMacOS } from "@/lib/platform";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { AlertCircle, Globe, Mic, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { LanguageSelection } from "../LanguageSelection";
-import { isMacOS } from "@/lib/platform";
 
 export function GeneralSettings() {
   const { settings, updateSettings } = useSettings();
@@ -30,7 +30,7 @@ export function GeneralSettings() {
     checkAutostart();
 
     // Check platform for accessibility warning
-    setShowAccessibilityWarning(isMacOS());
+    setShowAccessibilityWarning(isMacOS);
   }, []);
 
   if (!settings) return null;

@@ -9,23 +9,23 @@ import {
 } from "@/components/ui/tooltip";
 import { useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
+import { isMacOS } from "@/lib/platform";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   CheckCircle,
+  FileText,
+  HelpCircle,
   Key,
   Keyboard,
   Loader2,
   Mic,
   RefreshCw,
-  Trash2,
-  HelpCircle,
-  FileText
+  Trash2
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { isMacOS } from "@/lib/platform";
 
 export function AdvancedSection() {
   const { updateSettings } = useSettings();
@@ -43,7 +43,7 @@ export function AdvancedSection() {
   } = useReadiness();
 
   useEffect(() => {
-    setShowAccessibility(isMacOS());
+    setShowAccessibility(isMacOS);
   }, []);
 
   const handleRequestPermission = async (type: "microphone" | "accessibility") => {

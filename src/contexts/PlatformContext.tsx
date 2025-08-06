@@ -15,8 +15,8 @@ export function PlatformProvider({ children }: { children: React.ReactNode }) {
 
 
   const value: PlatformContextType = {
-    isMac: isMacOS(),
-    isWindows: isWindows(),
+    isMac: isMacOS,
+    isWindows: isWindows,
   };
 
   return (

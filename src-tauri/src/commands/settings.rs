@@ -330,29 +330,6 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn set_language_from_tray(app: AppHandle, language_code: String) -> Result<(), String> {
-    // Get current settings
-    let mut settings = get_settings(app.clone()).await?;
-
-    // Update the language
-    settings.language = language_code.clone();
-
-    // Save settings
-    save_settings(app.clone(), settings).await?;
-
-    // Update the tray menu to reflect the new selection
-    update_tray_menu(app.clone()).await?;
-
-    // Emit event to update UI only after successful tray menu update
-    if let Err(e) = app.emit("language-changed", &language_code) {
-        log::warn!("Failed to emit language-changed event: {}", e);
-        // Return error to caller so they know the UI might be out of sync
-        return Err(format!("Failed to emit language-changed event: {}", e));
-    }
-
-    Ok(())
-}
 
 #[tauri::command]
 pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
