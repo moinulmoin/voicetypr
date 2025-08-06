@@ -206,7 +206,7 @@ impl WindowManager {
                         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
 
                         // Force window to update with new styles
-                        let ok = SetWindowPos(
+                        SetWindowPos(
                             hwnd,
                             HWND_TOPMOST,
                             0,
@@ -214,13 +214,9 @@ impl WindowManager {
                             0,
                             0,
                             SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
-                        ).as_bool();
+                        );
                         
-                        if ok {
-                            log::info!("Applied Windows-specific window flags for pill");
-                        } else {
-                            log::warn!("SetWindowPos failed: {}", windows::core::Error::from_win32());
-                        }
+                        log::info!("Applied Windows-specific window flags for pill");
                     } else {
                         log::warn!("Invalid HWND received from Tauri window");
                     }
