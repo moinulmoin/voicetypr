@@ -30,7 +30,7 @@ export function GeneralSettings() {
     checkAutostart();
 
     // Check platform for accessibility warning
-    isMacOS().then(setShowAccessibilityWarning);
+    setShowAccessibilityWarning(isMacOS());
   }, []);
 
   if (!settings) return null;

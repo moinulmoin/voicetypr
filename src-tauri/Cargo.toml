@@ -61,9 +61,7 @@ tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2"
 tauri-plugin-macos-permissions = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# CPU-only build for universal Windows compatibility
-# Will use AVX/AVX2/FMA CPU features if available for optimization
-whisper-rs = { version = "0.14.3" }
+whisper-rs = { version = "0.14.3", features = ["cuda"] }
 windows = { version = "0.51", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
@@ -80,3 +78,4 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-os = "2"

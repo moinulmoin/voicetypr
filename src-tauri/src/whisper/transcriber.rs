@@ -53,7 +53,6 @@ impl Transcriber {
             let error = format!("Audio file does not exist: {:?}", audio_path);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
 
-
             return Err(error);
         }
 
@@ -78,7 +77,6 @@ impl Transcriber {
         let mut reader = hound::WavReader::open(audio_path).map_err(|e| {
             let error = format!("Failed to open WAV file: {}", e);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
-
 
             error
         })?;
@@ -135,12 +133,12 @@ impl Transcriber {
         // Use rubato for high-quality resampling to 16kHz
         let resampled_audio = if spec.sample_rate != 16_000 {
             use crate::audio::resampler::resample_to_16khz;
-            
+
             log::info!(
                 "[TRANSCRIPTION_DEBUG] Resampling audio from {} Hz to 16000 Hz",
                 spec.sample_rate
             );
-            
+
             resample_to_16khz(&audio, spec.sample_rate)?
         } else {
             log::info!("[TRANSCRIPTION_DEBUG] Audio already at 16kHz, no resampling needed");
@@ -225,15 +223,15 @@ impl Transcriber {
 
         // Stricter log probability threshold to enforce quality
         params.set_logprob_thold(-1.5); // Lower than default -1.0 for stricter probability requirements
-        
+
         // Set initial prompt to help with context
         params.set_initial_prompt(""); // Empty prompt to avoid biasing the model
-        
+
         // Temperature settings - slight randomness helps avoid repetitive loops
         params.set_temperature(0.2); // Small amount of randomness instead of deterministic
         params.set_temperature_inc(0.2); // Increase by 0.2 on fallback (default)
         params.set_max_initial_ts(1.0); // Limit initial timestamp search
-        
+
         // Limit segment length to prevent runaway hallucinations
         params.set_max_len(0); // 0 means no limit
         params.set_length_penalty(-1.0); // Default penalty
@@ -243,7 +241,6 @@ impl Transcriber {
         let mut state = self.context.create_state().map_err(|e| {
             let error = format!("Failed to create Whisper state: {}", e);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
-
 
             error
         })?;
@@ -259,7 +256,6 @@ impl Transcriber {
         state.full(params, &resampled_audio).map_err(|e| {
             let error = format!("Whisper inference failed: {}", e);
             log::error!("[TRANSCRIPTION_DEBUG] {}", error);
-
 
             error
         })?;

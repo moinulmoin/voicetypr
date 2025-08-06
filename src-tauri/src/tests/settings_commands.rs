@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::commands::settings::{Settings, get_supported_languages};
+    use crate::commands::settings::{get_supported_languages, Settings};
     use serde_json::json;
 
     #[test]
@@ -201,26 +201,26 @@ mod tests {
     #[tokio::test]
     async fn test_get_supported_languages() {
         let languages = get_supported_languages().await.unwrap();
-        
+
         // Should have multiple languages
         assert!(languages.len() > 50);
-        
+
         // Languages should be sorted alphabetically (auto-detect removed)
         // First language will be Afrikaans alphabetically
         assert_eq!(languages[0].code, "af");
         assert_eq!(languages[0].name, "Afrikaans");
-        
+
         // Should contain common languages
         let codes: Vec<String> = languages.iter().map(|l| l.code.clone()).collect();
         assert!(codes.contains(&"en".to_string()));
         assert!(codes.contains(&"es".to_string()));
         assert!(codes.contains(&"fr".to_string()));
         assert!(codes.contains(&"zh".to_string()));
-        
+
         // Should be sorted by name alphabetically
         for i in 1..languages.len() {
             assert!(
-                languages[i-1].name <= languages[i].name,
+                languages[i - 1].name <= languages[i].name,
                 "Languages should be sorted by name"
             );
         }

@@ -1,11 +1,11 @@
-use crate::{AppState, RecordingState};
 use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_combination};
+use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
+use crate::{AppState, RecordingState};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tauri::{AppHandle, Manager, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use tauri_plugin_store::StoreExt;
-use crate::whisper::languages::{SUPPORTED_LANGUAGES, validate_language};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
@@ -28,7 +28,7 @@ impl Default for Settings {
             hotkey: "CommandOrControl+Shift+Space".to_string(),
             current_model: "".to_string(), // Empty means auto-select
             language: "en".to_string(),
-            translate_to_english: false,      // Default to transcribe mode
+            translate_to_english: false, // Default to transcribe mode
             theme: "system".to_string(),
             transcription_cleanup_days: None, // None means keep forever
             pill_position: None,              // No saved position initially
@@ -116,12 +116,12 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
-    
+
     // Validate language before saving
     let validated_language = validate_language(Some(&settings.language));
     store.set("language", json!(validated_language));
     store.set("translate_to_english", json!(settings.translate_to_english));
-    
+
     store.set("theme", json!(settings.theme));
     store.set(
         "transcription_cleanup_days",
@@ -177,13 +177,13 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
     if shortcut.is_empty() || shortcut.len() > 100 {
         return Err("Invalid shortcut format".to_string());
     }
-    
+
     // Validate key combination
     validate_key_combination(&shortcut)?;
-    
+
     // Normalize the shortcut keys
     let normalized_shortcut = normalize_shortcut_keys(&shortcut);
-    
+
     // Validate that shortcut can be parsed
     let _new_shortcut: Shortcut = normalized_shortcut
         .parse()
@@ -191,11 +191,15 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
 
     // Store the pending shortcut in app state (normalized version)
     let app_state = app.state::<AppState>();
-    
+
     match app_state.pending_shortcut.lock() {
         Ok(mut pending_guard) => {
             *pending_guard = Some(normalized_shortcut.clone());
-            log::info!("Pending shortcut set to: {} (normalized from: {})", normalized_shortcut, shortcut);
+            log::info!(
+                "Pending shortcut set to: {} (normalized from: {})",
+                normalized_shortcut,
+                shortcut
+            );
         }
         Err(e) => {
             log::error!("Failed to acquire pending shortcut lock: {}", e);
@@ -214,29 +218,34 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
 #[tauri::command]
 pub async fn apply_pending_shortcut(app: AppHandle) -> Result<bool, String> {
     let app_state = app.state::<AppState>();
-    
+
     // Check if we're in idle state (safe to update shortcuts)
     let current_state = app_state.get_current_state();
     if current_state != RecordingState::Idle {
-        log::info!("Cannot apply shortcut while recording state is: {:?}", current_state);
+        log::info!(
+            "Cannot apply shortcut while recording state is: {:?}",
+            current_state
+        );
         return Ok(false);
     }
-    
+
     // Check if there's a pending shortcut
     let pending_shortcut = {
-        let pending_guard = app_state.pending_shortcut.lock()
+        let pending_guard = app_state
+            .pending_shortcut
+            .lock()
             .map_err(|e| format!("Failed to lock pending shortcut: {}", e))?;
         pending_guard.clone()
     };
-    
+
     if let Some(shortcut_str) = pending_shortcut {
         log::info!("Applying pending shortcut: {}", shortcut_str);
-        
+
         let shortcuts = app.global_shortcut();
-        
+
         // Unregister all existing shortcuts
         shortcuts.unregister_all().map_err(|e| e.to_string())?;
-        
+
         // Parse and register new shortcut
         let shortcut_obj: Shortcut = shortcut_str
             .parse()
@@ -244,7 +253,7 @@ pub async fn apply_pending_shortcut(app: AppHandle) -> Result<bool, String> {
         shortcuts
             .register(shortcut_obj.clone())
             .map_err(|e| e.to_string())?;
-        
+
         // Update the recording shortcut in managed state
         match app_state.recording_shortcut.lock() {
             Ok(mut shortcut_guard) => {
@@ -255,7 +264,7 @@ pub async fn apply_pending_shortcut(app: AppHandle) -> Result<bool, String> {
                 return Err("Failed to update recording shortcut".to_string());
             }
         }
-        
+
         // Clear the pending shortcut
         match app_state.pending_shortcut.lock() {
             Ok(mut pending_guard) => {
@@ -267,11 +276,11 @@ pub async fn apply_pending_shortcut(app: AppHandle) -> Result<bool, String> {
                 log::warn!("Continuing despite lock failure");
             }
         }
-        
+
         log::info!("Successfully applied shortcut: {}", shortcut_str);
         return Ok(true);
     }
-    
+
     Ok(false)
 }
 
@@ -290,10 +299,10 @@ pub async fn get_supported_languages() -> Result<Vec<LanguageInfo>, String> {
             name: lang.name.to_string(),
         })
         .collect();
-    
+
     // Sort by name for better UX (auto-detect removed)
     languages.sort_by(|a, b| a.name.cmp(&b.name));
-    
+
     Ok(languages)
 }
 
@@ -301,23 +310,23 @@ pub async fn get_supported_languages() -> Result<Vec<LanguageInfo>, String> {
 pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(), String> {
     // Get current settings
     let mut settings = get_settings(app.clone()).await?;
-    
+
     // Update the model
     settings.current_model = model_name.clone();
-    
+
     // Save settings (this will also preload the model)
     save_settings(app.clone(), settings).await?;
-    
+
     // Update the tray menu to reflect the new selection
     update_tray_menu(app.clone()).await?;
-    
+
     // Emit event to update UI only after successful tray menu update
     if let Err(e) = app.emit("model-changed", &model_name) {
         log::warn!("Failed to emit model-changed event: {}", e);
         // Return error to caller so they know the UI might be out of sync
         return Err(format!("Failed to emit model-changed event: {}", e));
     }
-    
+
     Ok(())
 }
 
@@ -325,32 +334,33 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
 pub async fn set_language_from_tray(app: AppHandle, language_code: String) -> Result<(), String> {
     // Get current settings
     let mut settings = get_settings(app.clone()).await?;
-    
+
     // Update the language
     settings.language = language_code.clone();
-    
+
     // Save settings
     save_settings(app.clone(), settings).await?;
-    
+
     // Update the tray menu to reflect the new selection
     update_tray_menu(app.clone()).await?;
-    
+
     // Emit event to update UI only after successful tray menu update
     if let Err(e) = app.emit("language-changed", &language_code) {
         log::warn!("Failed to emit language-changed event: {}", e);
         // Return error to caller so they know the UI might be out of sync
         return Err(format!("Failed to emit language-changed event: {}", e));
     }
-    
+
     Ok(())
 }
 
 #[tauri::command]
 pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
     // Build the new menu
-    let new_menu = crate::build_tray_menu(&app).await
+    let new_menu = crate::build_tray_menu(&app)
+        .await
         .map_err(|e| format!("Failed to build tray menu: {}", e))?;
-    
+
     // Update the tray menu
     if let Some(tray) = app.tray_by_id("main") {
         tray.set_menu(Some(new_menu))
@@ -359,7 +369,6 @@ pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
     } else {
         log::warn!("Tray icon not found");
     }
-    
+
     Ok(())
 }
-

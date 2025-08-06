@@ -46,7 +46,7 @@ impl Drop for AudioRecorder {
         } else {
             log::error!("Failed to acquire recording handle lock during drop");
         }
-        
+
         // Clear audio level receiver
         if let Ok(mut receiver_guard) = self.audio_level_receiver.lock() {
             receiver_guard.take();
@@ -76,14 +76,17 @@ impl AudioRecorder {
     }
 
     pub fn start_recording(&mut self, output_path: &str) -> Result<(), String> {
-        log::info!("AudioRecorder::start_recording called with path: {}", output_path);
-        
+        log::info!(
+            "AudioRecorder::start_recording called with path: {}",
+            output_path
+        );
+
         // Acquire lock once and hold it through the entire initialization
         let mut handle_guard = self
             .recording_handle
             .lock()
             .map_err(|e| format!("Failed to acquire lock: {}", e))?;
-            
+
         // Check if already recording
         if handle_guard.is_some() {
             return Err("Already recording".to_string());
@@ -110,7 +113,7 @@ impl AudioRecorder {
             let device = host
                 .default_input_device()
                 .ok_or("No input device available")?;
-                
+
             let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
             log::info!("======================================");
             log::info!("🎤 AUDIO DEVICE SELECTED: {}", device_name);
@@ -124,7 +127,7 @@ impl AudioRecorder {
                 config.channels(),
                 config.sample_format()
             );
-            
+
             // List all available input devices for debugging
             log::info!("Available input devices:");
             if let Ok(devices) = host.input_devices() {
@@ -136,17 +139,15 @@ impl AudioRecorder {
             }
 
             // Initialize silence detector and level meter
-            let silence_detector = Arc::new(Mutex::new(
-                SilenceDetector::new(silence_duration)
-            ));
-            
+            let silence_detector = Arc::new(Mutex::new(SilenceDetector::new(silence_duration)));
+
             let level_meter = Arc::new(Mutex::new(
                 AudioLevelMeter::new(
                     config.sample_rate().0,
                     config.channels() as u32,
-                    audio_level_tx.clone()
+                    audio_level_tx.clone(),
                 )
-                .map_err(|e| format!("Failed to create level meter: {}", e))?
+                .map_err(|e| format!("Failed to create level meter: {}", e))?,
             ));
 
             // Record with native settings, Whisper will handle resampling
@@ -180,7 +181,7 @@ impl AudioRecorder {
                     // Calculate RMS for both level meter and silence detection
                     let sum: f32 = f32_samples.iter().map(|x| x * x).sum();
                     let rms = (sum / f32_samples.len() as f32).sqrt();
-                    
+
                     // Process with level meter
                     if let Ok(mut meter) = level_meter_clone.try_lock() {
                         let _ = meter.process_samples(f32_samples);
@@ -211,10 +212,8 @@ impl AudioRecorder {
                             for &sample in i16_samples {
                                 if let Err(e) = writer.write_sample(sample) {
                                     if let Ok(mut error_guard) = error_clone.lock() {
-                                        *error_guard = Some(format!(
-                                            "Failed to write audio sample: {}",
-                                            e
-                                        ));
+                                        *error_guard =
+                                            Some(format!("Failed to write audio sample: {}", e));
                                     }
                                     break;
                                 }
@@ -240,7 +239,7 @@ impl AudioRecorder {
                                         (clamped * 32767.0) as i16
                                     })
                                     .collect();
-                                
+
                                 // Process audio
                                 process_clone(data, &i16_samples);
                             },
@@ -256,11 +255,9 @@ impl AudioRecorder {
                             &config.config(),
                             move |data: &[i16], _: &_| {
                                 // Convert I16 to F32 for processing
-                                let f32_samples: Vec<f32> = data
-                                    .iter()
-                                    .map(|&x| x as f32 / i16::MAX as f32)
-                                    .collect();
-                                
+                                let f32_samples: Vec<f32> =
+                                    data.iter().map(|&x| x as f32 / i16::MAX as f32).collect();
+
                                 // Process audio
                                 process_clone(&f32_samples, data);
                             },
@@ -279,13 +276,11 @@ impl AudioRecorder {
                                     .iter()
                                     .map(|&x| (x as f32 - 32768.0) / 32768.0)
                                     .collect();
-                                
+
                                 // Convert U16 to I16 for writing
-                                let i16_samples: Vec<i16> = data
-                                    .iter()
-                                    .map(|&x| (x as i32 - 32768) as i16)
-                                    .collect();
-                                
+                                let i16_samples: Vec<i16> =
+                                    data.iter().map(|&x| (x as i32 - 32768) as i16).collect();
+
                                 // Process audio
                                 process_audio(&f32_samples, &i16_samples);
                             },
@@ -306,7 +301,7 @@ impl AudioRecorder {
                 log::error!("Failed to start audio stream: {}", e);
                 e.to_string()
             })?;
-            
+
             log::info!("Audio stream started successfully");
 
             // Wait for stop signal

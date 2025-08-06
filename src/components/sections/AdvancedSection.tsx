@@ -43,7 +43,7 @@ export function AdvancedSection() {
   } = useReadiness();
 
   useEffect(() => {
-    isMacOS().then(setShowAccessibility);
+    setShowAccessibility(isMacOS());
   }, []);
 
   const handleRequestPermission = async (type: "microphone" | "accessibility") => {

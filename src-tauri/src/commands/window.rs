@@ -71,11 +71,11 @@ pub async fn focus_main_window(app: AppHandle) -> Result<(), String> {
     if let Some(main_window) = window_manager.get_main_window() {
         // Check if window is already visible to avoid duplicate animations
         let is_visible = main_window.is_visible().unwrap_or(false);
-        
+
         if !is_visible {
             main_window.show().map_err(|e| e.to_string())?;
         }
-        
+
         // Always set focus, even if already visible
         main_window.set_focus().map_err(|e| e.to_string())?;
     }

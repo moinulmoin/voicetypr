@@ -37,7 +37,7 @@ pub async fn insert_text(_app: tauri::AppHandle, text: String) -> Result<(), Str
         use crate::commands::permissions::check_accessibility_permission;
         check_accessibility_permission().await?
     };
-    
+
     #[cfg(not(target_os = "macos"))]
     let has_accessibility_permission = true;
 
@@ -54,17 +54,16 @@ pub async fn insert_text(_app: tauri::AppHandle, text: String) -> Result<(), Str
 fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Result<(), String> {
     // This function handles both copying text to clipboard AND pasting it at cursor
     // Initialize clipboard
-    let mut clipboard = Clipboard::new().map_err(|e| {
-        format!("Failed to initialize clipboard: {}", e)
-    })?;
+    let mut clipboard =
+        Clipboard::new().map_err(|e| format!("Failed to initialize clipboard: {}", e))?;
 
     // Save current clipboard content
     let original_clipboard = clipboard.get_text().ok();
 
     // Set new clipboard content
-    clipboard.set_text(&text).map_err(|e| {
-        format!("Failed to set clipboard: {}", e)
-    })?;
+    clipboard
+        .set_text(&text)
+        .map_err(|e| format!("Failed to set clipboard: {}", e))?;
 
     log::info!("Set clipboard content: {}", text);
 
@@ -78,7 +77,9 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Res
 
     // Check if we have accessibility permissions before attempting to paste
     if !has_accessibility_permission {
-        log::warn!("No accessibility permission - text copied to clipboard but cannot paste automatically");
+        log::warn!(
+            "No accessibility permission - text copied to clipboard but cannot paste automatically"
+        );
         // Return a specific error so the caller knows it's an accessibility issue
         return Err("No accessibility permission - text copied to clipboard. Please paste manually or grant accessibility permission.".to_string());
     }
@@ -97,7 +98,8 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Res
             log::warn!("rdev paste failed: {}, trying AppleScript fallback", e);
 
             // Fallback to AppleScript
-            let paste_result = panic::catch_unwind(AssertUnwindSafe(|| try_paste_with_applescript()));
+            let paste_result =
+                panic::catch_unwind(AssertUnwindSafe(|| try_paste_with_applescript()));
 
             match paste_result {
                 Ok(Ok(_)) => {

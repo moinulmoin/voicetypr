@@ -1,4 +1,4 @@
-use keyboard_types::{Key, Code};
+use keyboard_types::{Code, Key};
 use std::str::FromStr;
 
 /// Normalize keyboard shortcut keys for cross-platform compatibility
@@ -26,7 +26,7 @@ fn normalize_single_key(key: &str) -> &str {
         "space" => return "Space",
         _ => {}
     }
-    
+
     // First, try to parse as keyboard_types::Key for semantic normalization
     if let Ok(parsed_key) = Key::from_str(key) {
         match parsed_key {
@@ -106,49 +106,65 @@ pub fn validate_key_combination(shortcut: &str) -> Result<(), String> {
 
 /// Validate that a key combination is allowed with custom rules
 pub fn validate_key_combination_with_rules(
-    shortcut: &str, 
-    rules: &KeyValidationRules
+    shortcut: &str,
+    rules: &KeyValidationRules,
 ) -> Result<(), String> {
     let parts: Vec<&str> = shortcut.split('+').collect();
-    
+
     // Check minimum keys
     if parts.len() < rules.min_keys {
         return Err(format!("Minimum {} key(s) required", rules.min_keys));
     }
-    
+
     // Check maximum keys
     if parts.len() > rules.max_keys {
-        return Err(format!("Maximum {} keys allowed in combination", rules.max_keys));
+        return Err(format!(
+            "Maximum {} keys allowed in combination",
+            rules.max_keys
+        ));
     }
-    
+
     // Check modifier requirements
     let is_modifier = |key: &str| -> bool {
-        matches!(key, "CommandOrControl" | "Shift" | "Alt" | "Control" | 
-                 "Command" | "Cmd" | "Ctrl" | "Option" | "Meta")
+        matches!(
+            key,
+            "CommandOrControl"
+                | "Shift"
+                | "Alt"
+                | "Control"
+                | "Command"
+                | "Cmd"
+                | "Ctrl"
+                | "Option"
+                | "Meta"
+        )
     };
-    
+
     let has_modifier = parts.iter().any(|&key| is_modifier(key));
-    
+
     if rules.require_modifier && !has_modifier {
         return Err("At least one modifier key is required".to_string());
     }
-    
+
     // Check that the shortcut starts with a modifier
     if rules.require_modifier && !parts.is_empty() && !is_modifier(parts[0]) {
-        return Err("Keyboard shortcuts must start with a modifier key (Cmd/Ctrl, Alt, or Shift)".to_string());
+        return Err(
+            "Keyboard shortcuts must start with a modifier key (Cmd/Ctrl, Alt, or Shift)"
+                .to_string(),
+        );
     }
-    
+
     if rules.require_modifier_for_multi_key && !has_modifier && parts.len() > 1 {
         return Err("Multi-key shortcuts must include at least one modifier key".to_string());
     }
-    
+
     // Validate each key
     for key in parts {
         if !is_valid_key(key) {
             return Err(format!("Invalid key: {}", key));
         }
     }
-    
+
     Ok(())
 }
 
@@ -158,12 +174,12 @@ fn is_valid_key(key: &str) -> bool {
     if key.is_empty() {
         return false;
     }
-    
+
     // Try to parse as keyboard_types Key or Code first
     if Key::from_str(key).is_ok() || Code::from_str(key).is_ok() {
         return true;
     }
-    
+
     // Allow any non-empty string as a potential key
     // The actual validation will happen when we try to register the shortcut
     // This allows for maximum flexibility with different keyboard layouts and OS-specific keys
@@ -177,23 +193,41 @@ mod tests {
     #[test]
     fn test_normalize_shortcut_keys() {
         // Test default shortcut remains unchanged
-        assert_eq!(normalize_shortcut_keys("CommandOrControl+Shift+Space"), "CommandOrControl+Shift+Space");
-        
+        assert_eq!(
+            normalize_shortcut_keys("CommandOrControl+Shift+Space"),
+            "CommandOrControl+Shift+Space"
+        );
+
         assert_eq!(normalize_shortcut_keys("Return"), "Enter");
         assert_eq!(normalize_shortcut_keys("ArrowUp"), "Up");
-        assert_eq!(normalize_shortcut_keys("CommandOrControl+ArrowDown"), "CommandOrControl+Down");
+        assert_eq!(
+            normalize_shortcut_keys("CommandOrControl+ArrowDown"),
+            "CommandOrControl+Down"
+        );
         assert_eq!(normalize_shortcut_keys("Shift+Return"), "Shift+Enter");
-        assert_eq!(normalize_shortcut_keys("Cmd+Shift+Space"), "CommandOrControl+Shift+Space");
+        assert_eq!(
+            normalize_shortcut_keys("Cmd+Shift+Space"),
+            "CommandOrControl+Shift+Space"
+        );
         assert_eq!(normalize_shortcut_keys("Space"), "Space");
         assert_eq!(normalize_shortcut_keys("F1"), "F1");
-        
+
         // Test case-insensitive normalization
-        assert_eq!(normalize_shortcut_keys("cmd+shift+space"), "CommandOrControl+Shift+Space");
-        assert_eq!(normalize_shortcut_keys("ctrl+shift+space"), "CommandOrControl+Shift+Space");
-        assert_eq!(normalize_shortcut_keys("CMD+SHIFT+SPACE"), "CommandOrControl+Shift+Space");
+        assert_eq!(
+            normalize_shortcut_keys("cmd+shift+space"),
+            "CommandOrControl+Shift+Space"
+        );
+        assert_eq!(
+            normalize_shortcut_keys("ctrl+shift+space"),
+            "CommandOrControl+Shift+Space"
+        );
+        assert_eq!(
+            normalize_shortcut_keys("CMD+SHIFT+SPACE"),
+            "CommandOrControl+Shift+Space"
+        );
         assert_eq!(normalize_shortcut_keys("alt+a"), "Alt+a");
         assert_eq!(normalize_shortcut_keys("SHIFT+F1"), "Shift+F1");
-        
+
         // Test modifier keys stay as-is (no special single key handling anymore)
         assert_eq!(normalize_shortcut_keys("Alt"), "Alt");
         assert_eq!(normalize_shortcut_keys("Shift"), "Shift");
@@ -201,7 +235,7 @@ mod tests {
         assert_eq!(normalize_shortcut_keys("Ctrl"), "CommandOrControl");
         assert_eq!(normalize_shortcut_keys("Command"), "CommandOrControl");
         assert_eq!(normalize_shortcut_keys("Cmd"), "CommandOrControl");
-        
+
         // In combinations, they get normalized too
         assert_eq!(normalize_shortcut_keys("Alt+A"), "Alt+A");
         assert_eq!(normalize_shortcut_keys("Shift+Space"), "Shift+Space");
@@ -217,7 +251,7 @@ mod tests {
         assert!(validate_key_combination("Space+Shift").is_err()); // Must start with modifier
         assert!(validate_key_combination("Cmd+Shift+Alt+Ctrl+A+B").is_err()); // Too many keys
         assert!(validate_key_combination("CommandOrControl+InvalidKey").is_ok()); // Any non-empty key is valid
-        
+
         // Test punctuation keys
         assert!(validate_key_combination("CommandOrControl+/").is_ok());
         assert!(validate_key_combination("Cmd+\\").is_ok());
@@ -229,62 +263,85 @@ mod tests {
         assert!(validate_key_combination("Cmd+-").is_ok());
         assert!(validate_key_combination("Cmd+=").is_ok());
         assert!(validate_key_combination("/").is_err()); // Single punctuation key not allowed
-        
+
         // Test special named keys
         assert!(validate_key_combination("CommandOrControl+Slash").is_ok());
         assert!(validate_key_combination("Cmd+BracketLeft").is_ok());
         assert!(validate_key_combination("Ctrl+Minus").is_ok());
-        
+
         // Test numpad keys
         assert!(validate_key_combination("CommandOrControl+Numpad0").is_ok());
         assert!(validate_key_combination("Alt+NumpadAdd").is_ok());
         assert!(validate_key_combination("Shift+NumpadEnter").is_ok());
-        
+
         // Test media keys
         assert!(validate_key_combination("MediaPlayPause").is_err()); // Single media key not allowed
         assert!(validate_key_combination("AudioVolumeUp").is_err()); // Single media key not allowed
-        
+
         // Test system keys
         assert!(validate_key_combination("PrintScreen").is_err()); // Single system key not allowed
         assert!(validate_key_combination("Cmd+Insert").is_ok());
         assert!(validate_key_combination("Alt+CapsLock").is_ok());
-        
+
         // Test number row symbols
         assert!(validate_key_combination("Shift+1").is_ok()); // !
         assert!(validate_key_combination("Shift+2").is_ok()); // @
         assert!(validate_key_combination("Cmd+Shift+3").is_ok()); // #
-        
+
         // Test international keys
         assert!(validate_key_combination("CommandOrControl+ü").is_ok());
         assert!(validate_key_combination("Alt+ñ").is_ok());
     }
-    
+
     #[test]
     fn test_single_modifier_parsing() {
         // Test that demonstrates the difference between single modifiers and combinations
         use tauri_plugin_global_shortcut::Shortcut;
-        
+
         // These should fail to parse as single keys
-        assert!("Alt".parse::<Shortcut>().is_err(), "Alt alone should not parse");
-        assert!("Shift".parse::<Shortcut>().is_err(), "Shift alone should not parse");
-        assert!("Control".parse::<Shortcut>().is_err(), "Control alone should not parse");
-        
+        assert!(
+            "Alt".parse::<Shortcut>().is_err(),
+            "Alt alone should not parse"
+        );
+        assert!(
+            "Shift".parse::<Shortcut>().is_err(),
+            "Shift alone should not parse"
+        );
+        assert!(
+            "Control".parse::<Shortcut>().is_err(),
+            "Control alone should not parse"
+        );
+
         // Let's test what actually works for single keys
         let test_keys = vec![
-            "LeftAlt", "RightAlt", "LeftShift", "RightShift",
-            "LeftControl", "RightControl", "LeftMeta", "RightMeta",
-            "A", "B", "Space", "F1", "Tab", "CapsLock"
+            "LeftAlt",
+            "RightAlt",
+            "LeftShift",
+            "RightShift",
+            "LeftControl",
+            "RightControl",
+            "LeftMeta",
+            "RightMeta",
+            "A",
+            "B",
+            "Space",
+            "F1",
+            "Tab",
+            "CapsLock",
         ];
-        
+
         for key in test_keys {
             match key.parse::<Shortcut>() {
                 Ok(_) => println!("{} parses successfully", key),
                 Err(e) => println!("{} failed to parse: {:?}", key, e),
             }
         }
-        
+
         // Combinations with generic modifiers should work
         assert!("Alt+A".parse::<Shortcut>().is_ok(), "Alt+A should parse");
-        assert!("Shift+Space".parse::<Shortcut>().is_ok(), "Shift+Space should parse");
+        assert!(
+            "Shift+Space".parse::<Shortcut>().is_ok(),
+            "Shift+Space should parse"
+        );
     }
 }

@@ -1,4 +1,6 @@
-use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 
 /// Resample audio from any sample rate to 16kHz for Whisper
 pub fn resample_to_16khz(input: &[f32], input_sample_rate: u32) -> Result<Vec<f32>, String> {
@@ -12,11 +14,11 @@ pub fn resample_to_16khz(input: &[f32], input_sample_rate: u32) -> Result<Vec<f3
 
     // Calculate resampling ratio
     let resample_ratio = 16_000_f64 / input_sample_rate as f64;
-    
+
     // Configure resampler parameters for good quality
     let params = SincInterpolationParameters {
-        sinc_len: 256,      // Good balance of quality and performance
-        f_cutoff: 0.95,     // Prevent aliasing
+        sinc_len: 256,  // Good balance of quality and performance
+        f_cutoff: 0.95, // Prevent aliasing
         interpolation: SincInterpolationType::Linear,
         oversampling_factor: 256,
         window: WindowFunction::BlackmanHarris2,
@@ -27,11 +29,12 @@ pub fn resample_to_16khz(input: &[f32], input_sample_rate: u32) -> Result<Vec<f3
     let chunk_size = input.len();
     let mut resampler = SincFixedIn::<f32>::new(
         resample_ratio,
-        2.0,            // Maximum delay in seconds
+        2.0, // Maximum delay in seconds
         params,
         chunk_size,
-        1,              // Single channel
-    ).map_err(|e| format!("Failed to create resampler: {:?}", e))?;
+        1, // Single channel
+    )
+    .map_err(|e| format!("Failed to create resampler: {:?}", e))?;
 
     // Calculate expected output size
     let output_frames = resampler.output_frames_max();
@@ -42,11 +45,9 @@ pub fn resample_to_16khz(input: &[f32], input_sample_rate: u32) -> Result<Vec<f3
     let mut output_frames_written = 0;
 
     // Process the entire input
-    let (used, written) = resampler.process_into_buffer(
-        &[input], 
-        &mut [&mut output], 
-        None
-    ).map_err(|e| format!("Resampling failed: {:?}", e))?;
+    let (used, written) = resampler
+        .process_into_buffer(&[input], &mut [&mut output], None)
+        .map_err(|e| format!("Resampling failed: {:?}", e))?;
 
     input_frames_used += used;
     output_frames_written += written;
@@ -54,8 +55,8 @@ pub fn resample_to_16khz(input: &[f32], input_sample_rate: u32) -> Result<Vec<f3
     // Handle any remaining samples
     if input_frames_used < input.len() {
         log::warn!(
-            "Not all input samples were processed: {} of {} used", 
-            input_frames_used, 
+            "Not all input samples were processed: {} of {} used",
+            input_frames_used,
             input.len()
         );
     }

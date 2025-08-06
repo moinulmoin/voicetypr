@@ -1,3 +1,4 @@
+use chrono::Local;
 use serde_json;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -5,9 +6,8 @@ use std::sync::{Arc, Mutex};
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
 use tauri_plugin_store::StoreExt;
-use tauri_plugin_log::{Builder as LogBuilder, Target, TargetKind, RotationStrategy};
-use chrono::Local;
 
 mod ai;
 mod audio;
@@ -25,17 +25,25 @@ mod tests;
 
 use audio::recorder::AudioRecorder;
 use commands::{
-    ai::{get_ai_settings, get_ai_settings_for_provider, cache_ai_api_key, validate_and_cache_api_key, clear_ai_api_key_cache, update_ai_settings, enhance_transcription, disable_ai_enhancement, get_enhancement_options, update_enhancement_options},
+    ai::{
+        cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
+        get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, update_ai_settings,
+        update_enhancement_options, validate_and_cache_api_key,
+    },
     audio::*,
     debug::{debug_transcription_flow, test_transcription_event},
-    keyring::{keyring_set, keyring_get, keyring_delete, keyring_has},
+    keyring::{keyring_delete, keyring_get, keyring_has, keyring_set},
     license::*,
     logs::{get_log_directory, open_logs_folder},
     model::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model,
     },
-    permissions::{check_accessibility_permission, check_microphone_permission, request_accessibility_permission, request_microphone_permission, test_automation_permission},
+    permissions::{
+        check_accessibility_permission, check_microphone_permission,
+        request_accessibility_permission, request_microphone_permission,
+        test_automation_permission,
+    },
     reset::reset_app_data,
     settings::*,
     text::*,
@@ -43,22 +51,22 @@ use commands::{
 };
 use state::unified_state::UnifiedRecordingState;
 use std::collections::HashMap;
+use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem, Submenu};
 use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
-use tauri::menu::{MenuBuilder, MenuItem, PredefinedMenuItem, Submenu, CheckMenuItem};
-
 
 // Function to build the tray menu
-async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<tauri::menu::Menu<R>, Box<dyn std::error::Error>> {
+async fn build_tray_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<tauri::menu::Menu<R>, Box<dyn std::error::Error>> {
     // Get current settings for menu state
     let current_model = {
         match app.store("settings") {
-            Ok(store) => {
-                store.get("current_model")
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_default()
-            }
-            Err(_) => "".to_string()
+            Ok(store) => store
+                .get("current_model")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default(),
+            Err(_) => "".to_string(),
         }
     };
 
@@ -88,7 +96,7 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
                 display_name,
                 true,
                 is_selected,
-                None::<&str>
+                None::<&str>,
             )?;
             model_check_items.push(model_item);
         }
@@ -101,7 +109,8 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
         let current_model_display = if current_model.is_empty() {
             "Model: None".to_string()
         } else {
-            let display_name = models_info.get(&current_model)
+            let display_name = models_info
+                .get(&current_model)
                 .map(|info| info.display_name.clone())
                 .unwrap_or_else(|| current_model.clone());
             format!("Model: {}", display_name)
@@ -112,12 +121,11 @@ async fn build_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result
             "models",
             &current_model_display,
             true,
-            &model_items
+            &model_items,
         )?)
     } else {
         None
     };
-
 
     // Create menu items
     let separator1 = PredefinedMenuItem::separator(app)?;
@@ -157,7 +165,6 @@ impl Default for RecordingState {
         RecordingState::Idle
     }
 }
-
 
 // Application state - managed by Tauri (runtime state only)
 pub struct AppState {
@@ -269,54 +276,54 @@ pub fn update_recording_state(
     let app_state = app.state::<AppState>();
 
     // Use atomic transition with fallback to prevent race conditions
-    let final_state = match app_state.recording_state.transition_with_fallback(
-        new_state,
-        |current| {
-            log::debug!(
-                "update_recording_state: {:?} -> {:?}, error: {:?}",
-                current,
-                new_state,
-                error
-            );
-
-            // Determine if we should force a transition based on current state
-            let should_force = match (current, new_state) {
-                // Allow force transition from Error state to Idle (recovery)
-                (RecordingState::Error, RecordingState::Idle) => true,
-                // Allow force transition to Error state (error reporting)
-                (_, RecordingState::Error) => true,
-                // Allow force transition to Idle from any state (reset)
-                (_, RecordingState::Idle) if error.is_some() => true,
-                // Disallow other forced transitions
-                _ => false,
-            };
-
-            if should_force {
-                log::warn!(
-                    "Will force state transition from {:?} to {:?} for recovery",
+    let final_state =
+        match app_state
+            .recording_state
+            .transition_with_fallback(new_state, |current| {
+                log::debug!(
+                    "update_recording_state: {:?} -> {:?}, error: {:?}",
                     current,
-                    new_state
+                    new_state,
+                    error
                 );
-                Some(new_state)
-            } else {
-                log::error!(
-                    "Invalid state transition from {:?} to {:?} - transition blocked",
-                    current,
-                    new_state
-                );
-                None
+
+                // Determine if we should force a transition based on current state
+                let should_force = match (current, new_state) {
+                    // Allow force transition from Error state to Idle (recovery)
+                    (RecordingState::Error, RecordingState::Idle) => true,
+                    // Allow force transition to Error state (error reporting)
+                    (_, RecordingState::Error) => true,
+                    // Allow force transition to Idle from any state (reset)
+                    (_, RecordingState::Idle) if error.is_some() => true,
+                    // Disallow other forced transitions
+                    _ => false,
+                };
+
+                if should_force {
+                    log::warn!(
+                        "Will force state transition from {:?} to {:?} for recovery",
+                        current,
+                        new_state
+                    );
+                    Some(new_state)
+                } else {
+                    log::error!(
+                        "Invalid state transition from {:?} to {:?} - transition blocked",
+                        current,
+                        new_state
+                    );
+                    None
+                }
+            }) {
+            Ok(state) => {
+                log::debug!("Successfully transitioned to state: {:?}", state);
+                state
             }
-        }
-    ) {
-        Ok(state) => {
-            log::debug!("Successfully transitioned to state: {:?}", state);
-            state
-        }
-        Err(e) => {
-            log::error!("Failed to transition state: {}", e);
-            app_state.get_current_state()
-        }
-    };
+            Err(e) => {
+                log::error!("Failed to transition state: {}", e);
+                app_state.get_current_state()
+            }
+        };
 
     // Emit state change event with typed payload using the actual final state
     let payload = serde_json::json!({
@@ -330,10 +337,10 @@ pub fn update_recording_state(
         },
         "error": error
     });
-    
+
     // Emit to all windows
     let _ = app.emit("recording-state-changed", payload.clone());
-    
+
     // Also emit specifically to pill window to ensure it receives the event
     if let Some(pill_window) = app.get_webview_window("pill") {
         let _ = pill_window.emit("recording-state-changed", payload);
@@ -370,38 +377,37 @@ pub fn emit_to_all(
 // Setup logging with daily rotation
 fn setup_logging() -> tauri_plugin_log::Builder {
     let today = Local::now().format("%Y-%m-%d").to_string();
-    
+
     LogBuilder::default()
         .targets([
-            Target::new(TargetKind::Stdout)
-                .filter(|metadata| {
-                    // Filter out noisy logs
-                    let target = metadata.target();
-                    !target.contains("whisper_rs") &&
-                    !target.contains("audio::level_meter") &&
-                    !target.contains("cpal") &&
-                    !target.contains("rubato") &&
-                    !target.contains("hound")
-                }),
-            Target::new(TargetKind::LogDir { 
-                file_name: Some(format!("voicetypr-{}.log", today)) 
+            Target::new(TargetKind::Stdout).filter(|metadata| {
+                // Filter out noisy logs
+                let target = metadata.target();
+                !target.contains("whisper_rs")
+                    && !target.contains("audio::level_meter")
+                    && !target.contains("cpal")
+                    && !target.contains("rubato")
+                    && !target.contains("hound")
+            }),
+            Target::new(TargetKind::LogDir {
+                file_name: Some(format!("voicetypr-{}.log", today)),
             })
-                .filter(|metadata| {
-                    // Filter out noisy logs from file as well
-                    let target = metadata.target();
-                    !target.contains("whisper_rs") &&
-                    !target.contains("audio::level_meter") &&
-                    !target.contains("cpal") &&
-                    !target.contains("rubato") &&
-                    !target.contains("hound")
-                }),
+            .filter(|metadata| {
+                // Filter out noisy logs from file as well
+                let target = metadata.target();
+                !target.contains("whisper_rs")
+                    && !target.contains("audio::level_meter")
+                    && !target.contains("cpal")
+                    && !target.contains("rubato")
+                    && !target.contains("hound")
+            }),
         ])
         .rotation_strategy(RotationStrategy::KeepAll)
         .max_file_size(10_000_000) // 10MB per file
-        .level(if cfg!(debug_assertions) { 
-            log::LevelFilter::Debug 
-        } else { 
-            log::LevelFilter::Info 
+        .level(if cfg!(debug_assertions) {
+            log::LevelFilter::Debug
+        } else {
+            log::LevelFilter::Info
         })
 }
 
@@ -418,8 +424,8 @@ pub fn run() {
         eprintln!("Failed to initialize encryption: {}", e);
     }
 
-
     let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_os::init())
         .plugin(setup_logging().build())
         .plugin(tauri_plugin_cache::init())
         .plugin(tauri_plugin_fs::init())
@@ -433,13 +439,13 @@ pub fn run() {
                 tauri_plugin_autostart::MacosLauncher::LaunchAgent,
                 None::<Vec<&str>>,
             );
-            
+
             #[cfg(not(target_os = "macos"))]
             let autostart = tauri_plugin_autostart::init(
                 tauri_plugin_autostart::MacosLauncher::LaunchAgent, // This param is ignored on non-macOS
                 None::<Vec<&str>>,
             );
-            
+
             autostart
         })
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -452,7 +458,6 @@ pub fn run() {
             .plugin(tauri_nspanel::init())
             .plugin(tauri_plugin_macos_permissions::init());
     }
-
 
     builder
         .plugin(
@@ -1048,34 +1053,38 @@ pub fn run() {
 /// Perform essential startup checks
 async fn perform_startup_checks(app: tauri::AppHandle) {
     log::info!("Performing startup checks...");
-    
+
     // Check if any models are downloaded
-    if let Some(whisper_manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>() {
+    if let Some(whisper_manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
+    {
         let has_models = whisper_manager.read().await.has_downloaded_models();
         log::info!("Has downloaded models: {}", has_models);
-        
+
         if !has_models {
             log::warn!("No speech recognition models downloaded");
             // Emit event to frontend to show download prompt
             let _ = emit_to_window(&app, "main", "no-models-on-startup", ());
         }
     }
-    
+
     // Validate AI settings if enabled
     if let Ok(store) = app.store("settings") {
-        let ai_enabled = store.get("ai_enabled")
+        let ai_enabled = store
+            .get("ai_enabled")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-            
+
         if ai_enabled {
-            let provider = store.get("ai_provider")
+            let provider = store
+                .get("ai_provider")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| "groq".to_string());
-                
-            let model = store.get("ai_model")
+
+            let model = store
+                .get("ai_model")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_default();
-                
+
             // Check if API key is cached
             use crate::commands::ai::get_ai_settings;
             match get_ai_settings(app.clone()).await {
@@ -1085,17 +1094,25 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
                         // Disable AI to prevent errors during recording
                         store.set("ai_enabled", serde_json::Value::Bool(false));
                         let _ = store.save();
-                        
+
                         // Notify frontend
-                        let _ = emit_to_window(&app, "main", "ai-disabled-no-key", 
-                            "AI enhancement disabled - no API key found");
+                        let _ = emit_to_window(
+                            &app,
+                            "main",
+                            "ai-disabled-no-key",
+                            "AI enhancement disabled - no API key found",
+                        );
                     } else if model.is_empty() {
                         log::warn!("AI enabled but no model selected");
                         store.set("ai_enabled", serde_json::Value::Bool(false));
                         let _ = store.save();
-                        
-                        let _ = emit_to_window(&app, "main", "ai-disabled-no-model", 
-                            "AI enhancement disabled - no model selected");
+
+                        let _ = emit_to_window(
+                            &app,
+                            "main",
+                            "ai-disabled-no-model",
+                            "AI enhancement disabled - no model selected",
+                        );
                     } else {
                         log::info!("AI enhancement ready: {} with {}", provider, model);
                     }
@@ -1106,29 +1123,38 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
             }
         }
     }
-    
+
     // Pre-check recording settings
     if let Ok(store) = app.store("settings") {
         // Validate language setting
-        let language = store.get("language")
+        let language = store
+            .get("language")
             .and_then(|v| v.as_str().map(|s| s.to_string()));
-            
+
         if let Some(lang) = language {
             use crate::whisper::languages::validate_language;
             let validated = validate_language(Some(&lang));
             if validated != lang.as_str() {
-                log::warn!("Invalid language '{}' in settings, resetting to '{}'", lang, validated);
+                log::warn!(
+                    "Invalid language '{}' in settings, resetting to '{}'",
+                    lang,
+                    validated
+                );
                 store.set("language", serde_json::Value::String(validated.to_string()));
                 let _ = store.save();
             }
         }
-        
+
         // Check current model is still available
         let mut _model_available = false;
-        if let Some(current_model) = store.get("current_model")
-            .and_then(|v| v.as_str().map(|s| s.to_string())) {
+        if let Some(current_model) = store
+            .get("current_model")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+        {
             if !current_model.is_empty() {
-                if let Some(whisper_manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>() {
+                if let Some(whisper_manager) =
+                    app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
+                {
                     let downloaded = whisper_manager.read().await.get_downloaded_model_names();
                     _model_available = downloaded.contains(&current_model);
                     if !_model_available {
@@ -1141,6 +1167,6 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
             }
         }
     }
-    
+
     log::info!("Startup checks completed");
 }

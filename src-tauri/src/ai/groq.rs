@@ -1,5 +1,5 @@
-use super::{AIEnhancementRequest, AIEnhancementResponse, AIError, AIProvider, prompts};
 use super::config::*;
+use super::{prompts, AIEnhancementRequest, AIEnhancementResponse, AIError, AIProvider};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -7,13 +7,11 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 // Supported models with validation
-const SUPPORTED_MODELS: &[&str] = &[
-    "llama-3.1-8b-instant"
-];
+const SUPPORTED_MODELS: &[&str] = &["llama-3.1-8b-instant"];
 
 pub struct GroqProvider {
     #[allow(dead_code)]
-    api_key: String,  // Keep but don't expose
+    api_key: String, // Keep but don't expose
     model: String,
     client: Client,
     base_url: String,
@@ -21,22 +19,31 @@ pub struct GroqProvider {
 }
 
 impl GroqProvider {
-    pub fn new(api_key: String, model: String, options: HashMap<String, serde_json::Value>) -> Result<Self, AIError> {
+    pub fn new(
+        api_key: String,
+        model: String,
+        options: HashMap<String, serde_json::Value>,
+    ) -> Result<Self, AIError> {
         // Validate model
         if !SUPPORTED_MODELS.contains(&model.as_str()) {
-            return Err(AIError::ValidationError(format!("Unsupported model: {}", model)));
+            return Err(AIError::ValidationError(format!(
+                "Unsupported model: {}",
+                model
+            )));
         }
-        
+
         // Validate API key format (basic check)
         if api_key.trim().is_empty() || api_key.len() < MIN_API_KEY_LENGTH {
-            return Err(AIError::ValidationError("Invalid API key format".to_string()));
+            return Err(AIError::ValidationError(
+                "Invalid API key format".to_string(),
+            ));
         }
-        
+
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
             .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
-            
+
         Ok(Self {
             api_key,
             model,
@@ -45,30 +52,36 @@ impl GroqProvider {
             options,
         })
     }
-    
-    
-    async fn make_request_with_retry(&self, request: &GroqRequest) -> Result<GroqResponse, AIError> {
+
+    async fn make_request_with_retry(
+        &self,
+        request: &GroqRequest,
+    ) -> Result<GroqResponse, AIError> {
         let mut last_error = None;
-        
+
         for attempt in 1..=MAX_RETRIES {
             match self.make_single_request(request).await {
                 Ok(response) => return Ok(response),
                 Err(e) => {
                     log::warn!("API request attempt {} failed: {}", attempt, e);
                     last_error = Some(e);
-                    
+
                     if attempt < MAX_RETRIES {
-                        tokio::time::sleep(Duration::from_millis(RETRY_BASE_DELAY_MS * attempt as u64)).await;
+                        tokio::time::sleep(Duration::from_millis(
+                            RETRY_BASE_DELAY_MS * attempt as u64,
+                        ))
+                        .await;
                     }
                 }
             }
         }
-        
+
         Err(last_error.unwrap_or_else(|| AIError::NetworkError("Unknown error".to_string())))
     }
-    
+
     async fn make_single_request(&self, request: &GroqRequest) -> Result<GroqResponse, AIError> {
-        let response = self.client
+        let response = self
+            .client
             .post(&self.base_url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
@@ -76,20 +89,27 @@ impl GroqProvider {
             .send()
             .await
             .map_err(|e| AIError::NetworkError(e.to_string()))?;
-            
+
         let status = response.status();
-        
+
         // Handle rate limiting
         if status.as_u16() == 429 {
             return Err(AIError::RateLimitExceeded);
         }
-        
+
         if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(AIError::ApiError(format!("API returned {}: {}", status, error_text)));
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(AIError::ApiError(format!(
+                "API returned {}: {}",
+                status, error_text
+            )));
         }
-        
-        response.json()
+
+        response
+            .json()
             .await
             .map_err(|e| AIError::InvalidResponse(e.to_string()))
     }
@@ -123,50 +143,60 @@ struct Choice {
 
 #[async_trait]
 impl AIProvider for GroqProvider {
-    async fn enhance_text(&self, request: AIEnhancementRequest) -> Result<AIEnhancementResponse, AIError> {
+    async fn enhance_text(
+        &self,
+        request: AIEnhancementRequest,
+    ) -> Result<AIEnhancementResponse, AIError> {
         // Validate request
         request.validate()?;
-        
+
         let prompt = prompts::build_enhancement_prompt(
-            &request.text, 
+            &request.text,
             request.context.as_deref(),
-            &request.options.unwrap_or_default()
+            &request.options.unwrap_or_default(),
         );
-        
-        let temperature = self.options.get("temperature")
+
+        let temperature = self
+            .options
+            .get("temperature")
             .and_then(|v| v.as_f64())
             .map(|v| v as f32)
             .unwrap_or(DEFAULT_TEMPERATURE);
-            
-        let max_tokens = self.options.get("max_tokens")
+
+        let max_tokens = self
+            .options
+            .get("max_tokens")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
-        
+
         let groq_request = GroqRequest {
             model: self.model.clone(),
             messages: vec![Message {
                 role: "user".to_string(),
                 content: prompt,
             }],
-            temperature: Some(temperature.clamp(0.0, 2.0)),  // Clamp to valid range
+            temperature: Some(temperature.clamp(0.0, 2.0)), // Clamp to valid range
             max_tokens,
         };
-        
+
         let groq_response = self.make_request_with_retry(&groq_request).await?;
-        
-        let enhanced_text = groq_response.choices
+
+        let enhanced_text = groq_response
+            .choices
             .first()
             .ok_or_else(|| AIError::InvalidResponse("No choices in response".to_string()))?
             .message
             .content
             .trim()
             .to_string();
-            
+
         // Validate that we got a reasonable response
         if enhanced_text.is_empty() {
-            return Err(AIError::InvalidResponse("Empty response from API".to_string()));
+            return Err(AIError::InvalidResponse(
+                "Empty response from API".to_string(),
+            ));
         }
-            
+
         Ok(AIEnhancementResponse {
             enhanced_text,
             original_text: request.text,
@@ -174,7 +204,7 @@ impl AIProvider for GroqProvider {
             model: self.model.clone(),
         })
     }
-    
+
     fn name(&self) -> &str {
         "groq"
     }
@@ -183,16 +213,28 @@ impl AIProvider for GroqProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_provider_creation() {
-        let result = GroqProvider::new("".to_string(), "llama-3.1-8b-instant".to_string(), HashMap::new());
+        let result = GroqProvider::new(
+            "".to_string(),
+            "llama-3.1-8b-instant".to_string(),
+            HashMap::new(),
+        );
         assert!(result.is_err());
-        
-        let result = GroqProvider::new("test_key_12345".to_string(), "invalid-model".to_string(), HashMap::new());
+
+        let result = GroqProvider::new(
+            "test_key_12345".to_string(),
+            "invalid-model".to_string(),
+            HashMap::new(),
+        );
         assert!(result.is_err());
-        
-        let result = GroqProvider::new("test_key_12345".to_string(), "llama-3.1-8b-instant".to_string(), HashMap::new());
+
+        let result = GroqProvider::new(
+            "test_key_12345".to_string(),
+            "llama-3.1-8b-instant".to_string(),
+            HashMap::new(),
+        );
         assert!(result.is_ok());
     }
 }
