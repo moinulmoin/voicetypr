@@ -51,6 +51,13 @@
       "entitlements": "./entitlements.plist",
       "hardenedRuntime": true,
       "signingIdentity": "-"
+    },
+    "windows": {
+      "allowDowngrades": false,
+      "wix": {
+        "language": "en-US",
+        "upgradeCode": "9daf44c3-2a02-5807-b5eb-036eac841548"
+      }
     }
   },
   "plugins": {

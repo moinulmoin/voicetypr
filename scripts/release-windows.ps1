@@ -1,0 +1,356 @@
+# VoiceTypr Windows Release Script
+# This script is designed to run AFTER the macOS release-separate.sh script
+# It assumes version has already been bumped and tagged by the macOS script
+#
+# Usage: .\scripts\release-windows.ps1 [version]
+# If version is not provided, it will be read from package.json
+
+param(
+    [string]$Version,
+    [switch]$Help
+)
+
+# Colors for PowerShell output
+function Write-ColorOutput {
+    param(
+        [string]$Message,
+        [string]$Color = "White"
+    )
+    Write-Host $Message -ForegroundColor $Color
+}
+
+function Write-Success { param([string]$Message) Write-ColorOutput "✓ $Message" "Green" }
+function Write-Warning { param([string]$Message) Write-ColorOutput "⚠ $Message" "Yellow" }
+function Write-Error { param([string]$Message) Write-ColorOutput "✗ $Message" "Red" }
+function Write-Info { param([string]$Message) Write-ColorOutput "ℹ $Message" "Cyan" }
+function Write-Step { param([string]$Message) Write-ColorOutput "🚀 $Message" "Magenta" }
+
+# Show help
+if ($Help) {
+    Write-Host @"
+VoiceTypr Windows Release Script
+
+This script builds Windows MSI installer and update artifacts for VoiceTypr.
+It is designed to run AFTER the macOS release script has created the release.
+
+Usage:
+  .\scripts\release-windows.ps1                # Use version from package.json
+  .\scripts\release-windows.ps1 1.4.0         # Use specific version
+  .\scripts\release-windows.ps1 -Help         # Show this help
+
+Requirements:
+- Node.js and pnpm installed
+- Rust toolchain with windows targets
+- GitHub CLI (gh) installed and authenticated
+- TAURI_SIGNING_PRIVATE_KEY environment variable (optional, for update signatures)
+
+The script will:
+1. Read version from package.json (or use provided version)
+2. Verify the GitHub release exists
+3. Build Windows MSI installer
+4. Rename MSI to remove -en-US suffix
+5. Create Tauri update artifacts (.msi.zip and signatures)
+6. Download and update latest.json from GitHub release
+7. Upload all Windows artifacts to the existing release
+
+Environment Variables:
+- TAURI_SIGNING_PRIVATE_KEY: Private key for signing update artifacts
+- TAURI_SIGNING_PRIVATE_KEY_PASSWORD: Password for the private key (if needed)
+- GITHUB_TOKEN: GitHub token for API access (gh CLI should handle this)
+"@
+    exit 0
+}
+
+Write-Step "Starting VoiceTypr Windows Release Process"
+
+# Error handling
+$ErrorActionPreference = "Stop"
+
+# Get version
+if (-not $Version) {
+    Write-Info "Reading version from package.json..."
+    try {
+        $packageJson = Get-Content "package.json" | ConvertFrom-Json
+        $Version = $packageJson.version
+        Write-Success "Version detected: $Version"
+    } catch {
+        Write-Error "Failed to read version from package.json: $($_.Exception.Message)"
+        exit 1
+    }
+} else {
+    Write-Info "Using provided version: $Version"
+}
+
+# Validate version format
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+    Write-Error "Invalid version format: $Version (expected x.y.z)"
+    exit 1
+}
+
+$ReleaseTag = "v$Version"
+$OutputDir = "release-windows-$Version"
+
+# Check if GitHub CLI is available
+try {
+    $null = Get-Command "gh" -ErrorAction Stop
+    Write-Success "GitHub CLI found"
+} catch {
+    Write-Error "GitHub CLI (gh) not found. Please install it from https://cli.github.com/"
+    exit 1
+}
+
+# Verify GitHub authentication
+Write-Info "Checking GitHub authentication..."
+try {
+    $null = gh auth status 2>$null
+    Write-Success "GitHub CLI authenticated"
+} catch {
+    Write-Error "GitHub CLI not authenticated. Run: gh auth login"
+    exit 1
+}
+
+# Check if release exists
+Write-Info "Checking if release $ReleaseTag exists..."
+try {
+    $releaseInfo = gh release view $ReleaseTag --json id,name 2>$null | ConvertFrom-Json
+    Write-Success "Found existing release: $($releaseInfo.name)"
+} catch {
+    Write-Error "Release $ReleaseTag not found. Please run the macOS release script first."
+    exit 1
+}
+
+# Check for Rust and required targets
+Write-Info "Checking Rust toolchain..."
+try {
+    $null = Get-Command "rustup" -ErrorAction Stop
+    Write-Success "Rust toolchain found"
+    
+    # Install Windows target if not already installed
+    Write-Info "Ensuring Windows target is installed..."
+    rustup target add x86_64-pc-windows-msvc
+    Write-Success "Windows target ready"
+} catch {
+    Write-Error "Rust toolchain not found. Please install from https://rustup.rs/"
+    exit 1
+}
+
+# Check for required tools
+Write-Info "Checking required tools..."
+try {
+    $null = Get-Command "pnpm" -ErrorAction Stop
+    Write-Success "pnpm found"
+} catch {
+    Write-Error "pnpm not found. Please install it: npm install -g pnpm"
+    exit 1
+}
+
+# Create output directory
+if (Test-Path $OutputDir) {
+    Remove-Item $OutputDir -Recurse -Force
+}
+New-Item -ItemType Directory -Path $OutputDir | Out-Null
+Write-Success "Created output directory: $OutputDir"
+
+# Check for signing configuration
+$HasSigningKey = $false
+$keyPath = "$env:USERPROFILE\.tauri\voicetypr.key"
+
+# Auto-detect and set key path if file exists
+if (Test-Path $keyPath) {
+    $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
+    $HasSigningKey = $true
+    Write-Success "Tauri signing key found at: $keyPath"
+    Write-Info "Set TAURI_SIGNING_PRIVATE_KEY_PATH environment variable"
+} elseif ($env:TAURI_SIGNING_PRIVATE_KEY -or $env:TAURI_SIGNING_PRIVATE_KEY_PATH) {
+    $HasSigningKey = $true
+    Write-Success "Tauri signing key configured via environment variable"
+} else {
+    Write-Warning "No Tauri signing key found - update signatures will not be generated"
+    Write-Warning "To enable signing:"
+    Write-Warning "1. Generate keys: cargo tauri signer generate -w `"$env:USERPROFILE\.tauri\voicetypr.key`""
+    Write-Warning "2. The script will auto-detect the key at the standard location"
+}
+
+# Build Windows MSI
+Write-Step "Building Windows MSI installer..."
+try {
+    Set-Location "src-tauri"
+    $buildOutput = cargo tauri build --target x86_64-pc-windows-msvc --bundles msi 2>&1
+    Set-Location ".."
+    
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Build failed. Output: $buildOutput"
+        exit 1
+    }
+    Write-Success "MSI build completed"
+} catch {
+    Set-Location ".." -ErrorAction SilentlyContinue
+    Write-Error "Failed to build MSI: $($_.Exception.Message)"
+    exit 1
+}
+
+# Find the built MSI
+$MsiPath = Get-ChildItem -Path "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi" -Filter "*.msi" | Select-Object -First 1
+if (-not $MsiPath) {
+    Write-Error "MSI file not found in build output"
+    exit 1
+}
+
+Write-Success "Found MSI: $($MsiPath.Name)"
+
+# Rename MSI to remove -en-US suffix and match naming convention
+$OriginalMsiName = $MsiPath.Name
+$NewMsiName = "VoiceTypr_${Version}_x64.msi"
+$NewMsiPath = Join-Path $OutputDir $NewMsiName
+
+Copy-Item $MsiPath.FullName $NewMsiPath
+Write-Success "Renamed MSI: $OriginalMsiName -> $NewMsiName"
+
+# Create update artifacts
+Write-Step "Creating Tauri update artifacts..."
+
+# Create .msi.zip for updater
+$MsiZipPath = "$NewMsiPath.zip"
+try {
+    Compress-Archive -Path $NewMsiPath -DestinationPath $MsiZipPath -Force
+    Write-Success "Created update archive: $(Split-Path $MsiZipPath -Leaf)"
+} catch {
+    Write-Error "Failed to create MSI zip: $($_.Exception.Message)"
+    exit 1
+}
+
+# Sign update artifacts if signing key is available
+$MsiZipSignature = "SIGNATURE_PLACEHOLDER"
+if ($HasSigningKey) {
+    Write-Info "Signing update artifacts..."
+    try {
+        Set-Location "src-tauri"
+        
+        # Sign the .msi.zip file
+        $signArgs = @("tauri", "signer", "sign")
+        
+        if ($env:TAURI_SIGNING_PRIVATE_KEY_PATH) {
+            $signArgs += @("-f", $env:TAURI_SIGNING_PRIVATE_KEY_PATH)
+        }
+        
+        # No password for the key
+        $signArgs += @("-p", "")
+        
+        $signArgs += $MsiZipPath
+        
+        $signOutput = & cargo @signArgs 2>&1
+        Set-Location ".."
+        
+        if ($LASTEXITCODE -eq 0 -and (Test-Path "$MsiZipPath.sig")) {
+            $MsiZipSignature = Get-Content "$MsiZipPath.sig" -Raw
+            $MsiZipSignature = $MsiZipSignature.Trim()
+            Write-Success "Update artifact signed successfully"
+        } else {
+            Write-Warning "Failed to sign update artifact. Output: $signOutput"
+            Write-Warning "Proceeding without signature"
+        }
+    } catch {
+        Set-Location ".." -ErrorAction SilentlyContinue
+        Write-Warning "Error during signing: $($_.Exception.Message)"
+        Write-Warning "Proceeding without signature"
+    }
+} else {
+    Write-Warning "Skipping signature generation (no signing key configured)"
+}
+
+# Download and update latest.json
+Write-Step "Updating latest.json with Windows platform..."
+try {
+    # Download existing latest.json
+    $latestJsonPath = Join-Path $OutputDir "latest.json"
+    gh release download $ReleaseTag --pattern "latest.json" --dir $OutputDir
+    
+    if (-not (Test-Path $latestJsonPath)) {
+        Write-Error "Failed to download latest.json from release"
+        exit 1
+    }
+    
+    # Parse existing JSON
+    $latestJson = Get-Content $latestJsonPath | ConvertFrom-Json
+    Write-Success "Downloaded and parsed existing latest.json"
+    
+    # Add Windows platform
+    $windowsPlatform = @{
+        signature = $MsiZipSignature
+        url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/$(Split-Path $MsiZipPath -Leaf)"
+    }
+    
+    # Ensure platforms object exists
+    if (-not $latestJson.platforms) {
+        $latestJson | Add-Member -NotePropertyName "platforms" -NotePropertyValue @{}
+    }
+    
+    # Add windows-x86_64 platform
+    $latestJson.platforms | Add-Member -NotePropertyName "windows-x86_64" -NotePropertyValue $windowsPlatform -Force
+    
+    # Save updated JSON
+    $latestJson | ConvertTo-Json -Depth 10 | Set-Content $latestJsonPath
+    Write-Success "Added Windows platform to latest.json"
+    
+} catch {
+    Write-Error "Failed to update latest.json: $($_.Exception.Message)"
+    exit 1
+}
+
+# Upload all Windows artifacts to release
+Write-Step "Uploading Windows artifacts to GitHub release..."
+try {
+    # Upload MSI
+    Write-Info "Uploading MSI installer..."
+    gh release upload $ReleaseTag $NewMsiPath --clobber
+    Write-Success "Uploaded: $(Split-Path $NewMsiPath -Leaf)"
+    
+    # Upload MSI.zip
+    Write-Info "Uploading MSI update archive..."
+    gh release upload $ReleaseTag $MsiZipPath --clobber
+    Write-Success "Uploaded: $(Split-Path $MsiZipPath -Leaf)"
+    
+    # Upload signature if it exists
+    if (Test-Path "$MsiZipPath.sig") {
+        Write-Info "Uploading MSI signature..."
+        gh release upload $ReleaseTag "$MsiZipPath.sig" --clobber
+        Write-Success "Uploaded: $(Split-Path "$MsiZipPath.sig" -Leaf)"
+    }
+    
+    # Upload updated latest.json
+    Write-Info "Uploading updated latest.json..."
+    gh release upload $ReleaseTag $latestJsonPath --clobber
+    Write-Success "Uploaded: latest.json"
+    
+} catch {
+    Write-Error "Failed to upload artifacts: $($_.Exception.Message)"
+    exit 1
+}
+
+# Summary
+Write-Step "Windows Release Complete!"
+Write-Success "Successfully created and uploaded Windows release artifacts for v$Version"
+Write-Host ""
+Write-Info "📦 Windows Release Artifacts:"
+Get-ChildItem $OutputDir | ForEach-Object {
+    $size = if ($_.Length -gt 1MB) { "{0:N2} MB" -f ($_.Length / 1MB) } else { "{0:N2} KB" -f ($_.Length / 1KB) }
+    Write-Host "   $($_.Name) ($size)" -ForegroundColor White
+}
+
+Write-Host ""
+Write-Info "🔗 Release URL: https://github.com/moinulmoin/voicetypr/releases/tag/$ReleaseTag"
+
+if ($HasSigningKey) {
+    Write-Success "✓ Update signatures generated - auto-updater ready"
+} else {
+    Write-Warning "⚠ No update signatures - auto-updater won't work"
+}
+
+Write-Host ""
+Write-Info "📋 Next Steps:"
+Write-Host "1. Test the MSI installer on a clean Windows machine" -ForegroundColor Yellow
+Write-Host "2. Verify the Tauri updater works with the new artifacts" -ForegroundColor Yellow
+Write-Host "3. Update release notes if needed" -ForegroundColor Yellow
+Write-Host "4. Publish the release when ready" -ForegroundColor Yellow
+
+Write-Success "🎉 Windows release process completed successfully!"
