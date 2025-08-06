@@ -194,28 +194,36 @@ impl WindowManager {
                 unsafe {
                     let hwnd = HWND(hwnd.0 as isize);
 
-                    // Get current window style
-                    let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                    // Validate HWND before using it
+                    if IsWindow(hwnd).as_bool() {
+                        // Get current window style
+                        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                        
+                        // Add tool window and no-activate flags, remove from Alt-Tab
+                        let new_style = (style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize)
+                                        & !(WS_EX_APPWINDOW.0 as isize);
 
-                    // Add tool window and no-activate flags to prevent focus stealing
-                    SetWindowLongPtrW(
-                        hwnd,
-                        GWL_EXSTYLE,
-                        style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize,
-                    );
+                        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
 
-                    // Force window to update with new styles
-                    SetWindowPos(
-                        hwnd,
-                        HWND_TOPMOST,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
-                    );
-
-                    log::info!("Applied Windows-specific window flags for pill");
+                        // Force window to update with new styles
+                        let ok = SetWindowPos(
+                            hwnd,
+                            HWND_TOPMOST,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
+                        ).as_bool();
+                        
+                        if ok {
+                            log::info!("Applied Windows-specific window flags for pill");
+                        } else {
+                            log::warn!("SetWindowPos failed: {}", windows::core::Error::from_win32());
+                        }
+                    } else {
+                        log::warn!("Invalid HWND received from Tauri window");
+                    }
                 }
             }
         }

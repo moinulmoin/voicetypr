@@ -40,8 +40,7 @@ impl Drop for AudioRecorder {
                 if let Err(e) = handle.stop_tx.send(RecorderCommand::Stop) {
                     log::warn!("Failed to send stop signal during drop: {:?}", e);
                 }
-                // Note: We can't wait for the thread in Drop as it could block
-                // The thread will clean up when it receives the stop signal
+                // Don't wait for thread in Drop - let it clean up in background
             }
         } else {
             log::error!("Failed to acquire recording handle lock during drop");
@@ -365,12 +364,25 @@ impl AudioRecorder {
             // Send stop signal
             handle.stop_tx.send(RecorderCommand::Stop).ok();
 
-            // Wait for thread to finish
-            match handle.thread_handle.join() {
-                Ok(Ok(msg)) => Ok(msg),
-                Ok(Err(e)) => Err(e),
-                Err(_) => Err("Recording thread panicked".to_string()),
+            // Wait for thread to finish with timeout
+            let thread_handle = handle.thread_handle;
+            let timeout = Duration::from_secs(5); // Reasonable timeout for normal operation
+            let start = std::time::Instant::now();
+            
+            // Try to join thread with timeout by checking if it's finished
+            while start.elapsed() < timeout {
+                if thread_handle.is_finished() {
+                    match thread_handle.join() {
+                        Ok(Ok(msg)) => return Ok(msg),
+                        Ok(Err(e)) => return Err(e),
+                        Err(_) => return Err("Recording thread panicked".to_string()),
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(100));
             }
+            
+            // If we get here, the thread didn't finish within timeout
+            Err("Recording thread failed to stop within timeout".to_string())
         } else {
             Err("Not recording".to_string())
         }
