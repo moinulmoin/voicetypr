@@ -182,28 +182,28 @@ export function isSingleModifierKey(key: string): boolean {
 
 /**
  * Format a key for display (returns the display symbol)
+ * Note: This function now accepts platform as parameter for consistent behavior
  */
-export function formatKeyForDisplay(key: string): string {
-  const isMac = navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
+export function formatKeyForDisplay(key: string, isMac: boolean = false): string {
   
   const displayMap: Record<string, string> = {
     'CommandOrControl': isMac ? '⌘' : 'Ctrl',
-    'Cmd': '⌘',
+    'Cmd': isMac ? '⌘' : 'Ctrl',
     'Ctrl': 'Ctrl',
     'Control': 'Ctrl',
-    'Command': '⌘',
-    'Shift': '⇧',
+    'Command': isMac ? '⌘' : 'Ctrl',
+    'Shift': isMac ? '⇧' : 'Shift',
     'Alt': isMac ? '⌥' : 'Alt',
     'LeftAlt': isMac ? '⌥' : 'Alt',
     'RightAlt': isMac ? '⌥' : 'Alt',
-    'Option': '⌥',
-    'Meta': '⌘',
-    'Enter': '⏎',
-    'Return': '⏎',
-    'Tab': '⇥',
-    'Backspace': '⌫',
-    'Delete': '⌦',
-    'Space': '␣',
+    'Option': isMac ? '⌥' : 'Alt',
+    'Meta': isMac ? '⌘' : 'Ctrl',
+    'Enter': isMac ? '⏎' : 'Enter',
+    'Return': isMac ? '⏎' : 'Enter',
+    'Tab': isMac ? '⇥' : 'Tab',
+    'Backspace': isMac ? '⌫' : 'Backspace',
+    'Delete': isMac ? '⌦' : 'Delete',
+    'Space': isMac ? '␣' : 'Space',
     'Escape': 'Esc',
     'ArrowUp': '↑',
     'ArrowDown': '↓',

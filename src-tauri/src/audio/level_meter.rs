@@ -28,22 +28,22 @@ impl AudioLevelMeter {
         // Calculate RMS (Root Mean Square) - simple and effective for voice
         let sum: f32 = samples.iter().map(|x| x * x).sum();
         let rms = (sum / samples.len() as f32).sqrt();
-        
+
         // Apply exponential smoothing to avoid jittery meter
         // 0.7 = smooth, 0.3 = responsive
         self.smoothed_level = self.smoothed_level * 0.7 + rms * 0.3;
-        
+
         self.sample_count += samples.len();
 
         // Send level update at intervals
         if self.sample_count >= self.update_interval {
             self.sample_count = 0;
-            
+
             // Map RMS to display level optimized for voice
             // Normal speaking voice RMS is typically 0.01-0.1
             // We map this to 0.2-0.9 for good visual feedback
             let display_level = map_voice_level(self.smoothed_level);
-            
+
             if let Err(e) = self.audio_level_tx.send(display_level) {
                 log::debug!("Failed to send audio level: channel disconnected ({})", e);
             }
@@ -56,11 +56,11 @@ impl AudioLevelMeter {
 /// Map RMS level to display level optimized for voice
 fn map_voice_level(rms: f32) -> f64 {
     // These thresholds are tuned for typical speaking voice
-    const SILENCE_THRESHOLD: f32 = 0.001;  // Below this is silence
-    const WHISPER_LEVEL: f32 = 0.005;      // Quiet speech
-    const NORMAL_SPEECH: f32 = 0.02;       // Normal conversation
-    const LOUD_SPEECH: f32 = 0.1;          // Raised voice
-    
+    const SILENCE_THRESHOLD: f32 = 0.001; // Below this is silence
+    const WHISPER_LEVEL: f32 = 0.005; // Quiet speech
+    const NORMAL_SPEECH: f32 = 0.02; // Normal conversation
+    const LOUD_SPEECH: f32 = 0.1; // Raised voice
+
     if rms < SILENCE_THRESHOLD {
         0.0
     } else if rms < WHISPER_LEVEL {
@@ -90,17 +90,17 @@ mod tests {
         // Silence
         assert_eq!(map_voice_level(0.0), 0.0);
         assert_eq!(map_voice_level(0.0005), 0.0);
-        
+
         // Whisper range
         assert!((map_voice_level(0.003) - 0.15).abs() < 0.1);
-        
+
         // Normal speech range
         assert!((map_voice_level(0.01) - 0.5).abs() < 0.1);
         assert!((map_voice_level(0.015) - 0.6).abs() < 0.1);
-        
+
         // Loud speech
         assert!((map_voice_level(0.05) - 0.8).abs() < 0.1);
-        
+
         // Very loud
         assert_eq!(map_voice_level(0.2), 0.95);
     }

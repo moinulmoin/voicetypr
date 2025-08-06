@@ -1,4 +1,4 @@
-pub mod recorder;
 pub mod level_meter;
-pub mod silence_detector;
+pub mod recorder;
 pub mod resampler;
+pub mod silence_detector;

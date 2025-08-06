@@ -161,6 +161,20 @@
   }
 }
 
+/* Windows transparency fix for pill window */
+.bg-transparent {
+  background-color: transparent !important;
+  background-color: rgba(0, 0, 0, 0) !important;
+}
+
+/* Ensure transparency for pill window */
+body.bg-transparent,
+html body.bg-transparent {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-color: rgba(0, 0, 0, 0) !important;
+}
+
 @keyframes ios-spin {
   0% { opacity: 1; }
   100% { opacity: 0.15; }

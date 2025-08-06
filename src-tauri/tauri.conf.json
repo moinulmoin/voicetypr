@@ -19,26 +19,26 @@
         "resizable": false,
         "center": true,
         "visible": true,
-        "skipTaskbar": false,
-        "alwaysOnTop": true
+        "skipTaskbar": true,
+        "alwaysOnTop": false
       }
     ],
     "security": {
       "csp": {
         "default-src": "'self' customprotocol: asset:",
-        "script-src": "'self' 'unsafe-eval'",
+        "script-src": "'self'",
         "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' asset: https: http: data:",
         "font-src": "'self'",
         "connect-src": "'self' ipc: https: http: asset:",
         "media-src": "'self'"
       }
-    },
-    "macOSPrivateApi": true
+    }
   },
   "bundle": {
+    "publisher": "Ideaplexa LLC",
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "app", "dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -50,7 +50,10 @@
       "minimumSystemVersion": "13.0",
       "entitlements": "./entitlements.plist",
       "hardenedRuntime": true,
-      "signingIdentity": "Developer ID Application: Ideaplexa LLC (53P98M92V7)"
+      "signingIdentity": "-"
+    },
+    "windows": {
+      "allowDowngrades": false
     }
   },
   "plugins": {

@@ -121,7 +121,7 @@ mod tests {
 
         // Create a WhisperManager with known models
         let manager = WhisperManager::new(models_dir.clone());
-        
+
         // Create model files for known models only
         for model_name in ["base.en", "large-v3", "large-v3-q5_0"] {
             let file_path = models_dir.join(format!("{}.bin", model_name));
@@ -130,7 +130,7 @@ mod tests {
 
         // Create a non-model file that should be ignored
         std::fs::write(models_dir.join("readme.txt"), b"not a model").unwrap();
-        
+
         // Also create a .bin file that's not a known model - should be ignored
         std::fs::write(models_dir.join("unknown.bin"), b"unknown model").unwrap();
 
@@ -206,12 +206,7 @@ mod tests {
     #[test]
     fn test_model_validation() {
         // Test valid model names
-        let valid_models = vec![
-            "base.en",
-            "large-v3",
-            "large-v3-q5_0",
-            "large-v3-turbo",
-        ];
+        let valid_models = vec!["base.en", "large-v3", "large-v3-q5_0", "large-v3-turbo"];
 
         for model in &valid_models {
             assert!(valid_models.contains(&model));

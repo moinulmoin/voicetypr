@@ -1,42 +1,58 @@
+use crate::license::device;
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
 use base64::{engine::general_purpose, Engine as _};
-use rand::Rng;
 use once_cell::sync::OnceCell;
+use pbkdf2::pbkdf2_hmac;
+use rand::Rng;
+use sha2::Sha256;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
-use crate::license::device;
-use pbkdf2::pbkdf2_hmac;
-use sha2::Sha256;
 
 // Encryption key storage - OnceCell ensures thread-safe single initialization
 static ENCRYPTION_KEY: OnceCell<[u8; 32]> = OnceCell::new();
 
 /// Initialize the encryption key using the device hash with PBKDF2
 pub fn initialize_encryption_key() -> Result<(), String> {
-    ENCRYPTION_KEY.get_or_try_init(|| {
-        // Get the same device hash used for API authentication
-        let device_hash = device::get_device_hash()?;
-        
-        // Use PBKDF2 to derive a proper encryption key from the device hash
-        let mut key = [0u8; 32];
-        
-        // Salt: app-specific constant + version for future migration support
-        let salt = b"voicetypr-secure-store-v1";
-        
-        // 100,000 iterations for good security/performance balance
-        pbkdf2_hmac::<Sha256>(
-            device_hash.as_bytes(),
-            salt,
-            100_000,
-            &mut key
-        );
-        
-        println!("Initialized encryption with PBKDF2-derived device-specific key");
-        Ok(key)
-    }).map(|_| ())
+    ENCRYPTION_KEY
+        .get_or_try_init(|| {
+            // Get the same device hash used for API authentication
+            let device_hash = device::get_device_hash()?;
+            
+            // Validate device hash has sufficient entropy
+            // SHA256 produces 64 hex chars, we need at least that
+            if device_hash.len() < 64 {
+                return Err(format!(
+                    "Device hash has insufficient entropy: {} chars (expected 64)",
+                    device_hash.len()
+                ));
+            }
+            
+            // Verify it's a valid hex string (additional validation)
+            if !device_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err("Device hash contains invalid characters".to_string());
+            }
+
+            // Use PBKDF2 to derive a proper encryption key from the device hash
+            let mut key = [0u8; 32];
+
+            // Salt: app-specific constant + version for future migration support
+            let salt = b"voicetypr-secure-store-v1";
+
+            // 100,000 iterations for good security/performance balance
+            pbkdf2_hmac::<Sha256>(device_hash.as_bytes(), salt, 100_000, &mut key);
+            
+            // Verify key was properly generated (not all zeros)
+            if key.iter().all(|&b| b == 0) {
+                return Err("Failed to generate encryption key".to_string());
+            }
+
+            log::info!("Initialized encryption with PBKDF2-derived device-specific key");
+            Ok(key)
+        })
+        .map(|_| ())
 }
 
 /// Check if migration from keychain is needed (for future use)
@@ -44,93 +60,89 @@ pub fn initialize_encryption_key() -> Result<(), String> {
 pub fn check_migration_needed<R: Runtime>(app: &AppHandle<R>) -> bool {
     // Check if secure.dat exists
     let store_exists = app.store("secure.dat").is_ok();
-    
+
     // For now, we don't migrate automatically
     // This is here for future use if needed
     if !store_exists {
         log::debug!("No secure store found, fresh installation");
     }
-    
+
     false
 }
 
 /// Encrypt a string value
 fn encrypt_value(value: &str) -> Result<String, String> {
-    let key = ENCRYPTION_KEY.get()
+    let key = ENCRYPTION_KEY
+        .get()
         .ok_or("Encryption key not initialized")?;
-    
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|_| "Failed to create cipher")?;
-    
+
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| "Failed to create cipher")?;
+
     // Generate random nonce
     let mut nonce_bytes = [0u8; 12];
     rand::thread_rng().fill(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
-    
+
     // Encrypt
     let ciphertext = cipher
         .encrypt(nonce, value.as_bytes())
         .map_err(|_| "Encryption failed")?;
-    
+
     // Combine nonce and ciphertext
     let mut combined = nonce_bytes.to_vec();
     combined.extend_from_slice(&ciphertext);
-    
+
     // Base64 encode
     Ok(general_purpose::STANDARD.encode(combined))
 }
 
 /// Decrypt a string value
 fn decrypt_value(encrypted: &str) -> Result<String, String> {
-    let key = ENCRYPTION_KEY.get()
+    let key = ENCRYPTION_KEY
+        .get()
         .ok_or("Encryption key not initialized")?;
-    
+
     // Base64 decode
     let combined = general_purpose::STANDARD
         .decode(encrypted)
         .map_err(|_| "Failed to decode encrypted value")?;
-    
+
     if combined.len() < 12 {
         return Err("Invalid encrypted value".to_string());
     }
-    
+
     // Split nonce and ciphertext
     let (nonce_bytes, ciphertext) = combined.split_at(12);
     let nonce = Nonce::from_slice(nonce_bytes);
-    
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|_| "Failed to create cipher")?;
-    
+
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| "Failed to create cipher")?;
+
     // Decrypt
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
         .map_err(|_| "Decryption failed")?;
-    
+
     String::from_utf8(plaintext).map_err(|_| "Invalid UTF-8 in decrypted value".to_string())
 }
 
 /// Set an encrypted value in the store
-pub fn secure_set<R: Runtime>(
-    app: &AppHandle<R>,
-    key: &str,
-    value: &str,
-) -> Result<(), String> {
+pub fn secure_set<R: Runtime>(app: &AppHandle<R>, key: &str, value: &str) -> Result<(), String> {
     let encrypted = encrypt_value(value)?;
-    
-    let store = app.store("secure.dat")
+
+    let store = app
+        .store("secure.dat")
         .map_err(|e| format!("Failed to access store: {}", e))?;
-    
+
     store.set(key, encrypted);
-    store.save().map_err(|e| format!("Failed to save store: {}", e))?;
-    
+    store
+        .save()
+        .map_err(|e| format!("Failed to save store: {}", e))?;
+
     Ok(())
 }
 
 /// Get and decrypt a value from the store with corruption recovery
-pub fn secure_get<R: Runtime>(
-    app: &AppHandle<R>,
-    key: &str,
-) -> Result<Option<String>, String> {
+pub fn secure_get<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<Option<String>, String> {
     // Try to access the store with recovery on failure
     let store = match app.store("secure.dat") {
         Ok(store) => store,
@@ -140,7 +152,7 @@ pub fn secure_get<R: Runtime>(
             return Ok(None);
         }
     };
-    
+
     match store.get(key) {
         Some(value) => {
             if let Some(encrypted) = value.as_str() {
@@ -148,20 +160,30 @@ pub fn secure_get<R: Runtime>(
                 match decrypt_value(encrypted) {
                     Ok(decrypted) => Ok(Some(decrypted)),
                     Err(e) => {
-                        log::error!("Decryption failed for key '{}': {}. Data may be corrupted.", key, e);
-                        
+                        log::error!(
+                            "Decryption failed for key '{}': {}. Data may be corrupted.",
+                            key,
+                            e
+                        );
+
                         // Delete just this corrupted entry, not the whole store
                         store.delete(key);
                         if let Err(save_err) = store.save() {
-                            log::error!("Failed to save store after removing corrupted key: {}", save_err);
+                            log::error!(
+                                "Failed to save store after removing corrupted key: {}",
+                                save_err
+                            );
                         }
-                        
+
                         // Return None - treat as missing data
                         Ok(None)
                     }
                 }
             } else {
-                log::error!("Invalid value type in store for key '{}' - expected string", key);
+                log::error!(
+                    "Invalid value type in store for key '{}' - expected string",
+                    key
+                );
                 // Remove the corrupted entry
                 store.delete(key);
                 let _ = store.save();
@@ -173,24 +195,21 @@ pub fn secure_get<R: Runtime>(
 }
 
 /// Delete a value from the secure store
-pub fn secure_delete<R: Runtime>(
-    app: &AppHandle<R>,
-    key: &str,
-) -> Result<(), String> {
-    let store = app.store("secure.dat")
+pub fn secure_delete<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<(), String> {
+    let store = app
+        .store("secure.dat")
         .map_err(|e| format!("Failed to access store: {}", e))?;
-    
+
     store.delete(key);
-    store.save().map_err(|e| format!("Failed to save store: {}", e))?;
-    
+    store
+        .save()
+        .map_err(|e| format!("Failed to save store: {}", e))?;
+
     Ok(())
 }
 
 /// Check if a key exists in the secure store
-pub fn secure_has<R: Runtime>(
-    app: &AppHandle<R>,
-    key: &str,
-) -> Result<bool, String> {
+pub fn secure_has<R: Runtime>(app: &AppHandle<R>, key: &str) -> Result<bool, String> {
     let store = match app.store("secure.dat") {
         Ok(store) => store,
         Err(_) => {
@@ -198,7 +217,7 @@ pub fn secure_has<R: Runtime>(
             return Ok(false);
         }
     };
-    
+
     // Check if key exists AND is valid (can be decrypted)
     Ok(match store.get(key) {
         Some(value) => {
@@ -220,40 +239,40 @@ mod tests {
     #[test]
     fn test_encryption_decryption() {
         initialize_encryption_key().unwrap();
-        
+
         let original = "my-secret-api-key";
         let encrypted = encrypt_value(original).unwrap();
         let decrypted = decrypt_value(&encrypted).unwrap();
-        
+
         assert_eq!(original, decrypted);
         assert_ne!(original, encrypted);
     }
-    
+
     #[test]
     fn test_different_encryptions() {
         initialize_encryption_key().unwrap();
-        
+
         let original = "test-value";
         let encrypted1 = encrypt_value(original).unwrap();
         let encrypted2 = encrypt_value(original).unwrap();
-        
+
         // Different nonces should produce different ciphertexts
         assert_ne!(encrypted1, encrypted2);
-        
+
         // But both should decrypt to the same value
         assert_eq!(decrypt_value(&encrypted1).unwrap(), original);
         assert_eq!(decrypt_value(&encrypted2).unwrap(), original);
     }
-    
+
     #[test]
     fn test_decrypt_with_corrupted_data() {
         initialize_encryption_key().unwrap();
-        
+
         // Test with invalid base64
         let result = decrypt_value("not-valid-base64!");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Failed to decode"));
-        
+
         // Test with valid base64 but corrupted data
         let result = decrypt_value("dGVzdA=="); // Just "test" in base64
         assert!(result.is_err());

@@ -32,7 +32,7 @@ function AppContent() {
   // Use the new model management hook
   const modelManagement = useModelManagement({
     windowId: "main",
-    showToasts: true,
+    showToasts: true
   });
   const {
     downloadProgress,
@@ -40,23 +40,21 @@ function AppContent() {
     downloadModel,
     cancelDownload,
     deleteModel,
-    sortedModels,
+    sortedModels
   } = modelManagement;
 
   // Load history function
   const loadHistory = useCallback(async () => {
     try {
       const storedHistory = await invoke<any[]>("get_transcription_history", {
-        limit: 50,
+        limit: 50
       });
-      const formattedHistory: TranscriptionHistory[] = storedHistory.map(
-        (item) => ({
-          id: item.timestamp || Date.now().toString(),
-          text: item.text,
-          timestamp: new Date(item.timestamp),
-          model: item.model,
-        }),
-      );
+      const formattedHistory: TranscriptionHistory[] = storedHistory.map((item) => ({
+        id: item.timestamp || Date.now().toString(),
+        text: item.text,
+        timestamp: new Date(item.timestamp),
+        model: item.model
+      }));
       setHistory(formattedHistory);
     } catch (error) {
       console.error("Failed to load transcription history:", error);
@@ -79,7 +77,7 @@ function AppContent() {
         // Run cleanup if enabled
         if (settings?.transcription_cleanup_days) {
           await invoke("cleanup_old_transcriptions", {
-            days: settings.transcription_cleanup_days,
+            days: settings.transcription_cleanup_days
           });
         }
 
@@ -111,9 +109,7 @@ function AppContent() {
         // Listen for history updates from backend
         // Backend is the single source of truth for transcription history
         registerEvent("history-updated", async () => {
-          console.log(
-            "[EventCoordinator] Main window: reloading history after update",
-          );
+          console.log("[EventCoordinator] Main window: reloading history after update");
           await loadHistory();
         });
 
@@ -140,8 +136,8 @@ function AppContent() {
             description: "Navigate to Enhancements to update your API key",
             action: {
               label: "Go to Settings",
-              onClick: () => setActiveSection("enhancements"),
-            },
+              onClick: () => setActiveSection("enhancements")
+            }
           });
         });
 
@@ -167,7 +163,7 @@ function AppContent() {
               // Show toast after window is focused to ensure it appears on top
               setTimeout(() => {
                 toast.error(event.message, {
-                  duration: 2000,
+                  duration: 2000
                 });
               }, 200);
             } catch (error) {
@@ -175,7 +171,7 @@ function AppContent() {
               // If window focus fails, still show the toast
               toast.error(event.message);
             }
-          },
+          }
         );
 
         return () => {
@@ -192,28 +188,30 @@ function AppContent() {
 
   // Use a ref to track if we've just completed onboarding
   const hasJustCompletedOnboarding = useRef(false);
-  
+
   // Mark when onboarding is being shown
   useEffect(() => {
     if (showOnboarding) {
       hasJustCompletedOnboarding.current = true;
     }
   }, [showOnboarding]);
-  
+
   // Check permissions only when transitioning from onboarding to dashboard
   useEffect(() => {
     // Only refresh if we just completed onboarding and are now showing dashboard
     if (!showOnboarding && hasJustCompletedOnboarding.current && settings?.onboarding_completed) {
       hasJustCompletedOnboarding.current = false;
-      
-      Promise.all([
-        checkAccessibilityPermission(),
-        checkMicrophonePermission()
-      ]).then(() => {
+
+      Promise.all([checkAccessibilityPermission(), checkMicrophonePermission()]).then(() => {
         console.log("Permissions refreshed after onboarding completion");
       });
     }
-  }, [showOnboarding, settings?.onboarding_completed, checkAccessibilityPermission, checkMicrophonePermission]);
+  }, [
+    showOnboarding,
+    settings?.onboarding_completed,
+    checkAccessibilityPermission,
+    checkMicrophonePermission
+  ]);
 
   // Handle deleting a model with settings update
   const handleDeleteModel = useCallback(
@@ -225,7 +223,7 @@ function AppContent() {
         await saveSettings({ ...settings, current_model: "" });
       }
     },
-    [deleteModel, settings],
+    [deleteModel, settings]
   );
 
   // Save settings
@@ -236,7 +234,7 @@ function AppContent() {
         if (newSettings.hotkey !== settings?.hotkey) {
           try {
             await invoke("set_global_shortcut", {
-              shortcut: newSettings.hotkey,
+              shortcut: newSettings.hotkey
             });
           } catch (err) {
             console.error("Failed to update hotkey:", err);
@@ -249,7 +247,7 @@ function AppContent() {
         console.error("Failed to save settings:", error);
       }
     },
-    [settings, updateSettings],
+    [settings, updateSettings]
   );
 
   // sortedModels is provided by useModelManagement hook
@@ -328,10 +326,7 @@ function AppContent() {
   // Main App Layout
   return (
     <SidebarProvider>
-      <Sidebar
-        activeSection={activeSection}
-        onSectionChange={setActiveSection}
-      />
+      <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
       <SidebarInset>
         <div className="h-full flex flex-col">{renderSectionContent()}</div>
       </SidebarInset>

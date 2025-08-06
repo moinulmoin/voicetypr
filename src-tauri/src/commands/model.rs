@@ -18,7 +18,9 @@ pub async fn download_model(
     // Validate model name using WhisperManager
     {
         let manager = state.read().await;
-        if manager.get_model_path(&model_name).is_none() && !manager.get_models_status().contains_key(&model_name) {
+        if manager.get_model_path(&model_name).is_none()
+            && !manager.get_models_status().contains_key(&model_name)
+        {
             return Err(format!("Invalid model name: {}", model_name));
         }
     }
@@ -41,7 +43,7 @@ pub async fn download_model(
     // Spawn task to handle progress updates
     let progress_handle = tokio::spawn(async move {
         let mut verification_emitted = false;
-        
+
         while let Some((downloaded, total)) = progress_rx.recv().await {
             let progress = (downloaded as f64 / total as f64) * 100.0;
             log::debug!(
@@ -64,11 +66,14 @@ pub async fn download_model(
             ) {
                 log::warn!("Failed to emit download progress: {}", e);
             }
-            
+
             // When download reaches 100%, emit verification event
             if progress >= 100.0 && !verification_emitted {
                 verification_emitted = true;
-                log::info!("Download complete, starting verification for model: {}", &model_name_clone);
+                log::info!(
+                    "Download complete, starting verification for model: {}",
+                    &model_name_clone
+                );
                 if let Err(e) = emit_to_all(
                     &app_handle,
                     "model-verifying",
@@ -155,7 +160,7 @@ pub async fn download_model(
 
     // Close the progress channel to signal completion
     drop(progress_tx);
-    
+
     // Ensure progress handler completes
     let _ = progress_handle.await;
 
@@ -177,22 +182,25 @@ pub async fn download_model(
         }
         Ok(_) => {
             log::info!("Download completed successfully for model: {}", model_name);
-            
+
             // Refresh the manager's status to reflect the new download
             {
                 let mut manager = state.write().await;
                 manager.refresh_downloaded_status();
             }
-            
-            
+
             // Emit the event - the download_model function already verified the file
             log::info!("Emitting model-downloaded event for {}", model_name);
-            if let Err(e) = emit_to_all(&app, "model-downloaded", serde_json::json!({
-                "model": model_name
-            })) {
+            if let Err(e) = emit_to_all(
+                &app,
+                "model-downloaded",
+                serde_json::json!({
+                    "model": model_name
+                }),
+            ) {
                 log::warn!("Failed to emit model-downloaded event: {}", e);
             }
-            
+
             Ok(())
         }
         Err(e) => {
@@ -232,11 +240,15 @@ pub async fn get_model_status(
         .map(|(name, info)| ModelEntry { name, info })
         .collect();
     models_vec.sort_by(|a, b| a.info.accuracy_score.cmp(&b.info.accuracy_score));
-    
+
     // Log what we're returning
     log::info!("[GET_MODEL_STATUS] Returning {} models:", models_vec.len());
     for entry in &models_vec {
-        log::info!("[GET_MODEL_STATUS]   Model '{}': downloaded={}", entry.name, entry.info.downloaded);
+        log::info!(
+            "[GET_MODEL_STATUS]   Model '{}': downloaded={}",
+            entry.name,
+            entry.info.downloaded
+        );
     }
 
     Ok(ModelStatusResponse { models: models_vec })
@@ -250,11 +262,11 @@ pub async fn delete_model(
 ) -> Result<(), String> {
     let mut manager = state.write().await;
     manager.delete_model_file(&model_name)?;
-    
+
     // Emit model-deleted event
     use tauri::Emitter;
     let _ = app.emit("model-deleted", model_name.clone());
-    
+
     Ok(())
 }
 
@@ -330,7 +342,6 @@ pub async fn preload_model(
     cache.get_or_create(&model_path)?;
 
     log::info!("Model '{}' preloaded successfully", model_name);
-    
-    
+
     Ok(())
 }

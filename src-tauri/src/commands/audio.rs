@@ -1,13 +1,13 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
-use cpal::traits::{DeviceTrait, HostTrait};
+use crate::commands::license::check_license_status_internal;
+use crate::license::LicenseState;
 use crate::whisper::cache::TranscriberCache;
 use crate::whisper::languages::validate_language;
 use crate::whisper::manager::WhisperManager;
 use crate::{emit_to_window, update_recording_state, AppState, RecordingState};
-use crate::license::LicenseState;
-use crate::commands::license::check_license_status_internal;
+use cpal::traits::{DeviceTrait, HostTrait};
 use serde_json;
 use std::sync::Mutex;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
@@ -19,7 +19,11 @@ pub struct RecorderState(pub Mutex<AudioRecorder>);
 
 /// Select the best fallback model based on available models
 /// Prioritizes models by size (smaller to larger for better performance)
-fn select_best_fallback_model(available_models: &[String], requested: &str, model_priority: &[String]) -> String {
+fn select_best_fallback_model(
+    available_models: &[String],
+    requested: &str,
+    model_priority: &[String],
+) -> String {
     // First try to find a model similar to the requested one
     if !requested.is_empty() {
         // If requested "large-v3", try other large variants first
@@ -38,12 +42,15 @@ fn select_best_fallback_model(available_models: &[String], requested: &str, mode
     }
 
     // If no priority model found, return first available
-    available_models.first().map(|s| s.clone()).unwrap_or_else(|| {
-        log::error!("No models available for fallback selection");
-        // This should never happen as we check for empty models before calling this function
-        // But return a default to prevent panic
-        "base.en".to_string()
-    })
+    available_models
+        .first()
+        .map(|s| s.clone())
+        .unwrap_or_else(|| {
+            log::error!("No models available for fallback selection");
+            // This should never happen as we check for empty models before calling this function
+            // But return a default to prevent panic
+            "base.en".to_string()
+        })
 }
 
 /// Pre-recording validation using the readiness state
@@ -51,7 +58,7 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
     // Check if any models are downloaded
     let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
     let has_models = whisper_manager.read().await.has_downloaded_models();
-    
+
     if !has_models {
         log::error!("No models downloaded");
         // Emit error event with guidance
@@ -65,9 +72,11 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
                 "action": "open-settings"
             }),
         );
-        return Err("No speech recognition models installed. Please download a model first.".to_string());
+        return Err(
+            "No speech recognition models installed. Please download a model first.".to_string(),
+        );
     }
-    
+
     // Check license status
     match check_license_status_internal(app).await {
         Ok(status) => {
@@ -92,7 +101,7 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
             // Allow recording if license check fails
         }
     }
-    
+
     Ok(())
 }
 
@@ -158,7 +167,7 @@ pub async fn start_recording(
                 log::error!("❌ No default input device found!");
             }
         }
-        
+
         // Try to start recording with graceful error handling
         match recorder.start_recording(
             audio_path
@@ -169,7 +178,7 @@ pub async fn start_recording(
                 // Verify recording actually started
                 if !recorder.is_recording() {
                     log::error!("Recording failed to start!");
-                    
+
                     update_recording_state(
                         &app,
                         RecordingState::Error,
@@ -185,8 +194,7 @@ pub async fn start_recording(
             }
             Err(e) => {
                 log::error!("Failed to start recording: {}", e);
-                
-                
+
                 update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
 
                 // Provide specific error messages for common issues
@@ -341,9 +349,9 @@ pub async fn stop_recording(
             return Ok("".to_string());
         }
 
-        let stop_message = recorder.stop_recording().map_err(|e| {
-            format!("Failed to stop recording: {}", e)
-        })?;
+        let stop_message = recorder
+            .stop_recording()
+            .map_err(|e| format!("Failed to stop recording: {}", e))?;
         log::info!("{}", stop_message);
 
         // Emit event if recording was stopped due to silence
@@ -351,7 +359,6 @@ pub async fn stop_recording(
             let _ = emit_to_window(&app, "pill", "recording-stopped-silence", ());
         }
     } // MutexGuard dropped here BEFORE any await
-    
 
     // Unregister ESC key
     match "Escape".parse::<tauri_plugin_global_shortcut::Shortcut>() {
@@ -502,7 +509,8 @@ pub async fn stop_recording(
         } else {
             // Fallback to best available model
             let models_by_size = whisper_manager.read().await.get_models_by_size();
-            let fallback_model = select_best_fallback_model(&downloaded_models, &configured_model, &models_by_size);
+            let fallback_model =
+                select_best_fallback_model(&downloaded_models, &configured_model, &models_by_size);
             log::info!(
                 "Configured model '{}' not available, falling back to: {}",
                 configured_model,
@@ -550,7 +558,11 @@ pub async fn stop_recording(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    log::info!("[LANGUAGE] stop_recording: language={:?}, translate={}", language, translate_to_english);
+    log::info!(
+        "[LANGUAGE] stop_recording: language={:?}, translate={}",
+        language,
+        translate_to_english
+    );
 
     // clone for move into task
     let audio_path_clone = audio_path.clone();
@@ -704,20 +716,16 @@ pub async fn stop_recording(
 
                 // Check if AI enhancement is enabled BEFORE spawning task
                 let ai_enabled = match app_for_task.store("settings") {
-                    Ok(store) => store.get("ai_enabled")
+                    Ok(store) => store
+                        .get("ai_enabled")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
-                    Err(_) => false
+                    Err(_) => false,
                 };
 
                 // If AI is enabled, emit enhancing event NOW while pill is still visible
                 if ai_enabled {
-                    let _ = emit_to_window(
-                        &app_for_task,
-                        "pill",
-                        "enhancing-started",
-                        (),
-                    );
+                    let _ = emit_to_window(&app_for_task, "pill", "enhancing-started", ());
                 }
 
                 // Backend handles the complete flow
@@ -730,18 +738,20 @@ pub async fn stop_recording(
                     let final_text = {
                         // Re-check AI enabled status inside the spawned task
                         let ai_enabled = match app_for_process.store("settings") {
-                            Ok(store) => store.get("ai_enabled")
+                            Ok(store) => store
+                                .get("ai_enabled")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false),
-                            Err(_) => false
+                            Err(_) => false,
                         };
 
                         if ai_enabled {
-
                             match crate::commands::ai::enhance_transcription(
                                 text_for_process.clone(),
-                                app_for_process.clone()
-                            ).await {
+                                app_for_process.clone(),
+                            )
+                            .await
+                            {
                                 Ok(enhanced) => {
                                     // Emit enhancing completed event
                                     let _ = emit_to_window(
@@ -750,12 +760,12 @@ pub async fn stop_recording(
                                         "enhancing-completed",
                                         (),
                                     );
-                                    
+
                                     if enhanced != text_for_process {
                                         log::info!("AI enhancement applied successfully");
                                     }
                                     enhanced
-                                },
+                                }
                                 Err(e) => {
                                     // Emit enhancing failed event
                                     let _ = emit_to_window(
@@ -765,10 +775,12 @@ pub async fn stop_recording(
                                         (),
                                     );
                                     log::warn!("AI enhancement failed, using original text: {}", e);
-                                    
+
                                     // Check if it's an authentication error and notify frontend
                                     let error_message = e.to_string();
-                                    if error_message.contains("401") || error_message.contains("Unauthorized") {
+                                    if error_message.contains("401")
+                                        || error_message.contains("Unauthorized")
+                                    {
                                         let _ = emit_to_window(
                                             &app_for_process,
                                             "main",
@@ -791,7 +803,7 @@ pub async fn stop_recording(
                                             "AI enhancement failed. Using original text.",
                                         );
                                     }
-                                    
+
                                     text_for_process.clone() // Fall back to original text
                                 }
                             }
@@ -816,21 +828,25 @@ pub async fn stop_recording(
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
                     // 4. NOW handle text insertion - pill is gone, system is stable
-                    
-                    
+
                     // Always insert text at cursor position (this also copies to clipboard)
-                    match crate::commands::text::insert_text(app_for_process.clone(), final_text.clone()).await {
+                    match crate::commands::text::insert_text(
+                        app_for_process.clone(),
+                        final_text.clone(),
+                    )
+                    .await
+                    {
                         Ok(_) => log::debug!("Text inserted at cursor successfully"),
                         Err(e) => {
                             log::error!("Failed to insert text: {}", e);
-                            
+
                             // Check if it's an accessibility permission issue
                             if e.contains("accessibility") || e.contains("permission") {
                                 // Show the pill window again to notify user
                                 if let Some(window_manager) = app_state.get_window_manager() {
                                     let _ = window_manager.show_pill_window().await;
                                 }
-                                
+
                                 // Emit error to pill widget
                                 let _ = emit_to_window(
                                     &app_for_process,
@@ -838,10 +854,10 @@ pub async fn stop_recording(
                                     "paste-error",
                                     "Text copied to clipboard. Grant accessibility permission to auto-paste."
                                 );
-                                
+
                                 // Keep pill visible for 3 seconds with error
                                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                                
+
                                 // Then hide it
                                 if let Some(window_manager) = app_state.get_window_manager() {
                                     let _ = window_manager.hide_pill_window().await;
@@ -852,19 +868,15 @@ pub async fn stop_recording(
                                     &app_for_process,
                                     "main",
                                     "paste-error",
-                                    format!("Failed to paste text: {}. Text is in clipboard.", e)
+                                    format!("Failed to paste text: {}. Text is in clipboard.", e),
                                 );
                             }
                         }
                     }
 
                     // 5. Save transcription to history
-                    match save_transcription(
-                        app_for_process.clone(),
-                        final_text,
-                        model_for_process,
-                    )
-                    .await
+                    match save_transcription(app_for_process.clone(), final_text, model_for_process)
+                        .await
                     {
                         Ok(_) => {
                             // Emit history-updated event to refresh UI
@@ -942,7 +954,7 @@ pub async fn get_audio_devices() -> Result<Vec<String>, String> {
 #[tauri::command]
 pub async fn get_current_audio_device() -> Result<String, String> {
     let host = cpal::default_host();
-    
+
     host.default_input_device()
         .and_then(|device| device.name().ok())
         .ok_or_else(|| "No default input device found".to_string())
@@ -975,7 +987,6 @@ pub async fn cleanup_old_transcriptions(app: AppHandle, days: Option<u32>) -> Re
 
 #[tauri::command]
 pub async fn save_transcription(app: AppHandle, text: String, model: String) -> Result<(), String> {
-
     // Save transcription to store with current timestamp
     let store = app
         .store("transcriptions")
@@ -1007,7 +1018,6 @@ pub async fn get_transcription_history(
     app: AppHandle,
     limit: Option<usize>,
 ) -> Result<Vec<serde_json::Value>, String> {
-
     let store = app.store("transcriptions").map_err(|e| e.to_string())?;
 
     let mut entries: Vec<(String, serde_json::Value)> = Vec::new();
@@ -1079,7 +1089,11 @@ pub async fn transcribe_audio(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    log::info!("[LANGUAGE] transcribe_audio using language: {}, translate: {}", language, translate_to_english);
+    log::info!(
+        "[LANGUAGE] transcribe_audio using language: {}, translate: {}",
+        language,
+        translate_to_english
+    );
 
     // Transcribe (cached)
     let transcriber = {
@@ -1088,7 +1102,11 @@ pub async fn transcribe_audio(
         cache.get_or_create(&model_path)?
     };
 
-    let text = transcriber.transcribe_with_translation(&temp_path, Some(&language), translate_to_english)?;
+    let text = transcriber.transcribe_with_translation(
+        &temp_path,
+        Some(&language),
+        translate_to_english,
+    )?;
 
     // Clean up
     if let Err(e) = std::fs::remove_file(&temp_path) {
@@ -1198,7 +1216,11 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
         }
         RecordingState::Transcribing => {
             // Can't go directly to Idle from Transcribing, need to go through Error
-            update_recording_state(&app, RecordingState::Error, Some("Transcription cancelled".to_string()));
+            update_recording_state(
+                &app,
+                RecordingState::Error,
+                Some("Transcription cancelled".to_string()),
+            );
             update_recording_state(&app, RecordingState::Idle, None);
         }
         _ => {
@@ -1213,7 +1235,6 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn delete_transcription_entry(app: AppHandle, timestamp: String) -> Result<(), String> {
-
     let store = app
         .store("transcriptions")
         .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
@@ -1271,7 +1292,7 @@ pub struct RecordingStateResponse {
 pub fn get_current_recording_state(app: AppHandle) -> RecordingStateResponse {
     let app_state = app.state::<AppState>();
     let current_state = app_state.get_current_state();
-    
+
     RecordingStateResponse {
         state: match current_state {
             RecordingState::Idle => "idle",
@@ -1280,7 +1301,8 @@ pub fn get_current_recording_state(app: AppHandle) -> RecordingStateResponse {
             RecordingState::Stopping => "stopping",
             RecordingState::Transcribing => "transcribing",
             RecordingState::Error => "error",
-        }.to_string(),
+        }
+        .to_string(),
         error: None,
     }
 }

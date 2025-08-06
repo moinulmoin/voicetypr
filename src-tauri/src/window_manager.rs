@@ -155,7 +155,7 @@ impl WindowManager {
         .content_protected(true)
         .decorations(false)
         .transparent(true)
-        .shadow(true)
+        .shadow(false) // Disabled to fix Windows transparency issue
         .skip_taskbar(true)
         .inner_size(350.0, 150.0)
         .position(position_x, position_y)
@@ -165,44 +165,90 @@ impl WindowManager {
         // Disable context menu only in production builds
         #[cfg(not(debug_assertions))]
         {
-            pill_builder = pill_builder.initialization_script("document.addEventListener('contextmenu', e => e.preventDefault());");
+            pill_builder = pill_builder.initialization_script(
+                "document.addEventListener('contextmenu', e => e.preventDefault());",
+            );
         }
 
-        let pill_window = pill_builder.build()
-            .map_err(|e| e.to_string())?;
+        let pill_window = pill_builder.build().map_err(|e| e.to_string())?;
 
         // Convert to NSPanel on macOS
         #[cfg(target_os = "macos")]
         {
             use tauri_nspanel::WebviewWindowExt;
-            
+
             pill_window
                 .to_panel()
                 .map_err(|e| format!("Failed to convert to NSPanel: {:?}", e))?;
-            
+
             log::info!("Converted pill window to NSPanel");
+        }
+
+        // Apply Windows-specific window flags to prevent focus stealing
+        #[cfg(target_os = "windows")]
+        {
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::*;
+
+            if let Ok(hwnd) = pill_window.hwnd() {
+                unsafe {
+                    let hwnd = HWND(hwnd.0 as isize);
+
+                    // Validate HWND before using it
+                    if IsWindow(hwnd).as_bool() {
+                        // Get current window style
+                        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                        
+                        // Add tool window and no-activate flags, remove from Alt-Tab
+                        let new_style = (style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize)
+                                        & !(WS_EX_APPWINDOW.0 as isize);
+
+                        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+
+                        // Force window to update with new styles
+                        SetWindowPos(
+                            hwnd,
+                            HWND_TOPMOST,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
+                        );
+                        
+                        log::info!("Applied Windows-specific window flags for pill");
+                    } else {
+                        log::warn!("Invalid HWND received from Tauri window");
+                    }
+                }
+            }
         }
 
         // Show the window after NSPanel conversion
         pill_window.show().map_err(|e| e.to_string())?;
-        
+
         // Set always on top again to ensure it's visible
-        pill_window.set_always_on_top(true).map_err(|e| e.to_string())?;
-        
+        pill_window
+            .set_always_on_top(true)
+            .map_err(|e| e.to_string())?;
+
         // Emit current recording state to the pill window
         let app_state = pill_window.app_handle().state::<crate::AppState>();
         let current_state = app_state.get_current_state();
-        let _ = pill_window.emit("recording-state-changed", serde_json::json!({
-            "state": match current_state {
-                crate::RecordingState::Idle => "idle",
-                crate::RecordingState::Starting => "starting",
-                crate::RecordingState::Recording => "recording",
-                crate::RecordingState::Stopping => "stopping",
-                crate::RecordingState::Transcribing => "transcribing",
-                crate::RecordingState::Error => "error",
-            },
-            "error": null
-        }));
+        let _ = pill_window.emit(
+            "recording-state-changed",
+            serde_json::json!({
+                "state": match current_state {
+                    crate::RecordingState::Idle => "idle",
+                    crate::RecordingState::Starting => "starting",
+                    crate::RecordingState::Recording => "recording",
+                    crate::RecordingState::Stopping => "stopping",
+                    crate::RecordingState::Transcribing => "transcribing",
+                    crate::RecordingState::Error => "error",
+                },
+                "error": null
+            }),
+        );
 
         // Store the window reference while still holding the lock
         *pill_guard = Some(pill_window);

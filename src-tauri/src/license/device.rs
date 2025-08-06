@@ -59,9 +59,13 @@ fn get_macos_uuid() -> Result<String, String> {
 
 #[cfg(target_os = "windows")]
 fn get_windows_uuid() -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    
     // Get machine GUID on Windows
     let output = Command::new("wmic")
         .args(&["csproduct", "get", "UUID"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("Failed to execute wmic: {}", e))?;
 

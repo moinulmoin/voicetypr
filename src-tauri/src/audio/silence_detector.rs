@@ -15,16 +15,16 @@ impl SilenceDetector {
         Self {
             last_voice_time: Instant::now(),
             silence_duration,
-            voice_threshold: 0.005,  // 0.5% - matches original whisper.cpp threshold
+            voice_threshold: 0.005, // 0.5% - matches original whisper.cpp threshold
         }
     }
-    
+
     /// Update with current RMS level and check if should stop
     pub fn update(&mut self, rms: f32) -> bool {
         if rms > self.voice_threshold {
             // Voice detected, update timestamp
             self.last_voice_time = Instant::now();
-            false  // Don't stop
+            false // Don't stop
         } else {
             // Check if silence duration exceeded
             self.last_voice_time.elapsed() > self.silence_duration

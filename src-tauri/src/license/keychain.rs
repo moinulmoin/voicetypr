@@ -30,4 +30,3 @@ pub fn delete_license(app: &AppHandle) -> Result<(), String> {
     log::info!("License deleted from secure store");
     Ok(())
 }
-

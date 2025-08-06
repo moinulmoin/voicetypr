@@ -1,7 +1,8 @@
 {
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Cross-platform default permissions",
+  "$schema": "../gen/schemas/windows-schema.json",
+  "identifier": "windows",
+  "description": "Windows-specific permissions",
+  "platforms": ["windows"],
   "windows": [
     "main",
     "pill"
@@ -34,7 +35,6 @@
     "updater:allow-check",
     "updater:allow-download-and-install",
     "process:allow-restart",
-    "process:allow-exit",
-    "os:default"
+    "process:allow-exit"
   ]
 }

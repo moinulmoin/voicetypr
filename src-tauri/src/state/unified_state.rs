@@ -71,26 +71,33 @@ impl UnifiedRecordingState {
 
     /// Atomically transition with custom logic based on current state
     /// This prevents race conditions by holding the lock during the entire operation
-    pub fn transition_with_fallback<F>(&self, new_state: RecordingState, fallback: F) -> Result<RecordingState, String>
+    pub fn transition_with_fallback<F>(
+        &self,
+        new_state: RecordingState,
+        fallback: F,
+    ) -> Result<RecordingState, String>
     where
         F: FnOnce(RecordingState) -> Option<RecordingState>,
     {
         let mut guard = self.lock_or_recover()?;
         let current = guard.current;
-        
+
         // First try normal transition
         if guard.machine.transition_to(new_state).is_ok() {
             guard.current = new_state;
             return Ok(new_state);
         }
-        
+
         // If normal transition failed, check if we should force a different state
         if let Some(force_state) = fallback(current) {
             guard.machine.force_state(force_state);
             guard.current = force_state;
             Ok(force_state)
         } else {
-            Err(format!("Cannot transition from {:?} to {:?}", current, new_state))
+            Err(format!(
+                "Cannot transition from {:?} to {:?}",
+                current, new_state
+            ))
         }
     }
 

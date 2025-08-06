@@ -2,23 +2,16 @@ import { HotkeyInput } from "@/components/HotkeyInput";
 import { ModelCard } from "@/components/ModelCard";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import type { useModelManagement } from "@/hooks/useModelManagement";
-import { formatHotkey } from "@/lib/hotkey-utils";
-import { cn } from "@/lib/utils";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useAccessibilityPermission } from "@/hooks/useAccessibilityPermission";
 import { useMicrophonePermission } from "@/hooks/useMicrophonePermission";
+import type { useModelManagement } from "@/hooks/useModelManagement";
+import { formatHotkey } from "@/lib/hotkey-utils";
+import { isMacOS } from "@/lib/platform";
+import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
-import {
-  CheckCircle,
-  ChevronLeft,
-  ChevronRight,
-  Info,
-  Keyboard,
-  Loader2,
-  Mic
-} from "lucide-react";
+import { CheckCircle, ChevronLeft, ChevronRight, Info, Keyboard, Loader2, Mic } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -29,14 +22,6 @@ interface OnboardingDesktopProps {
 
 type Step = "welcome" | "permissions" | "models" | "setup" | "success";
 
-const STEPS = [
-  { id: "welcome" as const },
-  { id: "permissions" as const },
-  { id: "models" as const },
-  { id: "setup" as const },
-  { id: "success" as const }
-];
-
 type PermissionStatus = "checking" | "granted" | "denied" | "error";
 
 interface PermissionState {
@@ -44,20 +29,35 @@ interface PermissionState {
   error?: string;
 }
 
-export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelManagement }: OnboardingDesktopProps) {
+export const OnboardingDesktop = function OnboardingDesktop({
+  onComplete,
+  modelManagement
+}: OnboardingDesktopProps) {
   const { updateSettings } = useSettings();
-  const { hasPermission: hasMicPermission, checkPermission: checkMicPermission, requestPermission: requestMicPermission } = useMicrophonePermission();
-  const { hasPermission: hasAccessPermission, checkPermission: checkAccessPermission, requestPermission: requestAccessPermission } = useAccessibilityPermission();
-  
+  const {
+    hasPermission: hasMicPermission,
+    checkPermission: checkMicPermission,
+    requestPermission: requestMicPermission
+  } = useMicrophonePermission();
+  const {
+    hasPermission: hasAccessPermission,
+    checkPermission: checkAccessPermission,
+    requestPermission: requestAccessPermission
+  } = useAccessibilityPermission();
+
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
   const [hotkey, setHotkey] = useState("CommandOrControl+Shift+Space");
   const [isRequesting, setIsRequesting] = useState<string | null>(null);
   const [checkingPermissions, setCheckingPermissions] = useState<Set<string>>(new Set());
-  
+
   // Convert hook states to onboarding format
   const permissions = {
-    microphone: { status: hasMicPermission === null ? "checking" : hasMicPermission ? "granted" : "denied" } as PermissionState,
-    accessibility: { status: hasAccessPermission === null ? "checking" : hasAccessPermission ? "granted" : "denied" } as PermissionState
+    microphone: {
+      status: hasMicPermission === null ? "checking" : hasMicPermission ? "granted" : "denied"
+    } as PermissionState,
+    accessibility: {
+      status: hasAccessPermission === null ? "checking" : hasAccessPermission ? "granted" : "denied"
+    } as PermissionState
   };
 
   // Get model management from props
@@ -71,31 +71,44 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
     loadModels,
     downloadModel,
     cancelDownload,
-    isLoading,
+    isLoading
   } = modelManagement;
 
-
-  const steps = STEPS;
+  // Define steps based on platform
+  // Default to showing permissions until platform is detected
+  const steps = isMacOS
+    ? [
+        { id: "welcome" as const },
+        { id: "permissions" as const },
+        { id: "models" as const },
+        { id: "setup" as const },
+        { id: "success" as const }
+      ]
+    : [
+        { id: "welcome" as const },
+        { id: "models" as const },
+        { id: "setup" as const },
+        { id: "success" as const }
+      ];
 
   const currentIndex = steps.findIndex((s) => s.id === currentStep);
   // const progress = ((currentIndex + 1) / steps.length) * 100;
 
   useEffect(() => {
-    if (currentStep !== "permissions") return
-      checkPermissions();
-      // No auto-retry - user manually retries via buttons
-
+    if (currentStep !== "permissions") return;
+    checkPermissions();
+    // No auto-retry - user manually retries via buttons
   }, [currentStep]);
 
   // Add manual recheck when user returns from settings
   useEffect(() => {
-    if (currentStep !== "permissions") return
+    if (currentStep !== "permissions") return;
     const handleFocus = () => {
-        checkPermissions();
+      checkPermissions();
     };
 
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
   }, [currentStep]);
 
   useEffect(() => {
@@ -108,18 +121,13 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
     }
   }, [models]); // Only depend on models, not selectedModel to avoid loops
 
-
-
   const checkPermissions = async () => {
     // Use the hook methods to check permissions
-    await Promise.all([
-      checkMicPermission(),
-      checkAccessPermission()
-    ]);
+    await Promise.all([checkMicPermission(), checkAccessPermission()]);
   };
 
   const checkSinglePermission = async (type: string) => {
-    setCheckingPermissions(prev => new Set(prev).add(type));
+    setCheckingPermissions((prev) => new Set(prev).add(type));
 
     try {
       if (type === "microphone") {
@@ -130,7 +138,7 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
     } catch (error) {
       console.error(`Failed to check ${type} permission:`, error);
     } finally {
-      setCheckingPermissions(prev => {
+      setCheckingPermissions((prev) => {
         const next = new Set(prev);
         next.delete(type);
         return next;
@@ -149,7 +157,9 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
       } else if (type === "accessibility") {
         const granted = await requestAccessPermission();
         if (!granted) {
-          await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+          await open(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+          );
         }
       } else if (type === "automation") {
         // This will trigger the system dialog for automation permission
@@ -166,13 +176,12 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
     }
   };
 
-
   const saveSettings = async () => {
     try {
       await invoke("set_global_shortcut", { shortcut: hotkey });
       await updateSettings({
         hotkey: hotkey,
-        current_model: selectedModel || '',
+        current_model: selectedModel || "",
         onboarding_completed: true
       });
     } catch (error) {
@@ -219,9 +228,13 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
   const canProceed = () => {
     switch (currentStep) {
       case "permissions":
-        return permissions.microphone.status === "granted" &&
-               permissions.accessibility.status === "granted";
-               // automation check removed for now
+        // On Windows, permissions are always granted
+        if (!isMacOS) return true;
+        return (
+          permissions.microphone.status === "granted" &&
+          permissions.accessibility.status === "granted"
+        );
+      // automation check removed for now
       case "models":
         // User can proceed if they have selected a model that is downloaded
         return selectedModel !== null && models[selectedModel]?.downloaded === true;
@@ -426,16 +439,16 @@ export const OnboardingDesktop = function OnboardingDesktop({ onComplete, modelM
                         return (
                           <div key={name} className="relative">
                             <ModelCard
-                            name={name}
-                            model={model}
-                            downloadProgress={progress}
-                            isVerifying={verifyingModels.has(name)}
-                            isSelected={selectedModel === name}
-                            onDownload={downloadModel}
-                            onSelect={setSelectedModel}
-                            onCancelDownload={cancelDownload}
-                            showSelectButton={model.downloaded}
-                          />
+                              name={name}
+                              model={model}
+                              downloadProgress={progress}
+                              isVerifying={verifyingModels.has(name)}
+                              isSelected={selectedModel === name}
+                              onDownload={downloadModel}
+                              onSelect={setSelectedModel}
+                              onCancelDownload={cancelDownload}
+                              showSelectButton={model.downloaded}
+                            />
                           </div>
                         );
                       })}

@@ -2,13 +2,13 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub mod groq;
-pub mod gemini;
-pub mod prompts;
 pub mod config;
+pub mod gemini;
+pub mod groq;
+pub mod prompts;
 
+pub use config::{MAX_CUSTOM_VOCABULARY, MAX_TEXT_LENGTH, MAX_VOCABULARY_TERM_LENGTH};
 pub use prompts::EnhancementOptions;
-pub use config::{MAX_TEXT_LENGTH, MAX_CUSTOM_VOCABULARY, MAX_VOCABULARY_TERM_LENGTH};
 
 #[cfg(test)]
 mod tests;
@@ -17,7 +17,7 @@ mod tests;
 pub struct AIProviderConfig {
     pub provider: String,
     pub model: String,
-    #[serde(skip_serializing)]  // Don't serialize API key
+    #[serde(skip_serializing)] // Don't serialize API key
     pub api_key: String,
     pub enabled: bool,
     #[serde(default)]
@@ -37,13 +37,14 @@ impl AIEnhancementRequest {
         if self.text.trim().is_empty() {
             return Err(AIError::ValidationError("Text cannot be empty".to_string()));
         }
-        
+
         if self.text.len() > MAX_TEXT_LENGTH {
-            return Err(AIError::ValidationError(
-                format!("Text exceeds maximum length of {} characters", MAX_TEXT_LENGTH)
-            ));
+            return Err(AIError::ValidationError(format!(
+                "Text exceeds maximum length of {} characters",
+                MAX_TEXT_LENGTH
+            )));
         }
-        
+
         Ok(())
     }
 }
@@ -60,27 +61,30 @@ pub struct AIEnhancementResponse {
 pub enum AIError {
     #[error("API error: {0}")]
     ApiError(String),
-    
+
     #[error("Network error: {0}")]
     NetworkError(String),
-    
+
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
-    
+
     #[error("Provider not found: {0}")]
     ProviderNotFound(String),
-    
+
     #[error("Validation error: {0}")]
     ValidationError(String),
-    
+
     #[error("Rate limit exceeded")]
     RateLimitExceeded,
 }
 
 #[async_trait]
 pub trait AIProvider: Send + Sync {
-    async fn enhance_text(&self, request: AIEnhancementRequest) -> Result<AIEnhancementResponse, AIError>;
-    
+    async fn enhance_text(
+        &self,
+        request: AIEnhancementRequest,
+    ) -> Result<AIEnhancementResponse, AIError>;
+
     fn name(&self) -> &str;
 }
 
@@ -99,7 +103,7 @@ impl AIProviderFactory {
         if !Self::is_valid_provider(&config.provider) {
             return Err(AIError::ProviderNotFound(config.provider.clone()));
         }
-        
+
         match config.provider.as_str() {
             "groq" => Ok(Box::new(groq::GroqProvider::new(
                 config.api_key.clone(),
@@ -114,9 +118,8 @@ impl AIProviderFactory {
             provider => Err(AIError::ProviderNotFound(provider.to_string())),
         }
     }
-    
+
     fn is_valid_provider(provider: &str) -> bool {
         matches!(provider, "groq" | "gemini")
     }
 }
-

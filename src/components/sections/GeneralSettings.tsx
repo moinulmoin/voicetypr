@@ -4,6 +4,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
+import { isMacOS } from "@/lib/platform";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { AlertCircle, Globe, Mic, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -13,6 +14,7 @@ export function GeneralSettings() {
   const { settings, updateSettings } = useSettings();
   const [autostartEnabled, setAutostartEnabled] = useState(false);
   const [autostartLoading, setAutostartLoading] = useState(false);
+  const [showAccessibilityWarning, setShowAccessibilityWarning] = useState(true);
   const canAutoInsert = useCanAutoInsert();
 
   useEffect(() => {
@@ -26,6 +28,9 @@ export function GeneralSettings() {
       }
     };
     checkAutostart();
+
+    // Check platform for accessibility warning
+    setShowAccessibilityWarning(isMacOS);
   }, []);
 
   if (!settings) return null;
@@ -85,7 +90,7 @@ export function GeneralSettings() {
                 />
               </div>
 
-              {!canAutoInsert && (
+              {!canAutoInsert && showAccessibilityWarning && (
                 <div className="flex items-center gap-2 p-2 text-sm text-amber-600 bg-amber-50 rounded-md">
                   <AlertCircle className="w-4 h-4 flex-shrink-0" />
                   <span>
