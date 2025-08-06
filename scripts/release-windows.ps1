@@ -7,7 +7,8 @@
 
 param(
     [string]$Version,
-    [switch]$Help
+    [switch]$Help,
+    [switch]$SkipBuild
 )
 
 # Colors for PowerShell output
@@ -19,10 +20,10 @@ function Write-ColorOutput {
     Write-Host $Message -ForegroundColor $Color
 }
 
-function Write-Success { param([string]$Message) Write-ColorOutput "✓ $Message" "Green" }
-function Write-Warning { param([string]$Message) Write-ColorOutput "⚠ $Message" "Yellow" }
+function Write-Success { param([string]$Message) Write-ColorOutput "[OK] $Message" "Green" }
+function Write-Warning { param([string]$Message) Write-ColorOutput "[WARN] $Message" "Yellow" }
 function Write-Error { param([string]$Message) Write-ColorOutput "✗ $Message" "Red" }
-function Write-Info { param([string]$Message) Write-ColorOutput "ℹ $Message" "Cyan" }
+function Write-Info { param([string]$Message) Write-ColorOutput "[INFO] $Message" "Cyan" }
 function Write-Step { param([string]$Message) Write-ColorOutput "🚀 $Message" "Magenta" }
 
 # Show help
@@ -36,6 +37,7 @@ It is designed to run AFTER the macOS release script has created the release.
 Usage:
   .\scripts\release-windows.ps1                # Use version from package.json
   .\scripts\release-windows.ps1 1.4.0         # Use specific version
+  .\scripts\release-windows.ps1 -SkipBuild    # Skip build, use existing artifacts
   .\scripts\release-windows.ps1 -Help         # Show this help
 
 Requirements:
@@ -61,6 +63,9 @@ Environment Variables:
 }
 
 Write-Step "Starting VoiceTypr Windows Release Process"
+
+# Remember initial directory so we can return even on errors
+$InitialDir = Get-Location
 
 # Error handling
 $ErrorActionPreference = "Stop"
@@ -154,6 +159,9 @@ Write-Success "Created output directory: $OutputDir"
 $HasSigningKey = $false
 $keyPath = "$env:USERPROFILE\.tauri\voicetypr.key"
 
+# If needed you can export TAURI_SIGNING_PRIVATE_KEY_PATH before running this script
+# $env:TAURI_SIGNING_PRIVATE_KEY_PATH = "C:\Users\moinu\.tauri\voicetypr.key"
+
 # Auto-detect and set key path if file exists
 if (Test-Path $keyPath) {
     $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
@@ -171,25 +179,36 @@ if (Test-Path $keyPath) {
 }
 
 # Build Windows NSIS installer
-Write-Step "Building Windows NSIS installer..."
-try {
-    Set-Location "src-tauri"
-    $buildOutput = cargo tauri build --target x86_64-pc-windows-msvc 2>&1
-    Set-Location ".."
-    
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Build failed. Output: $buildOutput"
+if (-not $SkipBuild) {
+    Write-Step "Building Windows NSIS installer..."
+    try {
+        # Run Tauri build with verbose output
+        Write-Info "Building Tauri application (this may take several minutes)..."
+        
+        # Set environment to skip signing if no key
+        if (-not $HasSigningKey) {
+            $env:TAURI_SIGNING_PRIVATE_KEY = ""
+            $env:TAURI_SIGNING_PRIVATE_KEY_PATH = ""
+        }
+        
+        # Run build with full output
+        & pnpm tauri build --verbose
+        
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Tauri build failed with exit code: $LASTEXITCODE"
+            exit 1
+        }
+        Write-Success "NSIS build completed"
+    } catch {
+        Write-Error "Failed to build: $($_.Exception.Message)"
         exit 1
     }
-    Write-Success "NSIS build completed"
-} catch {
-    Set-Location ".." -ErrorAction SilentlyContinue
-    Write-Error "Failed to build NSIS: $($_.Exception.Message)"
-    exit 1
+} else {
+    Write-Info "Skipping build step (using existing artifacts)"
 }
 
 # Find the built NSIS installer
-$NsisPath = Get-ChildItem -Path "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis" -Filter "*-setup.exe" | Select-Object -First 1
+$NsisPath = Get-ChildItem -Path "src-tauri\target\release\bundle\nsis" -Filter "VoiceTypr_${Version}_x64-setup.exe" | Select-Object -First 1
 if (-not $NsisPath) {
     Write-Error "NSIS installer not found in build output"
     exit 1
@@ -220,35 +239,43 @@ $NsisZipSignature = "SIGNATURE_PLACEHOLDER"
 if ($HasSigningKey) {
     Write-Info "Signing update artifacts..."
     try {
-        Set-Location "src-tauri"
+        # Get absolute path for the zip file
+        $zipFullPath = (Get-Item $NsisZipPath).FullName
         
-        # Sign the .msi.zip file
-        $signArgs = @("tauri", "signer", "sign")
+        # Try multiple approaches to make signing work on Windows
+        $keyContent = Get-Content $env:TAURI_SIGNING_PRIVATE_KEY_PATH -Raw
         
-        if ($env:TAURI_SIGNING_PRIVATE_KEY_PATH) {
-            $signArgs += @("-f", $env:TAURI_SIGNING_PRIVATE_KEY_PATH)
+        # Approach 1: Use -f flag with key file path (most reliable)
+        Write-Info "Attempting to sign with: pnpm tauri signer sign -f $keyPath -p '' <file>"
+        $signOutput = & pnpm tauri signer sign -f $keyPath $zipFullPath 2>&1
+        
+        if ($LASTEXITCODE -ne 0) {
+            # Approach 2: Set environment variables (npm version uses TAURI_PRIVATE_KEY)
+            Write-Warning "Direct signing failed, trying with environment variables..."
+            $env:TAURI_PRIVATE_KEY = $keyContent
+            $env:TAURI_PRIVATE_KEY_PATH = $env:TAURI_SIGNING_PRIVATE_KEY_PATH
+            $env:TAURI_SIGNING_PRIVATE_KEY = $keyContent
+            
+            $signOutput = & pnpm tauri signer sign $zipFullPath 2>&1
         }
         
-        # No password for the key
-        $signArgs += @("-p", "")
-        
-        $signArgs += $NsisZipPath
-        
-        $signOutput = & cargo @signArgs 2>&1
-        Set-Location ".."
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to sign. Output: $signOutput"
+            exit 1
+        }
         
         if ($LASTEXITCODE -eq 0 -and (Test-Path "$NsisZipPath.sig")) {
             $NsisZipSignature = Get-Content "$NsisZipPath.sig" -Raw
             $NsisZipSignature = $NsisZipSignature.Trim()
             Write-Success "Update artifact signed successfully"
         } else {
-            Write-Warning "Failed to sign update artifact. Output: $signOutput"
-            Write-Warning "Proceeding without signature"
+            Write-Error "Failed to sign update artifact. Output: $signOutput"
+            exit 1
         }
     } catch {
-        Set-Location ".." -ErrorAction SilentlyContinue
-        Write-Warning "Error during signing: $($_.Exception.Message)"
-        Write-Warning "Proceeding without signature"
+        Set-Location $InitialDir -ErrorAction SilentlyContinue
+        Write-Error "Error during signing: $($_.Exception.Message)"
+        exit 1
     }
 } else {
     Write-Warning "Skipping signature generation (no signing key configured)"
@@ -327,26 +354,26 @@ try {
 Write-Step "Windows Release Complete!"
 Write-Success "Successfully created and uploaded Windows release artifacts for v$Version"
 Write-Host ""
-Write-Info "📦 Windows Release Artifacts:"
+Write-Info "Windows Release Artifacts:"
 Get-ChildItem $OutputDir | ForEach-Object {
     $size = if ($_.Length -gt 1MB) { "{0:N2} MB" -f ($_.Length / 1MB) } else { "{0:N2} KB" -f ($_.Length / 1KB) }
     Write-Host "   $($_.Name) ($size)" -ForegroundColor White
 }
 
 Write-Host ""
-Write-Info "🔗 Release URL: https://github.com/moinulmoin/voicetypr/releases/tag/$ReleaseTag"
+Write-Info "Release URL: https://github.com/moinulmoin/voicetypr/releases/tag/$ReleaseTag"
 
 if ($HasSigningKey) {
-    Write-Success "✓ Update signatures generated - auto-updater ready"
+    Write-Success "Update signatures generated - auto-updater ready"
 } else {
-    Write-Warning "⚠ No update signatures - auto-updater won't work"
+    Write-Warning "No update signatures - auto-updater won`'t work"
 }
 
 Write-Host ""
-Write-Info "📋 Next Steps:"
+Write-Info "Next Steps:"
 Write-Host "1. Test the MSI installer on a clean Windows machine" -ForegroundColor Yellow
 Write-Host "2. Verify the Tauri updater works with the new artifacts" -ForegroundColor Yellow
 Write-Host "3. Update release notes if needed" -ForegroundColor Yellow
 Write-Host "4. Publish the release when ready" -ForegroundColor Yellow
 
-Write-Success "🎉 Windows release process completed successfully!"
+Write-Success "Windows release process completed successfully!"
