@@ -84,8 +84,12 @@ pub async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        
         std::process::Command::new("explorer")
             .arg(&log_dir)
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| format!("Failed to open folder: {}", e))?;
     }

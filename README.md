@@ -79,8 +79,8 @@ VoiceTypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 > **Note**: VoiceTypr is fully signed and notarized by Apple, so you can run it without security warnings.
 
 #### Windows
-1. Download the latest [VoiceTypr.msi](https://github.com/moinulmoin/voicetypr/releases/latest)
-2. Run the MSI installer
+1. Download the latest [VoiceTypr installer](https://github.com/moinulmoin/voicetypr/releases/latest)
+2. Run the installer
 3. Launch VoiceTypr from Start Menu
 4. Follow the onboarding to download your preferred AI model
 

@@ -47,9 +47,8 @@ Requirements:
 The script will:
 1. Read version from package.json (or use provided version)
 2. Verify the GitHub release exists
-3. Build Windows MSI installer
-4. Rename MSI to remove -en-US suffix
-5. Create Tauri update artifacts (.msi.zip and signatures)
+3. Build Windows NSIS installer
+4. Create Tauri update artifacts (.nsis.zip and signatures)
 6. Download and update latest.json from GitHub release
 7. Upload all Windows artifacts to the existing release
 
@@ -171,56 +170,53 @@ if (Test-Path $keyPath) {
     Write-Warning "2. The script will auto-detect the key at the standard location"
 }
 
-# Build Windows MSI
-Write-Step "Building Windows MSI installer..."
+# Build Windows NSIS installer
+Write-Step "Building Windows NSIS installer..."
 try {
     Set-Location "src-tauri"
-    $buildOutput = cargo tauri build --target x86_64-pc-windows-msvc --bundles msi 2>&1
+    $buildOutput = cargo tauri build --target x86_64-pc-windows-msvc 2>&1
     Set-Location ".."
     
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Build failed. Output: $buildOutput"
         exit 1
     }
-    Write-Success "MSI build completed"
+    Write-Success "NSIS build completed"
 } catch {
     Set-Location ".." -ErrorAction SilentlyContinue
-    Write-Error "Failed to build MSI: $($_.Exception.Message)"
+    Write-Error "Failed to build NSIS: $($_.Exception.Message)"
     exit 1
 }
 
-# Find the built MSI
-$MsiPath = Get-ChildItem -Path "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi" -Filter "*.msi" | Select-Object -First 1
-if (-not $MsiPath) {
-    Write-Error "MSI file not found in build output"
+# Find the built NSIS installer
+$NsisPath = Get-ChildItem -Path "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis" -Filter "*-setup.exe" | Select-Object -First 1
+if (-not $NsisPath) {
+    Write-Error "NSIS installer not found in build output"
     exit 1
 }
 
-Write-Success "Found MSI: $($MsiPath.Name)"
+Write-Success "Found NSIS installer: $($NsisPath.Name)"
 
-# Rename MSI to remove -en-US suffix and match naming convention
-$OriginalMsiName = $MsiPath.Name
-$NewMsiName = "VoiceTypr_${Version}_x64.msi"
-$NewMsiPath = Join-Path $OutputDir $NewMsiName
-
-Copy-Item $MsiPath.FullName $NewMsiPath
-Write-Success "Renamed MSI: $OriginalMsiName -> $NewMsiName"
+# Copy NSIS installer (already has good naming: VoiceTypr_1.4.0_x64-setup.exe)
+$NewNsisPath = Join-Path $OutputDir $NsisPath.Name
+Copy-Item $NsisPath.FullName $NewNsisPath
+Write-Success "Copied NSIS installer: $($NsisPath.Name)"
 
 # Create update artifacts
 Write-Step "Creating Tauri update artifacts..."
 
-# Create .msi.zip for updater
-$MsiZipPath = "$NewMsiPath.zip"
+# Create .nsis.zip for updater
+$NsisZipPath = "$NewNsisPath.zip"
 try {
-    Compress-Archive -Path $NewMsiPath -DestinationPath $MsiZipPath -Force
-    Write-Success "Created update archive: $(Split-Path $MsiZipPath -Leaf)"
+    Compress-Archive -Path $NewNsisPath -DestinationPath $NsisZipPath -Force
+    Write-Success "Created update archive: $(Split-Path $NsisZipPath -Leaf)"
 } catch {
-    Write-Error "Failed to create MSI zip: $($_.Exception.Message)"
+    Write-Error "Failed to create NSIS zip: $($_.Exception.Message)"
     exit 1
 }
 
 # Sign update artifacts if signing key is available
-$MsiZipSignature = "SIGNATURE_PLACEHOLDER"
+$NsisZipSignature = "SIGNATURE_PLACEHOLDER"
 if ($HasSigningKey) {
     Write-Info "Signing update artifacts..."
     try {
@@ -236,14 +232,14 @@ if ($HasSigningKey) {
         # No password for the key
         $signArgs += @("-p", "")
         
-        $signArgs += $MsiZipPath
+        $signArgs += $NsisZipPath
         
         $signOutput = & cargo @signArgs 2>&1
         Set-Location ".."
         
-        if ($LASTEXITCODE -eq 0 -and (Test-Path "$MsiZipPath.sig")) {
-            $MsiZipSignature = Get-Content "$MsiZipPath.sig" -Raw
-            $MsiZipSignature = $MsiZipSignature.Trim()
+        if ($LASTEXITCODE -eq 0 -and (Test-Path "$NsisZipPath.sig")) {
+            $NsisZipSignature = Get-Content "$NsisZipPath.sig" -Raw
+            $NsisZipSignature = $NsisZipSignature.Trim()
             Write-Success "Update artifact signed successfully"
         } else {
             Write-Warning "Failed to sign update artifact. Output: $signOutput"
@@ -276,8 +272,8 @@ try {
     
     # Add Windows platform
     $windowsPlatform = @{
-        signature = $MsiZipSignature
-        url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/$(Split-Path $MsiZipPath -Leaf)"
+        signature = $NsisZipSignature
+        url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/$(Split-Path $NsisZipPath -Leaf)"
     }
     
     # Ensure platforms object exists
@@ -300,21 +296,21 @@ try {
 # Upload all Windows artifacts to release
 Write-Step "Uploading Windows artifacts to GitHub release..."
 try {
-    # Upload MSI
-    Write-Info "Uploading MSI installer..."
-    gh release upload $ReleaseTag $NewMsiPath --clobber
-    Write-Success "Uploaded: $(Split-Path $NewMsiPath -Leaf)"
+    # Upload NSIS installer
+    Write-Info "Uploading NSIS installer..."
+    gh release upload $ReleaseTag $NewNsisPath --clobber
+    Write-Success "Uploaded: $(Split-Path $NewNsisPath -Leaf)"
     
-    # Upload MSI.zip
-    Write-Info "Uploading MSI update archive..."
-    gh release upload $ReleaseTag $MsiZipPath --clobber
-    Write-Success "Uploaded: $(Split-Path $MsiZipPath -Leaf)"
+    # Upload NSIS.zip
+    Write-Info "Uploading NSIS update archive..."
+    gh release upload $ReleaseTag $NsisZipPath --clobber
+    Write-Success "Uploaded: $(Split-Path $NsisZipPath -Leaf)"
     
     # Upload signature if it exists
-    if (Test-Path "$MsiZipPath.sig") {
-        Write-Info "Uploading MSI signature..."
-        gh release upload $ReleaseTag "$MsiZipPath.sig" --clobber
-        Write-Success "Uploaded: $(Split-Path "$MsiZipPath.sig" -Leaf)"
+    if (Test-Path "$NsisZipPath.sig") {
+        Write-Info "Uploading NSIS signature..."
+        gh release upload $ReleaseTag "$NsisZipPath.sig" --clobber
+        Write-Success "Uploaded: $(Split-Path "$NsisZipPath.sig" -Leaf)"
     }
     
     # Upload updated latest.json

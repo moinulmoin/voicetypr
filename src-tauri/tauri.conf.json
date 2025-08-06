@@ -19,8 +19,8 @@
         "resizable": false,
         "center": true,
         "visible": true,
-        "skipTaskbar": false,
-        "alwaysOnTop": true
+        "skipTaskbar": true,
+        "alwaysOnTop": false
       }
     ],
     "security": {
@@ -38,7 +38,7 @@
   "bundle": {
     "publisher": "Ideaplexa LLC",
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "app", "dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -53,11 +53,7 @@
       "signingIdentity": "-"
     },
     "windows": {
-      "allowDowngrades": false,
-      "wix": {
-        "language": "en-US",
-        "upgradeCode": "9daf44c3-2a02-5807-b5eb-036eac841548"
-      }
+      "allowDowngrades": false
     }
   },
   "plugins": {
