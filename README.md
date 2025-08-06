@@ -8,6 +8,7 @@
   [![GitHub release](https://img.shields.io/github/v/release/moinulmoin/voicetypr)](https://github.com/moinulmoin/voicetypr/releases)
   [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE.md)
   [![macOS](https://img.shields.io/badge/macOS-13.0+-black)](https://www.apple.com/macos)
+  [![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6)](https://www.microsoft.com/windows)
   [![Downloads](https://img.shields.io/github/downloads/moinulmoin/voicetypr/total)](https://github.com/moinulmoin/voicetypr/releases)
 
   [Download](https://github.com/moinulmoin/voicetypr/releases/latest) • [Features](#features) • [Installation](#installation) • [Usage](#usage)
@@ -15,7 +16,7 @@
 
 ## 🎯 What is VoiceTypr?
 
-VoiceTypr is open source ai voice to text dictation tool, alternative to Wispr Flow, SuperWisper for viber coders, super ai users. Pay once, User forever.
+VoiceTypr is an open source AI voice-to-text dictation tool, alternative to Wispr Flow and SuperWhisper. Available for macOS and Windows. Pay once, use forever.
 
 ## ✨ Features
 
@@ -25,13 +26,14 @@ VoiceTypr is open source ai voice to text dictation tool, alternative to Wispr F
 - Works in any app - cursor, claude code, chatgpt, slack, etc
 
 ### 🤖 **Powered by local AI**
-- 100% offline transcription - your voice never leaves your Mac
+- 100% offline transcription - your voice never leaves your device
 - Multiple model sizes for accuracy vs speed tradeoffs
 - Support for 99+ languages out of the box
+- Hardware acceleration (Metal on macOS, CUDA on Windows)
 
 ### 🚀 **Native Performance**
 - Built with Rust and Tauri for blazing-fast performance
-- Universal binary - optimized for both Intel and Apple Silicon
+- Optimized for each platform with hardware acceleration
 - Minimal resource usage with maximum efficiency
 
 ### 🔒 **Privacy First**
@@ -41,7 +43,7 @@ VoiceTypr is open source ai voice to text dictation tool, alternative to Wispr F
 
 ### 🤖 **AI Enhancement** (NEW)
 - Transform your transcriptions with AI (Groq/Gemini)
-- Smart presets: Email, Commits, Notes
+- Smart presets: Prompts, Email, Commits, Notes
 - Secure API key storage
 - Requires internet connection for enhancement only
 
@@ -54,13 +56,21 @@ VoiceTypr is open source ai voice to text dictation tool, alternative to Wispr F
 ## 📦 Installation
 
 ### Requirements
+
+#### macOS
 - macOS 13.0 (Ventura) or later
-- 3/4 GB free disk space (for AI models)
+- 3-4 GB free disk space (for AI models)
 - Microphone access permission
 - Accessibility access permission
 
+#### Windows
+- Windows 10/11 (64-bit)
+- 3-4 GB free disk space (for AI models)
+- NVIDIA GPU recommended for CUDA acceleration (optional)
+
 ### Quick Install
 
+#### macOS
 1. Download the latest [VoiceTypr.dmg](https://github.com/moinulmoin/voicetypr/releases/latest)
 2. Open the DMG and drag VoiceTypr to Applications
 3. Launch VoiceTypr from Applications
@@ -68,14 +78,22 @@ VoiceTypr is open source ai voice to text dictation tool, alternative to Wispr F
 
 > **Note**: VoiceTypr is fully signed and notarized by Apple, so you can run it without security warnings.
 
+#### Windows
+1. Download the latest [VoiceTypr.msi](https://github.com/moinulmoin/voicetypr/releases/latest)
+2. Run the MSI installer
+3. Launch VoiceTypr from Start Menu
+4. Follow the onboarding to download your preferred AI model
+
+> **Note**: CUDA acceleration will be automatically enabled if you have a compatible NVIDIA GPU.
+
 ## 🎮 Usage
 
 ### Getting Started
 
-1. **Launch VoiceTypr** - Find it in your Applications folder
-2. **Grant Permissions** - Allow microphone and accessibility access when prompted
+1. **Launch VoiceTypr** - Find it in your Applications folder (macOS) or Start Menu (Windows)
+2. **Grant Permissions** - Allow microphone access (and accessibility on macOS)
 3. **Download a Model** - Choose from tiny to large models based on your needs
-4. **Start Transcribing** - Press your hot key anywhere to record
+4. **Start Transcribing** - Press your hotkey anywhere to record
 
 ### Tips & Tricks
 
@@ -104,5 +122,5 @@ voicetypr/
 
 ## 📄 License
 
-VoiceTypr is open source software licensed under the [GNU Affero General Public License v3.0](LICENSE.md).
+VoiceTypr is licensed under the [GNU Affero General Public License v3.0](LICENSE.md).
 </div>
