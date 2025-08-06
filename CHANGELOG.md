@@ -1,5 +1,23 @@
 # Changelog
 
+# [1.5.0](https://github.com/moinulmoin/voicetypr/compare/v1.4.0...v1.5.0) (2025-08-06)
+
+
+### Bug Fixes
+
+* :bug: simplify Windows window flag application by removing redundant error handling ([2c04f14](https://github.com/moinulmoin/voicetypr/commit/2c04f14478ab142f65f52d706463515e5fe4c1fb))
+
+
+### Features
+
+* :sparkles: add timeout to recorder thread, improve window handling, and enhance security validations ([758231d](https://github.com/moinulmoin/voicetypr/commit/758231dc3cb035d7a0517231075211a56a851d10))
+* :sparkles: refactor: optimize platform detection with static boolean values ([204e4f3](https://github.com/moinulmoin/voicetypr/commit/204e4f35edffd8291f81f68e4d0ffa46cc855d73))
+* add advanced settings section with permissions, reset options and diagnostics ([56bcc9b](https://github.com/moinulmoin/voicetypr/commit/56bcc9b03c5c7df1d4b618597f8438b65536c2bf))
+* add license management and log cleanup functionality ([5834ce6](https://github.com/moinulmoin/voicetypr/commit/5834ce69e0dca69839651815316ac6f21f6e774f))
+* add platform-specific settings and advanced configuration UI ([18d5e46](https://github.com/moinulmoin/voicetypr/commit/18d5e46b123c70454d36a7274c4384f578f20221))
+* add Windows release scripts and configuration files for cross-platform builds ([e1516de](https://github.com/moinulmoin/voicetypr/commit/e1516ded527c60ed7933a5c2bf8677e0fe212e94))
+* refactor the app with cross-platform permissions and settings UI ([930f9a2](https://github.com/moinulmoin/voicetypr/commit/930f9a23ce6cd8efcf59a762246b7dd0a82ac09c))
+
 # [1.4.0](https://github.com/moinulmoin/voicetypr/compare/v1.3.0...v1.4.0) (2025-08-01)
 
 
