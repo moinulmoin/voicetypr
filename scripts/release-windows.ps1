@@ -1,4 +1,4 @@
-# Simple Windows Release Script - Builds CPU and GPU versions
+# Windows Release Script - Single smart build with GPU support
 
 param(
     [string]$Version,
@@ -17,13 +17,15 @@ if ($Help) {
     Write-Host @"
 Windows Release Script
 
-Builds two versions:
-1. CPU version - works everywhere
-2. GPU version - REQUIRES Vulkan (installer will force install it)
+Builds a single smart installer that:
+- Detects GPU capability
+- Informs users about GPU acceleration
+- Falls back to CPU if needed
+- Always works!
 
 Usage:
-  .\scripts\release-windows.ps1                    # Build and upload both
-  .\scripts\release-windows.ps1 -SkipBuild         # Upload existing builds
+  .\scripts\release-windows.ps1                    # Build and upload
+  .\scripts\release-windows.ps1 -SkipBuild         # Upload existing build
   .\scripts\release-windows.ps1 -SkipPublish       # Build only, don't upload
   .\scripts\release-windows.ps1 -Help              # Show this help
 "@
@@ -49,66 +51,23 @@ if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir | Out-Null
 }
 
-# Build CPU version
+# Build single smart installer
 if (-not $SkipBuild) {
-    Write-Step "Building CPU version..."
-    
-    # CPU build uses default config (no hooks)
-    pnpm tauri build
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "CPU build failed!"
-        exit 1
-    }
-    
-    # Copy CPU installer
-    $cpuInstaller = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" | Select-Object -First 1
-    $cpuPath = "$OutputDir\VoiceTypr_${Version}_x64-setup.exe"
-    Copy-Item $cpuInstaller.FullName $cpuPath -Force
-    Write-Success "CPU version built"
-    
-    # Create update artifacts for CPU version
-    Write-Info "Creating CPU update artifacts..."
-    
-    # Create .zip for updater
-    $cpuZipPath = "$cpuPath.zip"
-    Compress-Archive -Path $cpuPath -DestinationPath $cpuZipPath -Force
-    Write-Success "Created CPU update archive"
-    
-    # Sign if key available
-    $keyPath = "$env:USERPROFILE\.tauri\voicetypr.key"
-    if (Test-Path $keyPath) {
-        Write-Info "Signing CPU update artifact..."
-        $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
-        
-        & pnpm tauri signer sign -f $keyPath $cpuZipPath
-        
-        if (Test-Path "$cpuZipPath.sig") {
-            Write-Success "CPU update artifact signed"
-        } else {
-            Write-Warning "Failed to sign CPU update artifact"
-        }
-    } else {
-        Write-Warning "No signing key found - CPU updates won't have signatures"
-    }
-}
-
-# Build GPU version
-if (-not $SkipBuild) {
-    Write-Step "Building GPU version..."
+    Write-Step "Building VoiceTypr with GPU support..."
     
     # Check for Vulkan SDK
     if (-not $env:VULKAN_SDK) {
-        Write-Error "VULKAN_SDK not set! GPU build requires Vulkan SDK."
+        Write-Error "VULKAN_SDK not set! Build requires Vulkan SDK."
         Write-Info "Download from: https://vulkan.lunarg.com/sdk/home"
         exit 1
     }
     
-    # Update tauri.conf.json to use GPU hooks
+    # Update tauri.conf.json to use smart installer hooks
     $config = Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
     # Create new nsis object with both properties
     $nsisConfig = @{
         installMode = "perMachine"
-        installerHooks = "./windows/gpu-installer-hooks.nsh"
+        installerHooks = "./windows/smart-installer-hooks.nsh"
     }
     $config.bundle.windows.nsis = $nsisConfig
     $config | ConvertTo-Json -Depth 10 | Set-Content "src-tauri\tauri.conf.json"
@@ -116,49 +75,49 @@ if (-not $SkipBuild) {
     # Clean to ensure fresh build
     cargo clean --manifest-path src-tauri\Cargo.toml
     
-    # Build with GPU features using the correct Tauri v2 syntax
-    Write-Info "Building GPU version with: pnpm tauri build -- --features gpu-windows"
-    pnpm tauri build -- --features gpu-windows
+    # Build with Vulkan enabled by default
+    Write-Info "Building with Vulkan support enabled..."
+    pnpm tauri build
     
     if ($LASTEXITCODE -ne 0) {
         # Restore config
         $originalConfig | Set-Content "src-tauri\tauri.conf.json"
-        Write-Error "GPU build failed!"
+        Write-Error "Build failed!"
         exit 1
     }
     
     # Restore original config
     $originalConfig | Set-Content "src-tauri\tauri.conf.json"
     
-    # Copy GPU installer with different name
-    $gpuInstaller = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" | Select-Object -First 1
-    $gpuPath = "$OutputDir\VoiceTypr_${Version}_x64-gpu-setup.exe"
-    Copy-Item $gpuInstaller.FullName $gpuPath -Force
-    Write-Success "GPU version built"
+    # Copy installer
+    $installer = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" | Select-Object -First 1
+    $installerPath = "$OutputDir\VoiceTypr_${Version}_x64-setup.exe"
+    Copy-Item $installer.FullName $installerPath -Force
+    Write-Success "Smart installer built successfully!"
     
-    # Create update artifacts for GPU version
-    Write-Info "Creating GPU update artifacts..."
+    # Create update artifacts
+    Write-Info "Creating update artifacts..."
     
     # Create .zip for updater
-    $gpuZipPath = "$gpuPath.zip"
-    Compress-Archive -Path $gpuPath -DestinationPath $gpuZipPath -Force
-    Write-Success "Created GPU update archive"
+    $zipPath = "$installerPath.zip"
+    Compress-Archive -Path $installerPath -DestinationPath $zipPath -Force
+    Write-Success "Created update archive"
     
     # Sign if key available
     $keyPath = "$env:USERPROFILE\.tauri\voicetypr.key"
     if (Test-Path $keyPath) {
-        Write-Info "Signing GPU update artifact..."
+        Write-Info "Signing update artifact..."
         $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
         
-        & pnpm tauri signer sign -f $keyPath $gpuZipPath
+        & pnpm tauri signer sign -f $keyPath $zipPath
         
-        if (Test-Path "$gpuZipPath.sig") {
-            Write-Success "GPU update artifact signed"
+        if (Test-Path "$zipPath.sig") {
+            Write-Success "Update artifact signed"
         } else {
-            Write-Warning "Failed to sign GPU update artifact"
+            Write-Warning "Failed to sign update artifact"
         }
     } else {
-        Write-Warning "No signing key found - GPU updates won't have signatures"
+        Write-Warning "No signing key found - updates won't have signatures"
     }
 }
 
@@ -174,11 +133,11 @@ if (-not $SkipPublish) {
         exit 1
     }
     
-    # Upload CPU version
-    Write-Info "Uploading CPU version..."
+    # Upload installer
+    Write-Info "Uploading installer..."
     gh release upload $ReleaseTag "$OutputDir\VoiceTypr_${Version}_x64-setup.exe" --clobber
     
-    # Upload CPU update artifacts if they exist
+    # Upload update artifacts if they exist
     if (Test-Path "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.zip") {
         gh release upload $ReleaseTag "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.zip" --clobber
         if (Test-Path "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.zip.sig") {
@@ -186,21 +145,13 @@ if (-not $SkipPublish) {
         }
     }
     
-    # Upload GPU version
-    Write-Info "Uploading GPU version..."
-    gh release upload $ReleaseTag "$OutputDir\VoiceTypr_${Version}_x64-gpu-setup.exe" --clobber
-    
-    # Upload GPU update artifacts
-    if (Test-Path "$OutputDir\VoiceTypr_${Version}_x64-gpu-setup.exe.zip") {
-        gh release upload $ReleaseTag "$OutputDir\VoiceTypr_${Version}_x64-gpu-setup.exe.zip" --clobber
-        if (Test-Path "$OutputDir\VoiceTypr_${Version}_x64-gpu-setup.exe.zip.sig") {
-            gh release upload $ReleaseTag "$OutputDir\VoiceTypr_${Version}_x64-gpu-setup.exe.zip.sig" --clobber
-        }
-    }
-    
-    Write-Success "All versions and update artifacts uploaded"
+    Write-Success "Installer and update artifacts uploaded"
 }
 
 Write-Step "Done!"
-Write-Info "CPU version: VoiceTypr_${Version}_x64-setup.exe"
-Write-Info "GPU version: VoiceTypr_${Version}_x64-gpu-setup.exe (forces Vulkan install)"
+Write-Info "Smart installer: VoiceTypr_${Version}_x64-setup.exe"
+Write-Info "Features:"
+Write-Info "  • Auto-detects GPU capability"
+Write-Info "  • Informs about GPU acceleration options"
+Write-Info "  • Falls back to CPU if needed"
+Write-Info "  • Single installer for all users!"

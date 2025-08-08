@@ -15,8 +15,7 @@ name = "voicetypr_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
-default = []
-gpu-windows = ["whisper-rs/vulkan"]
+default = ["whisper-rs/vulkan"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

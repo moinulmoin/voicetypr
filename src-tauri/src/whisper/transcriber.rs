@@ -39,38 +39,47 @@ impl Transcriber {
             }
         }
         
-        // Windows: Use Vulkan GPU if feature is enabled, otherwise CPU
-        #[cfg(all(target_os = "windows", feature = "gpu-windows"))]
+        // Windows: Try Vulkan GPU first, fallback to CPU if it fails (just like macOS!)
+        #[cfg(target_os = "windows")]
         {
             ctx_params.use_gpu(true);
-            gpu_used = true;
-            log::info!("🚀 GPU BUILD: Initializing with Vulkan GPU acceleration");
-            log::info!("GPU feature enabled - this is the GPU version of VoiceTypr");
+            log::info!("Attempting to initialize Whisper with Vulkan GPU acceleration...");
             
-            // Double-check Vulkan is available
-            if !std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists() {
-                log::warn!("WARNING: GPU build but vulkan-1.dll not found!");
+            // Check if Vulkan runtime is available
+            let vulkan_available = std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
+            if !vulkan_available {
+                log::warn!("Vulkan runtime not found. GPU acceleration unavailable.");
+            }
+            
+            match WhisperContext::new_with_params(model_path_str, ctx_params) {
+                Ok(ctx) => {
+                    log::info!("✓ Successfully initialized with Vulkan GPU acceleration");
+                    gpu_used = true;
+                    return Ok(Self { context: ctx });
+                }
+                Err(gpu_err) => {
+                    log::warn!("Vulkan initialization failed: {}. Falling back to CPU...", gpu_err);
+                    ctx_params = WhisperContextParameters::default();
+                    ctx_params.use_gpu(false);
+                    gpu_used = false;
+                    log::info!("Attempting CPU-only initialization...");
+                }
             }
         }
-        
-        #[cfg(all(target_os = "windows", not(feature = "gpu-windows")))]
-        {
-            ctx_params.use_gpu(false);
-            gpu_used = false;
-            log::info!("CPU BUILD: Initializing in CPU-only mode");
-            log::info!("This is the CPU version of VoiceTypr");
-        }
 
-        // Create context (for Windows or macOS CPU fallback)
+        // Create context (for Windows CPU fallback or other platforms)
         let ctx = WhisperContext::new_with_params(model_path_str, ctx_params)
             .map_err(|e| format!("Failed to load model: {}", e))?;
 
         // Determine backend type for logging
         let backend_type = if gpu_used {
-            #[cfg(all(target_os = "windows", feature = "gpu-windows"))]
-            { "Vulkan GPU" }
-            #[cfg(not(all(target_os = "windows", feature = "gpu-windows")))]
-            { "CPU" }  // macOS fallback case
+            if cfg!(target_os = "windows") {
+                "Vulkan GPU"
+            } else if cfg!(target_os = "macos") {
+                "Metal GPU"
+            } else {
+                "GPU"
+            }
         } else {
             "CPU"
         };
