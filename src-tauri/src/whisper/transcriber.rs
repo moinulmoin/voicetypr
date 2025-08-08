@@ -14,9 +14,25 @@ impl Transcriber {
             .to_str()
             .ok_or_else(|| format!("Model path contains invalid UTF-8: {:?}", model_path))?;
 
-        // Enable GPU acceleration for better performance
+        // Configure GPU usage based on platform and features
         let mut ctx_params = WhisperContextParameters::default();
-        ctx_params.use_gpu(true); // Enable Metal on macOS
+        
+        // macOS: Always use Metal for GPU acceleration
+        #[cfg(target_os = "macos")]
+        ctx_params.use_gpu(true);
+        
+        // Windows: Use Vulkan GPU if feature is enabled, otherwise CPU
+        #[cfg(all(target_os = "windows", feature = "gpu-windows"))]
+        {
+            ctx_params.use_gpu(true);
+            log::info!("Vulkan GPU acceleration enabled for Windows");
+        }
+        
+        #[cfg(all(target_os = "windows", not(feature = "gpu-windows")))]
+        {
+            ctx_params.use_gpu(false);
+            log::info!("CPU-only mode for Windows (maximum compatibility)");
+        }
 
         let ctx = WhisperContext::new_with_params(model_path_str, ctx_params)
             .map_err(|e| format!("Failed to load model: {}", e))?;

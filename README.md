@@ -29,7 +29,7 @@ VoiceTypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 - 100% offline transcription - your voice never leaves your device
 - Multiple model sizes for accuracy vs speed tradeoffs
 - Support for 99+ languages out of the box
-- Hardware acceleration (Metal on macOS, CUDA on Windows)
+- Hardware acceleration (Metal on macOS)
 
 ### 🚀 **Native Performance**
 - Built with Rust and Tauri for blazing-fast performance
@@ -66,7 +66,9 @@ VoiceTypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 #### Windows
 - Windows 10/11 (64-bit)
 - 3-4 GB free disk space (for AI models)
-- NVIDIA GPU recommended for CUDA acceleration (optional)
+- Two versions available:
+  - **CPU Version**: Universal compatibility (works on all systems)
+  - **GPU Version**: Vulkan acceleration (works with NVIDIA, AMD, Intel GPUs)
 
 ### Quick Install
 
@@ -79,12 +81,16 @@ VoiceTypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 > **Note**: VoiceTypr is fully signed and notarized by Apple, so you can run it without security warnings.
 
 #### Windows
-1. Download the latest [VoiceTypr installer](https://github.com/moinulmoin/voicetypr/releases/latest)
+1. Choose your version from the [latest release](https://github.com/moinulmoin/voicetypr/releases/latest):
+   - **VoiceTypr_x.x.x_x64-setup.exe**: CPU version (recommended for most users)
+   - **VoiceTypr_x.x.x_x64-gpu-setup.exe**: GPU version (faster, requires compatible GPU)
 2. Run the installer
 3. Launch VoiceTypr from Start Menu
 4. Follow the onboarding to download your preferred AI model
 
-> **Note**: CUDA acceleration will be automatically enabled if you have a compatible NVIDIA GPU.
+> **Which version should I choose?**
+> - **CPU Version**: Works on any Windows 10/11 PC. Choose this if unsure.
+> - **GPU Version**: ~2-3x faster transcription. Requires NVIDIA (GTX/RTX), AMD Radeon, or Intel Arc/Iris Xe GPU with Vulkan support.
 
 ## 🎮 Usage
 
