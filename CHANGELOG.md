@@ -1,5 +1,41 @@
 # Changelog
 
+# [1.6.0](https://github.com/moinulmoin/voicetypr/compare/v1.5.0...v1.6.0) (2025-08-08)
+
+
+### Features
+
+* :sparkles: add Windows dual build system with CPU and Vulkan GPU variants ([302d2f0](https://github.com/moinulmoin/voicetypr/commit/302d2f0e39aeee2af10d1f67738bb34b87b5e8fc))
+* :sparkles: move vulkan feature flag to windows-specific dependency for whisper-rs ([f3dae0b](https://github.com/moinulmoin/voicetypr/commit/f3dae0b83dfa5243e29131cb7f429113712291be))
+* :sparkles: set small English model as recommended for improved language support ([f95087f](https://github.com/moinulmoin/voicetypr/commit/f95087fc5e49d7ed5c35b894911f06ef4f6886ab))
+* add GPU-aware smart installer with auto-detection and update system ([3319d1e](https://github.com/moinulmoin/voicetypr/commit/3319d1ed4a512ca8487a2eeb812d92ccf7c7bcee))
+* add smart GPU detection and installer for Windows with Vulkan support ([81ba6ca](https://github.com/moinulmoin/voicetypr/commit/81ba6cac1a6b7ebcdd59efe07f11265ec3060400))
+* add Windows dual build release script with CPU and GPU variants ([ad05880](https://github.com/moinulmoin/voicetypr/commit/ad05880d08a58ef089c9742aee651fa277449e37))
+* add Windows GPU support with Vulkan installer and release scripts ([6d85863](https://github.com/moinulmoin/voicetypr/commit/6d858635bd6e555c93fa92d410e84efb71fab8a5))
+* add Windows release script with MSI installer and update artifacts ([ed55678](https://github.com/moinulmoin/voicetypr/commit/ed5567866034824cdf960da93cd37a5bc9e58b30))
+* implement robust Windows GPU dual-build support ([0aa71b6](https://github.com/moinulmoin/voicetypr/commit/0aa71b6863dd92a74ee9943fce7c01132bd135c6))
+
+
+### BREAKING CHANGES
+
+* Windows now has separate CPU and GPU builds
+
+Changes:
+- Add Vulkan GPU support for Windows (works with NVIDIA, AMD, Intel)
+- Implement macOS Metal fallback to CPU on initialization failure
+- Add VULKAN_SDK pre-flight check in Windows release script
+- Enhance README with GPU requirements and troubleshooting
+- Improve runtime logging to show active backend
+
+Critical fixes after review:
+- Fix macOS Metal early return to ensure consistent logging
+- Remove impossible conditional compilation branches
+- Track actual GPU usage for accurate backend reporting
+
+The CPU build ensures universal Windows compatibility while the GPU
+build with Vulkan provides ~2-3x faster transcription for users with
+compatible GPUs.
+
 # [1.5.0](https://github.com/moinulmoin/voicetypr/compare/v1.4.0...v1.5.0) (2025-08-06)
 
 
