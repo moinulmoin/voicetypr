@@ -169,7 +169,7 @@ impl WhisperManager {
                 downloaded: false,
                 speed_score: 7,    // Fast for English-only
                 accuracy_score: 6, // Good accuracy for English
-                recommended: false,
+                recommended: true,
             },
         );
 
