@@ -132,6 +132,7 @@ if (-not $SkipBuild) {
     
     # Sign if key available
     $keyPath = "$env:USERPROFILE\.tauri\voicetypr.key"
+    $signature = ""
     if (Test-Path $keyPath) {
         Write-Info "Signing update artifact..."
         $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
@@ -140,11 +141,71 @@ if (-not $SkipBuild) {
         
         if (Test-Path "$zipPath.sig") {
             Write-Success "Update artifact signed"
+            # Read signature for latest.json - ensure proper formatting
+            $signature = (Get-Content "$zipPath.sig" -Raw).Trim()
+            # Remove any potential line breaks within the signature
+            $signature = $signature -replace "`r`n", "" -replace "`n", ""
+            Write-Info "Signature captured: $($signature.Substring(0, [Math]::Min(50, $signature.Length)))..."
         } else {
             Write-Warning "Failed to sign update artifact"
+            $signature = ""
         }
     } else {
         Write-Warning "No signing key found - updates won't have signatures"
+        $signature = ""
+    }
+    
+    # Update latest.json with Windows platform
+    Write-Info "Updating latest.json with Windows platform..."
+    
+    $latestJsonPath = "$OutputDir\latest.json"
+    
+    # Try to download existing latest.json from GitHub release
+    Write-Info "Checking for existing latest.json in release..."
+    try {
+        # Download latest.json if it exists in the release
+        $null = gh release download $ReleaseTag -p "latest.json" -D $OutputDir --clobber 2>&1
+        if (Test-Path $latestJsonPath) {
+            Write-Success "Downloaded existing latest.json from release"
+        }
+    } catch {
+        Write-Info "No existing latest.json found in release"
+    }
+    
+    if (Test-Path $latestJsonPath) {
+        # Read existing latest.json
+        $latestJson = Get-Content $latestJsonPath -Raw | ConvertFrom-Json
+        
+        # Add Windows platform
+        if (-not $latestJson.platforms) {
+            $latestJson | Add-Member -NotePropertyName "platforms" -NotePropertyValue @{} -Force
+        }
+        
+        $latestJson.platforms."windows-x86_64" = @{
+            signature = $signature
+            url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/VoiceTypr_${Version}_x64-setup.exe.zip"
+        }
+        
+        # Save updated latest.json
+        $latestJson | ConvertTo-Json -Depth 10 | Set-Content $latestJsonPath
+        Write-Success "Updated latest.json with Windows platform"
+    } else {
+        # Create new latest.json if it doesn't exist (Windows-only release)
+        Write-Info "Creating new latest.json for Windows..."
+        $latestJson = @{
+            version = "v$Version"
+            notes = "See the release notes for v$Version"
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+            platforms = @{
+                "windows-x86_64" = @{
+                    signature = $signature
+                    url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/VoiceTypr_${Version}_x64-setup.exe.zip"
+                }
+            }
+        }
+        
+        $latestJson | ConvertTo-Json -Depth 10 | Set-Content $latestJsonPath
+        Write-Success "Created latest.json for Windows"
     }
 }
 
@@ -170,6 +231,12 @@ if (-not $SkipPublish) {
         if (Test-Path "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.zip.sig") {
             gh release upload $ReleaseTag "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.zip.sig" --clobber
         }
+    }
+    
+    # Upload latest.json
+    if (Test-Path "$OutputDir\latest.json") {
+        Write-Info "Uploading latest.json..."
+        gh release upload $ReleaseTag "$OutputDir\latest.json" --clobber
     }
     
     Write-Success "Installer and update artifacts uploaded"
