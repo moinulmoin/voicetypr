@@ -48,7 +48,15 @@ $originalConfig = Get-Content "src-tauri\tauri.conf.json" -Raw
 
 # Create output directory
 if (-not (Test-Path $OutputDir)) {
-    New-Item -ItemType Directory -Path $OutputDir | Out-Null
+    Write-Info "Creating output directory: $OutputDir"
+    New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+    if (-not (Test-Path $OutputDir)) {
+        Write-Error "Failed to create output directory: $OutputDir"
+        exit 1
+    }
+    Write-Success "Output directory created"
+} else {
+    Write-Info "Output directory already exists: $OutputDir"
 }
 
 # Build single smart installer
@@ -91,9 +99,28 @@ if (-not $SkipBuild) {
     
     # Copy installer
     $installer = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" | Select-Object -First 1
+    if (-not $installer) {
+        Write-Error "No installer found in src-tauri\target\release\bundle\nsis\"
+        exit 1
+    }
+    Write-Info "Found installer: $($installer.FullName)"
+    
+    # Ensure output directory exists before copying
+    if (-not (Test-Path $OutputDir)) {
+        Write-Info "Re-creating output directory: $OutputDir"
+        New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+    }
+    
     $installerPath = "$OutputDir\VoiceTypr_${Version}_x64-setup.exe"
+    Write-Info "Copying to: $installerPath"
     Copy-Item $installer.FullName $installerPath -Force
-    Write-Success "Smart installer built successfully!"
+    
+    if (Test-Path $installerPath) {
+        Write-Success "Smart installer built successfully!"
+    } else {
+        Write-Error "Failed to copy installer to output directory"
+        exit 1
+    }
     
     # Create update artifacts
     Write-Info "Creating update artifacts..."

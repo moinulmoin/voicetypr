@@ -27,7 +27,7 @@ Var GPUName
         ${AndIf} $1 != ""
         StrCpy $GPUDetected "YES"
         ; Simple GPU detection message
-        StrCpy $GPUName "your GPU"
+        StrCpy $GPUName "GPU"
         DetailPrint "Dedicated GPU detected"
     ${Else}
         DetailPrint "No dedicated GPU detected - will use CPU mode"
@@ -39,11 +39,8 @@ Var GPUName
         StrCpy $VulkanInstalled "YES"
         DetailPrint "✓ Vulkan Runtime detected - GPU acceleration ready!"
         
-        ; Show success message
-        MessageBox MB_OK|MB_ICONINFORMATION "GPU Acceleration Ready!$\n$\n\
-Your $GPUName supports GPU acceleration and Vulkan is installed.$\n$\n\
-VoiceTypr will automatically use your GPU for 5-10x faster transcription!"
-        
+        ; Everything is ready - no need to show a message, just continue
+        ; The app will automatically use GPU acceleration
         Goto install_complete
     ${Else}
         ; GPU exists but Vulkan missing - inform user
