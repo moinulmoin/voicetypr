@@ -7,7 +7,9 @@
 
 param(
     [string]$Version,
-    [switch]$Help
+    [switch]$Help,
+    [switch]$SkipBuild,
+    [switch]$SkipPublish
 )
 
 # Colors for PowerShell output
@@ -19,10 +21,10 @@ function Write-ColorOutput {
     Write-Host $Message -ForegroundColor $Color
 }
 
-function Write-Success { param([string]$Message) Write-ColorOutput "✓ $Message" "Green" }
-function Write-Warning { param([string]$Message) Write-ColorOutput "⚠ $Message" "Yellow" }
+function Write-Success { param([string]$Message) Write-ColorOutput "[OK] $Message" "Green" }
+function Write-Warning { param([string]$Message) Write-ColorOutput "[WARN] $Message" "Yellow" }
 function Write-Error { param([string]$Message) Write-ColorOutput "✗ $Message" "Red" }
-function Write-Info { param([string]$Message) Write-ColorOutput "ℹ $Message" "Cyan" }
+function Write-Info { param([string]$Message) Write-ColorOutput "[INFO] $Message" "Cyan" }
 function Write-Step { param([string]$Message) Write-ColorOutput "🚀 $Message" "Magenta" }
 
 # Show help
@@ -34,9 +36,12 @@ This script builds both CPU and GPU (Vulkan) Windows installers for VoiceTypr.
 It is designed to run AFTER the macOS release script has created the release.
 
 Usage:
-  .\scripts\release-windows-dual.ps1           # Use version from package.json
-  .\scripts\release-windows-dual.ps1 1.6.0     # Use specific version
-  .\scripts\release-windows-dual.ps1 -Help     # Show this help
+  .\scripts\release-windows-dual.ps1                     # Use version from package.json
+  .\scripts\release-windows-dual.ps1 1.6.0              # Use specific version
+  .\scripts\release-windows-dual.ps1 -SkipBuild         # Skip build, use existing artifacts
+  .\scripts\release-windows-dual.ps1 -SkipPublish       # Build but don't upload to GitHub
+  .\scripts\release-windows-dual.ps1 -SkipBuild -SkipPublish  # Test with existing artifacts
+  .\scripts\release-windows-dual.ps1 -Help              # Show this help
 
 Requirements:
 - Node.js and pnpm installed
@@ -46,12 +51,12 @@ Requirements:
 
 The script will:
 1. Read version from package.json (or use provided version)
-2. Verify the GitHub release exists
-3. Build CPU-only Windows NSIS installer
-4. Build GPU (Vulkan) Windows NSIS installer
+2. Verify the GitHub release exists (skipped with -SkipPublish)
+3. Build CPU-only Windows NSIS installer (skipped with -SkipBuild)
+4. Build GPU (Vulkan) Windows NSIS installer (skipped with -SkipBuild)
 5. Create Tauri update artifacts for both versions
-6. Download and update latest.json from GitHub release
-7. Upload all Windows artifacts to the existing release
+6. Download and update latest.json from GitHub release (skipped with -SkipPublish)
+7. Upload all Windows artifacts to the existing release (skipped with -SkipPublish)
 
 Build Variants:
 - CPU Version: Works on all Windows systems (universal compatibility)
@@ -66,6 +71,9 @@ Environment Variables:
 }
 
 Write-Step "Starting VoiceTypr Windows Dual Build Release Process"
+
+# Remember initial directory so we can return even on errors
+$InitialDir = Get-Location
 
 # Error handling
 $ErrorActionPreference = "Stop"
@@ -113,14 +121,18 @@ try {
     exit 1
 }
 
-# Check if release exists
-Write-Info "Checking if release $ReleaseTag exists..."
-try {
-    $releaseInfo = gh release view $ReleaseTag --json id,name 2>$null | ConvertFrom-Json
-    Write-Success "Found existing release: $($releaseInfo.name)"
-} catch {
-    Write-Error "Release $ReleaseTag not found. Please run the macOS release script first."
-    exit 1
+# Check if release exists (unless skipping publish)
+if (-not $SkipPublish) {
+    Write-Info "Checking if release $ReleaseTag exists..."
+    try {
+        $releaseInfo = gh release view $ReleaseTag --json id,name 2>$null | ConvertFrom-Json
+        Write-Success "Found existing release: $($releaseInfo.name)"
+    } catch {
+        Write-Error "Release $ReleaseTag not found. Please run the macOS release script first."
+        exit 1
+    }
+} else {
+    Write-Info "Skipping GitHub release check (SkipPublish mode)"
 }
 
 # Check for Rust and required targets
@@ -184,40 +196,52 @@ function Build-WindowsVariant {
     
     Write-Step "Building Windows $($Variant.ToUpper()) version..."
     
-    # Clean previous build artifacts
-    if (Test-Path "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis") {
-        Remove-Item "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\*" -Force
-    }
-    
-    try {
-        Set-Location "src-tauri"
-        
-        # Build with appropriate features
-        if ($Features) {
-            Write-Info "Building with features: $Features"
-            $buildOutput = cargo tauri build --target x86_64-pc-windows-msvc --features $Features 2>&1
-        } else {
-            Write-Info "Building CPU-only version (no additional features)"
-            $buildOutput = cargo tauri build --target x86_64-pc-windows-msvc 2>&1
+    if (-not $SkipBuild) {
+        # Clean previous build artifacts
+        if (Test-Path "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis") {
+            Remove-Item "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\*" -Force
         }
         
-        Set-Location ".."
-        
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "Build failed for $Variant version. Output: $buildOutput"
+        try {
+            # Set environment to skip signing if no key
+            if (-not $HasSigningKey) {
+                $env:TAURI_SIGNING_PRIVATE_KEY = ""
+                $env:TAURI_SIGNING_PRIVATE_KEY_PATH = ""
+            }
+            
+            # Build with appropriate features
+            if ($Features) {
+                Write-Info "Building with features: $Features"
+                & pnpm tauri build --verbose --features $Features
+            } else {
+                Write-Info "Building CPU-only version (no additional features)"
+                & pnpm tauri build --verbose
+            }
+            
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "Build failed for $Variant version with exit code: $LASTEXITCODE"
+                return $null
+            }
+            Write-Success "$($Variant.ToUpper()) build completed"
+        } catch {
+            Write-Error "Failed to build $Variant version: $($_.Exception.Message)"
             return $null
         }
-        Write-Success "$($Variant.ToUpper()) build completed"
-    } catch {
-        Set-Location ".." -ErrorAction SilentlyContinue
-        Write-Error "Failed to build $Variant version: $($_.Exception.Message)"
-        return $null
+    } else {
+        Write-Info "Skipping build step for $Variant version (using existing artifacts)"
     }
     
     # Find the built NSIS installer
-    $NsisPath = Get-ChildItem -Path "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis" -Filter "*-setup.exe" | Select-Object -First 1
+    $searchPath = "src-tauri\target\release\bundle\nsis"
+    
+    $NsisPath = Get-ChildItem -Path $searchPath -Filter "VoiceTypr_${Version}_x64-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $NsisPath) {
-        Write-Error "NSIS installer not found for $Variant version"
+        # Try alternative naming pattern
+        $NsisPath = Get-ChildItem -Path $searchPath -Filter "*_x64-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    
+    if (-not $NsisPath) {
+        Write-Error "NSIS installer not found for $Variant version in $searchPath"
         return $null
     }
     
@@ -253,20 +277,31 @@ function Build-WindowsVariant {
     if ($HasSigningKey) {
         Write-Info "Signing $Variant update artifacts..."
         try {
-            Set-Location "src-tauri"
+            # Get absolute path for the zip file
+            $zipFullPath = (Get-Item $NsisZipPath).FullName
             
-            $signArgs = @("tauri", "signer", "sign")
+            # Try multiple approaches to make signing work on Windows
+            $keyContent = Get-Content $env:TAURI_SIGNING_PRIVATE_KEY_PATH -Raw
             
-            if ($env:TAURI_SIGNING_PRIVATE_KEY_PATH) {
-                $signArgs += @("-f", $env:TAURI_SIGNING_PRIVATE_KEY_PATH)
+            # Approach 1: Use -f flag with key file path (most reliable)
+            Write-Info "Attempting to sign with: pnpm tauri signer sign -f $keyPath -p '' <file>"
+            $signOutput = & pnpm tauri signer sign -f $keyPath $zipFullPath 2>&1
+            
+            if ($LASTEXITCODE -ne 0) {
+                # Approach 2: Set environment variables (npm version uses TAURI_PRIVATE_KEY)
+                Write-Warning "Direct signing failed, trying with environment variables..."
+                $env:TAURI_PRIVATE_KEY = $keyContent
+                $env:TAURI_PRIVATE_KEY_PATH = $env:TAURI_SIGNING_PRIVATE_KEY_PATH
+                $env:TAURI_SIGNING_PRIVATE_KEY = $keyContent
+                
+                $signOutput = & pnpm tauri signer sign $zipFullPath 2>&1
             }
             
-            # No password for the key
-            $signArgs += @("-p", "")
-            $signArgs += $NsisZipPath
-            
-            $signOutput = & cargo @signArgs 2>&1
-            Set-Location ".."
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "Failed to sign. Output: $signOutput"
+                # Continue without signature rather than failing
+                Write-Warning "Continuing without signature for $Variant version"
+            }
             
             if ($LASTEXITCODE -eq 0 -and (Test-Path "$NsisZipPath.sig")) {
                 $NsisZipSignature = Get-Content "$NsisZipPath.sig" -Raw
@@ -276,9 +311,11 @@ function Build-WindowsVariant {
                 Write-Warning "Failed to sign $Variant update artifact. Output: $signOutput"
             }
         } catch {
-            Set-Location ".." -ErrorAction SilentlyContinue
-            Write-Warning "Error during signing $Variant: $($_.Exception.Message)"
+            Set-Location $InitialDir -ErrorAction SilentlyContinue
+            Write-Warning "Error during signing ${Variant}: $($_.Exception.Message)"
         }
+    } else {
+        Write-Warning "Skipping signature generation for $Variant (no signing key configured)"
     }
     
     return @{
@@ -369,114 +406,146 @@ if ($CanBuildGPU) {
     $gpuBuild = $null
 }
 
-# Download and update latest.json
-Write-Step "Updating latest.json with Windows platforms..."
-try {
-    # Download existing latest.json
-    $latestJsonPath = Join-Path $OutputDir "latest.json"
-    gh release download $ReleaseTag --pattern "latest.json" --dir $OutputDir
-    
-    if (-not (Test-Path $latestJsonPath)) {
-        Write-Error "Failed to download latest.json from release"
+# Download and update latest.json (unless skipping publish)
+if (-not $SkipPublish) {
+    Write-Step "Updating latest.json with Windows platforms..."
+    try {
+        # Download existing latest.json
+        $latestJsonPath = Join-Path $OutputDir "latest.json"
+        gh release download $ReleaseTag --pattern "latest.json" --dir $OutputDir
+        
+        if (-not (Test-Path $latestJsonPath)) {
+            Write-Error "Failed to download latest.json from release"
+            exit 1
+        }
+        
+        # Parse existing JSON
+        $latestJson = Get-Content $latestJsonPath | ConvertFrom-Json
+        Write-Success "Downloaded and parsed existing latest.json"
+        
+        # Add Windows CPU platform
+        $windowsCpuPlatform = @{
+            signature = $cpuBuild.Signature
+            url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/$(Split-Path $cpuBuild.UpdateZip -Leaf)"
+        }
+        
+        # Ensure platforms object exists
+        if (-not $latestJson.platforms) {
+            $latestJson | Add-Member -NotePropertyName "platforms" -NotePropertyValue @{}
+        }
+        
+        # Add windows-x86_64 platform (CPU version as default)
+        $latestJson.platforms | Add-Member -NotePropertyName "windows-x86_64" -NotePropertyValue $windowsCpuPlatform -Force
+        
+        # Note: GPU version would need a separate update channel or mechanism
+        # For now, users will manually download the GPU version if they want it
+        
+        # Save updated JSON
+        $latestJson | ConvertTo-Json -Depth 10 | Set-Content $latestJsonPath
+        Write-Success "Added Windows platforms to latest.json"
+        
+    } catch {
+        Write-Error "Failed to update latest.json: $($_.Exception.Message)"
         exit 1
     }
-    
-    # Parse existing JSON
-    $latestJson = Get-Content $latestJsonPath | ConvertFrom-Json
-    Write-Success "Downloaded and parsed existing latest.json"
-    
-    # Add Windows CPU platform
-    $windowsCpuPlatform = @{
-        signature = $cpuBuild.Signature
-        url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/$(Split-Path $cpuBuild.UpdateZip -Leaf)"
+} else {
+    Write-Info "Skipping latest.json update (SkipPublish mode)"
+    # Create a dummy latest.json for local testing
+    $latestJsonPath = Join-Path $OutputDir "latest.json"
+    $latestJson = @{
+        version = $Version
+        notes = "Test build - not published"
+        pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        platforms = @{
+            "windows-x86_64" = @{
+                signature = $cpuBuild.Signature
+                url = "file://$(Split-Path $cpuBuild.UpdateZip -Leaf)"
+            }
+        }
     }
-    
-    # Ensure platforms object exists
-    if (-not $latestJson.platforms) {
-        $latestJson | Add-Member -NotePropertyName "platforms" -NotePropertyValue @{}
-    }
-    
-    # Add windows-x86_64 platform (CPU version as default)
-    $latestJson.platforms | Add-Member -NotePropertyName "windows-x86_64" -NotePropertyValue $windowsCpuPlatform -Force
-    
-    # Note: GPU version would need a separate update channel or mechanism
-    # For now, users will manually download the GPU version if they want it
-    
-    # Save updated JSON
     $latestJson | ConvertTo-Json -Depth 10 | Set-Content $latestJsonPath
-    Write-Success "Added Windows platforms to latest.json"
-    
-} catch {
-    Write-Error "Failed to update latest.json: $($_.Exception.Message)"
-    exit 1
+    Write-Success "Created local latest.json for testing"
 }
 
-# Upload all Windows artifacts to release
-Write-Step "Uploading Windows artifacts to GitHub release..."
-try {
-    # Upload CPU installer
-    Write-Info "Uploading CPU installer..."
-    gh release upload $ReleaseTag $cpuBuild.Installer --clobber
-    Write-Success "Uploaded: $(Split-Path $cpuBuild.Installer -Leaf)"
-    
-    # Upload CPU update zip
-    Write-Info "Uploading CPU update archive..."
-    gh release upload $ReleaseTag $cpuBuild.UpdateZip --clobber
-    Write-Success "Uploaded: $(Split-Path $cpuBuild.UpdateZip -Leaf)"
-    
-    # Upload CPU signature if it exists
-    if ($cpuBuild.SignatureFile) {
-        Write-Info "Uploading CPU signature..."
-        gh release upload $ReleaseTag $cpuBuild.SignatureFile --clobber
-        Write-Success "Uploaded: $(Split-Path $cpuBuild.SignatureFile -Leaf)"
-    }
-    
-    # Upload GPU artifacts if build succeeded
-    if ($gpuBuild) {
-        # Upload GPU installer
-        Write-Info "Uploading GPU installer..."
-        gh release upload $ReleaseTag $gpuBuild.Installer --clobber
-        Write-Success "Uploaded: $(Split-Path $gpuBuild.Installer -Leaf)"
+# Upload all Windows artifacts to release (unless skipping publish)
+if (-not $SkipPublish) {
+    Write-Step "Uploading Windows artifacts to GitHub release..."
+    try {
+        # Upload CPU installer
+        Write-Info "Uploading CPU installer..."
+        gh release upload $ReleaseTag $cpuBuild.Installer --clobber
+        Write-Success "Uploaded: $(Split-Path $cpuBuild.Installer -Leaf)"
         
-        # Upload GPU update zip
-        Write-Info "Uploading GPU update archive..."
-        gh release upload $ReleaseTag $gpuBuild.UpdateZip --clobber
-        Write-Success "Uploaded: $(Split-Path $gpuBuild.UpdateZip -Leaf)"
+        # Upload CPU update zip
+        Write-Info "Uploading CPU update archive..."
+        gh release upload $ReleaseTag $cpuBuild.UpdateZip --clobber
+        Write-Success "Uploaded: $(Split-Path $cpuBuild.UpdateZip -Leaf)"
         
-        # Upload GPU signature if it exists
-        if ($gpuBuild.SignatureFile) {
-            Write-Info "Uploading GPU signature..."
-            gh release upload $ReleaseTag $gpuBuild.SignatureFile --clobber
-            Write-Success "Uploaded: $(Split-Path $gpuBuild.SignatureFile -Leaf)"
+        # Upload CPU signature if it exists
+        if ($cpuBuild.SignatureFile) {
+            Write-Info "Uploading CPU signature..."
+            gh release upload $ReleaseTag $cpuBuild.SignatureFile --clobber
+            Write-Success "Uploaded: $(Split-Path $cpuBuild.SignatureFile -Leaf)"
         }
-    } else {
-        Write-Warning "GPU build was skipped - no GPU artifacts to upload"
+        
+        # Upload GPU artifacts if build succeeded
+        if ($gpuBuild) {
+            # Upload GPU installer
+            Write-Info "Uploading GPU installer..."
+            gh release upload $ReleaseTag $gpuBuild.Installer --clobber
+            Write-Success "Uploaded: $(Split-Path $gpuBuild.Installer -Leaf)"
+            
+            # Upload GPU update zip
+            Write-Info "Uploading GPU update archive..."
+            gh release upload $ReleaseTag $gpuBuild.UpdateZip --clobber
+            Write-Success "Uploaded: $(Split-Path $gpuBuild.UpdateZip -Leaf)"
+            
+            # Upload GPU signature if it exists
+            if ($gpuBuild.SignatureFile) {
+                Write-Info "Uploading GPU signature..."
+                gh release upload $ReleaseTag $gpuBuild.SignatureFile --clobber
+                Write-Success "Uploaded: $(Split-Path $gpuBuild.SignatureFile -Leaf)"
+            }
+        } else {
+            Write-Warning "GPU build was skipped - no GPU artifacts to upload"
+        }
+        
+        # Upload updated latest.json
+        Write-Info "Uploading updated latest.json..."
+        gh release upload $ReleaseTag $latestJsonPath --clobber
+        Write-Success "Uploaded: latest.json"
+        
+    } catch {
+        Write-Error "Failed to upload artifacts: $($_.Exception.Message)"
+        exit 1
     }
-    
-    # Upload updated latest.json
-    Write-Info "Uploading updated latest.json..."
-    gh release upload $ReleaseTag $latestJsonPath --clobber
-    Write-Success "Uploaded: latest.json"
-    
-} catch {
-    Write-Error "Failed to upload artifacts: $($_.Exception.Message)"
-    exit 1
+} else {
+    Write-Step "Skipping upload to GitHub release (SkipPublish mode)"
+    Write-Info "Artifacts ready in: $OutputDir"
 }
 
 # Summary
 Write-Step "Windows Dual Build Release Complete!"
-Write-Success "Successfully created and uploaded Windows release artifacts for v$Version"
+if ($SkipPublish) {
+    Write-Success "Successfully created Windows release artifacts for v$Version (not uploaded)"
+} else {
+    Write-Success "Successfully created and uploaded Windows release artifacts for v$Version"
+}
 Write-Host ""
-Write-Info "📦 Windows Release Artifacts:"
+Write-Info "Windows Release Artifacts:"
+
+# CPU Version artifacts
 Write-Host ""
-Write-Info "CPU Version (Universal Compatibility):" -ForegroundColor Cyan
-Get-ChildItem $OutputDir -Filter "*_x64-setup*" | ForEach-Object {
+Write-Info "CPU Version (Universal Compatibility):"
+Get-ChildItem $OutputDir -Filter "*_x64-setup*" | Where-Object { $_.Name -notlike "*gpu*" } | ForEach-Object {
     $size = if ($_.Length -gt 1MB) { "{0:N2} MB" -f ($_.Length / 1MB) } else { "{0:N2} KB" -f ($_.Length / 1KB) }
     Write-Host "   $($_.Name) ($size)" -ForegroundColor White
 }
+
+# GPU Version artifacts if built
 if ($gpuBuild) {
     Write-Host ""
-    Write-Info "GPU Version (Vulkan Acceleration):" -ForegroundColor Cyan
+    Write-Info "GPU Version (Vulkan Acceleration):"
     Get-ChildItem $OutputDir -Filter "*gpu*" | ForEach-Object {
         $size = if ($_.Length -gt 1MB) { "{0:N2} MB" -f ($_.Length / 1MB) } else { "{0:N2} KB" -f ($_.Length / 1KB) }
         Write-Host "   $($_.Name) ($size)" -ForegroundColor White
@@ -484,34 +553,45 @@ if ($gpuBuild) {
 }
 
 Write-Host ""
-Write-Info "🔗 Release URL: https://github.com/moinulmoin/voicetypr/releases/tag/$ReleaseTag"
+if (-not $SkipPublish) {
+    Write-Info "Release URL: https://github.com/moinulmoin/voicetypr/releases/tag/$ReleaseTag"
+} else {
+    Write-Info "Artifacts Location: $((Get-Item $OutputDir).FullName)"
+}
 
 if ($HasSigningKey) {
-    Write-Success "✓ Update signatures generated - auto-updater ready"
+    Write-Success "Update signatures generated - auto-updater ready"
 } else {
-    Write-Warning "⚠ No update signatures - auto-updater won't work"
+    Write-Warning "No update signatures - auto-updater won`'t work"
 }
 
 Write-Host ""
-Write-Info "📋 Build Information:"
-Write-Host "• CPU Version: Works on ALL Windows 10/11 systems" -ForegroundColor Green
+Write-Info "Build Information:"
+Write-Host "- CPU Version: Works on ALL Windows 10/11 systems" -ForegroundColor Green
 if ($gpuBuild) {
-    Write-Host "• GPU Version: Requires Vulkan-compatible GPU (NVIDIA, AMD, Intel)" -ForegroundColor Yellow
+    Write-Host "- GPU Version: Requires Vulkan-compatible GPU (NVIDIA, AMD, Intel)" -ForegroundColor Yellow
 } else {
-    Write-Host "• GPU Version: Not built (Vulkan SDK not available)" -ForegroundColor Red
-}
-Write-Host ""
-Write-Info "📋 Next Steps:"
-Write-Host "1. Test the CPU installer on a Windows machine" -ForegroundColor Yellow
-if ($gpuBuild) {
-    Write-Host "2. Test the GPU installer on a Windows machine with NVIDIA/AMD/Intel GPU" -ForegroundColor Yellow
-    Write-Host "3. Update release notes to explain the two versions" -ForegroundColor Yellow
-    Write-Host "4. Add download instructions for users to choose the right version" -ForegroundColor Yellow
-    Write-Host "5. Publish the release when ready" -ForegroundColor Yellow
-} else {
-    Write-Host "2. Update release notes (CPU-only for Windows)" -ForegroundColor Yellow
-    Write-Host "3. Consider building GPU version later with Vulkan SDK installed" -ForegroundColor Yellow
-    Write-Host "4. Publish the release when ready" -ForegroundColor Yellow
+    Write-Host "- GPU Version: Not built (Vulkan SDK not available)" -ForegroundColor Red
 }
 
-Write-Success "🎉 Windows dual build release process completed successfully!"
+Write-Host ""
+Write-Info "Next Steps:"
+if ($SkipPublish) {
+    Write-Host "1. Test the installers locally from: $OutputDir" -ForegroundColor Yellow
+    Write-Host "2. Verify the build artifacts are correct" -ForegroundColor Yellow
+    Write-Host "3. Run again without -SkipPublish to upload to GitHub" -ForegroundColor Yellow
+} else {
+    Write-Host "1. Test the CPU installer on a Windows machine" -ForegroundColor Yellow
+    if ($gpuBuild) {
+        Write-Host "2. Test the GPU installer on a Windows machine with NVIDIA/AMD/Intel GPU" -ForegroundColor Yellow
+        Write-Host "3. Update release notes to explain the two versions" -ForegroundColor Yellow
+        Write-Host "4. Add download instructions for users to choose the right version" -ForegroundColor Yellow
+        Write-Host "5. Publish the release when ready" -ForegroundColor Yellow
+    } else {
+        Write-Host "2. Update release notes (CPU-only for Windows)" -ForegroundColor Yellow
+        Write-Host "3. Consider building GPU version later with Vulkan SDK installed" -ForegroundColor Yellow
+        Write-Host "4. Publish the release when ready" -ForegroundColor Yellow
+    }
+}
+
+Write-Success "Windows dual build release process completed successfully!"
