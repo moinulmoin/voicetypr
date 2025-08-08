@@ -1,86 +1,76 @@
 {
-    "$schema":  "https://schema.tauri.app/config/2",
-    "productName":  "VoiceTypr",
-    "version":  "1.5.0",
-    "identifier":  "com.ideaplexa.voicetypr",
-    "build":  {
-                  "beforeDevCommand":  "pnpm dev",
-                  "devUrl":  "http://localhost:1420",
-                  "beforeBuildCommand":  "pnpm build",
-                  "frontendDist":  "../dist"
-              },
-    "app":  {
-                "windows":  [
-                                {
-                                    "title":  "VoiceTypr",
-                                    "label":  "main",
-                                    "width":  800,
-                                    "height":  600,
-                                    "resizable":  false,
-                                    "center":  true,
-                                    "visible":  true,
-                                    "skipTaskbar":  true,
-                                    "alwaysOnTop":  false
-                                }
-                            ],
-                "security":  {
-                                 "csp":  {
-                                             "default-src":  "\u0027self\u0027 customprotocol: asset:",
-                                             "script-src":  "\u0027self\u0027",
-                                             "style-src":  "\u0027self\u0027 \u0027unsafe-inline\u0027",
-                                             "img-src":  "\u0027self\u0027 asset: https: http: data:",
-                                             "font-src":  "\u0027self\u0027",
-                                             "connect-src":  "\u0027self\u0027 ipc: https: http: asset:",
-                                             "media-src":  "\u0027self\u0027"
-                                         }
-                             }
-            },
-    "bundle":  {
-                   "publisher":  "Ideaplexa LLC",
-                   "active":  true,
-                   "targets":  [
-                                   "nsis",
-                                   "app",
-                                   "dmg"
-                               ],
-                   "icon":  [
-                                "icons/32x32.png",
-                                "icons/128x128.png",
-                                "icons/128x128@2x.png",
-                                "icons/icon.icns",
-                                "icons/icon.ico"
-                            ],
-                   "macOS":  {
-                                 "minimumSystemVersion":  "13.0",
-                                 "entitlements":  "./entitlements.plist",
-                                 "hardenedRuntime":  true,
-                                 "signingIdentity":  "Developer ID Application: Ideaplexa LLC (53P98M92V7)"
-                             },
-                   "windows":  {
-                                   "allowDowngrades":  false,
-                                   "nsis":  {
-                                                "installMode":  "perMachine",
-                                                "installerHooks":  "./windows/smart-installer-hooks.nsh"
-                                            }
-                               }
-               },
-    "plugins":  {
-                    "updater":  {
-                                    "active":  true,
-                                    "dialog":  true,
-                                    "endpoints":  [
-                                                      "https://github.com/moinulmoin/voicetypr/releases/latest/download/latest.json"
-                                                  ],
-                                    "pubkey":  "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE2Q0M5NTZENjAwM0YyNDkKUldSSjhnTmdiWlhNRm0wdHQ1YmxNSzBWS2tiZlcyZ3FJZG5FajZ3MFBzTUZmRDgvZys5R1J6c2cK"
-                                }
-                }
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "VoiceTypr",
+  "version": "1.5.0",
+  "identifier": "com.ideaplexa.voicetypr",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "VoiceTypr",
+        "label": "main",
+        "width": 800,
+        "height": 600,
+        "resizable": false,
+        "center": true,
+        "visible": true,
+        "skipTaskbar": true,
+        "alwaysOnTop": false
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self' customprotocol: asset:",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' asset: https: http: data:",
+        "font-src": "'self'",
+        "connect-src": "'self' ipc: https: http: asset:",
+        "media-src": "'self'"
+      }
+    }
+  },
+  "bundle": {
+    "publisher": "Ideaplexa LLC",
+    "active": true,
+    "targets": [
+      "nsis",
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "entitlements": "./entitlements.plist",
+      "hardenedRuntime": true,
+      "signingIdentity": "Developer ID Application: Ideaplexa LLC (53P98M92V7)"
+    },
+    "windows": {
+      "allowDowngrades": false,
+      "nsis": {
+        "installMode": "perMachine"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": true,
+      "endpoints": [
+        "https://github.com/moinulmoin/voicetypr/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE2Q0M5NTZENjAwM0YyNDkKUldSSjhnTmdiWlhNRm0wdHQ1YmxNSzBWS2tiZlcyZ3FJZG5FajZ3MFBzTUZmRDgvZys5R1J6c2cK"
+    }
+  }
 }
-
-
-
-
-
-
-
-
-
