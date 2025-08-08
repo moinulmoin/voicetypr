@@ -16,26 +16,59 @@ impl Transcriber {
 
         // Configure GPU usage based on platform and features
         let mut ctx_params = WhisperContextParameters::default();
+        let mut gpu_used = false;
         
-        // macOS: Always use Metal for GPU acceleration
+        // macOS: Try Metal first, fallback to CPU if it fails
         #[cfg(target_os = "macos")]
-        ctx_params.use_gpu(true);
+        {
+            ctx_params.use_gpu(true);
+            log::info!("Attempting to initialize Whisper with Metal acceleration...");
+            
+            match WhisperContext::new_with_params(model_path_str, ctx_params) {
+                Ok(ctx) => {
+                    log::info!("✓ Successfully initialized with Metal GPU acceleration");
+                    gpu_used = true;
+                    return Ok(Self { context: ctx });
+                }
+                Err(gpu_err) => {
+                    log::warn!("Metal initialization failed: {}. Falling back to CPU...", gpu_err);
+                    ctx_params = WhisperContextParameters::default();
+                    ctx_params.use_gpu(false);
+                    log::info!("Attempting CPU-only initialization...");
+                }
+            }
+        }
         
         // Windows: Use Vulkan GPU if feature is enabled, otherwise CPU
         #[cfg(all(target_os = "windows", feature = "gpu-windows"))]
         {
             ctx_params.use_gpu(true);
-            log::info!("Vulkan GPU acceleration enabled for Windows");
+            gpu_used = true;
+            log::info!("Initializing with Vulkan GPU acceleration (gpu-windows feature enabled)");
         }
         
         #[cfg(all(target_os = "windows", not(feature = "gpu-windows")))]
         {
             ctx_params.use_gpu(false);
-            log::info!("CPU-only mode for Windows (maximum compatibility)");
+            gpu_used = false;
+            log::info!("Initializing in CPU-only mode (maximum compatibility)");
         }
 
+        // Create context (for Windows or macOS CPU fallback)
         let ctx = WhisperContext::new_with_params(model_path_str, ctx_params)
             .map_err(|e| format!("Failed to load model: {}", e))?;
+
+        // Determine backend type for logging
+        let backend_type = if gpu_used {
+            #[cfg(all(target_os = "windows", feature = "gpu-windows"))]
+            { "Vulkan GPU" }
+            #[cfg(not(all(target_os = "windows", feature = "gpu-windows")))]
+            { "CPU" }  // macOS fallback case
+        } else {
+            "CPU"
+        };
+        
+        log::info!("✓ Whisper initialized successfully using {} backend", backend_type);
 
         Ok(Self { context: ctx })
     }

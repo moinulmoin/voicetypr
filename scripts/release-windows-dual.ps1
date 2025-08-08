@@ -297,12 +297,76 @@ if (-not $cpuBuild) {
     exit 1
 }
 
-# Build GPU version with Vulkan
-Write-Step "Building GPU version (Vulkan acceleration)..."
-$gpuBuild = Build-WindowsVariant -Variant "gpu" -Features "gpu-windows"
-if (-not $gpuBuild) {
-    Write-Error "Failed to build GPU version"
-    exit 1
+# Check for Vulkan SDK before attempting GPU build
+Write-Step "Checking for Vulkan SDK for GPU build..."
+$CanBuildGPU = $false
+$VulkanSDKFound = $false
+
+# Check VULKAN_SDK environment variable
+if ($env:VULKAN_SDK) {
+    if (Test-Path $env:VULKAN_SDK) {
+        Write-Success "Vulkan SDK found at: $env:VULKAN_SDK"
+        $VulkanSDKFound = $true
+        
+        # Check for vulkan-1.lib
+        $VulkanLib = Join-Path $env:VULKAN_SDK "Lib\vulkan-1.lib"
+        if (Test-Path $VulkanLib) {
+            Write-Success "vulkan-1.lib found"
+            $CanBuildGPU = $true
+        } else {
+            Write-Warning "vulkan-1.lib not found at expected location: $VulkanLib"
+        }
+        
+        # Optional: Check for vulkaninfo tool
+        $VulkanInfo = Join-Path $env:VULKAN_SDK "Bin\vulkaninfo.exe"
+        if (Test-Path $VulkanInfo) {
+            Write-Info "vulkaninfo tool available for testing"
+        }
+    } else {
+        Write-Warning "VULKAN_SDK environment variable set but path does not exist: $env:VULKAN_SDK"
+    }
+} else {
+    Write-Warning "VULKAN_SDK environment variable not set"
+}
+
+# Alternative: Check common Vulkan SDK installation paths
+if (-not $VulkanSDKFound) {
+    $CommonPaths = @(
+        "C:\VulkanSDK",
+        "$env:ProgramFiles\VulkanSDK",
+        "$env:LOCALAPPDATA\VulkanSDK"
+    )
+    
+    foreach ($BasePath in $CommonPaths) {
+        if (Test-Path $BasePath) {
+            $SDKVersions = Get-ChildItem -Path $BasePath -Directory | Sort-Object Name -Descending
+            if ($SDKVersions.Count -gt 0) {
+                $LatestSDK = $SDKVersions[0].FullName
+                Write-Info "Found Vulkan SDK at: $LatestSDK"
+                Write-Warning "Please set VULKAN_SDK environment variable to: $LatestSDK"
+                break
+            }
+        }
+    }
+}
+
+# Build GPU version with Vulkan if SDK is available
+if ($CanBuildGPU) {
+    Write-Step "Building GPU version (Vulkan acceleration)..."
+    $gpuBuild = Build-WindowsVariant -Variant "gpu" -Features "gpu-windows"
+    if (-not $gpuBuild) {
+        Write-Error "Failed to build GPU version"
+        Write-Warning "Continuing with CPU-only release..."
+        $gpuBuild = $null
+    }
+} else {
+    Write-Warning "Skipping GPU build - Vulkan SDK not found or not properly configured"
+    Write-Warning "To build GPU version:"
+    Write-Warning "1. Download and install Vulkan SDK from: https://vulkan.lunarg.com/sdk/home"
+    Write-Warning "2. Set VULKAN_SDK environment variable to the SDK installation path"
+    Write-Warning "3. Restart PowerShell and run this script again"
+    Write-Info "Continuing with CPU-only release..."
+    $gpuBuild = $null
 }
 
 # Download and update latest.json
@@ -367,21 +431,26 @@ try {
         Write-Success "Uploaded: $(Split-Path $cpuBuild.SignatureFile -Leaf)"
     }
     
-    # Upload GPU installer
-    Write-Info "Uploading GPU installer..."
-    gh release upload $ReleaseTag $gpuBuild.Installer --clobber
-    Write-Success "Uploaded: $(Split-Path $gpuBuild.Installer -Leaf)"
-    
-    # Upload GPU update zip
-    Write-Info "Uploading GPU update archive..."
-    gh release upload $ReleaseTag $gpuBuild.UpdateZip --clobber
-    Write-Success "Uploaded: $(Split-Path $gpuBuild.UpdateZip -Leaf)"
-    
-    # Upload GPU signature if it exists
-    if ($gpuBuild.SignatureFile) {
-        Write-Info "Uploading GPU signature..."
-        gh release upload $ReleaseTag $gpuBuild.SignatureFile --clobber
-        Write-Success "Uploaded: $(Split-Path $gpuBuild.SignatureFile -Leaf)"
+    # Upload GPU artifacts if build succeeded
+    if ($gpuBuild) {
+        # Upload GPU installer
+        Write-Info "Uploading GPU installer..."
+        gh release upload $ReleaseTag $gpuBuild.Installer --clobber
+        Write-Success "Uploaded: $(Split-Path $gpuBuild.Installer -Leaf)"
+        
+        # Upload GPU update zip
+        Write-Info "Uploading GPU update archive..."
+        gh release upload $ReleaseTag $gpuBuild.UpdateZip --clobber
+        Write-Success "Uploaded: $(Split-Path $gpuBuild.UpdateZip -Leaf)"
+        
+        # Upload GPU signature if it exists
+        if ($gpuBuild.SignatureFile) {
+            Write-Info "Uploading GPU signature..."
+            gh release upload $ReleaseTag $gpuBuild.SignatureFile --clobber
+            Write-Success "Uploaded: $(Split-Path $gpuBuild.SignatureFile -Leaf)"
+        }
+    } else {
+        Write-Warning "GPU build was skipped - no GPU artifacts to upload"
     }
     
     # Upload updated latest.json
@@ -405,11 +474,13 @@ Get-ChildItem $OutputDir -Filter "*_x64-setup*" | ForEach-Object {
     $size = if ($_.Length -gt 1MB) { "{0:N2} MB" -f ($_.Length / 1MB) } else { "{0:N2} KB" -f ($_.Length / 1KB) }
     Write-Host "   $($_.Name) ($size)" -ForegroundColor White
 }
-Write-Host ""
-Write-Info "GPU Version (Vulkan Acceleration):" -ForegroundColor Cyan
-Get-ChildItem $OutputDir -Filter "*gpu*" | ForEach-Object {
-    $size = if ($_.Length -gt 1MB) { "{0:N2} MB" -f ($_.Length / 1MB) } else { "{0:N2} KB" -f ($_.Length / 1KB) }
-    Write-Host "   $($_.Name) ($size)" -ForegroundColor White
+if ($gpuBuild) {
+    Write-Host ""
+    Write-Info "GPU Version (Vulkan Acceleration):" -ForegroundColor Cyan
+    Get-ChildItem $OutputDir -Filter "*gpu*" | ForEach-Object {
+        $size = if ($_.Length -gt 1MB) { "{0:N2} MB" -f ($_.Length / 1MB) } else { "{0:N2} KB" -f ($_.Length / 1KB) }
+        Write-Host "   $($_.Name) ($size)" -ForegroundColor White
+    }
 }
 
 Write-Host ""
@@ -424,13 +495,23 @@ if ($HasSigningKey) {
 Write-Host ""
 Write-Info "📋 Build Information:"
 Write-Host "• CPU Version: Works on ALL Windows 10/11 systems" -ForegroundColor Green
-Write-Host "• GPU Version: Requires Vulkan-compatible GPU (NVIDIA, AMD, Intel)" -ForegroundColor Yellow
+if ($gpuBuild) {
+    Write-Host "• GPU Version: Requires Vulkan-compatible GPU (NVIDIA, AMD, Intel)" -ForegroundColor Yellow
+} else {
+    Write-Host "• GPU Version: Not built (Vulkan SDK not available)" -ForegroundColor Red
+}
 Write-Host ""
 Write-Info "📋 Next Steps:"
-Write-Host "1. Test the CPU installer on a Windows machine without GPU" -ForegroundColor Yellow
-Write-Host "2. Test the GPU installer on a Windows machine with NVIDIA/AMD/Intel GPU" -ForegroundColor Yellow
-Write-Host "3. Update release notes to explain the two versions" -ForegroundColor Yellow
-Write-Host "4. Add download instructions for users to choose the right version" -ForegroundColor Yellow
-Write-Host "5. Publish the release when ready" -ForegroundColor Yellow
+Write-Host "1. Test the CPU installer on a Windows machine" -ForegroundColor Yellow
+if ($gpuBuild) {
+    Write-Host "2. Test the GPU installer on a Windows machine with NVIDIA/AMD/Intel GPU" -ForegroundColor Yellow
+    Write-Host "3. Update release notes to explain the two versions" -ForegroundColor Yellow
+    Write-Host "4. Add download instructions for users to choose the right version" -ForegroundColor Yellow
+    Write-Host "5. Publish the release when ready" -ForegroundColor Yellow
+} else {
+    Write-Host "2. Update release notes (CPU-only for Windows)" -ForegroundColor Yellow
+    Write-Host "3. Consider building GPU version later with Vulkan SDK installed" -ForegroundColor Yellow
+    Write-Host "4. Publish the release when ready" -ForegroundColor Yellow
+}
 
 Write-Success "🎉 Windows dual build release process completed successfully!"

@@ -90,7 +90,16 @@ VoiceTypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 
 > **Which version should I choose?**
 > - **CPU Version**: Works on any Windows 10/11 PC. Choose this if unsure.
-> - **GPU Version**: ~2-3x faster transcription. Requires NVIDIA (GTX/RTX), AMD Radeon, or Intel Arc/Iris Xe GPU with Vulkan support.
+> - **GPU Version**: ~2-3x faster transcription. Requires:
+>   - Vulkan-compatible GPU (NVIDIA GTX/RTX, AMD Radeon, Intel Arc/Iris Xe)
+>   - Updated GPU drivers with Vulkan runtime installed
+>   - ⚠️ **Important**: If the GPU version doesn't start (missing vulkan-1.dll), use the CPU version or update your GPU drivers
+
+> **GPU Version Troubleshooting:**
+> - **Error: "vulkan-1.dll was not found"** → Your system lacks Vulkan runtime. Solutions:
+>   1. Use the CPU version instead (recommended)
+>   2. Update GPU drivers: [NVIDIA](https://www.nvidia.com/drivers) | [AMD](https://www.amd.com/support) | [Intel](https://www.intel.com/content/www/us/en/support/products/80939/graphics.html)
+> - The GPU version has a load-time dependency on Vulkan - it won't start without proper GPU drivers
 
 ## 🎮 Usage
 
