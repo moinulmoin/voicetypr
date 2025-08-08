@@ -14,6 +14,9 @@ edition = "2021"
 name = "voicetypr_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -61,7 +64,7 @@ tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2"
 tauri-plugin-macos-permissions = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-whisper-rs = { version = "0.14.3", features = ["cuda"] }
+whisper-rs = { version = "0.14.3", features = ["vulkan"] }
 windows = { version = "0.51", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",

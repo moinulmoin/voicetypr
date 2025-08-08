@@ -14,12 +14,77 @@ impl Transcriber {
             .to_str()
             .ok_or_else(|| format!("Model path contains invalid UTF-8: {:?}", model_path))?;
 
-        // Enable GPU acceleration for better performance
+        // Configure GPU usage based on platform and features
         let mut ctx_params = WhisperContextParameters::default();
-        ctx_params.use_gpu(true); // Enable Metal on macOS
+        let mut gpu_used = false;
+        
+        // macOS: Try Metal first, fallback to CPU if it fails
+        #[cfg(target_os = "macos")]
+        {
+            ctx_params.use_gpu(true);
+            log::info!("Attempting to initialize Whisper with Metal acceleration...");
+            
+            match WhisperContext::new_with_params(model_path_str, ctx_params) {
+                Ok(ctx) => {
+                    log::info!("✓ Successfully initialized with Metal GPU acceleration");
+                    gpu_used = true;
+                    return Ok(Self { context: ctx });
+                }
+                Err(gpu_err) => {
+                    log::warn!("Metal initialization failed: {}. Falling back to CPU...", gpu_err);
+                    ctx_params = WhisperContextParameters::default();
+                    ctx_params.use_gpu(false);
+                    log::info!("Attempting CPU-only initialization...");
+                }
+            }
+        }
+        
+        // Windows: Try Vulkan GPU first, fallback to CPU if it fails (just like macOS!)
+        #[cfg(target_os = "windows")]
+        {
+            ctx_params.use_gpu(true);
+            log::info!("Attempting to initialize Whisper with Vulkan GPU acceleration...");
+            
+            // Check if Vulkan runtime is available
+            let vulkan_available = std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
+            if !vulkan_available {
+                log::warn!("Vulkan runtime not found. GPU acceleration unavailable.");
+            }
+            
+            match WhisperContext::new_with_params(model_path_str, ctx_params) {
+                Ok(ctx) => {
+                    log::info!("✓ Successfully initialized with Vulkan GPU acceleration");
+                    gpu_used = true;
+                    return Ok(Self { context: ctx });
+                }
+                Err(gpu_err) => {
+                    log::warn!("Vulkan initialization failed: {}. Falling back to CPU...", gpu_err);
+                    ctx_params = WhisperContextParameters::default();
+                    ctx_params.use_gpu(false);
+                    gpu_used = false;
+                    log::info!("Attempting CPU-only initialization...");
+                }
+            }
+        }
 
+        // Create context (for Windows CPU fallback or other platforms)
         let ctx = WhisperContext::new_with_params(model_path_str, ctx_params)
             .map_err(|e| format!("Failed to load model: {}", e))?;
+
+        // Determine backend type for logging
+        let backend_type = if gpu_used {
+            if cfg!(target_os = "windows") {
+                "Vulkan GPU"
+            } else if cfg!(target_os = "macos") {
+                "Metal GPU"
+            } else {
+                "GPU"
+            }
+        } else {
+            "CPU"
+        };
+        
+        log::info!("✓ Whisper initialized successfully using {} backend", backend_type);
 
         Ok(Self { context: ctx })
     }
