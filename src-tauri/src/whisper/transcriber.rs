@@ -44,14 +44,21 @@ impl Transcriber {
         {
             ctx_params.use_gpu(true);
             gpu_used = true;
-            log::info!("Initializing with Vulkan GPU acceleration (gpu-windows feature enabled)");
+            log::info!("🚀 GPU BUILD: Initializing with Vulkan GPU acceleration");
+            log::info!("GPU feature enabled - this is the GPU version of VoiceTypr");
+            
+            // Double-check Vulkan is available
+            if !std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists() {
+                log::warn!("WARNING: GPU build but vulkan-1.dll not found!");
+            }
         }
         
         #[cfg(all(target_os = "windows", not(feature = "gpu-windows")))]
         {
             ctx_params.use_gpu(false);
             gpu_used = false;
-            log::info!("Initializing in CPU-only mode (maximum compatibility)");
+            log::info!("CPU BUILD: Initializing in CPU-only mode");
+            log::info!("This is the CPU version of VoiceTypr");
         }
 
         // Create context (for Windows or macOS CPU fallback)
