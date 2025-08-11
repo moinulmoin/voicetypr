@@ -8,7 +8,11 @@
       "mcp__deepwiki__ask_question",
       "Bash(cargo check:*)",
       "Bash(find:*)",
-      "Bash(diff:*)"
+      "Bash(diff:*)",
+      "Bash(wc:*)",
+      "Bash(cargo test:*)",
+      "Bash(pnpm typecheck:*)",
+      "Bash(rg:*)"
     ],
     "deny": []
   },

@@ -31,8 +31,15 @@ pub async fn download_model(
     // Create cancellation flag for this download
     let cancel_flag = Arc::new(AtomicBool::new(false));
     {
-        let mut downloads = active_downloads.lock().unwrap();
-        downloads.insert(model_name.clone(), cancel_flag.clone());
+        match active_downloads.lock() {
+            Ok(mut downloads) => {
+                downloads.insert(model_name.clone(), cancel_flag.clone());
+            },
+            Err(e) => {
+                log::error!("Failed to lock active downloads for inserting: {}", e);
+                return Err("Failed to initialize download tracking".to_string());
+            }
+        }
     }
 
     let model_name_clone = model_name.clone();
@@ -166,8 +173,15 @@ pub async fn download_model(
 
     // Clean up the cancellation flag
     {
-        let mut downloads = active_downloads.lock().unwrap();
-        downloads.remove(&model_name);
+        match active_downloads.lock() {
+            Ok(mut downloads) => {
+                downloads.remove(&model_name);
+            },
+            Err(e) => {
+                log::warn!("Failed to lock active downloads for cleanup: {}", e);
+                // Continue despite cleanup failure
+            }
+        }
     }
 
     log::info!("Processing download result for model: {}", model_name);
@@ -287,21 +301,23 @@ pub async fn cancel_download(
 
     // Set the cancellation flag
     {
-        let downloads = active_downloads.lock().unwrap();
-        if let Some(cancel_flag) = downloads.get(&model_name) {
-            cancel_flag.store(true, Ordering::Relaxed);
-            log::info!("Set cancellation flag for model: {}", model_name);
-        } else {
-            return Err(format!(
-                "No active download found for model: {}",
-                model_name
-            ));
+        match active_downloads.lock() {
+            Ok(downloads) => {
+                if let Some(cancel_flag) = downloads.get(&model_name) {
+                    cancel_flag.store(true, Ordering::Relaxed);
+                    log::info!("Set cancellation flag for model: {}", model_name);
+                } else {
+                    log::warn!("No active download found for model: {}", model_name);
+                    return Ok(()); // Not an error if download doesn't exist
+                }
+            },
+            Err(e) => {
+                log::error!("Failed to lock active downloads for cancellation: {}", e);
+                return Err("Failed to access download tracking".to_string());
+            }
         }
     }
-
-    // The download loop will handle cleanup when it detects the cancellation flag
-
-    log::info!("Download cancelled for model: {}", model_name);
+    
     Ok(())
 }
 

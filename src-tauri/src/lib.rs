@@ -1,13 +1,18 @@
 use chrono::Local;
 use serde_json;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
 use tauri_plugin_store::StoreExt;
+
+// Import our logging utilities
+use crate::utils::logger::*;
 
 mod ai;
 mod audio;
@@ -50,7 +55,6 @@ use commands::{
     window::*,
 };
 use state::unified_state::UnifiedRecordingState;
-use std::collections::HashMap;
 use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem, Submenu};
 use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
@@ -412,16 +416,46 @@ fn setup_logging() -> tauri_plugin_log::Builder {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let app_start = Instant::now();
+    let app_version = env!("CARGO_PKG_VERSION");
+    
+    // Log application startup
+    log_lifecycle_event("APPLICATION_START", Some(app_version), None);
+
     // Load .env file if it exists (for development)
+    let env_context = log_context! {
+        "stage" => "env_loading"
+    };
+    
+    log_operation_start("ENV_FILE_LOAD", &env_context);
     match dotenv::dotenv() {
-        Ok(path) => println!("Loaded .env file from: {:?}", path),
-        Err(e) => println!("No .env file found or error loading it: {}", e),
+        Ok(path) => {
+            log_file_operation("LOAD", &format!("{:?}", path), true, None, None);
+            println!("Loaded .env file from: {:?}", path);
+        }
+        Err(e) => {
+            log::info!("📄 No .env file found or error loading it: {}", e);
+            println!("No .env file found or error loading it: {}", e);
+        }
     }
 
     // Initialize encryption key for secure storage
+    log_operation_start("ENCRYPTION_INIT", &log_context! {
+        "component" => "secure_store"
+    });
+    
     if let Err(e) = secure_store::initialize_encryption_key() {
+        log_error_with_context(
+            &format!("Failed to initialize encryption: {}", e),
+            &log_context! {
+                "component" => "secure_store",
+                "stage" => "encryption_init"
+            }
+        );
         eprintln!("Failed to initialize encryption: {}", e);
+    } else {
+        log::info!("✅ Encryption initialized successfully");
     }
 
     let mut builder = tauri::Builder::default()
@@ -633,26 +667,57 @@ pub fn run() {
                 })
                 .build(),
         )
-        .setup(|app| {
+        .setup(move |app| {
+            let setup_start = Instant::now();
+            log::info!("🚀 App setup START - version: {}", app_version);
+            
             // Keyring is now used instead of Stronghold for API keys
             // Much faster and uses OS-native secure storage
+            log::info!("🔐 Using OS-native keyring for secure API key storage");
 
             // Set up panic handler to catch crashes
+            log_operation_start("PANIC_HANDLER_SETUP", &log_context! {
+                "component" => "panic_handler"
+            });
+            
             std::panic::set_hook(Box::new(|panic_info| {
-                log::error!("PANIC: {:?}", panic_info);
+                log::error!("💥 CRITICAL PANIC: {:?}", panic_info);
+                log_error_with_context(
+                    "Application panic occurred",
+                    &log_context! {
+                        "panic_info" => &format!("{:?}", panic_info),
+                        "severity" => "critical"
+                    }
+                );
                 eprintln!("Application panic: {:?}", panic_info);
             }));
+            
+            log::info!("✅ Panic handler configured");
 
             // Clean up old logs on startup (keep last 30 days)
+            log_operation_start("LOG_CLEANUP", &log_context! {
+                "retention_days" => "30"
+            });
+            
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                let cleanup_start = Instant::now();
                 match commands::logs::clear_old_logs(app_handle, 30).await {
                     Ok(deleted) => {
+                        log_operation_complete("LOG_CLEANUP", 
+                            cleanup_start.elapsed().as_millis() as u64,
+                            &log_context! {
+                                "files_deleted" => &deleted.to_string()
+                            }
+                        );
                         if deleted > 0 {
-                            log::info!("Cleaned up {} old log files", deleted);
+                            log::info!("🧹 Cleaned up {} old log files", deleted);
                         }
                     }
                     Err(e) => {
+                        log_operation_failed("LOG_CLEANUP", &e, &log_context! {
+                            "retention_days" => "30"
+                        });
                         log::warn!("Failed to clean up old logs: {}", e);
                     }
                 }
@@ -661,8 +726,12 @@ pub fn run() {
             // Set activation policy on macOS to prevent focus stealing
             #[cfg(target_os = "macos")]
             {
+                log_operation_start("MACOS_SETUP", &log_context! {
+                    "policy" => "Accessory"
+                });
+                
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-                log::info!("Set macOS activation policy to Accessory");
+                log::info!("🍎 Set macOS activation policy to Accessory");
 
                 // Check accessibility permissions at startup
                 let app_handle = app.handle().clone();
@@ -670,10 +739,25 @@ pub fn run() {
                     // Small delay to ensure app is fully initialized
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
+                    log_permission_event("ACCESSIBILITY_CHECK", false, Some(&log_context! {
+                        "stage" => "startup_check",
+                        "delay_ms" => "200"
+                    }));
+
                     // Check and request accessibility permission for keyboard simulation
                     match app_handle.emit("check-accessibility-permission", ()) {
-                        Ok(_) => log::info!("Emitted accessibility permission check event"),
-                        Err(e) => log::error!("Failed to emit accessibility check: {}", e),
+                        Ok(_) => {
+                            log::info!("✅ Emitted accessibility permission check event");
+                        }
+                        Err(e) => {
+                            log_error_with_context(
+                                &format!("Failed to emit accessibility check: {}", e),
+                                &log_context! {
+                                    "event" => "check-accessibility-permission",
+                                    "stage" => "startup"
+                                }
+                            );
+                        }
                     }
                 });
             }
@@ -699,14 +783,28 @@ pub fn run() {
 
             // Initialize whisper manager
             let models_dir = app.path().app_data_dir()?.join("models");
-            log::info!("Models directory: {:?}", models_dir);
+            log::info!("🗂️  Models directory: {:?}", models_dir);
+
+            log_operation_start("WHISPER_MANAGER_INIT", &log_context! {
+                "models_dir" => &format!("{:?}", models_dir)
+            });
 
             // Ensure the models directory exists
-            std::fs::create_dir_all(&models_dir)
-                .map_err(|e| format!("Failed to create models directory: {}", e))?;
+            match std::fs::create_dir_all(&models_dir) {
+                Ok(_) => {
+                    log_file_operation("CREATE_DIR", &format!("{:?}", models_dir), true, None, None);
+                }
+                Err(e) => {
+                    let error_msg = format!("Failed to create models directory: {}", e);
+                    log_file_operation("CREATE_DIR", &format!("{:?}", models_dir), false, None, Some(&e.to_string()));
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, error_msg)));
+                }
+            }
 
             let whisper_manager = whisper::manager::WhisperManager::new(models_dir);
             app.manage(AsyncRwLock::new(whisper_manager));
+            
+            log::info!("✅ Whisper manager initialized and managed");
 
             // Manage active downloads for cancellation
             app.manage(Arc::new(Mutex::new(HashMap::<String, Arc<AtomicBool>>::new())));
@@ -738,9 +836,16 @@ pub fn run() {
 
 
             // Use default window icon for tray
-            let tray_icon = app.default_window_icon()
-                .expect("Failed to get default window icon")
-                .clone();
+            let tray_icon = match app.default_window_icon() {
+                Some(icon) => icon.clone(),
+                None => {
+                    log::error!("Default window icon not found, cannot create tray");
+                    return Err(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "Default window icon not available"
+                    )));
+                }
+            };
 
             let _tray = TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
@@ -761,7 +866,13 @@ pub fn run() {
                         app.exit(0);
                     } else if event_id.starts_with("model_") {
                         // Handle model selection
-                        let model_name = event_id.strip_prefix("model_").unwrap().to_string();
+                        let model_name = match event_id.strip_prefix("model_") {
+                            Some(name) => name.to_string(),
+                            None => {
+                                log::warn!("Invalid model event_id format: {}", event_id);
+                                return; // Skip processing invalid model events
+                            }
+                        };
                         let app_handle = app.app_handle().clone();
 
                         tauri::async_runtime::spawn(async move {
@@ -795,23 +906,33 @@ pub fn run() {
                 .build(app)?;
 
             // Load hotkey from settings store with graceful degradation
+            log_operation_start("HOTKEY_SETUP", &log_context! {
+                "default" => "CommandOrControl+Shift+Space"
+            });
+            
             let hotkey_str = match app.store("settings") {
                 Ok(store) => {
                     store
                         .get("hotkey")
                         .and_then(|v| v.as_str().map(|s| s.to_string()))
                         .unwrap_or_else(|| {
-                            log::info!("No hotkey configured, using default");
+                            log::info!("🎹 No hotkey configured, using default");
                             "CommandOrControl+Shift+Space".to_string()
                         })
                 }
                 Err(e) => {
-                    log::warn!("Failed to load settings store: {}. Using default hotkey.", e);
+                    log_error_with_context(
+                        &format!("Failed to load settings store: {}", e),
+                        &log_context! {
+                            "component" => "settings",
+                            "fallback" => "CommandOrControl+Shift+Space"
+                        }
+                    );
                     "CommandOrControl+Shift+Space".to_string()
                 }
             };
 
-            log::info!("Loading hotkey: {}", hotkey_str);
+            log::info!("🎯 Loading hotkey: {}", hotkey_str);
 
             // Normalize the hotkey for Tauri
             let normalized_hotkey = crate::commands::key_normalizer::normalize_shortcut_keys(&hotkey_str);
@@ -821,8 +942,18 @@ pub fn run() {
                 Ok(s) => s,
                 Err(_) => {
                     log::warn!("Invalid hotkey format '{}', using default", normalized_hotkey);
-                    "CommandOrControl+Shift+Space".parse()
-                        .expect("Default shortcut should be valid")
+                    match "CommandOrControl+Shift+Space".parse() {
+                        Ok(default_shortcut) => default_shortcut,
+                        Err(e) => {
+                            log::error!("Even default shortcut failed to parse: {}", e);
+                            // Emit event to notify frontend that hotkey registration failed
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.emit("hotkey-registration-failed", ());
+                            }
+                            // Return a minimal working shortcut or continue without hotkey
+                            return Ok(());
+                        }
+                    }
                 }
             };
 
@@ -832,7 +963,39 @@ pub fn run() {
                 *shortcut_guard = Some(shortcut.clone());
             }
 
-            app.global_shortcut().register(shortcut)?;
+            // Try to register global shortcut, but don't crash if it fails
+            let registration_start = Instant::now();
+            match app.global_shortcut().register(shortcut.clone()) {
+                Ok(_) => {
+                    log_operation_complete("HOTKEY_REGISTRATION", 
+                        registration_start.elapsed().as_millis() as u64,
+                        &log_context! {
+                            "hotkey" => &hotkey_str,
+                            "normalized" => &normalized_hotkey
+                        }
+                    );
+                    log::info!("✅ Successfully registered global hotkey: {}", hotkey_str);
+                }
+                Err(e) => {
+                    log_operation_failed("HOTKEY_REGISTRATION", &e.to_string(), &log_context! {
+                        "hotkey" => &hotkey_str,
+                        "normalized" => &normalized_hotkey,
+                        "suggestion" => "Try different hotkey or close conflicting apps"
+                    });
+                    
+                    log::error!("❌ Failed to register global hotkey '{}': {}", hotkey_str, e);
+                    log::warn!("⚠️  The app will continue without global hotkey support. Another application may be using this shortcut.");
+                    
+                    // Emit event to notify frontend that hotkey registration failed
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.emit("hotkey-registration-failed", serde_json::json!({
+                            "hotkey": hotkey_str,
+                            "error": e.to_string(),
+                            "suggestion": "Please choose a different hotkey in settings or close conflicting applications"
+                        }));
+                    }
+                }
+            }
 
             // Preload current model if set (graceful degradation)
             // Use Tauri's async runtime which is available after setup
@@ -882,7 +1045,7 @@ pub fn run() {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
                 // Create the pill window with extra height for tooltip
-                let mut pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
+                let pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
                     .title("Recording")
                     .resizable(false)
                     .decorations(false)
@@ -964,8 +1127,12 @@ pub fn run() {
                     log::info!("Main window hidden - menubar mode active");
                 }
             } else {
-                log::info!("First launch or no model configured - keeping main window visible");
+                log::info!("👋 First launch or no model configured - keeping main window visible");
             }
+
+            // Log setup completion
+            log_performance("APP_SETUP_COMPLETE", setup_start.elapsed().as_millis() as u64, None);
+            log::info!("🎉 App setup COMPLETED - Total time: {}ms", setup_start.elapsed().as_millis());
 
             Ok(())
         })
@@ -1047,23 +1214,53 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .map_err(|e| -> Box<dyn std::error::Error> {
+            log_error_with_context(
+                &format!("Critical error running Tauri application: {}", e),
+                &log_context! {
+                    "stage" => "application_run",
+                    "total_startup_time_ms" => &app_start.elapsed().as_millis().to_string()
+                }
+            );
+            eprintln!("VoiceTypr failed to start: {}", e);
+            Box::new(e)
+        })?;
+        
+    // Log successful application startup
+    log_lifecycle_event("APPLICATION_READY", Some(app_version), Some(&log_context! {
+        "total_startup_time_ms" => &app_start.elapsed().as_millis().to_string(),
+        "status" => "success"
+    }));
+    
+    Ok(())
 }
 
 /// Perform essential startup checks
 async fn perform_startup_checks(app: tauri::AppHandle) {
-    log::info!("Performing startup checks...");
+    let checks_start = Instant::now();
+    log_operation_start("STARTUP_CHECKS", &log_context! {
+        "stage" => "comprehensive_validation"
+    });
 
     // Check if any models are downloaded
     if let Some(whisper_manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
     {
         let has_models = whisper_manager.read().await.has_downloaded_models();
-        log::info!("Has downloaded models: {}", has_models);
+        let models_context = log_context! {
+            "has_models" => &has_models.to_string()
+        };
+        
+        log_model_operation("AVAILABILITY_CHECK", "all", 
+            if has_models { "AVAILABLE" } else { "NONE_FOUND" },
+            Some(&models_context)
+        );
 
         if !has_models {
-            log::warn!("No speech recognition models downloaded");
+            log::warn!("⚠️  No speech recognition models downloaded");
             // Emit event to frontend to show download prompt
             let _ = emit_to_window(&app, "main", "no-models-on-startup", ());
+        } else {
+            log::info!("✅ Speech recognition models are available");
         }
     }
 
@@ -1168,5 +1365,12 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         }
     }
 
-    log::info!("Startup checks completed");
+    // Log startup checks completion
+    log_operation_complete("STARTUP_CHECKS", 
+        checks_start.elapsed().as_millis() as u64,
+        &log_context! {
+            "status" => "all_checks_completed"
+        }
+    );
+    log::info!("✅ Startup checks COMPLETED in {}ms", checks_start.elapsed().as_millis());
 }

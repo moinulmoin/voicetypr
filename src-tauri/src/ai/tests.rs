@@ -107,7 +107,7 @@ mod tests {
         let prompt = build_enhancement_prompt("hello world", None, &options);
 
         assert!(prompt.contains("hello world"));
-        assert!(prompt.contains("Fix grammar, spelling, and add punctuation"));
+        assert!(prompt.contains("APPLY THESE CORRECTIONS"));
 
         // Test with context
         let prompt_with_context =
@@ -132,14 +132,14 @@ mod tests {
         // Test Default preset
         let default_options = EnhancementOptions::default();
         let default_prompt = build_enhancement_prompt(text, None, &default_options);
-        assert!(default_prompt.contains("Fix grammar, spelling, and add punctuation"));
+        assert!(default_prompt.contains("APPLY THESE CORRECTIONS"));
 
         // Test Prompts preset
         let mut prompts_options = EnhancementOptions::default();
         prompts_options.preset = EnhancementPreset::Prompts;
         let prompts_prompt = build_enhancement_prompt(text, None, &prompts_options);
         assert!(
-            prompts_prompt.contains("Transform this spoken request into a well-structured prompt")
+            prompts_prompt.contains("transform the cleaned text into a well-structured AI prompt")
         );
 
         // Test Email preset
@@ -147,20 +147,127 @@ mod tests {
         email_options.preset = EnhancementPreset::Email;
         let email_prompt = build_enhancement_prompt(text, None, &email_options);
         assert!(
-            email_prompt.contains("Convert this spoken message into a properly formatted email")
+            email_prompt.contains("format the cleaned text as an email")
         );
 
         // Test Commit preset
         let mut commit_options = EnhancementOptions::default();
         commit_options.preset = EnhancementPreset::Commit;
         let commit_prompt = build_enhancement_prompt(text, None, &commit_options);
-        assert!(commit_prompt.contains("Convert to a conventional commit message"));
+        assert!(commit_prompt.contains("convert to conventional commit format"));
+    }
 
-        // Test Notes preset
-        let mut notes_options = EnhancementOptions::default();
-        notes_options.preset = EnhancementPreset::Notes;
-        let notes_prompt = build_enhancement_prompt(text, None, &notes_options);
-        assert!(notes_prompt.contains("Convert spoken thoughts into well-structured notes"));
+    #[test]
+    fn test_self_correction_rules_in_all_presets() {
+        use crate::ai::prompts::{build_enhancement_prompt, EnhancementOptions, EnhancementPreset};
+
+        let test_text = "send it to john... to mary";
+
+        // Test that ALL presets include self-correction rules
+        let presets = vec![
+            EnhancementPreset::Default,
+            EnhancementPreset::Prompts,
+            EnhancementPreset::Email,
+            EnhancementPreset::Commit,
+        ];
+
+        for preset in presets {
+            let mut options = EnhancementOptions::default();
+            options.preset = preset.clone();
+            let prompt = build_enhancement_prompt(test_text, None, &options);
+            
+            // All prompts should include self-correction rules
+            assert!(
+                prompt.contains("handle natural speech self-corrections"),
+                "Preset {:?} should include self-correction rules",
+                preset
+            );
+            assert!(
+                prompt.contains("Immediate replacement"),
+                "Preset {:?} should include immediate replacement pattern",
+                preset
+            );
+        }
+    }
+
+    #[test]
+    fn test_layered_architecture() {
+        use crate::ai::prompts::{build_enhancement_prompt, EnhancementOptions, EnhancementPreset};
+
+        let test_text = "test";
+        
+        // Test that all presets include base processing
+        let presets = vec![
+            EnhancementPreset::Default,
+            EnhancementPreset::Prompts,
+            EnhancementPreset::Email,
+            EnhancementPreset::Commit,
+        ];
+
+        for preset in presets {
+            let mut options = EnhancementOptions::default();
+            options.preset = preset.clone();
+            let prompt = build_enhancement_prompt(test_text, None, &options);
+            
+            // All should include self-correction rules
+            assert!(
+                prompt.contains("handle natural speech self-corrections"),
+                "Preset {:?} should include self-correction rules",
+                preset
+            );
+            
+            // All should include default processing
+            assert!(
+                prompt.contains("APPLY THESE CORRECTIONS"),
+                "Preset {:?} should include default processing",
+                preset
+            );
+            
+            // Non-default presets should have FINALLY instruction
+            if !matches!(preset, EnhancementPreset::Default) {
+                assert!(
+                    prompt.contains("FINALLY"),
+                    "Preset {:?} should have FINALLY transformation",
+                    preset
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_default_prompt_comprehensive_features() {
+        use crate::ai::prompts::{build_enhancement_prompt, EnhancementOptions};
+
+        let test_text = "test transcription";
+        let options = EnhancementOptions::default();
+        let prompt = build_enhancement_prompt(test_text, None, &options);
+
+        // Test that Default prompt includes all comprehensive features
+        
+        // 1. Speech artifacts removal
+        assert!(prompt.contains("Filler words"), "Should include filler word removal");
+        assert!(prompt.contains("stutters"), "Should handle stutters");
+        
+        // 2. Homophone correction
+        assert!(prompt.contains("Homophones"), "Should handle homophones");
+        assert!(prompt.contains("there/their/they're"), "Should include common homophone examples");
+        
+        // 3. Number and time formatting
+        assert!(prompt.contains("Times:"), "Should format times");
+        assert!(prompt.contains("Dates:"), "Should format dates");
+        assert!(prompt.contains("Numbers:"), "Should format numbers");
+        
+        // 4. Spoken punctuation
+        assert!(prompt.contains("spoken punctuation"), "Should handle spoken punctuation");
+        assert!(prompt.contains("comma"), "Should handle spoken comma");
+        assert!(prompt.contains("question mark"), "Should handle spoken question mark");
+        
+        // 5. List detection
+        assert!(prompt.contains("Format lists"), "Should format detected lists");
+        
+        // 6. Technical terms
+        assert!(prompt.contains("Technical terms"), "Should preserve technical terms");
+        assert!(prompt.contains("JavaScript"), "Should correct JavaScript");
     }
 
     #[test]

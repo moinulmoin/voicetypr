@@ -2,5 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    voicetypr_lib::run()
+    if let Err(e) = voicetypr_lib::run() {
+        eprintln!("VoiceTypr failed to start: {}", e);
+        std::process::exit(1);
+    }
 }

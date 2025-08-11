@@ -22,12 +22,24 @@ impl WindowManager {
 
     /// Get the main window reference
     pub fn get_main_window(&self) -> Option<WebviewWindow> {
-        self.main_window.lock().unwrap().clone()
+        match self.main_window.lock() {
+            Ok(guard) => guard.clone(),
+            Err(e) => {
+                log::error!("Main window mutex is poisoned: {}", e);
+                None
+            }
+        }
     }
 
     /// Get the pill window reference (validates window is still alive)
     pub fn get_pill_window(&self) -> Option<WebviewWindow> {
-        let mut pill_guard = self.pill_window.lock().unwrap();
+        let mut pill_guard = match self.pill_window.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                log::error!("Pill window mutex is poisoned: {}", e);
+                return None;
+            }
+        };
 
         // Check if the window reference is still valid
         if let Some(ref window) = *pill_guard {
@@ -51,7 +63,13 @@ impl WindowManager {
 
     /// Store the pill window reference
     pub fn set_pill_window(&self, window: WebviewWindow) {
-        let mut pill_guard = self.pill_window.lock().unwrap();
+        let mut pill_guard = match self.pill_window.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                log::error!("Failed to lock pill window mutex for storing window: {}", e);
+                return;
+            }
+        };
         *pill_guard = Some(window);
         log::debug!("Stored pill window reference");
     }
@@ -88,7 +106,14 @@ impl WindowManager {
     /// Internal implementation of show_pill_window
     async fn show_pill_window_internal(&self) -> Result<(), String> {
         // Hold the lock for the entire operation to prevent race conditions
-        let mut pill_guard = self.pill_window.lock().unwrap();
+        let mut pill_guard = match self.pill_window.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                let msg = format!("Pill window mutex is poisoned: {}", e);
+                log::error!("{}", msg);
+                return Err(msg);
+            }
+        };
 
         // First check if we have a cached reference and if it's still valid
         if let Some(ref existing_window) = *pill_guard {
@@ -141,7 +166,7 @@ impl WindowManager {
             position_y
         );
 
-        let mut pill_builder = WebviewWindowBuilder::new(
+        let pill_builder = WebviewWindowBuilder::new(
             &self.app_handle,
             "pill",
             WebviewUrl::App("pill.html".into()),
@@ -271,17 +296,23 @@ impl WindowManager {
         for attempt in 1..=MAX_RETRIES {
             // Get the window reference inside the retry loop to handle stale references
             let window = {
-                let pill_guard = self.pill_window.lock().unwrap();
-                pill_guard.clone()
+                match self.pill_window.lock() {
+                    Ok(pill_guard) => pill_guard.clone(),
+                    Err(e) => {
+                        log::error!("Pill window mutex is poisoned during hide: {}", e);
+                        break;
+                    }
+                }
             };
 
             if let Some(window) = window {
                 // Verify window is still valid before trying to hide
                 if window.is_closable().is_err() {
                     // Window is no longer valid, clear the reference
-                    let mut pill_guard = self.pill_window.lock().unwrap();
-                    *pill_guard = None;
-                    log::debug!("Pill window reference is stale during hide, cleared");
+                    if let Ok(mut pill_guard) = self.pill_window.lock() {
+                        *pill_guard = None;
+                        log::debug!("Pill window reference is stale during hide, cleared");
+                    }
                     return Ok(());
                 }
 
@@ -294,9 +325,10 @@ impl WindowManager {
                         // Check if error is because window was closed
                         if !window.is_closable().unwrap_or(false) {
                             // Window was closed, clear the reference
-                            let mut pill_guard = self.pill_window.lock().unwrap();
-                            *pill_guard = None;
-                            log::debug!("Pill window was closed during hide attempt");
+                            if let Ok(mut pill_guard) = self.pill_window.lock() {
+                                *pill_guard = None;
+                                log::debug!("Pill window was closed during hide attempt");
+                            }
                             return Ok(());
                         }
 
@@ -329,8 +361,13 @@ impl WindowManager {
     pub async fn close_pill_window(&self) -> Result<(), String> {
         // Take the window out of the mutex
         let window = {
-            let mut pill_guard = self.pill_window.lock().unwrap();
-            pill_guard.take()
+            match self.pill_window.lock() {
+                Ok(mut pill_guard) => pill_guard.take(),
+                Err(e) => {
+                    log::error!("Pill window mutex is poisoned during close: {}", e);
+                    return Ok(());
+                }
+            }
         };
 
         if let Some(window) = window {
@@ -434,7 +471,13 @@ impl WindowManager {
 
     /// Check if pill window is visible
     pub fn is_pill_visible(&self) -> bool {
-        let pill_guard = self.pill_window.lock().unwrap();
+        let pill_guard = match self.pill_window.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                log::error!("Pill window mutex is poisoned during visibility check: {}", e);
+                return false;
+            }
+        };
 
         if let Some(ref window) = *pill_guard {
             // Check both that window is valid and visible

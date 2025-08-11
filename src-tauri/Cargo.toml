@@ -72,6 +72,10 @@ windows = { version = "0.51", features = [
 
 [dev-dependencies]
 tempfile = "3.10"
+tokio-test = "0.4"
+mockall = "0.12"
+serial_test = "3.0"
+rand = "0.8"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-fs = "2"
