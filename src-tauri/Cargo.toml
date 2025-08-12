@@ -56,6 +56,7 @@ rand = "0.8"
 base64 = "0.22"
 hex = "0.4"
 pbkdf2 = "0.12"
+sysinfo = "0.36.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.14.3", features = ["metal"] }

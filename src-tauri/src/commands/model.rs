@@ -1,6 +1,7 @@
 use crate::commands::license::check_license_status_internal;
 use crate::emit_to_all;
 use crate::license::LicenseState;
+use crate::utils::onboarding_logger;
 use crate::whisper::manager::{ModelInfo, WhisperManager};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,6 +27,19 @@ pub async fn download_model(
     }
 
     log::info!("Starting download for model: {}", model_name);
+    
+    // Log to onboarding if in onboarding context
+    let model_size_mb = {
+        let manager = state.read().await;
+        manager.get_models_status()
+            .get(&model_name)
+            .map(|info| info.size)
+            .unwrap_or(0) / (1024 * 1024) // Convert bytes to MB
+    };
+    onboarding_logger::with_onboarding_logger(|logger| {
+        logger.log_model_download_start(&model_name, model_size_mb);
+    });
+    
     let app_handle = app.clone();
 
     // Create cancellation flag for this download
@@ -58,6 +72,11 @@ pub async fn download_model(
                 &model_name_clone,
                 progress
             );
+            
+            // Log to onboarding if active
+            onboarding_logger::with_onboarding_logger(|logger| {
+                logger.log_model_download_progress(&model_name_clone, progress as u8);
+            });
 
             // Progress is already being emitted via events, no need for state storage
 
@@ -196,6 +215,12 @@ pub async fn download_model(
         }
         Ok(_) => {
             log::info!("Download completed successfully for model: {}", model_name);
+            
+            // Log to onboarding if active
+            onboarding_logger::with_onboarding_logger(|logger| {
+                // Calculate duration if possible
+                logger.log_model_download_complete(&model_name, 0); // TODO: track actual duration
+            });
 
             // Refresh the manager's status to reflect the new download
             {
@@ -219,6 +244,11 @@ pub async fn download_model(
         }
         Err(e) => {
             log::error!("Download failed for model {}: {}", model_name, e);
+            
+            // Log to onboarding if active
+            onboarding_logger::with_onboarding_logger(|logger| {
+                logger.log_model_download_failed(&model_name, &e);
+            });
 
             // Progress tracking is event-based, no state cleanup needed
 

@@ -1,10 +1,11 @@
 use super::config::*;
 use super::{prompts, AIEnhancementRequest, AIEnhancementResponse, AIError, AIProvider};
+use crate::utils::network_diagnostics::{log_api_request, log_api_response, log_network_error, log_network_error_with_duration, log_retry_attempt, NetworkError};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // Supported models with validation
 const SUPPORTED_MODELS: &[&str] = &["llama-3.1-8b-instant"];
@@ -60,6 +61,10 @@ impl GroqProvider {
         let mut last_error = None;
 
         for attempt in 1..=MAX_RETRIES {
+            if attempt > 1 && log::log_enabled!(log::Level::Info) {
+                log_retry_attempt("groq_api_request", attempt as u32, MAX_RETRIES as u32);
+            }
+            
             match self.make_single_request(request).await {
                 Ok(response) => return Ok(response),
                 Err(e) => {
@@ -80,6 +85,7 @@ impl GroqProvider {
     }
 
     async fn make_single_request(&self, request: &GroqRequest) -> Result<GroqResponse, AIError> {
+        let request_start = Instant::now();
         let response = self
             .client
             .post(&self.base_url)
@@ -88,12 +94,31 @@ impl GroqProvider {
             .json(request)
             .send()
             .await
-            .map_err(|e| AIError::NetworkError(e.to_string()))?;
+            .map_err(|e| {
+                let elapsed = request_start.elapsed().as_millis() as u64;
+                let error = NetworkError::Unknown { 
+                    message: e.to_string() 
+                };
+                log_network_error_with_duration(error, Some(elapsed));
+                AIError::NetworkError(e.to_string())
+            })?;
 
         let status = response.status();
+        let duration_ms = request_start.elapsed().as_millis() as u64;
+        
+        // Log response metrics (only if logging is enabled)
+        if log::log_enabled!(log::Level::Info) {
+            log_api_response("groq", "POST", &self.base_url, status.as_u16(), duration_ms, None);
+        }
 
         // Handle rate limiting
         if status.as_u16() == 429 {
+            if log::log_enabled!(log::Level::Error) {
+                let error = NetworkError::RateLimited { 
+                    retry_after: None 
+                };
+                log_network_error(error);
+            }
             return Err(AIError::RateLimitExceeded);
         }
 
@@ -102,6 +127,21 @@ impl GroqProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
+                
+            // Log specific error types (only if logging is enabled)
+            if log::log_enabled!(log::Level::Error) {
+                let error = if status.as_u16() == 401 {
+                    NetworkError::AuthenticationFailed { 
+                        provider: "groq".to_string() 
+                    }
+                } else {
+                    NetworkError::Unknown { 
+                        message: format!("Status {}: {}", status, error_text) 
+                    }
+                };
+                log_network_error(error);
+            }
+            
             return Err(AIError::ApiError(format!(
                 "API returned {}: {}",
                 status, error_text
@@ -155,6 +195,11 @@ impl AIProvider for GroqProvider {
             request.context.as_deref(),
             &request.options.unwrap_or_default(),
         );
+        
+        // Log API request details (only if logging is enabled)
+        if log::log_enabled!(log::Level::Info) {
+            log_api_request("groq", &self.model, prompt.len());
+        }
 
         let temperature = self
             .options

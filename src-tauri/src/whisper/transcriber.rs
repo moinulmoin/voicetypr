@@ -5,7 +5,7 @@ use whisper_rs::{
     WhisperContext, WhisperContextParameters,
 };
 
-use crate::{log_context, utils::logger::*};
+use crate::{log_context, utils::logger::*, utils::system_monitor};
 
 pub struct Transcriber {
     context: WhisperContext,
@@ -204,6 +204,10 @@ impl Transcriber {
     {
         let transcription_start = Instant::now();
         let audio_path_str = format!("{:?}", audio_path);
+        
+        // Monitor system resources before transcription (only in debug builds)
+        #[cfg(debug_assertions)]
+        system_monitor::log_resources_before_operation("TRANSCRIPTION");
         
         log_operation_start("TRANSCRIPTION", &log_context! {
             "audio_path" => &audio_path_str,
@@ -487,6 +491,10 @@ impl Transcriber {
 
         let result = text.trim().to_string();
         let total_time = transcription_start.elapsed();
+        
+        // Log system resources after transcription (only in debug builds)
+        #[cfg(debug_assertions)]
+        system_monitor::log_resources_after_operation("TRANSCRIPTION", total_time.as_millis() as u64);
         
         if result.is_empty() {
             log_operation_failed("TRANSCRIPTION", "Empty transcription result", &log_context! {
