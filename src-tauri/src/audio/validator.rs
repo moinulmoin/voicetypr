@@ -9,7 +9,6 @@ pub enum AudioValidationResult {
         energy: f32, 
         duration: f32, 
         peak: f32,
-        sample_count: usize,
     },
     /// Audio is completely silent (no detectable signal)
     Silent,
@@ -63,6 +62,7 @@ impl AudioValidator {
     }
 
     /// Create audio validator with custom thresholds
+    #[allow(dead_code)]
     pub fn with_thresholds(thresholds: ValidationThresholds) -> Self {
         Self { thresholds }
     }
@@ -167,7 +167,7 @@ impl AudioValidator {
     }
 
     /// Validate analysis results against thresholds
-    fn validate_analysis(&self, analysis: AudioAnalysis, duration: f32, total_samples: usize) 
+    fn validate_analysis(&self, analysis: AudioAnalysis, duration: f32, _total_samples: usize) 
         -> Result<AudioValidationResult, String> 
     {
         let AudioAnalysis { rms_energy, peak_amplitude, sample_count: _ } = analysis;
@@ -206,7 +206,6 @@ impl AudioValidator {
             energy: rms_energy,
             duration,
             peak: peak_amplitude,
-            sample_count: total_samples,
         })
     }
 }

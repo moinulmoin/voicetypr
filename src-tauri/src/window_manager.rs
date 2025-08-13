@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use crate::utils::logger::*;
 
 #[derive(Debug, Clone)]
 pub struct WindowManager {
@@ -10,14 +11,32 @@ pub struct WindowManager {
 
 impl WindowManager {
     pub fn new(app_handle: AppHandle) -> Self {
+        log_with_context(log::Level::Info, "Window manager initialization", &[
+            ("operation", "WINDOW_MANAGER_INIT"),
+            ("stage", "startup")
+        ]);
+
         // Get reference to main window on creation
         let main_window = app_handle.get_webview_window("main");
+        
+        let main_available = main_window.is_some();
+        log_with_context(log::Level::Debug, "Window manager setup", &[
+            ("main_window_available", &main_available.to_string().as_str()),
+            ("pill_window_created", "false")
+        ]);
 
-        Self {
+        let window_manager = Self {
             app_handle,
             main_window: Arc::new(Mutex::new(main_window)),
             pill_window: Arc::new(Mutex::new(None)),
-        }
+        };
+
+        log_with_context(log::Level::Info, "Window manager ready", &[
+            ("operation", "WINDOW_MANAGER_INIT"),
+            ("result", "success")
+        ]);
+
+        window_manager
     }
 
     /// Get the main window reference
@@ -166,7 +185,7 @@ impl WindowManager {
             position_y
         );
 
-        let pill_builder = WebviewWindowBuilder::new(
+        let mut pill_builder = WebviewWindowBuilder::new(
             &self.app_handle,
             "pill",
             WebviewUrl::App("pill.html".into()),

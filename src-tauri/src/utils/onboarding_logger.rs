@@ -216,6 +216,7 @@ static ONBOARDING_LOGGER: Lazy<Arc<Mutex<Option<OnboardingLogger>>>> =
     Lazy::new(|| Arc::new(Mutex::new(None)));
 
 /// Start onboarding session (thread-safe)
+#[allow(dead_code)] // Available for onboarding flow tracking
 pub fn start_onboarding() {
     let mut logger = ONBOARDING_LOGGER.lock().unwrap();
     *logger = Some(OnboardingLogger::start_session());

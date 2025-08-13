@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::time::Instant;
-use serde::Serialize;
 
 /// Structured logging utilities for VoiceTypr debugging
 /// 
@@ -29,222 +27,16 @@ use serde::Serialize;
 /// - **Error paths**: ALWAYS log with full context
 /// - **Performance tests**: Use specialized test macros
 
-/// Structured log event types to replace HashMap contexts
-#[derive(Debug, Clone, Serialize)]
-pub enum LogEvent {
-    Operation {
-        name: String,
-        phase: OperationPhase,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        context: Option<LogContext>,
-    },
-    Network {
-        operation: String,
-        status: NetworkStatus,
-        duration_ms: u64,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        details: Option<NetworkDetails>,
-    },
-    System {
-        operation: String,
-        resources: SystemResources,
-    },
-    Audio {
-        operation: String,
-        metrics: AudioMetrics,
-    },
-    Model {
-        operation: String,
-        model: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        status: Option<ModelStatus>,
-    },
-}
+// NOTE: LogEvent enums and complex structures have been removed
+// We now use simple logging functions (log_start, log_complete, log_failed, log_with_context)
+// for better maintainability and reduced complexity
 
-#[derive(Debug, Clone, Serialize)]
-pub enum OperationPhase {
-    Start,
-    Progress(u8),
-    Complete { duration_ms: u64 },
-    Failed { error: String },
-}
+// REMOVED: Function wrapper logging - use explicit log_start/log_complete for clarity
+// This avoids hidden overhead and makes logging intentions explicit at call sites
 
-#[derive(Debug, Clone, Serialize)]
-pub struct LogContext {
-    #[serde(flatten)]
-    pub fields: HashMap<String, String>,
-}
 
-#[derive(Debug, Clone, Serialize)]
-pub enum NetworkStatus {
-    Success,
-    RateLimited { retry_after: Option<u64> },
-    Timeout { duration_ms: u64 },
-    Failed { error: String },
-}
 
-#[derive(Debug, Clone, Serialize)]
-pub struct NetworkDetails {
-    pub endpoint: String,
-    pub method: String,
-    pub status_code: Option<u16>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SystemResources {
-    pub cpu_usage: f32,
-    pub memory_usage_mb: u64,
-    pub disk_available_gb: f64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AudioMetrics {
-    pub duration_seconds: f32,
-    pub sample_rate: u32,
-    pub channels: u16,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub enum ModelStatus {
-    Downloading { progress: u8 },
-    Downloaded,
-    Failed { error: String },
-}
-
-/// Unified logging function to replace all specialized functions
-pub fn log_event(event: LogEvent) {
-    match event {
-        LogEvent::Operation { name, phase, context } => {
-            let ctx_str = context.map(|c| format!(" | {:?}", c.fields)).unwrap_or_default();
-            match phase {
-                OperationPhase::Start => {
-                    log::info!("🚀 {} STARTING{}", name, ctx_str);
-                }
-                OperationPhase::Progress(percent) => {
-                    log::info!("📊 {} PROGRESS: {}%{}", name, percent, ctx_str);
-                }
-                OperationPhase::Complete { duration_ms } => {
-                    log::info!("✅ {} COMPLETE in {}ms{}", name, duration_ms, ctx_str);
-                }
-                OperationPhase::Failed { error } => {
-                    log::error!("❌ {} FAILED: {}{}", name, error, ctx_str);
-                }
-            }
-        }
-        LogEvent::Network { operation, status, duration_ms, details } => {
-            let detail_str = details.map(|d| format!(" | {} {}", d.method, d.endpoint)).unwrap_or_default();
-            match status {
-                NetworkStatus::Success => {
-                    log::info!("🌐 {} SUCCESS in {}ms{}", operation, duration_ms, detail_str);
-                }
-                NetworkStatus::RateLimited { retry_after } => {
-                    let retry_str = retry_after.map(|r| format!(" (retry after {}s)", r)).unwrap_or_default();
-                    log::warn!("⚠️ {} RATE LIMITED{}{}", operation, retry_str, detail_str);
-                }
-                NetworkStatus::Timeout { duration_ms: timeout } => {
-                    log::error!("⏱️ {} TIMEOUT after {}ms{}", operation, timeout, detail_str);
-                }
-                NetworkStatus::Failed { error } => {
-                    log::error!("❌ {} FAILED: {}{}", operation, error, detail_str);
-                }
-            }
-        }
-        LogEvent::System { operation, resources } => {
-            log::info!("💻 {} | CPU: {:.1}% | Memory: {}MB | Disk: {:.1}GB", 
-                operation, resources.cpu_usage, resources.memory_usage_mb, resources.disk_available_gb);
-        }
-        LogEvent::Audio { operation, metrics } => {
-            log::info!("🎵 {} | Duration: {:.2}s | Rate: {}Hz | Channels: {}", 
-                operation, metrics.duration_seconds, metrics.sample_rate, metrics.channels);
-        }
-        LogEvent::Model { operation, model, status } => {
-            let status_str = status.map(|s| match s {
-                ModelStatus::Downloading { progress } => format!(" | Downloading: {}%", progress),
-                ModelStatus::Downloaded => " | Downloaded".to_string(),
-                ModelStatus::Failed { error } => format!(" | Failed: {}", error),
-            }).unwrap_or_default();
-            log::info!("🤖 {} | Model: {}{}", operation, model, status_str);
-        }
-    }
-}
-
-/// Log function entry and exit with automatic timing
-#[inline]
-pub fn log_function<F, R>(name: &str, f: F) -> R 
-where 
-    F: FnOnce() -> R 
-{
-    // Always log in production for debugging user issues
-    // The overhead is acceptable for non-hot-path functions
-    if log::log_enabled!(log::Level::Info) {
-        let start = Instant::now();
-        log::info!("→ {} START", name);
-        let result = f();
-        log::info!("← {} END ({}ms)", name, start.elapsed().as_millis());
-        result
-    } else {
-        f()
-    }
-}
-
-/// Log function entry and exit with context data (zero-cost in release)
-#[inline]
-pub fn log_function_with_context<F, R>(
-    name: &str, 
-    context: &HashMap<String, String>, 
-    f: F
-) -> R 
-where 
-    F: FnOnce() -> R 
-{
-    #[cfg(debug_assertions)]
-    {
-        if log::log_enabled!(log::Level::Info) {
-            let start = Instant::now();
-            log::info!("→ {} START - Context: {:?}", name, context);
-            let result = f();
-            log::info!("← {} END ({}ms) - Context: {:?}", name, start.elapsed().as_millis(), context);
-            result
-        } else {
-            f()
-        }
-    }
-    
-    #[cfg(not(debug_assertions))]
-    {
-        f()
-    }
-}
-
-/// Log async function with timing
-#[inline]
-pub async fn log_async_function<F, Fut, R>(name: &str, f: F) -> R
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = R>,
-{
-    // Keep logging in production for debugging user issues
-    if log::log_enabled!(log::Level::Info) {
-        let start = Instant::now();
-        log::info!("→ {} START (async)", name);
-        let result = f().await;
-        log::info!("← {} END ({}ms) (async)", name, start.elapsed().as_millis());
-        result
-    } else {
-        f().await
-    }
-}
-
-/// Log error with comprehensive context information
-pub fn log_error_with_context(
-    error: &str,
-    context: &HashMap<String, String>
-) {
-    log::error!("❌ ERROR: {}", error);
-    if !context.is_empty() {
-        log::error!("   📋 Context: {:?}", context);
-    }
-}
+// REMOVED: Use log_failed() with log_with_context() for error logging
 
 /// Log performance metrics for operations
 pub fn log_performance(
@@ -258,46 +50,9 @@ pub fn log_performance(
 
 // Removed: log_performance_detailed - simplified to basic log_performance
 
-/// Log operation start with parameters (COMPATIBILITY WRAPPER)
-#[inline]
-pub fn log_operation_start(operation: &str, params: &HashMap<String, String>) {
-    log_event(LogEvent::Operation {
-        name: operation.to_string(),
-        phase: OperationPhase::Start,
-        context: if params.is_empty() { 
-            None 
-        } else { 
-            Some(LogContext { fields: params.clone() }) 
-        },
-    });
-}
+// REMOVED: HashMap-based wrappers - use log_start() with log_with_context() directly
 
-/// Log operation completion with results (COMPATIBILITY WRAPPER)
-#[inline]
-pub fn log_operation_complete(operation: &str, duration_ms: u64, results: &HashMap<String, String>) {
-    log_event(LogEvent::Operation {
-        name: operation.to_string(),
-        phase: OperationPhase::Complete { duration_ms },
-        context: if results.is_empty() { 
-            None 
-        } else { 
-            Some(LogContext { fields: results.clone() }) 
-        },
-    });
-}
 
-/// Log operation failure with context (COMPATIBILITY WRAPPER)
-pub fn log_operation_failed(operation: &str, error: &str, context: &HashMap<String, String>) {
-    log_event(LogEvent::Operation {
-        name: operation.to_string(),
-        phase: OperationPhase::Failed { error: error.to_string() },
-        context: if context.is_empty() { 
-            None 
-        } else { 
-            Some(LogContext { fields: context.clone() }) 
-        },
-    });
-}
 
 /// Log audio metrics in a structured way
 pub fn log_audio_metrics(
@@ -352,6 +107,7 @@ pub fn log_state_transition(
 }
 
 /// Log GPU/Hardware information
+#[allow(dead_code)] // Available for hardware diagnostics when needed
 pub fn log_hardware_info(
     component: &str,
     info: &HashMap<String, String>
@@ -531,5 +287,56 @@ mod tests {
             // Context is empty when logging is disabled (performance optimization)
             assert_eq!(context.len(), 0);
         }
+    }
+}
+
+// ============================================================================
+// SIMPLE LOGGING HELPERS - Phase 1 of simplification
+// ============================================================================
+// These are new, simple helpers that will gradually replace the complex logging
+// infrastructure above. They use standard log macros directly for simplicity.
+
+/// Simple log helper for operation start
+pub fn log_start(operation: &str) {
+    log::info!("🚀 {} STARTING", operation);
+}
+
+/// Simple log helper for successful completion
+pub fn log_complete(operation: &str, duration_ms: u64) {
+    log::info!("✅ {} COMPLETE in {}ms", operation, duration_ms);
+}
+
+/// Simple log helper for failures
+pub fn log_failed(operation: &str, error: &str) {
+    log::error!("❌ {} FAILED: {}", operation, error);
+}
+
+/// Simple contextual logging without HashMap overhead
+pub fn log_with_context(level: log::Level, operation: &str, context: &[(&str, &str)]) {
+    let ctx_str: Vec<String> = context.iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect();
+    let ctx = if ctx_str.is_empty() { 
+        String::new() 
+    } else { 
+        format!(" | {}", ctx_str.join(", ")) 
+    };
+    
+    match level {
+        log::Level::Info => log::info!("{}{}", operation, ctx),
+        log::Level::Debug => log::debug!("{}{}", operation, ctx),
+        log::Level::Warn => log::warn!("{}{}", operation, ctx),
+        log::Level::Error => log::error!("{}{}", operation, ctx),
+        _ => log::info!("{}{}", operation, ctx),
+    }
+}
+
+/// Log critical path operations (recording, transcription, etc)
+#[allow(dead_code)] // Useful for marking critical operations in future
+pub fn log_critical_operation(operation: &str, status: &str, details: Option<&str>) {
+    if let Some(d) = details {
+        log::info!("⭐ {} - {}: {}", operation, status, d);
+    } else {
+        log::info!("⭐ {} - {}", operation, status);
     }
 }

@@ -424,11 +424,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     log_lifecycle_event("APPLICATION_START", Some(app_version), None);
 
     // Load .env file if it exists (for development)
-    let env_context = log_context! {
-        "stage" => "env_loading"
-    };
-    
-    log_operation_start("ENV_FILE_LOAD", &env_context);
+    log_start("ENV_FILE_LOAD");
     match dotenv::dotenv() {
         Ok(path) => {
             log_file_operation("LOAD", &format!("{:?}", path), true, None, None);
@@ -441,18 +437,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Initialize encryption key for secure storage
-    log_operation_start("ENCRYPTION_INIT", &log_context! {
-        "component" => "secure_store"
-    });
+    log_start("ENCRYPTION_INIT");
+    log_with_context(log::Level::Debug, "Initializing encryption", &[
+        ("component", "secure_store")
+    ]);
     
     if let Err(e) = secure_store::initialize_encryption_key() {
-        log_error_with_context(
-            &format!("Failed to initialize encryption: {}", e),
-            &log_context! {
-                "component" => "secure_store",
-                "stage" => "encryption_init"
-            }
-        );
+        log_failed("ENCRYPTION_INIT", &format!("Failed to initialize encryption: {}", e));
         eprintln!("Failed to initialize encryption: {}", e);
     } else {
         log::info!("✅ Encryption initialized successfully");
@@ -676,48 +667,69 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             log::info!("🔐 Using OS-native keyring for secure API key storage");
 
             // Set up panic handler to catch crashes
-            log_operation_start("PANIC_HANDLER_SETUP", &log_context! {
-                "component" => "panic_handler"
-            });
+            log_start("PANIC_HANDLER_SETUP");
+            log_with_context(log::Level::Debug, "Setting up panic handler", &[
+                ("component", "panic_handler")
+            ]);
             
             std::panic::set_hook(Box::new(|panic_info| {
-                log::error!("💥 CRITICAL PANIC: {:?}", panic_info);
-                log_error_with_context(
-                    "Application panic occurred",
-                    &log_context! {
-                        "panic_info" => &format!("{:?}", panic_info),
-                        "severity" => "critical"
-                    }
-                );
-                eprintln!("Application panic: {:?}", panic_info);
+                let location = panic_info.location()
+                    .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+                    .unwrap_or_else(|| "unknown location".to_string());
+                
+                let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "Unknown panic payload".to_string()
+                };
+                
+                log::error!("💥 CRITICAL PANIC at {}: {}", location, message);
+                log_failed("PANIC", "Application panic occurred");
+                log_with_context(log::Level::Error, "Panic details", &[
+                    ("panic_location", &location),
+                    ("panic_message", &message),
+                    ("severity", "critical")
+                ]);
+                eprintln!("Application panic at {}: {}", location, message);
+                
+                // Try to save panic info to a crash file for debugging
+                if let Ok(home_dir) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+                    let crash_file = std::path::Path::new(&home_dir).join(".voicetypr_crash.log");
+                    let _ = std::fs::write(&crash_file, format!(
+                        "Panic at {}: {}\nFull info: {:?}\nTime: {:?}",
+                        location, message, panic_info, chrono::Local::now()
+                    ));
+                }
             }));
             
             log::info!("✅ Panic handler configured");
 
             // Clean up old logs on startup (keep last 30 days)
-            log_operation_start("LOG_CLEANUP", &log_context! {
-                "retention_days" => "30"
-            });
+            log_start("LOG_CLEANUP");
+            log_with_context(log::Level::Debug, "Cleaning up old logs", &[
+                ("retention_days", "30")
+            ]);
             
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let cleanup_start = Instant::now();
                 match commands::logs::clear_old_logs(app_handle, 30).await {
                     Ok(deleted) => {
-                        log_operation_complete("LOG_CLEANUP", 
-                            cleanup_start.elapsed().as_millis() as u64,
-                            &log_context! {
-                                "files_deleted" => &deleted.to_string()
-                            }
-                        );
+                        log_complete("LOG_CLEANUP", cleanup_start.elapsed().as_millis() as u64);
+                        log_with_context(log::Level::Debug, "Log cleanup complete", &[
+                            ("files_deleted", &deleted.to_string().as_str())
+                        ]);
                         if deleted > 0 {
                             log::info!("🧹 Cleaned up {} old log files", deleted);
                         }
                     }
                     Err(e) => {
-                        log_operation_failed("LOG_CLEANUP", &e, &log_context! {
-                            "retention_days" => "30"
-                        });
+                        log_failed("LOG_CLEANUP", &e);
+                        log_with_context(log::Level::Debug, "Log cleanup failed", &[
+                            ("retention_days", "30")
+                        ]);
                         log::warn!("Failed to clean up old logs: {}", e);
                     }
                 }
@@ -726,9 +738,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Set activation policy on macOS to prevent focus stealing
             #[cfg(target_os = "macos")]
             {
-                log_operation_start("MACOS_SETUP", &log_context! {
-                    "policy" => "Accessory"
-                });
+                log_start("MACOS_SETUP");
+                log_with_context(log::Level::Debug, "Setting up macOS policy", &[
+                    ("policy", "Accessory")
+                ]);
                 
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 log::info!("🍎 Set macOS activation policy to Accessory");
@@ -739,10 +752,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     // Small delay to ensure app is fully initialized
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-                    log_permission_event("ACCESSIBILITY_CHECK", false, Some(&log_context! {
-                        "stage" => "startup_check",
-                        "delay_ms" => "200"
-                    }));
+                    log_permission_event("ACCESSIBILITY_CHECK", false, None);
 
                     // Check and request accessibility permission for keyboard simulation
                     match app_handle.emit("check-accessibility-permission", ()) {
@@ -750,13 +760,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             log::info!("✅ Emitted accessibility permission check event");
                         }
                         Err(e) => {
-                            log_error_with_context(
-                                &format!("Failed to emit accessibility check: {}", e),
-                                &log_context! {
-                                    "event" => "check-accessibility-permission",
-                                    "stage" => "startup"
-                                }
-                            );
+                            log_failed("ACCESSIBILITY_EMIT", &format!("Failed to emit accessibility check: {}", e));
+                            log_with_context(log::Level::Debug, "Accessibility emit failed", &[
+                                ("event", "check-accessibility-permission"),
+                                ("stage", "startup")
+                            ]);
                         }
                     }
                 });
@@ -785,9 +793,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let models_dir = app.path().app_data_dir()?.join("models");
             log::info!("🗂️  Models directory: {:?}", models_dir);
 
-            log_operation_start("WHISPER_MANAGER_INIT", &log_context! {
-                "models_dir" => &format!("{:?}", models_dir)
-            });
+            log_start("WHISPER_MANAGER_INIT");
+            log_with_context(log::Level::Debug, "Initializing Whisper manager", &[
+                ("models_dir", &format!("{:?}", models_dir).as_str())
+            ]);
 
             // Ensure the models directory exists
             match std::fs::create_dir_all(&models_dir) {
@@ -906,9 +915,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .build(app)?;
 
             // Load hotkey from settings store with graceful degradation
-            log_operation_start("HOTKEY_SETUP", &log_context! {
-                "default" => "CommandOrControl+Shift+Space"
-            });
+            log_start("HOTKEY_SETUP");
+            log_with_context(log::Level::Debug, "Setting up hotkey", &[
+                ("default", "CommandOrControl+Shift+Space")
+            ]);
             
             let hotkey_str = match app.store("settings") {
                 Ok(store) => {
@@ -921,13 +931,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         })
                 }
                 Err(e) => {
-                    log_error_with_context(
-                        &format!("Failed to load settings store: {}", e),
-                        &log_context! {
-                            "component" => "settings",
-                            "fallback" => "CommandOrControl+Shift+Space"
-                        }
-                    );
+                    log_failed("SETTINGS_LOAD", &format!("Failed to load settings store: {}", e));
+                    log_with_context(log::Level::Debug, "Settings load failed", &[
+                        ("component", "settings"),
+                        ("fallback", "CommandOrControl+Shift+Space")
+                    ]);
                     "CommandOrControl+Shift+Space".to_string()
                 }
             };
@@ -963,25 +971,28 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 *shortcut_guard = Some(shortcut.clone());
             }
 
-            // Try to register global shortcut, but don't crash if it fails
+            // Try to register global shortcut with panic protection
             let registration_start = Instant::now();
-            match app.global_shortcut().register(shortcut.clone()) {
-                Ok(_) => {
-                    log_operation_complete("HOTKEY_REGISTRATION", 
-                        registration_start.elapsed().as_millis() as u64,
-                        &log_context! {
-                            "hotkey" => &hotkey_str,
-                            "normalized" => &normalized_hotkey
-                        }
-                    );
+            let registration_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                app.global_shortcut().register(shortcut.clone())
+            }));
+            
+            match registration_result {
+                Ok(Ok(_)) => {
+                    log_complete("HOTKEY_REGISTRATION", registration_start.elapsed().as_millis() as u64);
+                    log_with_context(log::Level::Debug, "Hotkey registered", &[
+                        ("hotkey", &hotkey_str),
+                        ("normalized", &normalized_hotkey)
+                    ]);
                     log::info!("✅ Successfully registered global hotkey: {}", hotkey_str);
                 }
-                Err(e) => {
-                    log_operation_failed("HOTKEY_REGISTRATION", &e.to_string(), &log_context! {
-                        "hotkey" => &hotkey_str,
-                        "normalized" => &normalized_hotkey,
-                        "suggestion" => "Try different hotkey or close conflicting apps"
-                    });
+                Ok(Err(e)) => {
+                    log_failed("HOTKEY_REGISTRATION", &e.to_string());
+                    log_with_context(log::Level::Debug, "Hotkey registration failed", &[
+                        ("hotkey", &hotkey_str),
+                        ("normalized", &normalized_hotkey),
+                        ("suggestion", "Try different hotkey or close conflicting apps")
+                    ]);
                     
                     log::error!("❌ Failed to register global hotkey '{}': {}", hotkey_str, e);
                     log::warn!("⚠️  The app will continue without global hotkey support. Another application may be using this shortcut.");
@@ -992,6 +1003,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             "hotkey": hotkey_str,
                             "error": e.to_string(),
                             "suggestion": "Please choose a different hotkey in settings or close conflicting applications"
+                        }));
+                    }
+                }
+                Err(panic_err) => {
+                    let panic_msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_err.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Unknown panic during hotkey registration".to_string()
+                    };
+                    
+                    log::error!("💥 PANIC during hotkey registration: {}", panic_msg);
+                    log::warn!("⚠️  Continuing without global hotkey due to panic");
+                    
+                    // Emit event to notify frontend
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.emit("hotkey-registration-failed", serde_json::json!({
+                            "hotkey": hotkey_str,
+                            "error": format!("Critical error: {}", panic_msg),
+                            "suggestion": "The hotkey system encountered an error. Please restart the app or try a different hotkey."
                         }));
                     }
                 }
@@ -1045,7 +1077,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
                 // Create the pill window with extra height for tooltip
-                let pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
+                let mut pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
                     .title("Recording")
                     .resizable(false)
                     .decorations(false)
@@ -1215,22 +1247,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .run(tauri::generate_context!())
         .map_err(|e| -> Box<dyn std::error::Error> {
-            log_error_with_context(
-                &format!("Critical error running Tauri application: {}", e),
-                &log_context! {
-                    "stage" => "application_run",
-                    "total_startup_time_ms" => &app_start.elapsed().as_millis().to_string()
-                }
-            );
+            log_failed("APPLICATION_RUN", &format!("Critical error running Tauri application: {}", e));
+            log_with_context(log::Level::Error, "Application run failed", &[
+                ("stage", "application_run"),
+                ("total_startup_time_ms", &app_start.elapsed().as_millis().to_string().as_str())
+            ]);
             eprintln!("VoiceTypr failed to start: {}", e);
             Box::new(e)
         })?;
         
     // Log successful application startup
-    log_lifecycle_event("APPLICATION_READY", Some(app_version), Some(&log_context! {
-        "total_startup_time_ms" => &app_start.elapsed().as_millis().to_string(),
-        "status" => "success"
-    }));
+    log_lifecycle_event("APPLICATION_READY", Some(app_version), None);
     
     Ok(())
 }
@@ -1238,21 +1265,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// Perform essential startup checks
 async fn perform_startup_checks(app: tauri::AppHandle) {
     let checks_start = Instant::now();
-    log_operation_start("STARTUP_CHECKS", &log_context! {
-        "stage" => "comprehensive_validation"
-    });
+    log_start("STARTUP_CHECKS");
+    log_with_context(log::Level::Debug, "Running startup checks", &[
+        ("stage", "comprehensive_validation")
+    ]);
 
     // Check if any models are downloaded
     if let Some(whisper_manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
     {
         let has_models = whisper_manager.read().await.has_downloaded_models();
-        let models_context = log_context! {
-            "has_models" => &has_models.to_string()
-        };
         
         log_model_operation("AVAILABILITY_CHECK", "all", 
             if has_models { "AVAILABLE" } else { "NONE_FOUND" },
-            Some(&models_context)
+            None
         );
 
         if !has_models {
@@ -1366,11 +1391,9 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
     }
 
     // Log startup checks completion
-    log_operation_complete("STARTUP_CHECKS", 
-        checks_start.elapsed().as_millis() as u64,
-        &log_context! {
-            "status" => "all_checks_completed"
-        }
-    );
+    log_complete("STARTUP_CHECKS", checks_start.elapsed().as_millis() as u64);
+    log_with_context(log::Level::Debug, "Startup checks complete", &[
+        ("status", "all_checks_completed")
+    ]);
     log::info!("✅ Startup checks COMPLETED in {}ms", checks_start.elapsed().as_millis());
 }

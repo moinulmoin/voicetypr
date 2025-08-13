@@ -5,10 +5,12 @@ use crate::audio::validator::{AudioValidator, AudioValidationResult};
 use crate::commands::license::check_license_status_internal;
 use crate::license::LicenseState;
 use crate::utils::logger::*;
+#[cfg(debug_assertions)]
+use crate::utils::system_monitor;
 use crate::whisper::cache::TranscriberCache;
 use crate::whisper::languages::validate_language;
 use crate::whisper::manager::WhisperManager;
-use crate::{emit_to_window, log_context, update_recording_state, AppState, RecordingState};
+use crate::{emit_to_window, update_recording_state, AppState, RecordingState};
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde_json;
 use std::sync::Mutex;
@@ -115,10 +117,11 @@ pub async fn start_recording(
 ) -> Result<(), String> {
     let recording_start = Instant::now();
     
-    log_operation_start("RECORDING_START", &log_context! {
-        "command" => "start_recording",
-        "timestamp" => &chrono::Utc::now().to_rfc3339()
-    });
+    log_start("RECORDING_START");
+    log_with_context(log::Level::Debug, "Recording command started", &[
+        ("command", "start_recording"),
+        ("timestamp", &chrono::Utc::now().to_rfc3339())
+    ]);
 
     // Validate all requirements upfront
     let validation_start = Instant::now();
@@ -128,10 +131,11 @@ pub async fn start_recording(
                 Some("validation_passed"));
         }
         Err(e) => {
-            log_operation_failed("RECORDING_START", &e, &log_context! {
-                "stage" => "validation",
-                "validation_time_ms" => &validation_start.elapsed().as_millis().to_string()
-            });
+            log_failed("RECORDING_START", &e);
+            log_with_context(log::Level::Debug, "Validation failed", &[
+                ("stage", "validation"),
+                ("validation_time_ms", &validation_start.elapsed().as_millis().to_string().as_str())
+            ]);
             return Err(e);
         }
     }
@@ -179,32 +183,31 @@ pub async fn start_recording(
         }
 
         // Log the current audio device before starting
-        log_operation_start("AUDIO_DEVICE_CHECK", &log_context! {
-            "stage" => "pre_recording"
-        });
+        log_start("AUDIO_DEVICE_CHECK");
+        log_with_context(log::Level::Debug, "Checking audio device", &[
+            ("stage", "pre_recording")
+        ]);
         
         if let Ok(host) = std::panic::catch_unwind(|| cpal::default_host()) {
             if let Some(device) = host.default_input_device() {
                 if let Ok(name) = device.name() {
                     log::info!("🎙️ Audio device available: {}", name);
-                    log_hardware_info("MICROPHONE", &log_context! {
-                        "device_name" => &name,
-                        "status" => "available"
-                    });
+                    log_with_context(log::Level::Info, "🎮 MICROPHONE", &[
+                        ("device_name", &name),
+                        ("status", "available")
+                    ]);
                 } else {
                     log::warn!("⚠️  Could not get device name, but device is available");
-                    log_hardware_info("MICROPHONE", &log_context! {
-                        "status" => "available_unnamed"
-                    });
+                    log_with_context(log::Level::Info, "🎮 MICROPHONE", &[
+                        ("status", "available_unnamed")
+                    ]);
                 }
             } else {
-                log_error_with_context(
-                    "No default input device found",
-                    &log_context! {
-                        "component" => "audio_device",
-                        "stage" => "device_detection"
-                    }
-                );
+                log_failed("AUDIO_DEVICE", "No default input device found");
+                log_with_context(log::Level::Debug, "Device detection failed", &[
+                    ("component", "audio_device"),
+                    ("stage", "device_detection")
+                ]);
             }
         }
 
@@ -220,13 +223,11 @@ pub async fn start_recording(
             Ok(_) => {
                 // Verify recording actually started
                 if !recorder.is_recording() {
-                    log_error_with_context(
-                        "Recording failed to start after initialization",
-                        &log_context! {
-                            "audio_path" => audio_path_str,
-                            "init_time_ms" => &recorder_init_start.elapsed().as_millis().to_string()
-                        }
-                    );
+                    log_failed("RECORDER_INIT", "Recording failed to start after initialization");
+                    log_with_context(log::Level::Debug, "Recorder initialization failed", &[
+                        ("audio_path", audio_path_str),
+                        ("init_time_ms", &recorder_init_start.elapsed().as_millis().to_string().as_str())
+                    ]);
 
                     update_recording_state(
                         &app,
@@ -244,13 +245,18 @@ pub async fn start_recording(
                         recorder_init_start.elapsed().as_millis() as u64, 
                         Some(&format!("file={}", audio_path_str)));
                     log::info!("✅ Recording started successfully");
+                    
+                    // Monitor system resources at recording start
+                    #[cfg(debug_assertions)]
+                    system_monitor::log_resources_before_operation("RECORDING_START");
                 }
             }
             Err(e) => {
-                log_operation_failed("RECORDER_START", &e, &log_context! {
-                    "audio_path" => audio_path_str,
-                    "init_time_ms" => &recorder_init_start.elapsed().as_millis().to_string()
-                });
+                log_failed("RECORDER_START", &e);
+                log_with_context(log::Level::Debug, "Recorder start failed", &[
+                    ("audio_path", audio_path_str),
+                    ("init_time_ms", &recorder_init_start.elapsed().as_millis().to_string().as_str())
+                ]);
 
                 update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
 
@@ -343,13 +349,11 @@ pub async fn start_recording(
     let _ = emit_to_window(&app, "pill", "recording-started", ());
     
     // Log successful recording start
-    log_operation_complete("RECORDING_START", 
-        recording_start.elapsed().as_millis() as u64,
-        &log_context! {
-            "audio_path" => &format!("{:?}", audio_path),
-            "state" => "recording"
-        }
-    );
+    log_complete("RECORDING_START", recording_start.elapsed().as_millis() as u64);
+    log_with_context(log::Level::Debug, "Recording started successfully", &[
+        ("audio_path", &format!("{:?}", audio_path).as_str()),
+        ("state", "recording")
+    ]);
 
     // Register global ESC key for cancellation
     let app_state = app.state::<AppState>();
@@ -391,12 +395,13 @@ pub async fn stop_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
 ) -> Result<String, String> {
-    let _stop_start = Instant::now();
+    let stop_start = Instant::now();
     
-    log_operation_start("RECORDING_STOP", &log_context! {
-        "command" => "stop_recording",
-        "timestamp" => &chrono::Utc::now().to_rfc3339()
-    });
+    log_start("RECORDING_STOP");
+    log_with_context(log::Level::Debug, "Stop recording command", &[
+        ("command", "stop_recording"),
+        ("timestamp", &chrono::Utc::now().to_rfc3339().as_str())
+    ]);
 
     // Update state to stopping
     log_state_transition("RECORDING", "recording", "stopping", true, None);
@@ -426,6 +431,10 @@ pub async fn stop_recording(
             .stop_recording()
             .map_err(|e| format!("Failed to stop recording: {}", e))?;
         log::info!("{}", stop_message);
+        
+        // Monitor system resources after recording stop
+        #[cfg(debug_assertions)]
+        system_monitor::log_resources_after_operation("RECORDING_STOP", stop_start.elapsed().as_millis() as u64);
 
         // Emit event if recording was stopped due to silence
         if stop_message.contains("silence") {
@@ -518,19 +527,29 @@ pub async fn stop_recording(
 
     // === AUDIO VALIDATION - Check quality before transcription ===
     let validation_start = Instant::now();
-    log_operation_start("AUDIO_VALIDATION", &log_context! {
-        "audio_path" => &format!("{:?}", audio_path),
-        "stage" => "pre_transcription"
-    });
+    log_start("AUDIO_VALIDATION");
+    log_with_context(log::Level::Debug, "Validating audio", &[
+        ("audio_path", &format!("{:?}", audio_path).as_str()),
+        ("stage", "pre_transcription")
+    ]);
     
     let validator = AudioValidator::new();
     
     match validator.validate_audio_file(&audio_path) {
         Ok(AudioValidationResult::Valid { energy, duration, peak, .. }) => {
             log_audio_metrics("VALIDATION_PASSED", energy as f64, peak as f64, duration, 
-                Some(&log_context! {
-                    "validation_time_ms" => &validation_start.elapsed().as_millis().to_string()
+                Some(&{
+                    let mut ctx = std::collections::HashMap::new();
+                    ctx.insert("validation_time_ms".to_string(), validation_start.elapsed().as_millis().to_string());
+                    ctx
                 }));
+            log_with_context(log::Level::Info, "Audio validation passed", &[
+                ("operation", "AUDIO_VALIDATION"),
+                ("result", "valid"),
+                ("energy", &energy.to_string().as_str()),
+                ("duration", &format!("{:.2}", duration).as_str()),
+                ("peak", &peak.to_string().as_str())
+            ]);
             // Continue with transcription
         }
         Ok(AudioValidationResult::Silent) => {
@@ -729,9 +748,10 @@ pub async fn stop_recording(
     }
 
     // Smart model selection with graceful degradation
-    log_operation_start("MODEL_SELECTION", &log_context! {
-        "available_count" => &downloaded_models.len().to_string()
-    });
+    log_start("MODEL_SELECTION");
+    log_with_context(log::Level::Debug, "Selecting model", &[
+        ("available_count", &downloaded_models.len().to_string().as_str())
+    ]);
     
     let configured_model = store
         .get("current_model")
@@ -745,10 +765,11 @@ pub async fn stop_recording(
             configured_model
         } else if downloaded_models.is_empty() {
             // This should never happen since we check earlier, but just in case
-            log_error_with_context("No models available for fallback", &log_context! {
-                "configured_model" => &configured_model,
-                "downloaded_count" => "0"
-            });
+            log_failed("MODEL_SELECTION", "No models available for fallback");
+            log_with_context(log::Level::Debug, "Model fallback failed", &[
+                ("configured_model", &configured_model),
+                ("downloaded_count", "0")
+            ]);
             return Err("No models available".to_string());
         } else {
             // Fallback to best available model
@@ -756,9 +777,11 @@ pub async fn stop_recording(
             let fallback_model =
                 select_best_fallback_model(&downloaded_models, &configured_model, &models_by_size);
                 
-            log_model_operation("FALLBACK", &fallback_model, "SELECTED", Some(&log_context! {
-                "requested" => &configured_model,
-                "reason" => "configured_not_available"
+            log_model_operation("FALLBACK", &fallback_model, "SELECTED", Some(&{
+                let mut ctx = std::collections::HashMap::new();
+                ctx.insert("requested".to_string(), configured_model.clone());
+                ctx.insert("reason".to_string(), "configured_not_available".to_string());
+                ctx
             }));
 
             // Notify user about fallback
@@ -780,9 +803,11 @@ pub async fn stop_recording(
         let models_by_size = whisper_manager.read().await.get_models_by_size();
         let best_model = select_best_fallback_model(&downloaded_models, "", &models_by_size);
         
-        log_model_operation("AUTO_SELECTION", &best_model, "SELECTED", Some(&log_context! {
-            "reason" => "no_model_configured",
-            "strategy" => "best_available"
+        log_model_operation("AUTO_SELECTION", &best_model, "SELECTED", Some(&{
+            let mut ctx = std::collections::HashMap::new();
+            ctx.insert("reason".to_string(), "no_model_configured".to_string());
+            ctx.insert("strategy".to_string(), "best_available".to_string());
+            ctx
         }));
         
         best_model

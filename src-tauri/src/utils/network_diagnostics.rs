@@ -1,4 +1,5 @@
-use crate::utils::logger::{log_event, LogEvent, NetworkStatus, NetworkDetails};
+
+use crate::utils::logger::*;
 
 /// Network error types for enhanced diagnostics
 #[derive(Debug, Clone)]
@@ -12,27 +13,7 @@ pub enum NetworkError {
     Unknown { message: String },
 }
 
-impl From<NetworkError> for NetworkStatus {
-    fn from(error: NetworkError) -> Self {
-        match error {
-            NetworkError::Timeout { duration_ms } => NetworkStatus::Timeout { duration_ms },
-            NetworkError::RateLimited { retry_after } => NetworkStatus::RateLimited { retry_after },
-            NetworkError::AuthenticationFailed { provider } => {
-                NetworkStatus::Failed { error: format!("Authentication failed for {}", provider) }
-            }
-            NetworkError::DnsResolutionFailed { host } => {
-                NetworkStatus::Failed { error: format!("DNS resolution failed for {}", host) }
-            }
-            NetworkError::SslError { details } => {
-                NetworkStatus::Failed { error: format!("SSL error: {}", details) }
-            }
-            NetworkError::ConnectionRefused { endpoint } => {
-                NetworkStatus::Failed { error: format!("Connection refused: {}", endpoint) }
-            }
-            NetworkError::Unknown { message } => NetworkStatus::Failed { error: message },
-        }
-    }
-}
+// NetworkStatus conversion removed - using simple logging functions instead
 
 /// Log AI API request with full context (stateless)
 pub fn log_api_request(provider: &str, model: &str, token_count: usize) {
@@ -56,24 +37,20 @@ pub fn log_api_response(
     duration_ms: u64,
     tokens_used: Option<usize>,
 ) {
-    let status = if status_code == 200 {
-        NetworkStatus::Success
+    let status_str = if status_code == 200 {
+        "SUCCESS"
+    } else if status_code == 429 {
+        "RATE_LIMITED"  
+    } else if status_code >= 500 {
+        "SERVER_ERROR"
+    } else if status_code == 401 || status_code == 403 {
+        "AUTH_ERROR"
     } else {
-        NetworkStatus::Failed { error: format!("HTTP {}", status_code) }
+        "ERROR"
     };
     
-    let details = NetworkDetails {
-        endpoint: endpoint.to_string(),
-        method: method.to_string(),
-        status_code: Some(status_code),
-    };
-
-    log_event(LogEvent::Network {
-        operation: format!("API_{}", provider.to_uppercase()),
-        status,
-        duration_ms,
-        details: Some(details),
-    });
+    log::info!("🌐 API_{} {} in {}ms | {} {} | Status: {}", 
+        provider.to_uppercase(), status_str, duration_ms, method, endpoint, status_code);
 
     if let Some(tokens) = tokens_used {
         log::info!("  • Tokens Used: {}", tokens);
@@ -106,16 +83,27 @@ pub fn log_network_error_with_duration(error: NetworkError, duration_ms: Option<
         }
     });
 
-    log_event(LogEvent::Network {
-        operation: operation.to_string(),
-        status: error.clone().into(),
-        duration_ms: final_duration,
-        details: None,
-    });
+    let error_str = match &error {
+        NetworkError::Timeout { duration_ms } => format!("Timeout after {}ms", duration_ms),
+        NetworkError::RateLimited { retry_after } => {
+            if let Some(seconds) = retry_after {
+                format!("Rate limited, retry after {}s", seconds)
+            } else {
+                "Rate limited".to_string()
+            }
+        }
+        NetworkError::AuthenticationFailed { provider } => format!("Auth failed for {}", provider),
+        NetworkError::DnsResolutionFailed { host } => format!("DNS failed for {}", host),
+        NetworkError::SslError { details } => format!("SSL error: {}", details),
+        NetworkError::ConnectionRefused { endpoint } => format!("Connection refused: {}", endpoint),
+        NetworkError::Unknown { message } => message.clone(),
+    };
+    
+    log::error!("❌ {} FAILED: {} ({}ms)", operation, error_str, final_duration);
 
     // Log helpful suggestions
     match error {
-        NetworkError::Timeout { duration_ms } => {
+        NetworkError::Timeout { duration_ms: _ } => {
             log::error!("  • Suggestion: Check internet connection or increase timeout");
         }
         NetworkError::RateLimited { retry_after } => {
@@ -124,10 +112,10 @@ pub fn log_network_error_with_duration(error: NetworkError, duration_ms: Option<
             }
             log::error!("  • Suggestion: Reduce request frequency or upgrade plan");
         }
-        NetworkError::AuthenticationFailed { provider } => {
+        NetworkError::AuthenticationFailed { provider: _ } => {
             log::error!("  • Suggestion: Check API key in settings");
         }
-        NetworkError::DnsResolutionFailed { host } => {
+        NetworkError::DnsResolutionFailed { host: _ } => {
             log::error!("  • Suggestion: Check DNS settings or internet connection");
         }
         NetworkError::SslError { .. } => {
@@ -148,4 +136,38 @@ pub fn log_network_error(error: NetworkError) {
 /// Log retry attempt for network operations
 pub fn log_retry_attempt(operation: &str, attempt: u32, max_attempts: u32) {
     log::info!("🔄 RETRY_ATTEMPT: {} (attempt {}/{})", operation, attempt, max_attempts);
+}
+
+/// Log network connectivity status check
+#[allow(dead_code)] // Available for network diagnostics
+pub fn log_connectivity_check(host: &str, success: bool, duration_ms: u64) {
+    if success {
+        log_with_context(log::Level::Info, "Network connectivity verified", &[
+            ("operation", "CONNECTIVITY_CHECK"),
+            ("host", host),
+            ("result", "success"),
+            ("duration_ms", &duration_ms.to_string().as_str())
+        ]);
+        log::info!("🌐 CONNECTIVITY_OK: {} reachable in {}ms", host, duration_ms);
+    } else {
+        log_with_context(log::Level::Error, "Network connectivity failed", &[
+            ("operation", "CONNECTIVITY_CHECK"),
+            ("host", host),
+            ("result", "failed"),
+            ("duration_ms", &duration_ms.to_string().as_str())
+        ]);
+        log::error!("❌ CONNECTIVITY_FAILED: {} not reachable ({}ms)", host, duration_ms);
+        log::error!("  • Suggestion: Check internet connection and DNS settings");
+    }
+}
+
+/// Log network interface information
+#[allow(dead_code)] // Available for network diagnostics
+pub fn log_network_interfaces() {
+    log_with_context(log::Level::Debug, "Network interface enumeration", &[
+        ("operation", "NETWORK_INTERFACES"),
+        ("platform", std::env::consts::OS)
+    ]);
+    // This would require additional dependencies to implement fully
+    log::debug!("📡 NETWORK_INTERFACES: Enumeration requested for debugging");
 }

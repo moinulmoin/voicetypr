@@ -1,13 +1,16 @@
 use crate::commands::license::check_license_status_internal;
 use crate::emit_to_all;
+#[cfg(debug_assertions)]
+use crate::utils::system_monitor;
 use crate::license::LicenseState;
 use crate::utils::onboarding_logger;
 use crate::whisper::manager::{ModelInfo, WhisperManager};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Instant;
 use tauri::async_runtime::RwLock;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[tauri::command]
 pub async fn download_model(
@@ -16,6 +19,8 @@ pub async fn download_model(
     state: State<'_, RwLock<WhisperManager>>,
     active_downloads: State<'_, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>,
 ) -> Result<(), String> {
+    let download_start = Instant::now();
+    
     // Validate model name using WhisperManager
     {
         let manager = state.read().await;
@@ -27,6 +32,10 @@ pub async fn download_model(
     }
 
     log::info!("Starting download for model: {}", model_name);
+    
+    // Monitor system resources at download start
+    #[cfg(debug_assertions)]
+    system_monitor::log_resources_before_operation("MODEL_DOWNLOAD");
     
     // Log to onboarding if in onboarding context
     let model_size_mb = {
@@ -216,6 +225,10 @@ pub async fn download_model(
         Ok(_) => {
             log::info!("Download completed successfully for model: {}", model_name);
             
+            // Monitor system resources after download completion
+            #[cfg(debug_assertions)]
+            system_monitor::log_resources_after_operation("MODEL_DOWNLOAD", download_start.elapsed().as_millis() as u64);
+            
             // Log to onboarding if active
             onboarding_logger::with_onboarding_logger(|logger| {
                 // Calculate duration if possible
@@ -271,12 +284,30 @@ pub struct ModelEntry {
 #[tauri::command]
 pub async fn get_model_status(
     state: State<'_, RwLock<WhisperManager>>,
+    app: tauri::AppHandle,
 ) -> Result<ModelStatusResponse, String> {
     // Force refresh before returning status
     let mut manager = state.write().await;
     log::info!("[GET_MODEL_STATUS] Refreshing downloaded status...");
     manager.refresh_downloaded_status();
     let models = manager.get_models_status();
+    
+    // Check for incomplete models and emit events
+    for (model_name, model_info) in &models {
+        if model_info.incomplete {
+            log::warn!("Emitting incomplete model event for: {}", model_name);
+            let _ = app.emit(
+                "model-incomplete-error",
+                serde_json::json!({
+                    "title": "Incomplete Model Detected",
+                    "message": format!("Model '{}' appears corrupted. Please delete and re-download it.", 
+                        model_info.display_name),
+                    "model": model_name,
+                    "action": "redownload"
+                }),
+            );
+        }
+    }
 
     // Convert HashMap to Vec and sort by accuracy (ascending)
     let mut models_vec: Vec<ModelEntry> = models

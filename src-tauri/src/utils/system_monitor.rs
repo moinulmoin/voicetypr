@@ -1,4 +1,3 @@
-use crate::utils::logger::{log_event, LogEvent, SystemResources};
 use sysinfo::{System, Disks};
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
@@ -31,6 +30,7 @@ mod thresholds {
     }
     
     /// CPU frequency threshold for thermal throttling detection (MHz)
+    #[allow(dead_code)]
     pub fn cpu_throttle_mhz() -> u64 {
         std::env::var("VOICETYPR_CPU_THROTTLE_MHZ")
             .ok()
@@ -46,6 +46,13 @@ static SYSTEM: Lazy<Mutex<System>> = Lazy::new(|| {
     Mutex::new(system)
 });
 
+/// Simple struct for system resources
+struct SystemResources {
+    cpu_usage: f32,
+    memory_usage_mb: u64,
+    disk_available_gb: f64,
+}
+
 /// Get current system resources
 fn get_current_resources() -> SystemResources {
     let mut system = match SYSTEM.lock() {
@@ -59,7 +66,7 @@ fn get_current_resources() -> SystemResources {
     
     let cpu_usage = system.global_cpu_usage();
     let memory_used = system.used_memory();
-    let memory_total = system.total_memory();
+    let _memory_total = system.total_memory();
     let memory_usage_mb = memory_used / 1_048_576; // Convert to MB
     
     // Get actual disk space for the current working directory
@@ -120,10 +127,8 @@ fn get_available_disk_space() -> f64 {
 pub fn log_resources_before_operation(operation: &str) {
     let resources = get_current_resources();
     
-    log_event(LogEvent::System {
-        operation: format!("{}_BEFORE", operation),
-        resources: resources.clone(),
-    });
+    log::info!("💻 {}_BEFORE | CPU: {:.1}% | Memory: {}MB | Disk: {:.1}GB", 
+        operation, resources.cpu_usage, resources.memory_usage_mb, resources.disk_available_gb);
     
     // Warn if resources are constrained (using configurable thresholds)
     if resources.cpu_usage > thresholds::cpu_warning_percent() {
@@ -165,15 +170,14 @@ pub fn log_resources_before_operation(operation: &str) {
 pub fn log_resources_after_operation(operation: &str, duration_ms: u64) {
     let resources = get_current_resources();
     
-    log_event(LogEvent::System {
-        operation: format!("{}_AFTER", operation),
-        resources,
-    });
+    log::info!("💻 {}_AFTER | CPU: {:.1}% | Memory: {}MB | Disk: {:.1}GB", 
+        operation, resources.cpu_usage, resources.memory_usage_mb, resources.disk_available_gb);
     
     log::info!("⏱️ Operation completed in {}ms", duration_ms);
 }
 
 /// Check for thermal throttling
+#[allow(dead_code)] // Available for performance diagnostics
 pub fn check_thermal_state() -> bool {
     // Platform-specific thermal checks
     #[cfg(target_os = "macos")]
@@ -205,6 +209,7 @@ pub fn check_thermal_state() -> bool {
 }
 
 /// Monitor GPU memory (if available)
+#[allow(dead_code)] // Available for GPU diagnostics when needed
 pub fn log_gpu_memory() {
     #[cfg(target_os = "macos")]
     {
@@ -228,6 +233,7 @@ pub fn log_gpu_memory() {
 }
 
 /// Detect if running in virtual machine
+#[allow(dead_code)] // Useful for environment-specific debugging
 pub fn detect_virtual_environment() -> Option<String> {
     // Check for VM indicators
     let vm_indicators = vec![

@@ -51,6 +51,7 @@ pub struct ModelInfo {
     pub url: String,
     pub sha256: String,
     pub downloaded: bool,
+    pub incomplete: bool,   // Whether the model file is incomplete/corrupted
     pub speed_score: u8,    // 1-10, 10 being fastest
     pub accuracy_score: u8, // 1-10, 10 being most accurate
     pub recommended: bool,  // Whether this model is recommended
@@ -111,6 +112,7 @@ impl WhisperManager {
                     .to_string(),
                 sha256: "137c40403d78fd54d454da0f9bd998f78703390c".to_string(), // SHA1 (correct)
                 downloaded: false,
+                incomplete: false,
                 speed_score: 8,    // Very fast
                 accuracy_score: 5, // Basic accuracy
                 recommended: false,
@@ -127,6 +129,7 @@ impl WhisperManager {
                     .to_string(),
                 sha256: "ad82bf6a9043ceed055076d0fd39f5f186ff8062".to_string(), // SHA1 (correct)
                 downloaded: false,
+                incomplete: false,
                 speed_score: 2,    // Slowest
                 accuracy_score: 9, // Best accuracy
                 recommended: true, // Recommended model
@@ -140,6 +143,7 @@ impl WhisperManager {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin".to_string(),
             sha256: "e6e2ed78495d403bef4b7cff42ef4aaadcfea8de".to_string(), // SHA1 (correct)
             downloaded: false,
+            incomplete: false,
             speed_score: 4,       // Quantized, faster than full large
             accuracy_score: 8,    // Slight degradation from quantization
             recommended: false,
@@ -152,6 +156,7 @@ impl WhisperManager {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".to_string(),
             sha256: "4af2b29d7ec73d781377bfd1758ca957a807e941".to_string(), // SHA1 (correct)
             downloaded: false,
+            incomplete: false,
             speed_score: 7,       // 6x faster than large-v3
             accuracy_score: 9,    // Comparable to large-v2
             recommended: true,    // Recommended model
@@ -167,6 +172,7 @@ impl WhisperManager {
                     .to_string(),
                 sha256: "db8a495a91d927739e50b3fc1cc4c6b8f6c2d022".to_string(), // SHA1 (correct)
                 downloaded: false,
+                incomplete: false,
                 speed_score: 7,    // Fast for English-only
                 accuracy_score: 6, // Good accuracy for English
                 recommended: true,
@@ -180,6 +186,7 @@ impl WhisperManager {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin".to_string(),
             sha256: "01bf15bedffe9f39d65c1b6ff9b687ea91f59e0e".to_string(), // SHA1 (correct)
             downloaded: false,
+            incomplete: false,
             speed_score: 7,       // Fast, higher quality quantization
             accuracy_score: 8,    // Excellent accuracy with minimal loss
             recommended: false,
@@ -219,6 +226,7 @@ impl WhisperManager {
                         log::warn!("[check_downloaded_models] Model '{}' exists but appears incomplete: {} bytes (expected: {} bytes)", 
                             model_name, file_size, expected_size);
                         model_info.downloaded = false;
+                        model_info.incomplete = true;  // Mark as incomplete for UI
                     } else {
                         log::warn!(
                             "[check_downloaded_models] Model '{}' exists but has 0 bytes",
@@ -748,6 +756,7 @@ impl WhisperManager {
                 url: "https://test.example.com/base.en.bin".to_string(),
                 sha256: "test_hash".to_string(),
                 downloaded: false,
+                incomplete: false,
                 speed_score: 8,
                 accuracy_score: 5,
                 recommended: false,
