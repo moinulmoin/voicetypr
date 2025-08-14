@@ -6,8 +6,10 @@ import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { isMacOS } from "@/lib/platform";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
+import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle, Globe, Mic, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { LanguageSelection } from "../LanguageSelection";
 
 export function GeneralSettings() {
@@ -85,7 +87,18 @@ export function GeneralSettings() {
                 </div>
                 <HotkeyInput
                   value={settings.hotkey || ""}
-                  onChange={(hotkey) => updateSettings({ hotkey })}
+                  onChange={async (hotkey) => {
+                    try {
+                      // First update the global shortcut in the backend
+                      await invoke("set_global_shortcut", { shortcut: hotkey });
+                      // Then update the settings
+                      await updateSettings({ hotkey });
+                      toast.success("Hotkey updated successfully!");
+                    } catch (err) {
+                      console.error("Failed to update hotkey:", err);
+                      toast.error("Failed to update hotkey. Please try a different combination.");
+                    }
+                  }}
                   placeholder="Click to set"
                 />
               </div>

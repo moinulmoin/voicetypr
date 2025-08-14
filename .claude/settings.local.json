@@ -16,7 +16,8 @@
       "WebSearch",
       "Bash(gh pr diff:*)"
     ],
-    "deny": []
+    "deny": [],
+    "defaultMode": "acceptEdits"
   },
   "hooks": {
     "PreToolUse": [
