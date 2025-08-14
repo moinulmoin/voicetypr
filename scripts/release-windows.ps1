@@ -74,7 +74,7 @@ if (-not $SkipBuild) {
     $config = Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
     # Create new nsis object with both properties
     $nsisConfig = @{
-        installMode = "perMachine"
+        installMode = "currentUser"
         installerHooks = "./windows/smart-installer-hooks.nsh"
     }
     $config.bundle.windows.nsis = $nsisConfig
@@ -122,32 +122,24 @@ if (-not $SkipBuild) {
         exit 1
     }
     
-    # Create update artifacts
-    Write-Info "Creating update artifacts..."
-    
-    # Create .zip for updater
-    $zipPath = "$installerPath.zip"
-    Compress-Archive -Path $installerPath -DestinationPath $zipPath -Force
-    Write-Success "Created update archive"
-    
-    # Sign if key available
+    # Sign installer directly if key available
     $keyPath = "$env:USERPROFILE\.tauri\voicetypr.key"
     $signature = ""
     if (Test-Path $keyPath) {
-        Write-Info "Signing update artifact..."
+        Write-Info "Signing installer for updates..."
         $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
         
-        & pnpm tauri signer sign -f $keyPath $zipPath
+        & pnpm tauri signer sign -f $keyPath $installerPath
         
-        if (Test-Path "$zipPath.sig") {
-            Write-Success "Update artifact signed"
+        if (Test-Path "$installerPath.sig") {
+            Write-Success "Installer signed"
             # Read signature for latest.json - ensure proper formatting
-            $signature = (Get-Content "$zipPath.sig" -Raw).Trim()
+            $signature = (Get-Content "$installerPath.sig" -Raw).Trim()
             # Remove any potential line breaks within the signature
             $signature = $signature -replace "`r`n", "" -replace "`n", ""
             Write-Info "Signature captured: $($signature.Substring(0, [Math]::Min(50, $signature.Length)))..."
         } else {
-            Write-Warning "Failed to sign update artifact"
+            Write-Warning "Failed to sign installer"
             $signature = ""
         }
     } else {
@@ -164,12 +156,24 @@ if (-not $SkipBuild) {
     Write-Info "Checking for existing latest.json in release..."
     try {
         # Download latest.json if it exists in the release
-        $null = gh release download $ReleaseTag -p "latest.json" -D $OutputDir --clobber 2>&1
-        if (Test-Path $latestJsonPath) {
+        $downloadOutput = gh release download $ReleaseTag -p "latest.json" -D $OutputDir --clobber 2>&1
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $latestJsonPath)) {
             Write-Success "Downloaded existing latest.json from release"
+        } else {
+            Write-Info "No existing latest.json found in release - will check draft"
+            # Try to get from draft release
+            $draftReleases = gh release list --json isDraft,tagName,uploadUrl | ConvertFrom-Json
+            $draftRelease = $draftReleases | Where-Object { $_.tagName -eq $ReleaseTag -and $_.isDraft -eq $true }
+            if ($draftRelease) {
+                Write-Info "Found draft release, attempting to download latest.json..."
+                $downloadOutput = gh release download $ReleaseTag -p "latest.json" -D $OutputDir --clobber 2>&1
+                if ($LASTEXITCODE -eq 0 -and (Test-Path $latestJsonPath)) {
+                    Write-Success "Downloaded existing latest.json from draft release"
+                }
+            }
         }
     } catch {
-        Write-Info "No existing latest.json found in release"
+        Write-Info "Error checking for latest.json: $_"
     }
     
     if (Test-Path $latestJsonPath) {
@@ -181,10 +185,12 @@ if (-not $SkipBuild) {
             $latestJson | Add-Member -NotePropertyName "platforms" -NotePropertyValue @{} -Force
         }
         
-        $latestJson.platforms."windows-x86_64" = @{
+        # Use Add-Member to safely add the windows platform
+        $windowsPlatform = @{
             signature = $signature
-            url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/VoiceTypr_${Version}_x64-setup.exe.zip"
+            url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/VoiceTypr_${Version}_x64-setup.exe"
         }
+        $latestJson.platforms | Add-Member -NotePropertyName "windows-x86_64" -NotePropertyValue $windowsPlatform -Force
         
         # Save updated latest.json
         $latestJson | ConvertTo-Json -Depth 10 | Set-Content $latestJsonPath
@@ -199,13 +205,27 @@ if (-not $SkipBuild) {
             platforms = @{
                 "windows-x86_64" = @{
                     signature = $signature
-                    url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/VoiceTypr_${Version}_x64-setup.exe.zip"
+                    url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/VoiceTypr_${Version}_x64-setup.exe"
                 }
             }
         }
         
         $latestJson | ConvertTo-Json -Depth 10 | Set-Content $latestJsonPath
         Write-Success "Created latest.json for Windows"
+    }
+}
+
+# If we skipped build, try to read signature from existing .sig file
+if ($SkipBuild) {
+    $sigPath = "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.sig"
+    if (Test-Path $sigPath) {
+        Write-Info "Reading signature from existing .sig file..."
+        $signature = (Get-Content $sigPath -Raw).Trim()
+        $signature = $signature -replace "`r`n", "" -replace "`n", ""
+        Write-Success "Signature loaded from file"
+    } else {
+        Write-Warning "No signature file found at $sigPath"
+        $signature = ""
     }
 }
 
@@ -225,12 +245,10 @@ if (-not $SkipPublish) {
     Write-Info "Uploading installer..."
     gh release upload $ReleaseTag "$OutputDir\VoiceTypr_${Version}_x64-setup.exe" --clobber
     
-    # Upload update artifacts if they exist
-    if (Test-Path "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.zip") {
-        gh release upload $ReleaseTag "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.zip" --clobber
-        if (Test-Path "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.zip.sig") {
-            gh release upload $ReleaseTag "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.zip.sig" --clobber
-        }
+    # Upload signature if it exists
+    if (Test-Path "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.sig") {
+        Write-Info "Uploading signature..."
+        gh release upload $ReleaseTag "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.sig" --clobber
     }
     
     # Upload latest.json
@@ -239,11 +257,12 @@ if (-not $SkipPublish) {
         gh release upload $ReleaseTag "$OutputDir\latest.json" --clobber
     }
     
-    Write-Success "Installer and update artifacts uploaded"
+    Write-Success "Installer uploaded successfully!"
 }
 
 Write-Step "Done!"
 Write-Info "Smart installer: VoiceTypr_${Version}_x64-setup.exe"
+Write-Info "Direct downloads enabled - no ZIP required!"
 Write-Info "Features:"
 Write-Info "  • Auto-detects GPU capability"
 Write-Info "  • Informs about GPU acceleration options"
