@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.6.1](https://github.com/moinulmoin/voicetypr/compare/v1.6.0...v1.6.1) (2025-08-14)
+
+
+### Features
+
+* :sparkles: add audio validation and enhanced error logging system ([d9ecc06](https://github.com/moinulmoin/voicetypr/commit/d9ecc06d870e807f50a4c9fa0f1925ae9e299e24))
+* enhance logging system with comprehensive diagnostics and monitoring ([64fb1c2](https://github.com/moinulmoin/voicetypr/commit/64fb1c21a31a4ebdf6f39595542966b23b1e0014))
+* implement comprehensive production-ready logging system ([5c8bee1](https://github.com/moinulmoin/voicetypr/commit/5c8bee1ebbb75c69643b76673fd9bfea41ed9775))
+* implement smart Windows installer with automatic GPU detection and fallback ([f314952](https://github.com/moinulmoin/voicetypr/commit/f314952df72fc7948333021e2d48799f82319d44))
+
 # [1.6.0](https://github.com/moinulmoin/voicetypr/compare/v1.5.0...v1.6.0) (2025-08-08)
 
 
