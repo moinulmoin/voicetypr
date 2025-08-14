@@ -210,24 +210,7 @@ function AppContent() {
           });
         });
 
-        // Listen for transcription empty (when speech was detected but no text generated)
-        registerEvent<string>("transcription-empty", (message) => {
-          console.warn("Transcription empty:", message);
-          
-          toast.warning('No Text Generated', {
-            description: 'The recording did not produce any text. Try speaking more clearly.',
-            action: {
-              label: 'Tips',
-              onClick: () => {
-                toast.info('Recording Tips', {
-                  description: '• Speak clearly and at normal volume\n• Keep microphone 6-12 inches away\n• Minimize background noise\n• Ensure you have the correct language model',
-                  duration: 8000
-                });
-              }
-            },
-            duration: 5000
-          });
-        });
+        // Note: transcription-empty events are now handled by the pill widget for better UX
 
         // Listen for hotkey registration failures
         registerEvent<ErrorEventPayload>("hotkey-registration-failed", (data) => {
@@ -387,9 +370,10 @@ function AppContent() {
             await invoke("set_global_shortcut", {
               shortcut: newSettings.hotkey
             });
+            toast.success("Hotkey updated successfully!");
           } catch (err) {
             console.error("Failed to update hotkey:", err);
-            // Still update UI even if hotkey registration fails
+            toast.error("Failed to update hotkey. Please try a different combination.");
           }
         }
 

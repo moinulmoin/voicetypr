@@ -175,7 +175,6 @@ pub struct AppState {
     // Recording-related runtime state
     pub recording_state: UnifiedRecordingState,
     pub recording_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
-    pub pending_shortcut: Arc<Mutex<Option<String>>>, // Pending shortcut to be applied
     pub current_recording_path: Arc<Mutex<Option<PathBuf>>>,
     pub transcription_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 
@@ -195,7 +194,6 @@ impl AppState {
         Self {
             recording_state: UnifiedRecordingState::new(),
             recording_shortcut: Arc::new(Mutex::new(None)),
-            pending_shortcut: Arc::new(Mutex::new(None)),
             current_recording_path: Arc::new(Mutex::new(None)),
             transcription_task: Arc::new(Mutex::new(None)),
             should_cancel_recording: Arc::new(AtomicBool::new(false)),
@@ -555,17 +553,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         Ok(_) => {
                                             log::info!("Toggle: Recording stopped successfully");
 
-                                            // Apply pending shortcut after recording stops
-                                            match apply_pending_shortcut(app_handle.clone()).await {
-                                                Ok(applied) => {
-                                                    if applied {
-                                                        log::info!("Applied pending shortcut after recording stopped");
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    log::warn!("Failed to apply pending shortcut: {}", e);
-                                                }
-                                            }
                                         }
                                         Err(e) => {
                                             log::error!("Toggle: Error stopping recording: {}", e)
@@ -1165,7 +1152,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_settings,
             save_settings,
             set_global_shortcut,
-            apply_pending_shortcut,
             get_supported_languages,
             set_model_from_tray,
             update_tray_menu,
