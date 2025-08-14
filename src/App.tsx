@@ -18,6 +18,18 @@ import { useEventCoordinator } from "./hooks/useEventCoordinator";
 import { useModelManagement } from "./hooks/useModelManagement";
 import { updateService } from "./services/updateService";
 import { AppSettings, TranscriptionHistory } from "./types";
+
+// Type for error event payloads from backend
+interface ErrorEventPayload {
+  title?: string;
+  message: string;
+  severity?: 'info' | 'warning' | 'error';
+  actions?: string[];
+  details?: string;
+  hotkey?: string;
+  error?: string;
+  suggestion?: string;
+}
 import { loadApiKeysToCache } from "./utils/keyring";
 
 // Main App Component
@@ -170,6 +182,145 @@ function AppContent() {
               console.error("Failed to focus window:", error);
               // If window focus fails, still show the toast
               toast.error(event.message);
+            }
+          }
+        );
+
+        // Listen for no speech detected events (various audio validation failures)
+        registerEvent<ErrorEventPayload>("no-speech-detected", (data) => {
+          console.warn("No speech detected:", data);
+          
+          // Determine toast type based on severity
+          const toastFn = data.severity === 'error' ? toast.error : toast.warning;
+          
+          toastFn(data.title || 'No Speech Detected', {
+            description: data.message || 'Please check your microphone and speak clearly',
+            action: {
+              label: data.actions?.includes('settings') ? 'Open Settings' : 'Try Again',
+              onClick: () => {
+                if (data.actions?.includes('settings')) {
+                  setActiveSection('general');
+                } else {
+                  // Trigger recording again
+                  invoke('start_recording').catch(console.error);
+                }
+              }
+            },
+            duration: data.severity === 'error' ? 8000 : 5000
+          });
+        });
+
+        // Listen for transcription empty (when speech was detected but no text generated)
+        registerEvent<string>("transcription-empty", (message) => {
+          console.warn("Transcription empty:", message);
+          
+          toast.warning('No Text Generated', {
+            description: 'The recording did not produce any text. Try speaking more clearly.',
+            action: {
+              label: 'Tips',
+              onClick: () => {
+                toast.info('Recording Tips', {
+                  description: '• Speak clearly and at normal volume\n• Keep microphone 6-12 inches away\n• Minimize background noise\n• Ensure you have the correct language model',
+                  duration: 8000
+                });
+              }
+            },
+            duration: 5000
+          });
+        });
+
+        // Listen for hotkey registration failures
+        registerEvent<ErrorEventPayload>("hotkey-registration-failed", (data) => {
+          console.error("Hotkey registration failed:", data);
+          
+          toast.error('Hotkey Registration Failed', {
+            description: data.suggestion || 'The hotkey is in use by another application',
+            action: {
+              label: 'Change Hotkey',
+              onClick: () => {
+                setActiveSection('general');
+                // Show additional guidance
+                setTimeout(() => {
+                  toast.info('Hotkey Conflict', {
+                    description: `The hotkey "${data.hotkey}" could not be registered. Please choose a different combination in General Settings.`,
+                    duration: 6000
+                  });
+                }, 500);
+              }
+            },
+            duration: 10000 // Persistent for important errors
+          });
+        });
+
+        // Listen for no models error (when trying to record without any models)
+        registerEvent<ErrorEventPayload>("no-models-error", (data) => {
+          console.error("No models available:", data);
+          
+          toast.error(data.title || 'No Models Available', {
+            description: data.message || 'Please download at least one model from Settings before recording.',
+            action: {
+              label: 'Download Models',
+              onClick: () => {
+                setActiveSection('models');
+                // Show additional guidance after navigation
+                setTimeout(() => {
+                  toast.info('Download Required', {
+                    description: 'Choose a model size based on your needs. Larger models are more accurate but require more storage space.',
+                    duration: 6000
+                  });
+                }, 500);
+              }
+            },
+            duration: 8000
+          });
+        });
+
+
+        // Listen for recording errors
+        registerEvent<string>("recording-error", (errorMessage) => {
+          console.error("Recording error:", errorMessage);
+          
+          toast.error('Recording Failed', {
+            description: errorMessage || 'An error occurred during recording. Please try again.',
+            action: {
+              label: 'Try Again',
+              onClick: () => {
+                invoke('start_recording').catch(console.error);
+              }
+            },
+            duration: 6000
+          });
+        });
+
+        // Listen for transcription errors
+        registerEvent<string>("transcription-error", (errorMessage) => {
+          console.error("Transcription error:", errorMessage);
+          
+          toast.error('Transcription Failed', {
+            description: errorMessage || 'An error occurred during transcription. Please try again.',
+            action: {
+              label: 'Try Again',
+              onClick: () => {
+                invoke('start_recording').catch(console.error);
+              }
+            },
+            duration: 6000
+          });
+        });
+
+        // Listen for download retry events (when download fails and retries)
+        registerEvent<{ model: string; attempt: number; max_attempts: number; error: string }>(
+          "download-retry", 
+          (retryData) => {
+            const { model, attempt, max_attempts } = retryData;
+            console.warn("Download retry:", retryData);
+            
+            // Only show toast for the first retry to avoid spam
+            if (attempt === 1) {
+              toast.warning(`Download Retry`, {
+                description: `Download of ${model} failed, retrying... (Attempt ${attempt}/${max_attempts})`,
+                duration: 4000
+              });
             }
           }
         );

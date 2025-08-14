@@ -66,6 +66,7 @@ onCancelDownload,
               onDelete={onDelete}
               onCancelDownload={onCancelDownload}
               onSelect={async (modelName) => {
+                // Only allow selection if model is downloaded
                 if (model.downloaded) {
                   onSelect(modelName);
                 }

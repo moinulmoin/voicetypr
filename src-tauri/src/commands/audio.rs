@@ -1,8 +1,12 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
+use crate::audio::validator::{AudioValidator, AudioValidationResult};
 use crate::commands::license::check_license_status_internal;
 use crate::license::LicenseState;
+use crate::utils::logger::*;
+#[cfg(debug_assertions)]
+use crate::utils::system_monitor;
 use crate::whisper::cache::TranscriberCache;
 use crate::whisper::languages::validate_language;
 use crate::whisper::manager::WhisperManager;
@@ -10,6 +14,7 @@ use crate::{emit_to_window, update_recording_state, AppState, RecordingState};
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde_json;
 use std::sync::Mutex;
+use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_store::StoreExt;
@@ -110,10 +115,33 @@ pub async fn start_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
 ) -> Result<(), String> {
+    let recording_start = Instant::now();
+    
+    log_start("RECORDING_START");
+    log_with_context(log::Level::Debug, "Recording command started", &[
+        ("command", "start_recording"),
+        ("timestamp", &chrono::Utc::now().to_rfc3339())
+    ]);
+
     // Validate all requirements upfront
-    validate_recording_requirements(&app).await?;
+    let validation_start = Instant::now();
+    match validate_recording_requirements(&app).await {
+        Ok(_) => {
+            log_performance("RECORDING_VALIDATION", validation_start.elapsed().as_millis() as u64, 
+                Some("validation_passed"));
+        }
+        Err(e) => {
+            log_failed("RECORDING_START", &e);
+            log_with_context(log::Level::Debug, "Validation failed", &[
+                ("stage", "validation"),
+                ("validation_time_ms", &validation_start.elapsed().as_millis().to_string().as_str())
+            ]);
+            return Err(e);
+        }
+    }
 
     // All validation passed, update state to starting
+    log_state_transition("RECORDING", "idle", "starting", true, None);
     update_recording_state(&app, RecordingState::Starting, None);
     // Get app data directory for recordings
     let recordings_dir = app
@@ -155,29 +183,51 @@ pub async fn start_recording(
         }
 
         // Log the current audio device before starting
-        log::info!("🎙️ Checking audio device before recording...");
+        log_start("AUDIO_DEVICE_CHECK");
+        log_with_context(log::Level::Debug, "Checking audio device", &[
+            ("stage", "pre_recording")
+        ]);
+        
         if let Ok(host) = std::panic::catch_unwind(|| cpal::default_host()) {
             if let Some(device) = host.default_input_device() {
                 if let Ok(name) = device.name() {
-                    log::info!("✅ Will record from: {}", name);
+                    log::info!("🎙️ Audio device available: {}", name);
+                    log_with_context(log::Level::Info, "🎮 MICROPHONE", &[
+                        ("device_name", &name),
+                        ("status", "available")
+                    ]);
                 } else {
                     log::warn!("⚠️  Could not get device name, but device is available");
+                    log_with_context(log::Level::Info, "🎮 MICROPHONE", &[
+                        ("status", "available_unnamed")
+                    ]);
                 }
             } else {
-                log::error!("❌ No default input device found!");
+                log_failed("AUDIO_DEVICE", "No default input device found");
+                log_with_context(log::Level::Debug, "Device detection failed", &[
+                    ("component", "audio_device"),
+                    ("stage", "device_detection")
+                ]);
             }
         }
 
         // Try to start recording with graceful error handling
-        match recorder.start_recording(
-            audio_path
-                .to_str()
-                .ok_or_else(|| "Invalid path encoding".to_string())?,
-        ) {
+        let recorder_init_start = Instant::now();
+        let audio_path_str = audio_path
+            .to_str()
+            .ok_or_else(|| "Invalid path encoding".to_string())?;
+            
+        log_file_operation("RECORDING_START", audio_path_str, false, None, None);
+        
+        match recorder.start_recording(audio_path_str) {
             Ok(_) => {
                 // Verify recording actually started
                 if !recorder.is_recording() {
-                    log::error!("Recording failed to start!");
+                    log_failed("RECORDER_INIT", "Recording failed to start after initialization");
+                    log_with_context(log::Level::Debug, "Recorder initialization failed", &[
+                        ("audio_path", audio_path_str),
+                        ("init_time_ms", &recorder_init_start.elapsed().as_millis().to_string().as_str())
+                    ]);
 
                     update_recording_state(
                         &app,
@@ -190,10 +240,23 @@ pub async fn start_recording(
                         "Could not access microphone. Please check your audio settings and permissions.");
 
                     return Err("Failed to start recording".to_string());
+                } else {
+                    log_performance("RECORDER_INIT", 
+                        recorder_init_start.elapsed().as_millis() as u64, 
+                        Some(&format!("file={}", audio_path_str)));
+                    log::info!("✅ Recording started successfully");
+                    
+                    // Monitor system resources at recording start
+                    #[cfg(debug_assertions)]
+                    system_monitor::log_resources_before_operation("RECORDING_START");
                 }
             }
             Err(e) => {
-                log::error!("Failed to start recording: {}", e);
+                log_failed("RECORDER_START", &e);
+                log_with_context(log::Level::Debug, "Recorder start failed", &[
+                    ("audio_path", audio_path_str),
+                    ("init_time_ms", &recorder_init_start.elapsed().as_millis().to_string().as_str())
+                ]);
 
                 update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
 
@@ -284,7 +347,13 @@ pub async fn start_recording(
 
     // Also emit legacy event for compatibility
     let _ = emit_to_window(&app, "pill", "recording-started", ());
-    log::debug!("Recording started successfully");
+    
+    // Log successful recording start
+    log_complete("RECORDING_START", recording_start.elapsed().as_millis() as u64);
+    log_with_context(log::Level::Debug, "Recording started successfully", &[
+        ("audio_path", &format!("{:?}", audio_path).as_str()),
+        ("state", "recording")
+    ]);
 
     // Register global ESC key for cancellation
     let app_state = app.state::<AppState>();
@@ -326,13 +395,22 @@ pub async fn stop_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
 ) -> Result<String, String> {
+    let stop_start = Instant::now();
+    
+    log_start("RECORDING_STOP");
+    log_with_context(log::Level::Debug, "Stop recording command", &[
+        ("command", "stop_recording"),
+        ("timestamp", &chrono::Utc::now().to_rfc3339().as_str())
+    ]);
+
     // Update state to stopping
+    log_state_transition("RECORDING", "recording", "stopping", true, None);
     update_recording_state(&app, RecordingState::Stopping, None);
     // DO NOT request cancellation here - we want transcription to complete!
     // Cancellation should only happen in cancel_recording command
 
     // Stop recording (lock only within this scope to stay Send)
-    log::info!("Stopping recording...");
+    log::info!("🛑 Stopping recording...");
     {
         let mut recorder = state
             .inner()
@@ -353,6 +431,10 @@ pub async fn stop_recording(
             .stop_recording()
             .map_err(|e| format!("Failed to stop recording: {}", e))?;
         log::info!("{}", stop_message);
+        
+        // Monitor system resources after recording stop
+        #[cfg(debug_assertions)]
+        system_monitor::log_resources_after_operation("RECORDING_STOP", stop_start.elapsed().as_millis() as u64);
 
         // Emit event if recording was stopped due to silence
         if stop_message.contains("silence") {
@@ -443,6 +525,179 @@ pub async fn stop_recording(
         }
     };
 
+    // === AUDIO VALIDATION - Check quality before transcription ===
+    let validation_start = Instant::now();
+    log_start("AUDIO_VALIDATION");
+    log_with_context(log::Level::Debug, "Validating audio", &[
+        ("audio_path", &format!("{:?}", audio_path).as_str()),
+        ("stage", "pre_transcription")
+    ]);
+    
+    let validator = AudioValidator::new();
+    
+    match validator.validate_audio_file(&audio_path) {
+        Ok(AudioValidationResult::Valid { energy, duration, peak, .. }) => {
+            log_audio_metrics("VALIDATION_PASSED", energy as f64, peak as f64, duration, 
+                Some(&{
+                    let mut ctx = std::collections::HashMap::new();
+                    ctx.insert("validation_time_ms".to_string(), validation_start.elapsed().as_millis().to_string());
+                    ctx
+                }));
+            log_with_context(log::Level::Info, "Audio validation passed", &[
+                ("operation", "AUDIO_VALIDATION"),
+                ("result", "valid"),
+                ("energy", &energy.to_string().as_str()),
+                ("duration", &format!("{:.2}", duration).as_str()),
+                ("peak", &peak.to_string().as_str())
+            ]);
+            // Continue with transcription
+        }
+        Ok(AudioValidationResult::Silent) => {
+            log::warn!("Audio validation FAILED: No speech detected (silent audio)");
+            
+            // Clean up audio file
+            if let Err(e) = std::fs::remove_file(&audio_path) {
+                log::warn!("Failed to remove silent audio file: {}", e);
+            }
+            
+            // Emit event to show user feedback
+            let _ = emit_to_window(
+                &app,
+                "main",
+                "no-speech-detected",
+                serde_json::json!({
+                    "title": "No Speech Detected",
+                    "message": "The recording appears to be silent. Please check your microphone and speak clearly.",
+                    "severity": "warning",
+                    "actions": ["retry", "settings"]
+                }),
+            );
+            
+            // Hide pill window
+            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                log::error!("Failed to hide pill window: {}", e);
+            }
+            
+            // Transition back to Idle
+            update_recording_state(&app, RecordingState::Idle, None);
+            
+            return Ok("".to_string()); // Don't proceed to transcription
+        }
+        Ok(AudioValidationResult::TooQuiet { energy, suggestion }) => {
+            log::warn!("Audio validation FAILED: Audio too quiet (RMS={:.6})", energy);
+            
+            // Clean up audio file
+            if let Err(e) = std::fs::remove_file(&audio_path) {
+                log::warn!("Failed to remove quiet audio file: {}", e);
+            }
+            
+            // Emit event with specific guidance
+            let _ = emit_to_window(
+                &app,
+                "main", 
+                "no-speech-detected",
+                serde_json::json!({
+                    "title": "Audio Too Quiet",
+                    "message": suggestion,
+                    "severity": "warning",
+                    "actions": ["retry", "settings"]
+                }),
+            );
+            
+            // Hide pill window
+            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                log::error!("Failed to hide pill window: {}", e);
+            }
+            
+            // Transition back to Idle
+            update_recording_state(&app, RecordingState::Idle, None);
+            
+            return Ok("".to_string()); // Don't proceed to transcription
+        }
+        Ok(AudioValidationResult::TooShort { duration }) => {
+            log::warn!("Audio validation FAILED: Recording too short ({:.2}s)", duration);
+            
+            // Clean up audio file
+            if let Err(e) = std::fs::remove_file(&audio_path) {
+                log::warn!("Failed to remove short audio file: {}", e);
+            }
+            
+            // Emit event
+            let _ = emit_to_window(
+                &app,
+                "main",
+                "no-speech-detected", 
+                serde_json::json!({
+                    "title": "Recording Too Short",
+                    "message": format!("Recording was only {:.1}s. Please hold the recording button longer and speak clearly.", duration),
+                    "severity": "warning",
+                    "actions": ["retry"]
+                }),
+            );
+            
+            // Hide pill window
+            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                log::error!("Failed to hide pill window: {}", e);
+            }
+            
+            // Transition back to Idle
+            update_recording_state(&app, RecordingState::Idle, None);
+            
+            return Ok("".to_string()); // Don't proceed to transcription
+        }
+        Ok(AudioValidationResult::InvalidFormat(error)) => {
+            log::error!("Audio validation FAILED: Invalid format - {}", error);
+            
+            // Clean up audio file
+            if let Err(e) = std::fs::remove_file(&audio_path) {
+                log::warn!("Failed to remove invalid audio file: {}", e);
+            }
+            
+            // Emit error event
+            let _ = emit_to_window(
+                &app,
+                "main",
+                "no-speech-detected",
+                serde_json::json!({
+                    "title": "Audio Format Error", 
+                    "message": "There was a problem with the audio recording. Please try again.",
+                    "severity": "error",
+                    "actions": ["retry"]
+                }),
+            );
+            
+            // Hide pill window
+            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                log::error!("Failed to hide pill window: {}", e);
+            }
+            
+            // Transition to error state
+            update_recording_state(&app, RecordingState::Error, Some(error));
+            
+            return Err("Audio format error".to_string());
+        }
+        Err(validation_error) => {
+            log::error!("Audio validation ERROR: {}", validation_error);
+            
+            // Don't clean up audio file - let transcription proceed in degraded mode
+            log::warn!("Proceeding with transcription despite validation error (degraded mode)");
+            
+            // Emit warning but don't stop transcription
+            let _ = emit_to_window(
+                &app,
+                "main",
+                "audio-validation-warning",
+                serde_json::json!({
+                    "title": "Audio Validation Warning",
+                    "message": "Unable to validate audio quality, but proceeding with transcription.",
+                    "severity": "info"
+                }),
+            );
+            
+            // Continue with transcription...
+        }
+    }
+
     // Get current model from settings
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
@@ -493,6 +748,11 @@ pub async fn stop_recording(
     }
 
     // Smart model selection with graceful degradation
+    log_start("MODEL_SELECTION");
+    log_with_context(log::Level::Debug, "Selecting model", &[
+        ("available_count", &downloaded_models.len().to_string().as_str())
+    ]);
+    
     let configured_model = store
         .get("current_model")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -501,21 +761,28 @@ pub async fn stop_recording(
     let model_name = if let Some(configured_model) = configured_model {
         // Use configured model if it exists and is downloaded
         if downloaded_models.contains(&configured_model) {
+            log_model_operation("SELECTION", &configured_model, "CONFIGURED_AVAILABLE", None);
             configured_model
         } else if downloaded_models.is_empty() {
             // This should never happen since we check earlier, but just in case
-            log::error!("No models available for fallback");
+            log_failed("MODEL_SELECTION", "No models available for fallback");
+            log_with_context(log::Level::Debug, "Model fallback failed", &[
+                ("configured_model", &configured_model),
+                ("downloaded_count", "0")
+            ]);
             return Err("No models available".to_string());
         } else {
             // Fallback to best available model
             let models_by_size = whisper_manager.read().await.get_models_by_size();
             let fallback_model =
                 select_best_fallback_model(&downloaded_models, &configured_model, &models_by_size);
-            log::info!(
-                "Configured model '{}' not available, falling back to: {}",
-                configured_model,
-                fallback_model
-            );
+                
+            log_model_operation("FALLBACK", &fallback_model, "SELECTED", Some(&{
+                let mut ctx = std::collections::HashMap::new();
+                ctx.insert("requested".to_string(), configured_model.clone());
+                ctx.insert("reason".to_string(), "configured_not_available".to_string());
+                ctx
+            }));
 
             // Notify user about fallback
             let _ = emit_to_window(
@@ -535,11 +802,18 @@ pub async fn stop_recording(
         // We already checked that downloaded_models is not empty above
         let models_by_size = whisper_manager.read().await.get_models_by_size();
         let best_model = select_best_fallback_model(&downloaded_models, "", &models_by_size);
-        log::info!("No model configured, auto-selecting: {}", best_model);
+        
+        log_model_operation("AUTO_SELECTION", &best_model, "SELECTED", Some(&{
+            let mut ctx = std::collections::HashMap::new();
+            ctx.insert("reason".to_string(), "no_model_configured".to_string());
+            ctx.insert("strategy".to_string(), "best_available".to_string());
+            ctx
+        }));
+        
         best_model
     };
 
-    log::info!("Using model for transcription: {}", model_name);
+    log::info!("🤖 Using model for transcription: {}", model_name);
 
     let model_path = whisper_manager
         .read()

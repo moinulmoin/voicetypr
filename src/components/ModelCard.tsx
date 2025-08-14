@@ -37,14 +37,17 @@ export const ModelCard = function ModelCard({
       : `${Math.round(sizeInMB)} MB`;
   };
 
+  // Model is usable if downloaded
+  const isUsable = model.downloaded;
+
   return (
     <Card
       className={`px-4 py-2 transition-all ${
-        model.downloaded ? 'cursor-pointer' : ''
+        isUsable ? 'cursor-pointer' : ''
       } ${
         isSelected ? 'border-primary bg-primary/5' : ''
       }`}
-      onClick={() => model.downloaded && showSelectButton && onSelect(name)}
+      onClick={() => isUsable && showSelectButton && onSelect(name)}
     >
       <div className="flex items-center justify-between gap-3">
         {/* Model Name */}
@@ -74,6 +77,7 @@ export const ModelCard = function ModelCard({
         {/* Action Buttons */}
         <div className="flex items-center gap-2 flex-shrink-0">
           {model.downloaded ? (
+            // Model is downloaded - show delete option
             <>
               {onDelete && (
                 <Button

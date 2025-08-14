@@ -114,6 +114,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   useEffect(() => {
     // Only auto-select if no model is selected yet
     if (!selectedModel) {
+      // Find a downloaded model
       const downloadedModel = Object.entries(models).find(([_, m]) => m.downloaded);
       if (downloadedModel) {
         setSelectedModel(downloadedModel[0]);

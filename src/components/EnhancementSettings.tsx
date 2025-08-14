@@ -3,11 +3,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useState } from "react";
-import { FileText, Mail, GitCommit, ListChecks, Sparkles, X } from "lucide-react";
+import { FileText, Mail, GitCommit, Sparkles, X } from "lucide-react";
 
 interface EnhancementSettingsProps {
   settings: {
-    preset: "Default" | "Prompts" | "Email" | "Commit" | "Notes";
+    preset: "Default" | "Prompts" | "Email" | "Commit";
     customVocabulary: string[];
   };
   onSettingsChange: (settings: any) => void;
@@ -21,7 +21,7 @@ export function EnhancementSettings({ settings, onSettingsChange }: EnhancementS
       id: "Default",
       label: "Default",
       icon: FileText,
-      description: "Basic corrections"
+      description: "Clean text"
     },
     {
       id: "Prompts",
@@ -40,20 +40,14 @@ export function EnhancementSettings({ settings, onSettingsChange }: EnhancementS
       label: "Commit",
       icon: GitCommit,
       description: "Git messages"
-    },
-    {
-      id: "Notes",
-      label: "Notes",
-      icon: ListChecks,
-      description: "Structured notes"
     }
   ];
 
   const handlePresetChange = (preset: string) => {
-    if (["Default", "Prompts", "Email", "Commit", "Notes"].includes(preset)) {
+    if (["Default", "Prompts", "Email", "Commit"].includes(preset)) {
       onSettingsChange({
         ...settings,
-        preset: preset as "Default" | "Prompts" | "Email" | "Commit" | "Notes"
+        preset: preset as "Default" | "Prompts" | "Email" | "Commit"
       });
     }
   };
@@ -109,11 +103,10 @@ export function EnhancementSettings({ settings, onSettingsChange }: EnhancementS
         
         {/* Mode description */}
         <p className="text-sm text-muted-foreground">
-          {settings.preset === "Default" && "Fixes spelling, grammar, and technical terms"}
-          {settings.preset === "Prompts" && "Expands brief ideas into detailed AI prompts"}
-          {settings.preset === "Email" && "Formats speech into professional emails"}
-          {settings.preset === "Commit" && "Creates conventional commit messages"}
-          {settings.preset === "Notes" && "Organizes into structured bullet points"}
+          {settings.preset === "Default" && "Comprehensive cleaning with grammar, spelling, formatting, and lists"}
+          {settings.preset === "Prompts" && "Transforms speech into well-structured AI prompts"}
+          {settings.preset === "Email" && "Formats speech into professional emails with subject and greeting"}
+          {settings.preset === "Commit" && "Creates conventional commit messages with type and scope"}
         </p>
       </div>
 

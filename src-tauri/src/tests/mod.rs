@@ -17,6 +17,18 @@ mod regression_tests;
 mod language_tests;
 
 #[cfg(test)]
+mod panic_prevention_tests;
+
+#[cfg(test)]
+mod error_event_tests;
+
+#[cfg(test)]
+mod test_data_helpers;
+
+#[cfg(test)]
+mod logging_performance_tests;
+
+#[cfg(test)]
 mod integration_tests {
     use crate::whisper::manager::{ModelSize, WhisperManager};
     use tempfile::TempDir;

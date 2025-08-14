@@ -593,6 +593,10 @@ impl WhisperManager {
         self.models.clone()
     }
 
+    pub fn get_models_status_mut(&mut self) -> &mut HashMap<String, ModelInfo> {
+        &mut self.models
+    }
+
     /// Check if any models are downloaded (efficient, no cloning)
     pub fn has_downloaded_models(&self) -> bool {
         self.models.values().any(|info| info.downloaded)

@@ -1,6 +1,6 @@
 // AI Enhancement Types that match Rust structures
 
-export type EnhancementPreset = 'Default' | 'Prompts' | 'Email' | 'Commit' | 'Notes';
+export type EnhancementPreset = 'Default' | 'Prompts' | 'Email' | 'Commit';
 
 export interface EnhancementOptions {
   preset: EnhancementPreset;

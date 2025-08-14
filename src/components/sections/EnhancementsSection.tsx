@@ -41,7 +41,7 @@ export function EnhancementsSection() {
   const [isLoading, setIsLoading] = useState(false);
   const [providerApiKeys, setProviderApiKeys] = useState<Record<string, boolean>>({});
   const [enhancementOptions, setEnhancementOptions] = useState<{
-    preset: "Default" | "Prompts" | "Email" | "Commit" | "Notes";
+    preset: "Default" | "Prompts" | "Email" | "Commit";
     customVocabulary: string[];
   }>({
     preset: 'Default',

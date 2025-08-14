@@ -10,9 +10,11 @@ describe('ModelCard', () => {
     display_name: 'Base',
     size: 157286400, // 150MB
     url: 'https://example.com/model.bin',
+    sha256: 'abc123',
     downloaded: false,
     speed_score: 7,
     accuracy_score: 5,
+    recommended: false,
   };
 
   const mockOnDownload = vi.fn();

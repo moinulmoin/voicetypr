@@ -1,12 +1,16 @@
 use crate::commands::license::check_license_status_internal;
 use crate::emit_to_all;
+#[cfg(debug_assertions)]
+use crate::utils::system_monitor;
 use crate::license::LicenseState;
+use crate::utils::onboarding_logger;
 use crate::whisper::manager::{ModelInfo, WhisperManager};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Instant;
 use tauri::async_runtime::RwLock;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[tauri::command]
 pub async fn download_model(
@@ -15,6 +19,8 @@ pub async fn download_model(
     state: State<'_, RwLock<WhisperManager>>,
     active_downloads: State<'_, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>,
 ) -> Result<(), String> {
+    let download_start = Instant::now();
+    
     // Validate model name using WhisperManager
     {
         let manager = state.read().await;
@@ -26,13 +32,37 @@ pub async fn download_model(
     }
 
     log::info!("Starting download for model: {}", model_name);
+    
+    // Monitor system resources at download start
+    #[cfg(debug_assertions)]
+    system_monitor::log_resources_before_operation("MODEL_DOWNLOAD");
+    
+    // Log to onboarding if in onboarding context
+    let model_size_mb = {
+        let manager = state.read().await;
+        manager.get_models_status()
+            .get(&model_name)
+            .map(|info| info.size)
+            .unwrap_or(0) / (1024 * 1024) // Convert bytes to MB
+    };
+    onboarding_logger::with_onboarding_logger(|logger| {
+        logger.log_model_download_start(&model_name, model_size_mb);
+    });
+    
     let app_handle = app.clone();
 
     // Create cancellation flag for this download
     let cancel_flag = Arc::new(AtomicBool::new(false));
     {
-        let mut downloads = active_downloads.lock().unwrap();
-        downloads.insert(model_name.clone(), cancel_flag.clone());
+        match active_downloads.lock() {
+            Ok(mut downloads) => {
+                downloads.insert(model_name.clone(), cancel_flag.clone());
+            },
+            Err(e) => {
+                log::error!("Failed to lock active downloads for inserting: {}", e);
+                return Err("Failed to initialize download tracking".to_string());
+            }
+        }
     }
 
     let model_name_clone = model_name.clone();
@@ -51,6 +81,11 @@ pub async fn download_model(
                 &model_name_clone,
                 progress
             );
+            
+            // Log to onboarding if active
+            onboarding_logger::with_onboarding_logger(|logger| {
+                logger.log_model_download_progress(&model_name_clone, progress as u8);
+            });
 
             // Progress is already being emitted via events, no need for state storage
 
@@ -166,8 +201,15 @@ pub async fn download_model(
 
     // Clean up the cancellation flag
     {
-        let mut downloads = active_downloads.lock().unwrap();
-        downloads.remove(&model_name);
+        match active_downloads.lock() {
+            Ok(mut downloads) => {
+                downloads.remove(&model_name);
+            },
+            Err(e) => {
+                log::warn!("Failed to lock active downloads for cleanup: {}", e);
+                // Continue despite cleanup failure
+            }
+        }
     }
 
     log::info!("Processing download result for model: {}", model_name);
@@ -182,6 +224,16 @@ pub async fn download_model(
         }
         Ok(_) => {
             log::info!("Download completed successfully for model: {}", model_name);
+            
+            // Monitor system resources after download completion
+            #[cfg(debug_assertions)]
+            system_monitor::log_resources_after_operation("MODEL_DOWNLOAD", download_start.elapsed().as_millis() as u64);
+            
+            // Log to onboarding if active
+            onboarding_logger::with_onboarding_logger(|logger| {
+                // Calculate duration if possible
+                logger.log_model_download_complete(&model_name, 0); // TODO: track actual duration
+            });
 
             // Refresh the manager's status to reflect the new download
             {
@@ -205,6 +257,11 @@ pub async fn download_model(
         }
         Err(e) => {
             log::error!("Download failed for model {}: {}", model_name, e);
+            
+            // Log to onboarding if active
+            onboarding_logger::with_onboarding_logger(|logger| {
+                logger.log_model_download_failed(&model_name, &e);
+            });
 
             // Progress tracking is event-based, no state cleanup needed
 
@@ -227,12 +284,16 @@ pub struct ModelEntry {
 #[tauri::command]
 pub async fn get_model_status(
     state: State<'_, RwLock<WhisperManager>>,
+    _app: tauri::AppHandle,
 ) -> Result<ModelStatusResponse, String> {
     // Force refresh before returning status
     let mut manager = state.write().await;
     log::info!("[GET_MODEL_STATUS] Refreshing downloaded status...");
     manager.refresh_downloaded_status();
     let models = manager.get_models_status();
+    
+    // Note: Corrupted model detection is now handled in refresh_downloaded_status()
+    // which sets downloaded=false for corrupted files, so no separate tracking needed here
 
     // Convert HashMap to Vec and sort by accuracy (ascending)
     let mut models_vec: Vec<ModelEntry> = models
@@ -287,21 +348,95 @@ pub async fn cancel_download(
 
     // Set the cancellation flag
     {
-        let downloads = active_downloads.lock().unwrap();
-        if let Some(cancel_flag) = downloads.get(&model_name) {
-            cancel_flag.store(true, Ordering::Relaxed);
-            log::info!("Set cancellation flag for model: {}", model_name);
-        } else {
-            return Err(format!(
-                "No active download found for model: {}",
-                model_name
-            ));
+        match active_downloads.lock() {
+            Ok(downloads) => {
+                if let Some(cancel_flag) = downloads.get(&model_name) {
+                    cancel_flag.store(true, Ordering::Relaxed);
+                    log::info!("Set cancellation flag for model: {}", model_name);
+                } else {
+                    log::warn!("No active download found for model: {}", model_name);
+                    return Ok(()); // Not an error if download doesn't exist
+                }
+            },
+            Err(e) => {
+                log::error!("Failed to lock active downloads for cancellation: {}", e);
+                return Err("Failed to access download tracking".to_string());
+            }
         }
     }
+    
+    Ok(())
+}
 
-    // The download loop will handle cleanup when it detects the cancellation flag
-
-    log::info!("Download cancelled for model: {}", model_name);
+#[tauri::command]
+pub async fn verify_model(
+    app: AppHandle,
+    model_name: String,
+    state: State<'_, RwLock<WhisperManager>>,
+) -> Result<(), String> {
+    log::info!("Verifying model: {}", model_name);
+    
+    // Get model info and check if it exists
+    let (model_info, model_path) = {
+        let manager = state.read().await;
+        let info = manager.get_models_status()
+            .get(&model_name)
+            .ok_or(format!("Model '{}' not found", model_name))?
+            .clone();
+        let path = manager.get_model_path(&model_name)
+            .ok_or(format!("Model '{}' path not found", model_name))?;
+        (info, path)
+    };
+    
+    // Check if file exists
+    if !model_path.exists() {
+        log::warn!("Model file does not exist: {:?}", model_path);
+        return Err(format!("Model file not found: {}", model_name));
+    }
+    
+    // Check file size
+    let metadata = tokio::fs::metadata(&model_path)
+        .await
+        .map_err(|e| format!("Cannot read model file metadata: {}", e))?;
+    
+    let file_size = metadata.len();
+    let expected_size = model_info.size;
+    
+    // Allow 5% tolerance for size differences
+    let size_tolerance = (expected_size as f64 * 0.05) as u64;
+    let min_size = expected_size.saturating_sub(size_tolerance);
+    
+    if file_size < min_size {
+        log::warn!("Model '{}' file size {} is less than expected minimum {}", 
+                   model_name, file_size, min_size);
+        
+        // Delete the corrupted file
+        if let Err(e) = tokio::fs::remove_file(&model_path).await {
+            log::error!("Failed to delete corrupted model file: {}", e);
+        }
+        
+        // Update manager status
+        {
+            let mut manager = state.write().await;
+            manager.refresh_downloaded_status();
+        }
+        
+        return Err(format!("Model '{}' is corrupted and has been deleted. Please re-download.", model_name));
+    }
+    
+    // File looks good - mark as downloaded
+    {
+        let mut manager = state.write().await;
+        if let Some(info) = manager.get_models_status_mut().get_mut(&model_name) {
+            info.downloaded = true;
+        }
+    }
+    
+    log::info!("Model '{}' verified successfully", model_name);
+    
+    // Emit verification success event
+    let _ = app.emit("model-verified", model_name.clone());
+    
     Ok(())
 }
 

@@ -192,7 +192,15 @@ impl LicenseApiClient {
 
 impl Default for LicenseApiClient {
     fn default() -> Self {
-        Self::new().expect("Failed to create API client")
+        match Self::new() {
+            Ok(client) => client,
+            Err(e) => {
+                log::error!("Failed to create default API client: {}", e);
+                // Create a client with minimal configuration as fallback
+                let client = reqwest::Client::new();
+                Self { client }
+            }
+        }
     }
 }
 
