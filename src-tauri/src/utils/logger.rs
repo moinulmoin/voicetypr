@@ -228,21 +228,6 @@ pub fn log_lifecycle_event(
     }
 }
 
-/// Log security/permission events
-pub fn log_permission_event(
-    permission: &str,
-    granted: bool,
-    context: Option<&HashMap<String, String>>
-) {
-    let status = if granted { "✅ GRANTED" } else { "❌ DENIED" };
-    log::info!("🔒 PERMISSION {} - {}", permission, status);
-    
-    if let Some(ctx) = context {
-        if !ctx.is_empty() {
-            log::info!("   📋 Permission Context: {:?}", ctx);
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

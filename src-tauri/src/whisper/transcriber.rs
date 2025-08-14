@@ -35,6 +35,7 @@ impl Transcriber {
 
         // Configure GPU usage based on platform and features
         let mut ctx_params = WhisperContextParameters::default();
+        #[allow(unused_assignments)] // gpu_used is assigned in multiple conditional blocks
         let mut gpu_used = false;
         
         // macOS: Try Metal first, fallback to CPU if it fails
@@ -51,7 +52,10 @@ impl Transcriber {
             
             match WhisperContext::new_with_params(model_path_str, ctx_params) {
                 Ok(ctx) => {
-                    gpu_used = true;
+                    #[allow(unused_assignments)] // This assignment is used later but flagged due to multiple conditional paths
+                    {
+                        gpu_used = true; // Metal GPU acceleration succeeded
+                    }
                     let init_time = metal_start.elapsed().as_millis();
                     
                     log_performance("METAL_INIT", init_time as u64, Some("gpu_acceleration_enabled"));

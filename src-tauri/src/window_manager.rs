@@ -185,7 +185,7 @@ impl WindowManager {
             position_y
         );
 
-        let mut pill_builder = WebviewWindowBuilder::new(
+        let pill_builder = WebviewWindowBuilder::new(
             &self.app_handle,
             "pill",
             WebviewUrl::App("pill.html".into()),
@@ -208,11 +208,12 @@ impl WindowManager {
 
         // Disable context menu only in production builds
         #[cfg(not(debug_assertions))]
-        {
-            pill_builder = pill_builder.initialization_script(
-                "document.addEventListener('contextmenu', e => e.preventDefault());",
-            );
-        }
+        let pill_builder = pill_builder.initialization_script(
+            "document.addEventListener('contextmenu', e => e.preventDefault());",
+        );
+
+        #[cfg(debug_assertions)]
+        let pill_builder = pill_builder;
 
         let pill_window = pill_builder.build().map_err(|e| e.to_string())?;
 

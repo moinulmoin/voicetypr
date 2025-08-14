@@ -3,6 +3,7 @@ use crate::utils::logger::*;
 
 /// Network error types for enhanced diagnostics
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Comprehensive error types for network diagnostics
 pub enum NetworkError {
     Timeout { duration_ms: u64 },
     RateLimited { retry_after: Option<u64> },

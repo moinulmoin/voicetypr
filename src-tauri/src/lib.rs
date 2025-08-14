@@ -746,28 +746,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 log::info!("🍎 Set macOS activation policy to Accessory");
 
-                // Check accessibility permissions at startup
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    // Small delay to ensure app is fully initialized
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-                    log_permission_event("ACCESSIBILITY_CHECK", false, None);
-
-                    // Check and request accessibility permission for keyboard simulation
-                    match app_handle.emit("check-accessibility-permission", ()) {
-                        Ok(_) => {
-                            log::info!("✅ Emitted accessibility permission check event");
-                        }
-                        Err(e) => {
-                            log_failed("ACCESSIBILITY_EMIT", &format!("Failed to emit accessibility check: {}", e));
-                            log_with_context(log::Level::Debug, "Accessibility emit failed", &[
-                                ("event", "check-accessibility-permission"),
-                                ("stage", "startup")
-                            ]);
-                        }
-                    }
-                });
             }
 
             // Clear license cache on app start to ensure fresh checks
@@ -1077,7 +1055,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
                 // Create the pill window with extra height for tooltip
-                let mut pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
+                let pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
                     .title("Recording")
                     .resizable(false)
                     .decorations(false)
@@ -1089,9 +1067,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Disable context menu only in production builds
                 #[cfg(not(debug_assertions))]
-                {
-                    pill_builder = pill_builder.initialization_script("document.addEventListener('contextmenu', e => e.preventDefault());");
-                }
+                let pill_builder = pill_builder.initialization_script("document.addEventListener('contextmenu', e => e.preventDefault());");
+
+                #[cfg(debug_assertions)]
+                let pill_builder = pill_builder;
 
                 let pill_window = pill_builder.build()?;
 

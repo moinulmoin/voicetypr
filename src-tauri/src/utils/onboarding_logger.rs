@@ -3,6 +3,7 @@ use std::time::Instant;
 
 /// Comprehensive onboarding flow logger
 /// Captures EVERY step to debug any onboarding issues
+#[allow(dead_code)] // Comprehensive logging infrastructure for onboarding diagnostics
 pub struct OnboardingLogger {
     session_id: String,
     start_time: Instant,
@@ -10,6 +11,7 @@ pub struct OnboardingLogger {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Complete step tracking for onboarding diagnostics
 struct OnboardingStep {
     timestamp: Instant,
     step_name: String,
@@ -18,6 +20,7 @@ struct OnboardingStep {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Complete status tracking for onboarding diagnostics
 enum StepStatus {
     Started,
     InProgress(u8), // Percentage for downloads
@@ -26,6 +29,7 @@ enum StepStatus {
     Skipped,
 }
 
+#[allow(dead_code)] // Comprehensive onboarding diagnostics methods
 impl OnboardingLogger {
     pub fn start_session() -> Self {
         let session_id = format!("onboard_{}", chrono::Utc::now().timestamp());

@@ -13,7 +13,8 @@
       "Bash(cargo test:*)",
       "Bash(pnpm typecheck:*)",
       "Bash(rg:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(gh pr diff:*)"
     ],
     "deny": []
   },

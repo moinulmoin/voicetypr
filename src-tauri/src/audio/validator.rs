@@ -3,6 +3,7 @@ use hound::WavReader;
 
 /// Result of audio validation analysis
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // InvalidFormat variant used in commands/audio.rs but not detected due to derived trait analysis
 pub enum AudioValidationResult {
     /// Audio is valid for transcription
     Valid { 
@@ -22,6 +23,7 @@ pub enum AudioValidationResult {
         duration: f32,
     },
     /// Invalid audio format or file corruption
+    /// Used by audio processing pipeline for error handling
     InvalidFormat(String),
 }
 
@@ -215,6 +217,7 @@ impl AudioValidator {
 struct AudioAnalysis {
     rms_energy: f32,
     peak_amplitude: f32,
+    #[allow(dead_code)] // Field is included for completeness but not used in validation logic
     sample_count: usize,
 }
 

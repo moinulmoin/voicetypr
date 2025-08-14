@@ -284,7 +284,7 @@ pub struct ModelEntry {
 #[tauri::command]
 pub async fn get_model_status(
     state: State<'_, RwLock<WhisperManager>>,
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
 ) -> Result<ModelStatusResponse, String> {
     // Force refresh before returning status
     let mut manager = state.write().await;

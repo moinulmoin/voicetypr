@@ -1,3 +1,7 @@
+// This module provides comprehensive system monitoring capabilities for diagnostics
+// It's intentionally preserved for debugging and future performance monitoring
+#![allow(dead_code)]
+
 use sysinfo::{System, Disks};
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
