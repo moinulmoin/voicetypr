@@ -22,8 +22,6 @@
     "core:webview:allow-create-webview-window",
     "opener:default",
     "store:default",
-    "global-shortcut:default",
-    "global-shortcut:allow-unregister-all",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",
