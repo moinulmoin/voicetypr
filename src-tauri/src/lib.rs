@@ -42,7 +42,7 @@ use commands::{
     logs::{get_log_directory, open_logs_folder},
     model::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
-        preload_model,
+        preload_model, verify_model,
     },
     permissions::{
         check_accessibility_permission, check_microphone_permission,
@@ -1181,6 +1181,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             download_model,
             get_model_status,
             preload_model,
+            verify_model,
             transcribe_audio,
             get_settings,
             save_settings,

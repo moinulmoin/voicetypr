@@ -292,22 +292,8 @@ pub async fn get_model_status(
     manager.refresh_downloaded_status();
     let models = manager.get_models_status();
     
-    // Check for incomplete models and emit events
-    for (model_name, model_info) in &models {
-        if model_info.incomplete {
-            log::warn!("Emitting incomplete model event for: {}", model_name);
-            let _ = app.emit(
-                "model-incomplete-error",
-                serde_json::json!({
-                    "title": "Incomplete Model Detected",
-                    "message": format!("Model '{}' appears corrupted. Please delete and re-download it.", 
-                        model_info.display_name),
-                    "model": model_name,
-                    "action": "redownload"
-                }),
-            );
-        }
-    }
+    // Note: Corrupted model detection is now handled in refresh_downloaded_status()
+    // which sets downloaded=false for corrupted files, so no separate tracking needed here
 
     // Convert HashMap to Vec and sort by accuracy (ascending)
     let mut models_vec: Vec<ModelEntry> = models
@@ -378,6 +364,78 @@ pub async fn cancel_download(
             }
         }
     }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn verify_model(
+    app: AppHandle,
+    model_name: String,
+    state: State<'_, RwLock<WhisperManager>>,
+) -> Result<(), String> {
+    log::info!("Verifying model: {}", model_name);
+    
+    // Get model info and check if it exists
+    let (model_info, model_path) = {
+        let manager = state.read().await;
+        let info = manager.get_models_status()
+            .get(&model_name)
+            .ok_or(format!("Model '{}' not found", model_name))?
+            .clone();
+        let path = manager.get_model_path(&model_name)
+            .ok_or(format!("Model '{}' path not found", model_name))?;
+        (info, path)
+    };
+    
+    // Check if file exists
+    if !model_path.exists() {
+        log::warn!("Model file does not exist: {:?}", model_path);
+        return Err(format!("Model file not found: {}", model_name));
+    }
+    
+    // Check file size
+    let metadata = tokio::fs::metadata(&model_path)
+        .await
+        .map_err(|e| format!("Cannot read model file metadata: {}", e))?;
+    
+    let file_size = metadata.len();
+    let expected_size = model_info.size;
+    
+    // Allow 5% tolerance for size differences
+    let size_tolerance = (expected_size as f64 * 0.05) as u64;
+    let min_size = expected_size.saturating_sub(size_tolerance);
+    
+    if file_size < min_size {
+        log::warn!("Model '{}' file size {} is less than expected minimum {}", 
+                   model_name, file_size, min_size);
+        
+        // Delete the corrupted file
+        if let Err(e) = tokio::fs::remove_file(&model_path).await {
+            log::error!("Failed to delete corrupted model file: {}", e);
+        }
+        
+        // Update manager status
+        {
+            let mut manager = state.write().await;
+            manager.refresh_downloaded_status();
+        }
+        
+        return Err(format!("Model '{}' is corrupted and has been deleted. Please re-download.", model_name));
+    }
+    
+    // File looks good - mark as downloaded
+    {
+        let mut manager = state.write().await;
+        if let Some(info) = manager.get_models_status_mut().get_mut(&model_name) {
+            info.downloaded = true;
+        }
+    }
+    
+    log::info!("Model '{}' verified successfully", model_name);
+    
+    // Emit verification success event
+    let _ = app.emit("model-verified", model_name.clone());
     
     Ok(())
 }

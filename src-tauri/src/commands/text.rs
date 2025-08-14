@@ -3,6 +3,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
+use tauri::Emitter;
 
 // Import rdev for more reliable keyboard simulation
 use rdev::{simulate, EventType, Key as RdevKey, SimulateError};
@@ -18,7 +19,7 @@ use enigo::{
 static IS_INSERTING: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
-pub async fn insert_text(_app: tauri::AppHandle, text: String) -> Result<(), String> {
+pub async fn insert_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
     // Check if already inserting text
     if IS_INSERTING.swap(true, Ordering::SeqCst) {
         log::warn!("Text insertion already in progress, skipping duplicate request");
@@ -45,13 +46,13 @@ pub async fn insert_text(_app: tauri::AppHandle, text: String) -> Result<(), Str
     tokio::task::spawn_blocking(move || {
         // Always use clipboard method for reliability and to prevent duplicate insertion
         // This function handles both copying to clipboard and pasting at cursor
-        insert_via_clipboard(text, has_accessibility_permission)
+        insert_via_clipboard(text, has_accessibility_permission, Some(app))
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?
 }
 
-fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Result<(), String> {
+fn insert_via_clipboard(text: String, has_accessibility_permission: bool, app_handle: Option<tauri::AppHandle>) -> Result<(), String> {
     // This function handles both copying text to clipboard AND pasting it at cursor
     // Initialize clipboard
     let mut clipboard =
@@ -107,6 +108,10 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Res
                 }
                 Ok(Err(e)) => {
                     log::warn!("AppleScript paste failed: {}, text remains in clipboard", e);
+                    // Notify user through pill that paste failed but text is in clipboard
+                    if let Some(app) = app_handle {
+                        app.emit("paste-error", "Paste failed - copied to clipboard").ok();
+                    }
                     // Don't fail - text is still in clipboard for manual paste
                 }
                 Err(panic_err) => {
@@ -114,6 +119,10 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool) -> Res
                         "PANIC during paste: {:?}, text remains in clipboard",
                         panic_err
                     );
+                    // Notify user through pill about the failure
+                    if let Some(app) = app_handle {
+                        app.emit("paste-error", "Paste failed - copied to clipboard").ok();
+                    }
                     // Don't fail - text is still in clipboard for manual paste
                 }
             }
@@ -170,15 +179,15 @@ fn try_paste_with_applescript() -> Result<(), String> {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     {
-        // Use Enigo on other platforms
-        log::debug!("Using Enigo for keyboard simulation");
+        // Keep Enigo as fallback for Linux due to X11/Wayland differences
+        log::debug!("Using Enigo fallback for Linux keyboard simulation");
 
         let mut enigo = Enigo::new(&Settings::default())
             .map_err(|e| format!("Failed to initialize Enigo: {:?}", e))?;
 
-        // Simulate Ctrl+V on Windows/Linux
+        // Simulate Ctrl+V on Linux
         enigo
             .key(Key::Control, Press)
             .map_err(|e| format!("Failed to press Control: {:?}", e))?;
@@ -192,6 +201,13 @@ fn try_paste_with_applescript() -> Result<(), String> {
             .map_err(|e| format!("Failed to release Control: {:?}", e))?;
 
         Ok(())
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // Windows doesn't need enigo fallback - rdev is sufficient
+        log::debug!("No Enigo fallback for Windows - rdev should have worked");
+        Err("Windows paste failed with rdev (no fallback needed)".to_string())
     }
 }
 
@@ -222,72 +238,140 @@ fn send_key_event(event_type: &EventType) -> Result<(), SimulateError> {
 
 // rdev implementation for more reliable paste
 fn try_paste_with_rdev() -> Result<(), String> {
-    log::debug!("Attempting paste with rdev");
+    let paste_start = std::time::Instant::now();
+    log::info!("=== PASTE CHAIN START ===");
+    log::debug!("Platform: {}", std::env::consts::OS);
+    log::debug!("Method: rdev primary, fallback available: {}", 
+               cfg!(any(target_os = "macos", target_os = "linux")));
 
     // Add a small delay to ensure the app is not in focus
     thread::sleep(Duration::from_millis(100));
 
-    #[cfg(target_os = "macos")]
-    {
-        paste_mac().map_err(|e| format!("Failed to paste on macOS: {:?}", e))
-    }
+    let result = {
+        #[cfg(target_os = "macos")]
+        {
+            paste_mac().map_err(|e| format!("Failed to paste on macOS: {:?}", e))
+        }
 
-    #[cfg(target_os = "windows")]
-    {
-        paste_windows().map_err(|e| format!("Failed to paste on Windows: {:?}", e))
-    }
+        #[cfg(target_os = "windows")]
+        {
+            paste_windows().map_err(|e| format!("Failed to paste on Windows: {:?}", e))
+        }
 
-    #[cfg(target_os = "linux")]
-    {
-        paste_linux().map_err(|e| format!("Failed to paste on Linux: {:?}", e))
-    }
+        #[cfg(target_os = "linux")]
+        {
+            paste_linux().map_err(|e| format!("Failed to paste on Linux: {:?}", e))
+        }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    {
-        Err("Unsupported platform for rdev".to_string())
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            Err("Unsupported platform for rdev".to_string())
+        }
+    };
+    
+    let paste_duration = paste_start.elapsed();
+    match &result {
+        Ok(_) => {
+            log::info!("=== PASTE SUCCESS in {}ms ===", paste_duration.as_millis());
+        }
+        Err(e) => {
+            log::warn!("=== PASTE FAILED in {}ms: {} ===", paste_duration.as_millis(), e);
+        }
     }
+    
+    result
 }
 
 #[cfg(target_os = "macos")]
 fn paste_mac() -> Result<(), SimulateError> {
     log::debug!("Starting macOS paste simulation with rdev");
-
-    // Clear any existing key states first
+    
+    // Add initial delay to match Windows timing for better reliability
     thread::sleep(Duration::from_millis(100));
+    
+    // Try paste with retry logic
+    for attempt in 1..=2 {
+        log::debug!("macOS paste attempt {}/2", attempt);
+        
+        let result = (|| {
+            // Press Cmd (Meta) key first and hold it
+            log::debug!("Pressing MetaLeft (Cmd)");
+            simulate(&EventType::KeyPress(RdevKey::MetaLeft))?;
+            thread::sleep(Duration::from_millis(50)); // Give OS time to register modifier
 
-    // Press Cmd (Meta) key first and hold it
-    log::debug!("Pressing MetaLeft (Cmd)");
-    simulate(&EventType::KeyPress(RdevKey::MetaLeft))?;
-    thread::sleep(Duration::from_millis(50)); // Give OS time to register modifier
+            // While Cmd is held, press V
+            log::debug!("Pressing KeyV while Cmd is held");
+            simulate(&EventType::KeyPress(RdevKey::KeyV))?;
+            thread::sleep(Duration::from_millis(50));
 
-    // While Cmd is held, press V
-    log::debug!("Pressing KeyV while Cmd is held");
-    simulate(&EventType::KeyPress(RdevKey::KeyV))?;
-    thread::sleep(Duration::from_millis(50));
+            // Release V first
+            log::debug!("Releasing KeyV");
+            simulate(&EventType::KeyRelease(RdevKey::KeyV))?;
+            thread::sleep(Duration::from_millis(50));
 
-    // Release V first
-    log::debug!("Releasing KeyV");
-    simulate(&EventType::KeyRelease(RdevKey::KeyV))?;
-    thread::sleep(Duration::from_millis(50));
-
-    // Then release Cmd
-    log::debug!("Releasing MetaLeft (Cmd)");
-    simulate(&EventType::KeyRelease(RdevKey::MetaLeft))?;
-    thread::sleep(Duration::from_millis(50));
-
-    log::debug!("macOS paste simulation completed");
-    Ok(())
+            // Then release Cmd
+            log::debug!("Releasing MetaLeft (Cmd)");
+            simulate(&EventType::KeyRelease(RdevKey::MetaLeft))?;
+            thread::sleep(Duration::from_millis(50));
+            
+            Ok::<(), SimulateError>(())
+        })();
+        
+        match result {
+            Ok(_) => {
+                log::debug!("macOS paste simulation completed on attempt {}", attempt);
+                return Ok(());
+            }
+            Err(e) if attempt < 2 => {
+                log::warn!("macOS paste attempt {} failed: {:?}, retrying...", attempt, e);
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                log::error!("macOS paste failed after 2 attempts: {:?}", e);
+                return Err(e);
+            }
+        }
+    }
+    
+    unreachable!()
 }
 
 #[cfg(target_os = "windows")]
 fn paste_windows() -> Result<(), SimulateError> {
     log::debug!("Starting Windows paste simulation with rdev");
-    send_key_event(&EventType::KeyPress(RdevKey::ControlLeft))?;
-    send_key_event(&EventType::KeyPress(RdevKey::KeyV))?;
-    send_key_event(&EventType::KeyRelease(RdevKey::KeyV))?;
-    send_key_event(&EventType::KeyRelease(RdevKey::ControlLeft))?;
-    log::debug!("Windows paste simulation completed");
-    Ok(())
+    
+    // Add initial delay to match macOS timing for better reliability
+    thread::sleep(Duration::from_millis(100));
+    
+    // Try paste with retry logic
+    for attempt in 1..=2 {
+        log::debug!("Windows paste attempt {}/2", attempt);
+        
+        let result = (|| {
+            send_key_event(&EventType::KeyPress(RdevKey::ControlLeft))?;
+            send_key_event(&EventType::KeyPress(RdevKey::KeyV))?;
+            send_key_event(&EventType::KeyRelease(RdevKey::KeyV))?;
+            send_key_event(&EventType::KeyRelease(RdevKey::ControlLeft))?;
+            Ok::<(), SimulateError>(())
+        })();
+        
+        match result {
+            Ok(_) => {
+                log::debug!("Windows paste simulation completed on attempt {}", attempt);
+                return Ok(());
+            }
+            Err(e) if attempt < 2 => {
+                log::warn!("Windows paste attempt {} failed: {:?}, retrying...", attempt, e);
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                log::error!("Windows paste failed after 2 attempts: {:?}", e);
+                return Err(e);
+            }
+        }
+    }
+    
+    unreachable!()
 }
 
 #[cfg(target_os = "linux")]

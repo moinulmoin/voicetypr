@@ -96,7 +96,7 @@ mod logging_performance_tests {
                 "iteration" => &i.to_string(),
                 "test" => "basic_logging"
             };
-            log_operation_start("PERF_TEST", &context);
+            log_start("PERF_TEST");
         });
         
         result.assert_performance();
@@ -132,7 +132,7 @@ mod logging_performance_tests {
                 "error_type" => "performance_test",
                 "component" => "logging_system"
             };
-            log_error_with_context("Performance test error message", &context);
+            log_failed("PERF_TEST", "Performance test error message");
         });
         
         result.assert_performance();
@@ -190,8 +190,8 @@ mod logging_performance_tests {
             };
             
             if i % 100 == 0 {
-                log_operation_start("STRUCTURED_PERF", &complex_context);
-                log_operation_complete("STRUCTURED_PERF", i as u64, &complex_context);
+                log_start("STRUCTURED_PERF");
+                log_complete("STRUCTURED_PERF", i as u64);
             }
         });
         
@@ -205,10 +205,10 @@ mod logging_performance_tests {
         let benchmark = PerformanceBenchmark::new("function_timing", 500, 300);
         
         let result = benchmark.run(|i| {
-            log_function(&format!("perf_test_function_{}", i), || {
-                // Simulate some work
-                let _sum: usize = (0..10).sum();
-            });
+            log_start(&format!("perf_test_function_{}", i));
+            // Simulate some work
+            let _sum: usize = (0..10).sum();
+            log_complete(&format!("perf_test_function_{}", i), 0);
         });
         
         result.assert_performance();
@@ -224,10 +224,10 @@ mod logging_performance_tests {
         
         let result = benchmark.run(|i| {
             rt.block_on(async {
-                log_async_function(&format!("async_perf_test_{}", i), || async {
-                    // Simulate async work
-                    tokio::time::sleep(Duration::from_millis(1)).await;
-                }).await;
+                log_start(&format!("async_perf_test_{}", i));
+                // Simulate async work
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                log_complete(&format!("async_perf_test_{}", i), 1);
             });
         });
         
@@ -247,7 +247,7 @@ mod logging_performance_tests {
                     "total_iterations" => "10000"
                 };
                 log_performance("HIGH_FREQ_BATCH", i as u64, Some("batch_complete"));
-                log_operation_complete("BATCH_PROCESS", i as u64 / 10, &context);
+                log_complete("BATCH_PROCESS", i as u64 / 10);
             } else {
                 // Lightweight logging for most iterations
                 log::debug!("High frequency log entry #{}", i);
@@ -273,7 +273,7 @@ mod logging_performance_tests {
                 "metadata" => &format!("Large context test iteration {}", i)
             };
             
-            log_operation_start("LARGE_CONTEXT_TEST", &large_context);
+            log_start("LARGE_CONTEXT_TEST");
         });
         
         result.assert_performance();
@@ -298,13 +298,13 @@ mod logging_performance_tests {
                             "concurrent_test" => "true"
                         };
                         
-                        log_operation_start("CONCURRENT_TEST", &context);
+                        log_start("CONCURRENT_TEST");
                         
                         if i % 10 == 0 {
                             log_performance("CONCURRENT_BATCH", i as u64, Some("thread_batch"));
                         }
                         
-                        log_operation_complete("CONCURRENT_TEST", 1, &context);
+                        log_complete("CONCURRENT_TEST", 1);
                     }
                 })
             })
@@ -341,9 +341,9 @@ mod logging_performance_tests {
                 "data" => &format!("Test data for iteration {}", i)
             };
             
-            log_operation_start("MEMORY_EFFICIENCY", &context);
+            log_start("MEMORY_EFFICIENCY");
             log_performance("MEMORY_PERF", i as u64, Some("memory_test"));
-            log_operation_complete("MEMORY_EFFICIENCY", 1, &context);
+            log_complete("MEMORY_EFFICIENCY", 1);
             
             // Force context to go out of scope
             drop(context);
@@ -381,9 +381,9 @@ mod logging_performance_tests {
                 "iteration" => &i.to_string(),
                 "overhead_test" => "true"
             };
-            log_operation_start("OVERHEAD_TEST", &context);
+            log_start("OVERHEAD_TEST");
             let _data = i * 2;
-            log_operation_complete("OVERHEAD_TEST", 1, &context);
+            log_complete("OVERHEAD_TEST", 1);
         }
         let logging_duration = logging_start.elapsed();
         
@@ -423,7 +423,7 @@ mod stress_tests {
                 "elapsed_ms" => &start.elapsed().as_millis().to_string()
             };
             
-            log_operation_start("STRESS_TEST", &context);
+            log_start("STRESS_TEST");
             
             if operations % 100 == 0 {
                 log_performance("STRESS_BATCH", operations, Some("sustained_test"));
@@ -433,7 +433,7 @@ mod stress_tests {
                 log_audio_metrics("STRESS_AUDIO", 0.5, 0.8, 1.0, Some(&context));
             }
             
-            log_operation_complete("STRESS_TEST", 1, &context);
+            log_complete("STRESS_TEST", 1);
             operations += 1;
         }
         
@@ -466,13 +466,13 @@ mod stress_tests {
                     "burst_test" => "true"
                 };
                 
-                log_operation_start("BURST_TEST", &context);
+                log_start("BURST_TEST");
                 
                 if i % 100 == 0 {
                     log_performance("BURST_CHECKPOINT", i as u64, Some("burst_progress"));
                 }
                 
-                log_operation_complete("BURST_TEST", 1, &context);
+                log_complete("BURST_TEST", 1);
             }
             
             let burst_duration = burst_start.elapsed();
@@ -512,15 +512,10 @@ mod stress_tests {
                 "stack_trace" => "mock_stack_trace_for_testing"
             };
             
-            log_error_with_context(
-                &format!("Stress test error #{}", i), 
-                &error_context
-            );
+            log_failed("STRESS_ERROR", &format!("Stress test error #{}", i));
             
             if i % 100 == 0 {
-                log_operation_failed("STRESS_ERROR_BATCH", 
-                                    &format!("Batch error {}", i / 100), 
-                                    &error_context);
+                log_failed("STRESS_ERROR_BATCH", &format!("Batch error {}", i / 100));
             }
         }
         

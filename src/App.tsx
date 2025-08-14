@@ -275,28 +275,6 @@ function AppContent() {
           });
         });
 
-        // Listen for incomplete model errors
-        registerEvent<{title: string; message: string; model: string; action: string}>("model-incomplete-error", (data) => {
-          console.warn("Incomplete model detected:", data);
-          
-          toast.warning(data.title, {
-            description: data.message,
-            action: {
-              label: 'Fix Model',
-              onClick: () => {
-                setActiveSection('models');
-                // Show additional guidance after navigation
-                setTimeout(() => {
-                  toast.info('Model Repair', {
-                    description: `Delete the corrupted ${data.model} model and download it again to fix the issue.`,
-                    duration: 8000
-                  });
-                }, 500);
-              }
-            },
-            duration: 10000 // Longer duration for important warnings
-          });
-        });
 
         // Listen for recording errors
         registerEvent<string>("recording-error", (errorMessage) => {

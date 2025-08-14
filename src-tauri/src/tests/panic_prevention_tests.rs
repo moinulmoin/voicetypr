@@ -221,11 +221,11 @@ mod panic_prevention_tests {
             
             // Log multiple times with large context
             for i in 0..100 {
-                log_operation_start(&format!("STRESS_TEST_{}", i), &large_context);
-                log_operation_complete(&format!("STRESS_TEST_{}", i), i, &large_context);
+                log_start(&format!("STRESS_TEST_{}", i));
+                log_complete(&format!("STRESS_TEST_{}", i), i);
                 
                 if i % 10 == 0 {
-                    log_error_with_context("Test error message", &large_context);
+                    log_failed("STRESS_ERROR", "Test error message");
                 }
             }
             
@@ -319,9 +319,9 @@ mod panic_prevention_tests {
             };
             
             // Use all contexts in logging
-            log_operation_start("MACRO_SAFETY_1", &context1);
-            log_operation_start("MACRO_SAFETY_2", &context2);
-            log_operation_start("MACRO_SAFETY_3", &context3);
+            log_start("MACRO_SAFETY_1");
+            log_start("MACRO_SAFETY_2");
+            log_start("MACRO_SAFETY_3");
             
             "completed_macro_safety_test"
         });
@@ -386,9 +386,9 @@ mod performance_tests {
                     "timestamp" => &chrono::Utc::now().to_rfc3339()
                 };
                 
-                log_operation_start("PERF_TEST", &context);
+                log_start("PERF_TEST");
                 log_performance("TEST_METRIC", i as u64, Some("test_data"));
-                log_operation_complete("PERF_TEST", 1, &context);
+                log_complete("PERF_TEST", 1);
                 
                 if i % 100 == 0 {
                     log_audio_metrics("PERF_AUDIO", 0.5, 0.8, 2.5, Some(&context));
@@ -423,14 +423,14 @@ mod performance_tests {
                     "memory_test" => "stability_check"
                 };
                 
-                log_operation_start("MEMORY_TEST", &context);
+                log_start("MEMORY_TEST");
                 
                 // Create temporary data structures
                 let temp_map: HashMap<String, String> = (0..50)
                     .map(|j| (format!("key_{}", j), format!("value_{}_{}", i, j)))
                     .collect();
                 
-                log_operation_complete("MEMORY_TEST", 1, &temp_map);
+                log_complete("MEMORY_TEST", 1);
                 
                 // Force cleanup
                 drop(context);
