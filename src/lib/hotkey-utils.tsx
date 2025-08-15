@@ -1,16 +1,17 @@
 import { cn } from '@/lib/utils';
+import { isMacOS } from '@/lib/platform';
 
 /**
  * Formats a hotkey string into styled keyboard keys
  * e.g., "cmd+shift+space" -> styled keyboard keys
  */
-export function formatHotkey(hotkey: string, isMac: boolean = false): React.ReactNode {
+export function formatHotkey(hotkey: string): React.ReactNode {
   
   if (!hotkey) return null;
   
   // Normalize the hotkey string based on platform
   const normalized = hotkey.toLowerCase()
-    .replace('commandorcontrol', isMac ? 'cmd' : 'ctrl')
+    .replace('commandorcontrol', isMacOS ? 'cmd' : 'ctrl')
     .replace('command', 'cmd')
     .replace('control', 'ctrl')
     .replace('option', 'alt')
@@ -26,22 +27,22 @@ export function formatHotkey(hotkey: string, isMac: boolean = false): React.Reac
   
   // Map common key names to display names
   const keyDisplayMap: Record<string, string> = {
-    'cmd': isMac ? '⌘' : 'Ctrl',
+    'cmd': isMacOS ? '⌘' : 'Ctrl',
     'ctrl': 'Ctrl',
-    'commandorcontrol': isMac ? '⌘' : 'Ctrl',
-    'command': isMac ? '⌘' : 'Ctrl',
-    'shift': isMac ? '⇧' : 'Shift',
-    'alt': isMac ? '⌥' : 'Alt',
-    'option': isMac ? '⌥' : 'Alt',
-    'meta': isMac ? '⌘' : 'Ctrl',
+    'commandorcontrol': isMacOS ? '⌘' : 'Ctrl',
+    'command': isMacOS ? '⌘' : 'Ctrl',
+    'shift': isMacOS ? '⇧' : 'Shift',
+    'alt': isMacOS ? '⌥' : 'Alt',
+    'option': isMacOS ? '⌥' : 'Alt',
+    'meta': isMacOS ? '⌘' : 'Ctrl',
     'space': 'Space',
-    'enter': isMac ? '⏎' : 'Enter',
-    'return': isMac ? '⏎' : 'Enter',
-    'tab': isMac ? '⇥' : 'Tab',
+    'enter': isMacOS ? '⏎' : 'Enter',
+    'return': isMacOS ? '⏎' : 'Enter',
+    'tab': isMacOS ? '⇥' : 'Tab',
     'escape': 'Esc',
     'esc': 'Esc',
-    'delete': isMac ? '⌦' : 'Del',
-    'backspace': isMac ? '⌫' : 'Backspace',
+    'delete': isMacOS ? '⌦' : 'Del',
+    'backspace': isMacOS ? '⌫' : 'Backspace',
     'up': '↑',
     'down': '↓',
     'left': '←',
@@ -50,10 +51,10 @@ export function formatHotkey(hotkey: string, isMac: boolean = false): React.Reac
     'arrowdown': '↓',
     'arrowleft': '←',
     'arrowright': '→',
-    'pageup': isMac ? '⇞' : 'PgUp',
-    'pagedown': isMac ? '⇟' : 'PgDn',
-    'home': isMac ? '⇱' : 'Home',
-    'end': isMac ? '⇲' : 'End',
+    'pageup': isMacOS ? '⇞' : 'PgUp',
+    'pagedown': isMacOS ? '⇟' : 'PgDn',
+    'home': isMacOS ? '⇱' : 'Home',
+    'end': isMacOS ? '⇲' : 'End',
     'f1': 'F1',
     'f2': 'F2',
     'f3': 'F3',

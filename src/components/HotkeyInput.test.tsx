@@ -18,8 +18,12 @@ describe('HotkeyInput', () => {
     vi.clearAllMocks();
   });
 
+  const renderWithProvider = (ui: React.ReactElement) => {
+    return render(ui);
+  };
+
   it('should render with initial value', () => {
-    render(
+    renderWithProvider(
       <HotkeyInput 
         value="CommandOrControl+Shift+Space" 
         onChange={mockOnChange}
@@ -32,7 +36,7 @@ describe('HotkeyInput', () => {
   });
 
   it('should display placeholder when no value', () => {
-    render(
+    renderWithProvider(
       <HotkeyInput 
         value="" 
         onChange={mockOnChange}
@@ -48,7 +52,7 @@ describe('HotkeyInput', () => {
   it('should enter recording mode on Edit click', async () => {
     const user = userEvent.setup();
     
-    render(
+    renderWithProvider(
       <HotkeyInput 
         value="CommandOrControl+Space" 
         onChange={mockOnChange}

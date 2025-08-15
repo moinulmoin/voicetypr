@@ -2,7 +2,7 @@ import { Check, Edit2, X } from "lucide-react";
 import React, { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/button";
 import { formatHotkey } from "@/lib/hotkey-utils";
-import { usePlatform } from "@/contexts/PlatformContext";
+import { isMacOS } from "@/lib/platform";
 import { 
   normalizeShortcutKeys, 
   validateKeyCombinationWithRules,
@@ -25,7 +25,6 @@ export const HotkeyInput = React.memo(function HotkeyInput({
   placeholder,
   validationRules = ValidationPresets.standard()
 }: HotkeyInputProps) {
-  const { isMac } = usePlatform();
   const [mode, setMode] = useState<"display" | "edit">("display");
   const [keys, setKeys] = useState<Set<string>>(new Set());
   const [pendingHotkey, setPendingHotkey] = useState("");
@@ -107,10 +106,10 @@ export const HotkeyInput = React.memo(function HotkeyInput({
         // Update current keys display
         const displayKeys = [];
         if (modifiers.includes("CommandOrControl"))
-          displayKeys.push(formatKeyForDisplay("CommandOrControl", isMac));
-        if (modifiers.includes("Alt")) displayKeys.push(formatKeyForDisplay("Alt", isMac));
-        if (modifiers.includes("Shift")) displayKeys.push(formatKeyForDisplay("Shift", isMac));
-        displayKeys.push(...regularKeys.map(k => formatKeyForDisplay(k, isMac)));
+          displayKeys.push(formatKeyForDisplay("CommandOrControl", isMacOS));
+        if (modifiers.includes("Alt")) displayKeys.push(formatKeyForDisplay("Alt", isMacOS));
+        if (modifiers.includes("Shift")) displayKeys.push(formatKeyForDisplay("Shift", isMacOS));
+        displayKeys.push(...regularKeys.map(k => formatKeyForDisplay(k, isMacOS)));
         setCurrentKeysDisplay(displayKeys.join(" + "));
 
         // Validate with rules
@@ -227,7 +226,7 @@ export const HotkeyInput = React.memo(function HotkeyInput({
         <div className="flex items-center gap-2">
           <div className="flex-1 flex items-center">
             {value ? (
-              formatHotkey(value, isMac)
+              formatHotkey(value)
             ) : (
               <span className="text-muted-foreground">{placeholder || "No hotkey set"}</span>
             )}
@@ -251,7 +250,7 @@ export const HotkeyInput = React.memo(function HotkeyInput({
       <div className="flex items-center gap-2">
         <div className="flex-1 flex items-center">
           {pendingHotkey ? (
-            formatHotkey(pendingHotkey, isMac)
+            formatHotkey(pendingHotkey)
           ) : currentKeysDisplay ? (
             <span className="text-foreground">{currentKeysDisplay}</span>
           ) : (
