@@ -2,6 +2,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { TranscriptionHistory } from "@/types";
 import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
+import { isMacOS } from "@/lib/platform";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { AlertCircle, Mic, Trash2 } from "lucide-react";
@@ -129,7 +130,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                 <p className="text-sm text-muted-foreground">No recordings yet</p>
                 {canAutoInsert ? (
                   <p className="text-xs text-muted-foreground/70 mt-2">
-                    Press {formatHotkey(hotkey)} to start recording
+                    Press {formatHotkey(hotkey, isMacOS)} to start recording
                   </p>
                 ) : (
                   <p className="text-xs text-amber-600 mt-2">

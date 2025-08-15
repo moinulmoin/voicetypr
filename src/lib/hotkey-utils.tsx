@@ -1,12 +1,10 @@
 import { cn } from '@/lib/utils';
-import { usePlatform } from '@/contexts/PlatformContext';
 
 /**
  * Formats a hotkey string into styled keyboard keys
  * e.g., "cmd+shift+space" -> styled keyboard keys
  */
-export function formatHotkey(hotkey: string): React.ReactNode {
-  const { isMac } = usePlatform();
+export function formatHotkey(hotkey: string, isMac: boolean = false): React.ReactNode {
   
   if (!hotkey) return null;
   
@@ -28,25 +26,34 @@ export function formatHotkey(hotkey: string): React.ReactNode {
   
   // Map common key names to display names
   const keyDisplayMap: Record<string, string> = {
-    'cmd': isMac ? 'cmd' : 'ctrl',
-    'ctrl': 'ctrl',
-    'shift': 'shift',
-    'alt': 'alt',
-    'space': 'space',
-    'enter': 'enter',
-    'tab': 'tab',
-    'escape': 'esc',
-    'esc': 'esc',
-    'delete': 'del',
-    'backspace': '⌫',
+    'cmd': isMac ? '⌘' : 'Ctrl',
+    'ctrl': 'Ctrl',
+    'commandorcontrol': isMac ? '⌘' : 'Ctrl',
+    'command': isMac ? '⌘' : 'Ctrl',
+    'shift': isMac ? '⇧' : 'Shift',
+    'alt': isMac ? '⌥' : 'Alt',
+    'option': isMac ? '⌥' : 'Alt',
+    'meta': isMac ? '⌘' : 'Ctrl',
+    'space': 'Space',
+    'enter': isMac ? '⏎' : 'Enter',
+    'return': isMac ? '⏎' : 'Enter',
+    'tab': isMac ? '⇥' : 'Tab',
+    'escape': 'Esc',
+    'esc': 'Esc',
+    'delete': isMac ? '⌦' : 'Del',
+    'backspace': isMac ? '⌫' : 'Backspace',
     'up': '↑',
     'down': '↓',
     'left': '←',
     'right': '→',
-    'pageup': 'PgUp',
-    'pagedown': 'PgDn',
-    'home': 'Home',
-    'end': 'End',
+    'arrowup': '↑',
+    'arrowdown': '↓',
+    'arrowleft': '←',
+    'arrowright': '→',
+    'pageup': isMac ? '⇞' : 'PgUp',
+    'pagedown': isMac ? '⇟' : 'PgDn',
+    'home': isMac ? '⇱' : 'Home',
+    'end': isMac ? '⇲' : 'End',
     'f1': 'F1',
     'f2': 'F2',
     'f3': 'F3',

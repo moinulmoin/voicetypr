@@ -537,7 +537,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 <div className="space-y-2">
                   <h1 className="text-3xl font-bold">You're all set!</h1>
                   <p className="text-muted-foreground">
-                    Press {formatHotkey(hotkey)} to start recording
+                    Press {formatHotkey(hotkey, isMacOS)} to start recording
                   </p>
                 </div>
 
