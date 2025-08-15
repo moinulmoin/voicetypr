@@ -3,7 +3,7 @@
 
   # VoiceTypr
 
-  **Open Source voice to text tool, alternative to superwhisper, whispr flow**
+  **Open Source AI Powered voice to text dictation tool, alternative to superwhisper, whispr flow**
 
   [![GitHub release](https://img.shields.io/github/v/release/moinulmoin/voicetypr)](https://github.com/moinulmoin/voicetypr/releases)
   [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE.md)
