@@ -132,14 +132,10 @@ voicetypr/
 
 VoiceTypr automatically detects and uses your GPU for faster transcription. If you're experiencing slower performance:
 
-1. **Update your graphics drivers** - This is the most common fix:
+**Update your graphics drivers** - This is the most common fix:
    - [NVIDIA Drivers](https://www.nvidia.com/drivers)
    - [AMD Drivers](https://www.amd.com/support)
    - [Intel Drivers](https://www.intel.com/content/www/us/en/support/products/80939/graphics.html)
-
-2. **Check logs** - Enable debug logging in Settings to see if GPU is being used
-
-3. **Verify GPU support** - Modern GPUs (2016+) should work automatically
 
 > **Note**: VoiceTypr always works - it automatically falls back to CPU if GPU acceleration is unavailable
 
