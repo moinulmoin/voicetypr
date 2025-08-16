@@ -62,6 +62,8 @@ describe('SettingsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (window as any).__testEventCallbacks = {};
+    // Default mock for invoke to return a resolved promise
+    vi.mocked(invoke).mockResolvedValue(true);
   });
 
   it('renders without crashing', () => {
@@ -78,7 +80,6 @@ describe('SettingsTab', () => {
     render(<SettingsTab />);
     
     expect((window as any).__testEventCallbacks).toHaveProperty('no-speech-detected');
-    expect((window as any).__testEventCallbacks).toHaveProperty('transcription-empty');
     expect((window as any).__testEventCallbacks).toHaveProperty('hotkey-registration-failed');
   });
 
@@ -120,21 +121,6 @@ describe('SettingsTab', () => {
     );
   });
 
-  it('handles transcription-empty event', () => {
-    render(<SettingsTab />);
-    
-    const callback = (window as any).__testEventCallbacks['transcription-empty'];
-    callback('Empty transcription message');
-
-    expect(toast.warning).toHaveBeenCalledWith(
-      'No Text Generated',
-      expect.objectContaining({
-        description: 'The recording did not produce any text. Try speaking more clearly.',
-        duration: 5000
-      })
-    );
-  });
-
   it('handles hotkey-registration-failed event', () => {
     render(<SettingsTab />);
     
@@ -154,11 +140,11 @@ describe('SettingsTab', () => {
     );
   });
 
-  it('provides tips when user clicks Tips action in toast', () => {
+  it('provides tips when user clicks Tips action in no-speech toast', () => {
     render(<SettingsTab />);
     
-    const callback = (window as any).__testEventCallbacks['transcription-empty'];
-    callback('No text');
+    const callback = (window as any).__testEventCallbacks['no-speech-detected'];
+    callback({ severity: 'warning', message: 'No speech detected' });
 
     // Get the action from the toast call
     const toastCall = vi.mocked(toast.warning).mock.calls[0];

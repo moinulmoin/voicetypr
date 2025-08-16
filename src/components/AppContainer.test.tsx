@@ -21,21 +21,29 @@ vi.mock('sonner', () => ({
 }));
 
 // Mock contexts
+let mockSettings = {
+  onboarding_completed: true,
+  transcription_cleanup_days: 30,
+  hotkey: 'Cmd+Shift+Space'
+};
+
 vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
-    settings: {
-      onboarding_completed: true,
-      transcription_cleanup_days: 30,
-      hotkey: 'Cmd+Shift+Space'
-    },
-    refreshSettings: vi.fn()
+    settings: mockSettings,
+    refreshSettings: vi.fn(() => {
+      mockSettings.onboarding_completed = true;
+    })
   })
 }));
 
+// Mock functions for ReadinessContext
+const mockCheckAccessibility = vi.fn().mockResolvedValue(true);
+const mockCheckMicrophone = vi.fn().mockResolvedValue(true);
+
 vi.mock('@/contexts/ReadinessContext', () => ({
   useReadiness: () => ({
-    checkAccessibilityPermission: vi.fn().mockResolvedValue(true),
-    checkMicrophonePermission: vi.fn().mockResolvedValue(true)
+    checkAccessibilityPermission: mockCheckAccessibility,
+    checkMicrophonePermission: mockCheckMicrophone
   })
 }));
 
@@ -110,6 +118,15 @@ describe('AppContainer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (window as any).__testEventCallbacks = {};
+    // Reset mock settings to defaults
+    mockSettings.onboarding_completed = true;
+    mockSettings.transcription_cleanup_days = 30;
+    mockSettings.hotkey = 'Cmd+Shift+Space';
+    // Reset mock functions
+    mockCheckAccessibility.mockClear();
+    mockCheckMicrophone.mockClear();
+    // Default mock for invoke
+    vi.mocked(invoke).mockResolvedValue(true);
   });
 
   it('renders main layout when onboarding is completed', () => {
@@ -121,14 +138,7 @@ describe('AppContainer', () => {
   });
 
   it('shows onboarding when not completed', () => {
-    vi.mock('@/contexts/SettingsContext', () => ({
-      useSettings: () => ({
-        settings: {
-          onboarding_completed: false
-        },
-        refreshSettings: vi.fn()
-      })
-    }));
+    mockSettings.onboarding_completed = false;
 
     render(<AppContainer />);
     
@@ -213,18 +223,7 @@ describe('AppContainer', () => {
 
   it('completes onboarding flow', async () => {
     // Start with onboarding not completed
-    let onboardingCompleted = false;
-    
-    vi.mock('@/contexts/SettingsContext', () => ({
-      useSettings: () => ({
-        settings: {
-          onboarding_completed: onboardingCompleted
-        },
-        refreshSettings: vi.fn(() => {
-          onboardingCompleted = true;
-        })
-      })
-    }));
+    mockSettings.onboarding_completed = false;
 
     const { rerender } = render(<AppContainer />);
     
@@ -236,7 +235,7 @@ describe('AppContainer', () => {
     await userEvent.click(completeButton);
     
     // Simulate settings refresh
-    onboardingCompleted = true;
+    mockSettings.onboarding_completed = true;
     rerender(<AppContainer />);
     
     // Should now show main app
@@ -247,22 +246,12 @@ describe('AppContainer', () => {
   });
 
   it('checks permissions after onboarding completion', async () => {
-    const checkAccessibility = vi.fn().mockResolvedValue(true);
-    const checkMicrophone = vi.fn().mockResolvedValue(true);
-    
-    vi.mock('@/contexts/ReadinessContext', () => ({
-      useReadiness: () => ({
-        checkAccessibilityPermission: checkAccessibility,
-        checkMicrophonePermission: checkMicrophone
-      })
-    }));
-
     render(<AppContainer />);
     
     // Permissions should be checked after onboarding
     await waitFor(() => {
-      expect(checkAccessibility).toHaveBeenCalled();
-      expect(checkMicrophone).toHaveBeenCalled();
+      expect(mockCheckAccessibility).toHaveBeenCalled();
+      expect(mockCheckMicrophone).toHaveBeenCalled();
     });
   });
 
@@ -278,8 +267,10 @@ describe('AppContainer', () => {
     expect(screen.getByTestId('tab-container')).toBeInTheDocument();
   });
 
-  it('cleans up on unmount', () => {
-    const { updateService } = require('@/services/updateService');
+  it('cleans up on unmount', async () => {
+    // We need to import the actual mock to check if dispose was called
+    const { updateService } = await import('@/services/updateService');
+    
     const { unmount } = render(<AppContainer />);
     
     unmount();

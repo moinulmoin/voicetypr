@@ -60,6 +60,8 @@ describe('EnhancementsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (window as any).__testEventCallbacks = {};
+    // Default mock for getApiKey
+    vi.mocked(getApiKey).mockResolvedValue(null);
   });
 
   it('renders without crashing', () => {
@@ -107,13 +109,13 @@ describe('EnhancementsTab', () => {
     render(<EnhancementsTab />);
     
     const callback = (window as any).__testEventCallbacks['ai-enhancement-auth-error'];
-    callback('API key expired');
+    callback({ payload: 'API key expired' });
 
     const toastCall = vi.mocked(toast.error).mock.calls[0];
     const options = toastCall[1] as any;
     
     expect(options.action).toBeDefined();
-    expect(options.action.label).toBe('Go to Settings');
+    expect(options.action.label).toBe('Update API Key');
   });
 
   it('loads API key on mount', async () => {

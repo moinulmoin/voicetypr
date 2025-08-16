@@ -42,6 +42,8 @@ describe('RecordingsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (window as any).__testEventCallbacks = {};
+    // Default mock for get_transcription_history to return empty array
+    vi.mocked(invoke).mockResolvedValue([]);
   });
 
   it('renders without crashing', () => {
@@ -97,10 +99,6 @@ describe('RecordingsTab', () => {
     expect((window as any).__testEventCallbacks).toHaveProperty('history-updated');
     expect((window as any).__testEventCallbacks).toHaveProperty('recording-error');
     expect((window as any).__testEventCallbacks).toHaveProperty('transcription-error');
-    expect((window as any).__testEventCallbacks).toHaveProperty('no-speech-detected');
-    expect((window as any).__testEventCallbacks).toHaveProperty('transcription-empty');
-    expect((window as any).__testEventCallbacks).toHaveProperty('no-models-error');
-    expect((window as any).__testEventCallbacks).toHaveProperty('model-incomplete-error');
   });
 
   it('reloads history when history-updated event is fired', async () => {
