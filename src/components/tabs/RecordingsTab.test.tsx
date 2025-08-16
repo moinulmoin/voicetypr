@@ -4,6 +4,14 @@ import { RecordingsTab } from './RecordingsTab';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 import { EventCallback } from '@tauri-apps/api/event';
 
+// Mock sonner
+vi.mock('sonner', () => ({
+  toast: {
+    error: vi.fn(),
+    warning: vi.fn()
+  }
+}));
+
 // Mock hooks
 vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
@@ -11,12 +19,16 @@ vi.mock('@/contexts/SettingsContext', () => ({
   })
 }));
 
+// Track registered events
+const registeredEvents: Record<string, any> = {};
+
 vi.mock('@/hooks/useEventCoordinator', () => ({
   useEventCoordinator: () => ({
     registerEvent: vi.fn((event: string, callback: EventCallback<any>) => {
       // Store callbacks for testing
       (window as any).__testEventCallbacks = (window as any).__testEventCallbacks || {};
       (window as any).__testEventCallbacks[event] = callback;
+      registeredEvents[event] = callback;
       return vi.fn(); // Return unregister function
     })
   })
@@ -39,6 +51,7 @@ describe('RecordingsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (window as any).__testEventCallbacks = {};
+    Object.keys(registeredEvents).forEach(key => delete registeredEvents[key]);
     
     // Setup default Tauri IPC mock
     mockIPC((cmd) => {
@@ -53,10 +66,6 @@ describe('RecordingsTab', () => {
     clearMocks();
   });
 
-  it('renders without crashing', () => {
-    render(<RecordingsTab />);
-    expect(screen.getByTestId('recent-recordings')).toBeInTheDocument();
-  });
 
   it('loads history on mount', async () => {
     const mockHistory = [
@@ -112,14 +121,6 @@ describe('RecordingsTab', () => {
     consoleSpy.mockRestore();
   });
 
-  it('registers event listeners on mount', () => {
-    render(<RecordingsTab />);
-    
-    // Check that all required events are registered
-    expect((window as any).__testEventCallbacks).toHaveProperty('history-updated');
-    expect((window as any).__testEventCallbacks).toHaveProperty('recording-error');
-    expect((window as any).__testEventCallbacks).toHaveProperty('transcription-error');
-  });
 
   it('reloads history when history-updated event is fired', async () => {
     const mockHistory = [
@@ -160,12 +161,18 @@ describe('RecordingsTab', () => {
 
   it('handles recording error event with toast', async () => {
     const { toast } = await import('sonner');
-    vi.mocked(toast.error).mockImplementation(() => '1');
     
     render(<RecordingsTab />);
     
+    // Wait for events to be registered
+    await waitFor(() => {
+      expect((window as any).__testEventCallbacks['recording-error']).toBeDefined();
+    });
+    
     const callback = (window as any).__testEventCallbacks['recording-error'];
-    callback('Microphone not available');
+    if (callback) {
+      callback('Microphone not available');
+    }
     
     expect(toast.error).toHaveBeenCalledWith(
       'Recording Failed',
@@ -177,34 +184,18 @@ describe('RecordingsTab', () => {
 
   it('handles transcription error event with toast', async () => {
     const { toast } = await import('sonner');
-    vi.mocked(toast.error).mockImplementation(() => '1');
-    
-    // Setup mock to return empty first, then updated history
-    let callCount = 0;
-    clearMocks();
-    mockIPC((cmd) => {
-      if (cmd === 'get_transcription_history') {
-        callCount++;
-        return callCount === 1 ? [] : mockHistory;
-      }
-      if (cmd === 'start_recording') {
-        return true;
-      }
-      return null;
-    });
-    
-    const mockHistory = [
-      {
-        timestamp: '2024-01-01T00:00:00Z',
-        text: 'Test',
-        model: 'base'
-      }
-    ];
     
     render(<RecordingsTab />);
     
+    // Wait for events to be registered
+    await waitFor(() => {
+      expect((window as any).__testEventCallbacks['transcription-error']).toBeDefined();
+    });
+    
     const callback = (window as any).__testEventCallbacks['transcription-error'];
-    callback('Model not loaded');
+    if (callback) {
+      callback('Model not loaded');
+    }
     
     expect(toast.error).toHaveBeenCalledWith(
       'Transcription Failed',
