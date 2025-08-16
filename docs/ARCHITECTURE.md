@@ -2,7 +2,7 @@
 
 ## Overview
 
-VoiceTypr's frontend architecture follows a **component composition pattern** with clear separation of concerns, lazy loading for performance, and event-driven communication between components.
+VoiceTypr's frontend architecture follows a **component composition pattern** with clear separation of concerns and event-driven communication between components. Components are loaded directly for instant desktop app experience.
 
 ## Component Structure
 
@@ -12,7 +12,7 @@ src/
 ├── components/
 │   ├── AppContainer.tsx             # Main orchestration (179 lines)
 │   ├── tabs/                        # Self-contained feature tabs
-│   │   ├── TabContainer.tsx         # Lazy loading router
+│   │   ├── TabContainer.tsx         # Tab routing component
 │   │   ├── RecordingsTab.tsx        # Transcription history
 │   │   ├── ModelsTab.tsx            # Model management
 │   │   ├── SettingsTab.tsx          # General settings
@@ -51,9 +51,9 @@ Handles app-level concerns:
 - Navigation state management
 
 ### 3. **Routing Layer (TabContainer.tsx)**
-Implements lazy loading and tab routing:
-- Dynamic imports for code splitting
-- Suspense boundaries with loading skeletons
+Implements direct tab routing for instant switching:
+- Direct component imports (no lazy loading)
+- Instant tab transitions
 - Section-to-component mapping
 
 ### 4. **Feature Layer (Tab Components)**
@@ -179,7 +179,7 @@ export function NewFeatureTab() {
 2. Add to TabContainer:
 ```typescript
 // src/components/tabs/TabContainer.tsx
-const NewFeatureTab = lazy(() => import('./NewFeatureTab'));
+import { NewFeatureTab } from './NewFeatureTab';
 
 // In switch statement
 case 'newfeature':
@@ -216,7 +216,7 @@ app_handle.emit("event-name", payload)?;
 Each tab has its own test file:
 - `RecordingsTab.test.tsx` - History management tests
 - `ModelsTab.test.tsx` - Model operations tests
-- `TabContainer.test.tsx` - Routing and lazy loading tests
+- `TabContainer.test.tsx` - Routing and tab switching tests
 
 ### Integration Testing
 Test complete user flows:
@@ -260,8 +260,8 @@ vi.mock('@tauri-apps/api/core');
 
 **Tab not rendering:**
 - Check TabContainer switch statement
-- Verify lazy import path
-- Check for loading errors in console
+- Verify import path
+- Check for console errors
 
 **Event not firing:**
 - Verify event name matches backend

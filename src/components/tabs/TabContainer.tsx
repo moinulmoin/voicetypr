@@ -1,33 +1,13 @@
-import { lazy, Suspense } from "react";
-import { Skeleton } from "../ui/skeleton";
-
-// Lazy load tab components for better performance
-const RecordingsTab = lazy(() => import("./RecordingsTab").then(m => ({ default: m.RecordingsTab })));
-const ModelsTab = lazy(() => import("./ModelsTab").then(m => ({ default: m.ModelsTab })));
-const SettingsTab = lazy(() => import("./SettingsTab").then(m => ({ default: m.SettingsTab })));
-const EnhancementsTab = lazy(() => import("./EnhancementsTab").then(m => ({ default: m.EnhancementsTab })));
-const AdvancedTab = lazy(() => import("./AdvancedTab").then(m => ({ default: m.AdvancedTab })));
-const AccountTab = lazy(() => import("./AccountTab").then(m => ({ default: m.AccountTab })));
+// Direct imports for instant desktop app experience
+import { RecordingsTab } from "./RecordingsTab";
+import { ModelsTab } from "./ModelsTab";
+import { SettingsTab } from "./SettingsTab";
+import { EnhancementsTab } from "./EnhancementsTab";
+import { AdvancedTab } from "./AdvancedTab";
+import { AccountTab } from "./AccountTab";
 
 interface TabContainerProps {
   activeSection: string;
-}
-
-// Loading skeleton for tab content
-function TabSkeleton() {
-  return (
-    <div className="h-full flex flex-col p-6">
-      <div className="flex-shrink-0 mb-4 space-y-3">
-        <Skeleton className="h-6 w-48" />
-        <Skeleton className="h-4 w-96" />
-      </div>
-      <div className="flex-1 space-y-3">
-        <Skeleton className="h-20 w-full" />
-        <Skeleton className="h-20 w-full" />
-        <Skeleton className="h-20 w-full" />
-      </div>
-    </div>
-  );
 }
 
 export function TabContainer({ activeSection }: TabContainerProps) {
@@ -59,10 +39,8 @@ export function TabContainer({ activeSection }: TabContainerProps) {
   };
 
   return (
-    <Suspense fallback={<TabSkeleton />}>
-      <div className="h-full flex flex-col">
-        {renderTabContent()}
-      </div>
-    </Suspense>
+    <div className="h-full flex flex-col">
+      {renderTabContent()}
+    </div>
   );
 }
