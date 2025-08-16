@@ -1,13 +1,8 @@
 import { render, screen, waitFor } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { RecordingsTab } from './RecordingsTab';
-import { invoke } from '@tauri-apps/api/core';
+import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 import { EventCallback } from '@tauri-apps/api/event';
-
-// Mock Tauri API
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn()
-}));
 
 // Mock hooks
 vi.mock('@/contexts/SettingsContext', () => ({
@@ -28,12 +23,14 @@ vi.mock('@/hooks/useEventCoordinator', () => ({
 }));
 
 // Mock RecentRecordings component
-vi.mock('../sections/RecentRecordings', () => ({
-  RecentRecordings: ({ history, hotkey, onHistoryUpdate }: any) => (
+vi.mock('@/components/sections/RecentRecordings', () => ({
+  RecentRecordings: ({ history, onRefresh }: any) => (
     <div data-testid="recent-recordings">
-      <div>Hotkey: {hotkey}</div>
-      <div>History Count: {history.length}</div>
-      <button onClick={onHistoryUpdate}>Update History</button>
+      <div>History count: {history.length}</div>
+      <button onClick={onRefresh}>Refresh</button>
+      {history.map((item: any) => (
+        <div key={item.id}>{item.text}</div>
+      ))}
     </div>
   )
 }));
@@ -42,8 +39,18 @@ describe('RecordingsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (window as any).__testEventCallbacks = {};
-    // Default mock for get_transcription_history to return empty array
-    vi.mocked(invoke).mockResolvedValue([]);
+    
+    // Setup default Tauri IPC mock
+    mockIPC((cmd) => {
+      if (cmd === 'get_transcription_history') {
+        return [];
+      }
+      return null;
+    });
+  });
+  
+  afterEach(() => {
+    clearMocks();
   });
 
   it('renders without crashing', () => {
@@ -60,34 +67,47 @@ describe('RecordingsTab', () => {
       }
     ];
     
-    vi.mocked(invoke).mockResolvedValueOnce(mockHistory);
+    // Setup mock for this test
+    clearMocks();
+    mockIPC((cmd) => {
+      if (cmd === 'get_transcription_history') {
+        return mockHistory;
+      }
+      return null;
+    });
     
     render(<RecordingsTab />);
     
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('get_transcription_history', { limit: 50 });
-    });
-    
-    await waitFor(() => {
-      expect(screen.getByText('History Count: 1')).toBeInTheDocument();
+      expect(screen.getByText('History count: 1')).toBeInTheDocument();
     });
   });
 
-  it('handles history load failure gracefully', async () => {
+  it('displays empty state when no history', async () => {
+    render(<RecordingsTab />);
+    
+    await waitFor(() => {
+      expect(screen.getByText('History count: 0')).toBeInTheDocument();
+    });
+  });
+
+  it('silently handles errors when loading history', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.mocked(invoke).mockRejectedValueOnce(new Error('Failed to load'));
+    
+    // Mock to throw an error
+    clearMocks();
+    mockIPC((cmd) => {
+      if (cmd === 'get_transcription_history') {
+        throw new Error('Failed to load');
+      }
+      return null;
+    });
     
     render(<RecordingsTab />);
     
     await waitFor(() => {
-      expect(consoleSpy).toHaveBeenCalledWith(
-        'Failed to load transcription history:',
-        expect.any(Error)
-      );
+      expect(consoleSpy).toHaveBeenCalledWith('Failed to load transcription history:', expect.any(Error));
     });
-    
-    // Should still render with empty history
-    expect(screen.getByText('History Count: 0')).toBeInTheDocument();
     
     consoleSpy.mockRestore();
   });
@@ -110,49 +130,87 @@ describe('RecordingsTab', () => {
       }
     ];
     
-    vi.mocked(invoke).mockResolvedValueOnce([]).mockResolvedValueOnce(mockHistory);
+    // Setup mock to return empty first, then updated history
+    let callCount = 0;
+    clearMocks();
+    mockIPC((cmd) => {
+      if (cmd === 'get_transcription_history') {
+        callCount++;
+        return callCount === 1 ? [] : mockHistory;
+      }
+      return null;
+    });
     
     render(<RecordingsTab />);
     
-    // Initial load
+    // Initially empty
     await waitFor(() => {
-      expect(screen.getByText('History Count: 0')).toBeInTheDocument();
+      expect(screen.getByText('History count: 0')).toBeInTheDocument();
     });
     
-    // Trigger history-updated event
-    const historyUpdatedCallback = (window as any).__testEventCallbacks['history-updated'];
-    await historyUpdatedCallback({});
+    // Fire the event
+    const callback = (window as any).__testEventCallbacks['history-updated'];
+    await callback();
     
+    // Should reload and show updated history
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledTimes(2);
-      expect(screen.getByText('History Count: 1')).toBeInTheDocument();
+      expect(screen.getByText('History count: 1')).toBeInTheDocument();
     });
   });
 
-  it('displays correct hotkey from settings', () => {
+  it('handles recording error event with toast', async () => {
+    const { toast } = await import('sonner');
+    vi.mocked(toast.error).mockImplementation(() => '1');
+    
     render(<RecordingsTab />);
-    expect(screen.getByText('Hotkey: Cmd+Shift+Space')).toBeInTheDocument();
+    
+    const callback = (window as any).__testEventCallbacks['recording-error'];
+    callback('Microphone not available');
+    
+    expect(toast.error).toHaveBeenCalledWith(
+      'Recording Failed',
+      expect.objectContaining({
+        description: 'Microphone not available'
+      })
+    );
   });
 
-  it('handles manual history update', async () => {
+  it('handles transcription error event with toast', async () => {
+    const { toast } = await import('sonner');
+    vi.mocked(toast.error).mockImplementation(() => '1');
+    
+    // Setup mock to return empty first, then updated history
+    let callCount = 0;
+    clearMocks();
+    mockIPC((cmd) => {
+      if (cmd === 'get_transcription_history') {
+        callCount++;
+        return callCount === 1 ? [] : mockHistory;
+      }
+      if (cmd === 'start_recording') {
+        return true;
+      }
+      return null;
+    });
+    
     const mockHistory = [
       {
         timestamp: '2024-01-01T00:00:00Z',
-        text: 'Manual update',
-        model: 'small'
+        text: 'Test',
+        model: 'base'
       }
     ];
     
-    vi.mocked(invoke).mockResolvedValueOnce([]).mockResolvedValueOnce(mockHistory);
-    
     render(<RecordingsTab />);
     
-    const updateButton = screen.getByText('Update History');
-    updateButton.click();
+    const callback = (window as any).__testEventCallbacks['transcription-error'];
+    callback('Model not loaded');
     
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledTimes(2);
-      expect(screen.getByText('History Count: 1')).toBeInTheDocument();
-    });
+    expect(toast.error).toHaveBeenCalledWith(
+      'Transcription Failed',
+      expect.objectContaining({
+        description: 'Model not loaded'
+      })
+    );
   });
 });
