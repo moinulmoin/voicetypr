@@ -168,6 +168,11 @@ vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   },
 }));
 
+// Mock OS plugin for platform detection
+vi.mock('@tauri-apps/plugin-os', () => ({
+  type: vi.fn(() => 'macos'), // Default to macOS for tests
+}));
+
 // Mock window.matchMedia
 Object.defineProperty(window, 'matchMedia', {
   writable: true,

@@ -2,6 +2,7 @@ import { Check, Edit2, X } from "lucide-react";
 import React, { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/button";
 import { formatHotkey } from "@/lib/hotkey-utils";
+import { isMacOS } from "@/lib/platform";
 import { 
   normalizeShortcutKeys, 
   validateKeyCombinationWithRules,
@@ -105,10 +106,10 @@ export const HotkeyInput = React.memo(function HotkeyInput({
         // Update current keys display
         const displayKeys = [];
         if (modifiers.includes("CommandOrControl"))
-          displayKeys.push(formatKeyForDisplay("CommandOrControl"));
-        if (modifiers.includes("Alt")) displayKeys.push(formatKeyForDisplay("Alt"));
-        if (modifiers.includes("Shift")) displayKeys.push(formatKeyForDisplay("Shift"));
-        displayKeys.push(...regularKeys.map(k => formatKeyForDisplay(k)));
+          displayKeys.push(formatKeyForDisplay("CommandOrControl", isMacOS));
+        if (modifiers.includes("Alt")) displayKeys.push(formatKeyForDisplay("Alt", isMacOS));
+        if (modifiers.includes("Shift")) displayKeys.push(formatKeyForDisplay("Shift", isMacOS));
+        displayKeys.push(...regularKeys.map(k => formatKeyForDisplay(k, isMacOS)));
         setCurrentKeysDisplay(displayKeys.join(" + "));
 
         // Validate with rules

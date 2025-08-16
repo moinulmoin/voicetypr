@@ -1,18 +1,17 @@
 import { cn } from '@/lib/utils';
-import { usePlatform } from '@/contexts/PlatformContext';
+import { isMacOS } from '@/lib/platform';
 
 /**
  * Formats a hotkey string into styled keyboard keys
  * e.g., "cmd+shift+space" -> styled keyboard keys
  */
 export function formatHotkey(hotkey: string): React.ReactNode {
-  const { isMac } = usePlatform();
   
   if (!hotkey) return null;
   
   // Normalize the hotkey string based on platform
   const normalized = hotkey.toLowerCase()
-    .replace('commandorcontrol', isMac ? 'cmd' : 'ctrl')
+    .replace('commandorcontrol', isMacOS ? 'cmd' : 'ctrl')
     .replace('command', 'cmd')
     .replace('control', 'ctrl')
     .replace('option', 'alt')
@@ -28,25 +27,34 @@ export function formatHotkey(hotkey: string): React.ReactNode {
   
   // Map common key names to display names
   const keyDisplayMap: Record<string, string> = {
-    'cmd': isMac ? 'cmd' : 'ctrl',
-    'ctrl': 'ctrl',
-    'shift': 'shift',
-    'alt': 'alt',
-    'space': 'space',
-    'enter': 'enter',
-    'tab': 'tab',
-    'escape': 'esc',
-    'esc': 'esc',
-    'delete': 'del',
-    'backspace': '⌫',
+    'cmd': isMacOS ? '⌘' : 'Ctrl',
+    'ctrl': 'Ctrl',
+    'commandorcontrol': isMacOS ? '⌘' : 'Ctrl',
+    'command': isMacOS ? '⌘' : 'Ctrl',
+    'shift': isMacOS ? '⇧' : 'Shift',
+    'alt': isMacOS ? '⌥' : 'Alt',
+    'option': isMacOS ? '⌥' : 'Alt',
+    'meta': isMacOS ? '⌘' : 'Ctrl',
+    'space': 'Space',
+    'enter': isMacOS ? '⏎' : 'Enter',
+    'return': isMacOS ? '⏎' : 'Enter',
+    'tab': isMacOS ? '⇥' : 'Tab',
+    'escape': 'Esc',
+    'esc': 'Esc',
+    'delete': isMacOS ? '⌦' : 'Del',
+    'backspace': isMacOS ? '⌫' : 'Backspace',
     'up': '↑',
     'down': '↓',
     'left': '←',
     'right': '→',
-    'pageup': 'PgUp',
-    'pagedown': 'PgDn',
-    'home': 'Home',
-    'end': 'End',
+    'arrowup': '↑',
+    'arrowdown': '↓',
+    'arrowleft': '←',
+    'arrowright': '→',
+    'pageup': isMacOS ? '⇞' : 'PgUp',
+    'pagedown': isMacOS ? '⇟' : 'PgDn',
+    'home': isMacOS ? '⇱' : 'Home',
+    'end': isMacOS ? '⇲' : 'End',
     'f1': 'F1',
     'f2': 'F2',
     'f3': 'F3',
