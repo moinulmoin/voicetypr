@@ -137,10 +137,10 @@ Backend (Rust) → Tauri Events → Frontend Event Coordinator → Tab Component
 ## Performance Optimizations
 
 ### Lazy Loading
-All tab components are lazy loaded to reduce initial bundle size:
+All tab components are directly imported for instant desktop experience:
 ```typescript
-const RecordingsTab = lazy(() => import('./tabs/RecordingsTab'));
-const ModelsTab = lazy(() => import('./tabs/ModelsTab'));
+import { RecordingsTab } from './tabs/RecordingsTab';
+import { ModelsTab } from './tabs/ModelsTab';
 // ... etc
 ```
 
@@ -250,7 +250,7 @@ vi.mock('@tauri-apps/api/core');
 3. **Event Consistency**: Use typed events with clear payloads
 
 ### Performance
-1. **Lazy Load Routes**: All tabs should be lazy loaded
+1. **Direct Import Routes**: All tabs are directly imported for instant switching
 2. **Virtualize Long Lists**: Use react-window for large datasets
 3. **Batch Updates**: Group related state changes
 
@@ -278,7 +278,7 @@ vi.mock('@tauri-apps/api/core');
 The refactoring from a 524-line monolithic App.tsx achieved:
 - **96% reduction** in main component complexity
 - **Better testability** with isolated components
-- **Improved performance** with lazy loading
+- **Instant tab switching** with direct imports
 - **Enhanced maintainability** with clear boundaries
 
 Each piece of functionality was carefully extracted to maintain 100% feature parity while improving the architecture.
