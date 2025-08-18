@@ -1013,40 +1013,37 @@ pub async fn stop_recording(
                                     enhanced
                                 }
                                 Err(e) => {
-                                    // Emit enhancing failed event
+                                    log::warn!("AI enhancement failed, using original text: {}", e);
+
+                                    // Check error type and create appropriate message
+                                    let error_message = e.to_string();
+                                    let user_message = if error_message.contains("400") || error_message.contains("Bad Request") {
+                                        "Enhancement failed: Missing or invalid API key"
+                                    } else if error_message.contains("401") || error_message.contains("Unauthorized") {
+                                        "Enhancement failed: Invalid API key"
+                                    } else if error_message.contains("429") {
+                                        "Enhancement failed: Rate limit exceeded"
+                                    } else if error_message.contains("network") || error_message.contains("connection") {
+                                        "Enhancement failed: Network error"
+                                    } else {
+                                        "Enhancement failed: Using original text"
+                                    };
+
+                                    // Emit enhancing failed event with error message to pill
                                     let _ = emit_to_window(
                                         &app_for_process,
                                         "pill",
                                         "enhancing-failed",
-                                        (),
+                                        user_message,
                                     );
-                                    log::warn!("AI enhancement failed, using original text: {}", e);
 
-                                    // Check if it's an authentication error and notify frontend
-                                    let error_message = e.to_string();
-                                    if error_message.contains("401")
-                                        || error_message.contains("Unauthorized")
-                                    {
+                                    // Also notify main window for settings update if needed
+                                    if error_message.contains("400") || error_message.contains("401") || error_message.contains("Bad Request") || error_message.contains("Unauthorized") {
                                         let _ = emit_to_window(
                                             &app_for_process,
                                             "main",
                                             "ai-enhancement-auth-error",
-                                            "Invalid API key. Please check your AI settings.",
-                                        );
-                                    } else if error_message.contains("429") {
-                                        let _ = emit_to_window(
-                                            &app_for_process,
-                                            "main",
-                                            "ai-enhancement-error",
-                                            "Rate limit exceeded. Please try again later.",
-                                        );
-                                    } else {
-                                        // Generic enhancement error
-                                        let _ = emit_to_window(
-                                            &app_for_process,
-                                            "main",
-                                            "ai-enhancement-error",
-                                            "AI enhancement failed. Using original text.",
+                                            "Please check your AI API key in settings.",
                                         );
                                     }
 

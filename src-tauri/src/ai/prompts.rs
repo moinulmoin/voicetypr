@@ -83,66 +83,67 @@ pub fn build_enhancement_prompt(
     prompt
 }
 
-const DEFAULT_PROMPT: &str = r#"THEN clean up this voice transcription to create professional, readable text while preserving the speaker's intended meaning.
+const DEFAULT_PROMPT: &str = r#"THEN clean up this voice transcription like a high-quality dictation tool would - fix errors while keeping the natural speech flow.
 
 APPLY THESE CORRECTIONS:
 
 1. REMOVE speech artifacts:
-   - Filler words: um, uh, ah, er, hmm, like (when filler), you know (when filler), basically (when redundant), actually (when redundant)
+   - Filler words: um, uh, ah, er, hmm, like (when filler), you know (when filler)
    - False starts and incomplete thoughts
    - Unintentional word repetitions and stutters: "I I think", "that that's"
    - Verbal backspacing: "wait", "scratch that", "let me rephrase"
 
 2. FIX common errors:
-   - Homophones: there/their/they're, to/too/two, your/you're, its/it's, then/than, here/hear, write/right
+   - Homophones: there/their/they're, to/too/two, your/you're, its/it's, then/than
    - Grammar: subject-verb agreement, article usage (a/an/the)
-   - Technical terms: "java script" → "JavaScript", "type script" → "TypeScript", "react js" → "React.js"
+   - Technical terms (fix misheard/misspelled tech words):
+     * "java script" → "JavaScript", "type script" → "TypeScript", "react js" → "React.js"
+     * "fortend/frontent/front and" → "frontend"
+     * "backing/back and/beck end" → "backend"
+     * "jason/jayson" → "JSON", "A P I" → "API"
+     * Common programming terms that sound similar
    - Contractions: "dont" → "don't", "wont" → "won't", "cant" → "can't"
    - Word boundaries: "alot" → "a lot", "incase" → "in case"
 
-3. FORMAT properly:
+3. ADD proper formatting:
    - Capitalize sentence beginnings and proper nouns (names, places, brands)
    - Add punctuation based on speech patterns and context
    - Numbers: "twenty twenty five" → "2025", "one hundred" → "100"
-   - Times: "two thirty PM" → "2:30 PM", "three o'clock" → "3:00"
-   - Dates: "january first" → "January 1st", "the fifth of march" → "March 5th"
+   - Times: "two thirty PM" → "2:30 PM"
+   - Dates: "january first" → "January 1st"
    - Split run-on sentences at natural break points
-   - Format lists when detected: "first... second..." → "1) ... 2) ..."
 
-4. HANDLE spoken punctuation (when clearly commands):
-   - "comma" → , (when spoken as command)
-   - "period" or "full stop" → .
+4. HANDLE explicit dictation commands:
+   - "period" or "full stop" → . (only when clearly dictating)
+   - "comma" → , (only when clearly dictating)
    - "question mark" → ?
-   - "exclamation point" → !
-   - "quote/unquote" → "..."
-   - "open/close parenthesis" → ()
-   - "colon" → :
-   - "semicolon" → ;
+   - "new paragraph" → create paragraph break
+   - Email addresses: "john at gmail dot com" → "john@gmail.com"
 
-5. PRESERVE:
-   - Technical jargon and domain-specific terms
-   - Intentional emphasis through repetition
-   - Natural conversational tone
-   - Quoted speech or dialogue
-   - Acronyms spoken as letters (FBI, API, URL)
+5. KEEP the natural flow:
+   - Don't restructure into lists or bullet points
+   - Keep the conversational sequence intact
+   - Preserve the speaker's tone and style
+   - Don't make casual speech overly formal
+   - Maintain original sentence connections
 
 EXAMPLES:
-"um their going too the store at two thirty PM comma and there buying to apples period" 
-→ "They're going to the store at 2:30 PM, and they're buying two apples."
+"um their going too the store at two thirty PM and there buying to apples" 
+→ "They're going to the store at 2:30 PM and they're buying two apples."
 
 "the java script function returns uh jason data with a two hundred status"
 → "The JavaScript function returns JSON data with a 200 status."
 
 "first we need milk second bread third eggs"
-→ "First, we need: 1) milk, 2) bread, 3) eggs."
+→ "First, we need milk, second bread, third eggs."
 
-"can you send it to john at gmail dot com question mark"
+"can you send it to john at gmail dot com"
 → "Can you send it to john@gmail.com?"
 
 "I I think that that's the last no wait the least important one"
 → "I think that's the least important one."
 
-Return ONLY the cleaned text."#;
+Return ONLY the cleaned text as natural dictation output."#;
 
 // Thin transformation layer for Prompts preset
 const PROMPTS_TRANSFORM: &str = r#"FINALLY, transform the cleaned text into a well-structured AI prompt:

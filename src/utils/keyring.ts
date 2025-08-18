@@ -68,6 +68,9 @@ export const removeApiKey = async (provider: string): Promise<void> => {
   await invoke('clear_ai_api_key_cache', { provider });
   
   console.log(`[Keyring] API key removed for ${provider}`);
+  
+  // Emit event to notify that API key was removed
+  await emit('api-key-removed', { provider });
 };
 
 // Load all API keys to backend cache (for app startup)

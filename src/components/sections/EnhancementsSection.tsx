@@ -187,8 +187,41 @@ export function EnhancementsSection() {
       }
     });
 
+    // Listen for API key remove events
+    const unlistenApiKeyRemoved = listen<{ provider: string }>('api-key-removed', async (event) => {
+      console.log('[AI Settings] API key removed for provider:', event.payload.provider);
+      
+      // Update local state immediately
+      setProviderApiKeys(prev => ({ ...prev, [event.payload.provider]: false }));
+      
+      // Check if the removed key was for the currently selected model
+      const selectedModel = models.find(m => m.id === aiSettings.model);
+      if (selectedModel && selectedModel.provider === event.payload.provider) {
+        console.log('[AI Settings] Clearing model selection for removed API key');
+        // Clear the model selection and disable AI
+        setAISettings(prev => ({
+          ...prev,
+          enabled: false,
+          provider: "",
+          model: "",
+          hasApiKey: false
+        }));
+        
+        // Update backend to clear the selection
+        try {
+          await invoke("update_ai_settings", {
+            enabled: false,
+            provider: "",
+            model: ""
+          });
+        } catch (error) {
+          console.error('Failed to update backend settings:', error);
+        }
+      }
+    });
+
     return () => {
-      Promise.all([unlistenReady, unlistenApiKey]).then(fns => {
+      Promise.all([unlistenReady, unlistenApiKey, unlistenApiKeyRemoved]).then(fns => {
         fns.forEach(fn => fn());
       });
     };
@@ -275,21 +308,11 @@ export function EnhancementsSection() {
   const handleRemoveApiKey = async (provider: string) => {
     try {
       console.log(`[AI Settings] Removing API key for provider: ${provider}`);
+      
+      // Remove the key (this also clears backend cache and emits the event)
+      // The 'api-key-removed' event listener will handle all UI updates
       await removeApiKey(provider);
-
-      // If the removed key was for the currently selected model, deselect it
-      const selectedModel = models.find(m => m.id === aiSettings.model);
-      if (selectedModel && selectedModel.provider === provider) {
-        console.log(`[AI Settings] Deselecting model ${selectedModel.id} due to API key removal`);
-        // Deselect model and disable AI enhancement
-        await invoke("update_ai_settings", {
-          enabled: false,
-          provider: aiSettings.provider,
-          model: ""  // Clear model selection
-        });
-      }
-
-      await loadAISettings();
+      
       toast.success("API key removed");
     } catch (error) {
       console.error(`[AI Settings] Failed to remove API key:`, error);
@@ -332,7 +355,7 @@ export function EnhancementsSection() {
                 key={model.id}
                 model={model}
                 hasApiKey={providerApiKeys[model.provider] || false}
-                isSelected={aiSettings.model === model.id}
+                isSelected={aiSettings.model === model.id && providerApiKeys[model.provider]}
                 onSetupApiKey={() => handleSetupApiKey(model.provider)}
                 onSelect={() => handleModelSelect(model.id, model.provider)}
                 onRemoveApiKey={() => handleRemoveApiKey(model.provider)}

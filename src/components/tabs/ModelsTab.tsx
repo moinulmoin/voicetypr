@@ -31,7 +31,7 @@ export function ModelsTab() {
 
       // If deleted model was the current one, clear selection in settings
       if (settings?.current_model === modelName) {
-        await saveSettings({ ...settings, current_model: "" });
+        await saveSettings({ current_model: "" });
       }
     },
     [deleteModel, settings]
@@ -39,9 +39,9 @@ export function ModelsTab() {
 
   // Save settings
   const saveSettings = useCallback(
-    async (newSettings: AppSettings) => {
+    async (updates: Partial<AppSettings>) => {
       try {
-        await updateSettings(newSettings);
+        await updateSettings(updates);
       } catch (error) {
         console.error("Failed to save settings:", error);
       }
@@ -88,7 +88,7 @@ export function ModelsTab() {
       onCancelDownload={cancelDownload}
       onSelect={async (modelName) => {
         if (settings) {
-          await saveSettings({ ...settings, current_model: modelName });
+          await saveSettings({ current_model: modelName });
         }
       }}
     />
