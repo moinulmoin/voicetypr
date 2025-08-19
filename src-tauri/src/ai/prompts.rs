@@ -1,18 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 // Self-correction rules that apply to ALL presets
-const SELF_CORRECTION_RULES: &str = r#"FIRST, handle natural speech self-corrections:
-
-SELF-CORRECTION PATTERNS (apply these before other processing):
-1. Immediate replacement: "send it to John... to Mary" → "send it to Mary"
-2. Trailing corrections: "meeting at 3pm... 4pm" → "meeting at 4pm"
-3. Partial restarts: "the proj... the project deadline" → "the project deadline"
-4. Negation patterns: "delete it... no rename it" → "rename it"
-5. Or/actually patterns: "Tuesday... or actually Wednesday" → "Wednesday"
-6. Wait/hold patterns: "send it now... wait tomorrow" → "send it tomorrow"
-7. Cascading corrections: keep only the final version when multiple corrections occur
-
-KEEP ONLY THE FINAL CORRECTION when speakers naturally correct themselves."#;
+const SELF_CORRECTION_RULES: &str = r#"FIRST, handle self-corrections:
+When speakers correct themselves mid-sentence (e.g., "send it to John... to Mary"), keep only the final version ("send it to Mary")."#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EnhancementPreset {
@@ -83,104 +73,73 @@ pub fn build_enhancement_prompt(
     prompt
 }
 
-const DEFAULT_PROMPT: &str = r#"THEN clean up this voice transcription like a high-quality dictation tool would - fix errors while keeping the natural speech flow.
+const DEFAULT_PROMPT: &str = r#"THEN clean up this voice transcription:
 
-APPLY THESE CORRECTIONS:
-
-1. REMOVE speech artifacts:
-   - Filler words: um, uh, ah, er, hmm, like (when filler), you know (when filler)
-   - False starts and incomplete thoughts
-   - Unintentional word repetitions and stutters: "I I think", "that that's"
-   - Verbal backspacing: "wait", "scratch that", "let me rephrase"
-
-2. FIX common errors:
-   - Homophones: there/their/they're, to/too/two, your/you're, its/it's, then/than
-   - Grammar: subject-verb agreement, article usage (a/an/the)
-   - Technical terms (fix misheard/misspelled tech words):
-     * "java script" → "JavaScript", "type script" → "TypeScript", "react js" → "React.js"
-     * "fortend/frontent/front and" → "frontend"
-     * "backing/back and/beck end" → "backend"
-     * "jason/jayson" → "JSON", "A P I" → "API"
-     * Common programming terms that sound similar
-   - Contractions: "dont" → "don't", "wont" → "won't", "cant" → "can't"
-   - Word boundaries: "alot" → "a lot", "incase" → "in case"
-
-3. ADD proper formatting:
-   - Capitalize sentence beginnings and proper nouns (names, places, brands)
-   - Add punctuation based on speech patterns and context
-   - Numbers: "twenty twenty five" → "2025", "one hundred" → "100"
-   - Times: "two thirty PM" → "2:30 PM"
-   - Dates: "january first" → "January 1st"
-   - Split run-on sentences at natural break points
-
-4. HANDLE explicit dictation commands:
-   - "period" or "full stop" → . (only when clearly dictating)
-   - "comma" → , (only when clearly dictating)
-   - "question mark" → ?
-   - "new paragraph" → create paragraph break
-   - Email addresses: "john at gmail dot com" → "john@gmail.com"
-
-5. KEEP the natural flow:
-   - Don't restructure into lists or bullet points
-   - Keep the conversational sequence intact
-   - Preserve the speaker's tone and style
-   - Don't make casual speech overly formal
-   - Maintain original sentence connections
-
-EXAMPLES:
-"um their going too the store at two thirty PM and there buying to apples" 
-→ "They're going to the store at 2:30 PM and they're buying two apples."
-
-"the java script function returns uh jason data with a two hundred status"
-→ "The JavaScript function returns JSON data with a 200 status."
-
-"first we need milk second bread third eggs"
-→ "First, we need milk, second bread, third eggs."
-
-"can you send it to john at gmail dot com"
-→ "Can you send it to john@gmail.com?"
-
-"I I think that that's the last no wait the least important one"
-→ "I think that's the least important one."
+- Remove filler words (um, uh, like) and stutters
+- Fix grammar, spelling, and common homophones  
+- Correct technical terms and programming terminology
+- Format numbers, dates, times naturally
+- Handle dictation commands when explicitly stated
+- Keep the original tone and flow - don't restructure into lists
+- Preserve natural speech patterns while fixing errors
 
 Return ONLY the cleaned text as natural dictation output."#;
 
 // Thin transformation layer for Prompts preset
 const PROMPTS_TRANSFORM: &str = r#"FINALLY, transform the cleaned text into a well-structured AI prompt:
 
-RULES:
-- Keep the core request intact
-- Make implicit requirements explicit
-- Add output format if mentioned
-- Don't over-elaborate if already clear
-- Preserve technical level
+IDENTIFY the type:
+- Request: Add deliverables and success criteria
+- Question: Clarify scope and depth needed
+- Task: Include constraints and requirements
+
+ENHANCE by:
+- Adding "what/how/why" if missing
+- Specifying output format if relevant
+- Preserving all technical details
 
 Examples:
-"fix the login bug" → "Fix the login bug. Include what caused it and what you changed."
-"make a todo app" → "Create a todo app with basic features: add, edit, delete tasks, and mark as complete."
-"explain this code" → "Explain what this code does, its purpose, and how it works."
+"fix the login bug" → "Fix the login bug. Explain what caused it and show the code changes needed."
+"make a todo app" → "Create a todo app with add, edit, delete, and mark complete functionality. Include basic UI."
+"what's this do" → "Explain what this code does, its purpose, and key implementation details."
 
 Return ONLY the enhanced prompt."#;
 
 // Thin transformation layer for Email preset
 const EMAIL_TRANSFORM: &str = r#"FINALLY, format the cleaned text as an email:
 
-ADD ONLY:
-- Subject line (concise, specific)
-- Greeting (match formality to content)
-- Paragraph breaks for clarity
-- Closing signature
-- Use [Name] placeholders where needed
+DETECT intent and tone:
+- Request: Include clear action items
+- Update: Lead with key information  
+- Question: Be specific about what you need
+- Formal: Use professional language
+- Casual: Keep friendly but clear
 
-Example:
-"Need the report by Friday" →
-"Subject: Report Due Friday
+STRUCTURE:
+- Subject: Specific and action-oriented
+- Greeting: Match relationship (Hi/Dear/Hello)
+- Body: Paragraph breaks for readability
+- Closing: Appropriate sign-off
+- Use [Name] for placeholders
+
+Examples:
+"need the Q3 report by Friday" →
+"Subject: Q3 Report Needed by Friday
 
 Hi [Name],
 
-Could you please send me the report by Friday?
+Could you please send me the Q3 report by Friday?
 
 Thanks,
+[Your name]"
+
+"following up on our discussion about the new feature yesterday" →
+"Subject: Follow-up: New Feature Discussion
+
+Hi [Name],
+
+Following up on our discussion about the new feature yesterday.
+
 [Your name]"
 
 Return ONLY the formatted email."#;
