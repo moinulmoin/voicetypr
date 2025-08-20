@@ -1,9 +1,6 @@
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { useState } from "react";
-import { FileText, Mail, GitCommit, Sparkles, X } from "lucide-react";
+import { FileText, Mail, GitCommit, Sparkles } from "lucide-react";
 
 interface EnhancementSettingsProps {
   settings: {
@@ -11,11 +8,10 @@ interface EnhancementSettingsProps {
     customVocabulary: string[];
   };
   onSettingsChange: (settings: any) => void;
+  disabled?: boolean;
 }
 
-export function EnhancementSettings({ settings, onSettingsChange }: EnhancementSettingsProps) {
-  const [vocabularyInput, setVocabularyInput] = useState("");
-
+export function EnhancementSettings({ settings, onSettingsChange, disabled = false }: EnhancementSettingsProps) {
   const presets = [
     {
       id: "Default",
@@ -52,32 +48,9 @@ export function EnhancementSettings({ settings, onSettingsChange }: EnhancementS
     }
   };
 
-  const handleAddVocabulary = () => {
-    const terms = vocabularyInput.split(",").map(t => t.trim()).filter(t => t);
-    if (terms.length > 0) {
-      onSettingsChange({
-        ...settings,
-        customVocabulary: [...settings.customVocabulary, ...terms]
-      });
-      setVocabularyInput("");
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && vocabularyInput.trim()) {
-      handleAddVocabulary();
-    }
-  };
-
-  const handleRemoveTerm = (term: string) => {
-    onSettingsChange({
-      ...settings,
-      customVocabulary: settings.customVocabulary.filter(t => t !== term)
-    });
-  };
 
   return (
-    <div className="space-y-6">
+    <div className={`space-y-6 ${disabled ? 'opacity-50' : ''}`}>
       {/* Enhancement Mode */}
       <div className="space-y-3">
         <Label className="text-sm font-medium">Enhancement Mode</Label>
@@ -91,8 +64,9 @@ export function EnhancementSettings({ settings, onSettingsChange }: EnhancementS
                 key={preset.id}
                 variant={isSelected ? "default" : "outline"}
                 size="sm"
-                className="gap-2"
-                onClick={() => handlePresetChange(preset.id)}
+                className={`gap-2 ${disabled ? 'cursor-not-allowed' : ''}`}
+                onClick={() => !disabled && handlePresetChange(preset.id)}
+                disabled={disabled}
               >
                 <Icon className="h-4 w-4" />
                 {preset.label}
@@ -108,40 +82,6 @@ export function EnhancementSettings({ settings, onSettingsChange }: EnhancementS
           {settings.preset === "Email" && "Formats speech into professional emails with subject and greeting"}
           {settings.preset === "Commit" && "Creates conventional commit messages with type and scope"}
         </p>
-      </div>
-
-      {/* Custom Vocabulary */}
-      <div className="space-y-3">
-        <Label className="text-sm font-medium">Custom Vocabulary</Label>
-        <Input
-          placeholder="Add terms (comma separated)"
-          value={vocabularyInput}
-          onChange={(e) => setVocabularyInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          className="text-sm"
-        />
-        
-        {settings.customVocabulary.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {settings.customVocabulary.map((term) => (
-              <Badge
-                key={term}
-                variant="secondary"
-                className="gap-1 pr-1"
-              >
-                {term}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-4 w-4 p-0 hover:bg-transparent"
-                  onClick={() => handleRemoveTerm(term)}
-                >
-                  <X className="h-3 w-3" />
-                </Button>
-              </Badge>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );

@@ -363,6 +363,16 @@ export function EnhancementsSection() {
             ))}
           </div>
 
+          {/* Enhancement Settings - Always visible, disabled when AI is off */}
+          <div className="mt-4 pt-4">
+            <div className={!aiSettings.enabled ? "opacity-50 pointer-events-none" : ""}>
+              <EnhancementSettings
+                settings={enhancementOptions}
+                onSettingsChange={handleEnhancementOptionsChange}
+              />
+            </div>
+          </div>
+
           {/* Simple setup guide when AI is disabled */}
           {!aiSettings.enabled && (
             <div className="bg-muted/50 rounded-lg p-4 space-y-3 mt-4">
@@ -374,16 +384,6 @@ export function EnhancementsSection() {
                 <li>Select the model you want to use</li>
                 <li>Toggle the switch above to enable AI enhancement</li>
               </ol>
-            </div>
-          )}
-
-          {/* Enhancement Settings - Always visible when enabled */}
-          {aiSettings.enabled && (
-            <div className="mt-4 pt-4">
-              <EnhancementSettings
-                settings={enhancementOptions}
-                onSettingsChange={handleEnhancementOptionsChange}
-              />
             </div>
           )}
         </div>
