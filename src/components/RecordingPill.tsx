@@ -156,9 +156,11 @@ export function RecordingPill() {
     );
 
     unlisteners.push(
-      listen("enhancing-failed", () => {
-        console.log("RecordingPill: Received enhancing-failed event");
+      listen<string>("enhancing-failed", (event) => {
+        console.log("RecordingPill: Received enhancing-failed event", event.payload);
         setIsEnhancing(false);
+        // Show error message for 4 seconds
+        setFeedbackWithTimeout(event.payload || "Enhancement failed", 4000);
       })
     );
 

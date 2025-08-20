@@ -145,17 +145,18 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
     store.save().map_err(|e| e.to_string())?;
 
-    // Preload new model if it changed
+    // Preload new model and update tray menu if model changed
     if !settings.current_model.is_empty() && old_model != settings.current_model {
         use crate::commands::model::preload_model;
         use tauri::async_runtime::RwLock as AsyncRwLock;
 
         log::info!(
-            "Model changed from '{}' to '{}', preloading new model",
+            "Model changed from '{}' to '{}', preloading new model and updating tray menu",
             old_model,
             settings.current_model
         );
 
+        // Preload the new model
         let app_clone = app.clone();
         let model_name = settings.current_model.clone();
         tokio::spawn(async move {
@@ -166,6 +167,12 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
                 Err(e) => log::warn!("Failed to preload new model: {}", e),
             }
         });
+        
+        // Update the tray menu to reflect the new selection
+        if let Err(e) = update_tray_menu(app.clone()).await {
+            log::warn!("Failed to update tray menu after model change: {}", e);
+            // Don't fail the whole operation if tray update fails
+        }
     }
 
     Ok(())

@@ -257,14 +257,19 @@ pub async fn clear_ai_api_key_cache(
     _app: tauri::AppHandle,
     provider: String,
 ) -> Result<(), String> {
-    validate_provider_name(&provider)?;
+    // Skip validation if provider is empty (happens when clearing selection)
+    if !provider.is_empty() {
+        validate_provider_name(&provider)?;
+    }
 
     let mut cache = API_KEY_CACHE
         .lock()
         .map_err(|_| "Failed to access cache".to_string())?;
-    cache.remove(&format!("ai_api_key_{}", provider));
-
-    log::info!("API key cache cleared for provider: {}", provider);
+    
+    if !provider.is_empty() {
+        cache.remove(&format!("ai_api_key_{}", provider));
+        log::info!("API key cache cleared for provider: {}", provider);
+    }
 
     Ok(())
 }
@@ -286,7 +291,10 @@ pub async fn update_ai_settings(
     model: String,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    validate_provider_name(&provider)?;
+    // Allow empty provider and model for deselection
+    if !provider.is_empty() {
+        validate_provider_name(&provider)?;
+    }
 
     // Allow empty model (for deselection) but validate if not empty
     if !model.is_empty() {
