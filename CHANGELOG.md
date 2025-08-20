@@ -1,5 +1,22 @@
 # Changelog
 
+# [1.7.0](https://github.com/moinulmoin/voicetypr/compare/v1.6.2...v1.7.0) (2025-08-20)
+
+
+### Bug Fixes
+
+* handle misheard filler words in base enhancement prompt ([b2db125](https://github.com/moinulmoin/voicetypr/commit/b2db125527508fc40855fe360420eb5b2bc06873))
+* hotkey display platform-specific symbols ([04dde4b](https://github.com/moinulmoin/voicetypr/commit/04dde4bea3b3bbcb0e5097f3cac9064aae6693d8))
+* make enhancement prompt comprehensive for all error types ([73a1612](https://github.com/moinulmoin/voicetypr/commit/73a16128d8ecc3df9aff6a1ac7a7eb134f8b4dfb))
+* resolve menu bar updates and AI enhancement issues ([6f3b15f](https://github.com/moinulmoin/voicetypr/commit/6f3b15f905bc4a90d3a750846f755aaa497bfbdd))
+* restore license expiration dashboard navigation on hotkey press ([0cdbfef](https://github.com/moinulmoin/voicetypr/commit/0cdbfef6801f2a5c3483a22c6941877a432b921d))
+* update enhancement mode descriptions for accuracy ([29d2679](https://github.com/moinulmoin/voicetypr/commit/29d2679abe2406d978d21d43889ff9a68d44cd3e))
+
+
+### Features
+
+* improve AI enhancement settings discoverability ([84dac26](https://github.com/moinulmoin/voicetypr/commit/84dac2654f0d2f6fa444290d197c04c90dbc0c30))
+
 ## [1.6.2](https://github.com/moinulmoin/voicetypr/compare/v1.6.0...v1.6.2) (2025-08-14)
 
 
