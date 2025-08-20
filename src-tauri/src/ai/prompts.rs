@@ -75,14 +75,14 @@ pub fn build_enhancement_prompt(
 
 const DEFAULT_PROMPT: &str = r#"THEN clean up this voice transcription:
 
-- Remove filler words (um, uh, like) and stutters
-- Fix unnatural conjunctions or articles that seem out of place
-- Fix grammar, spelling, and common homophones  
-- Correct technical terms and programming terminology
+- Remove filler words and stutters
+- Fix all errors: grammar, spelling, punctuation, word choice
+- Fix logical inconsistencies and nonsensical phrases
+- Correct informal speech if inappropriate (gonna → going to)
+- Correct technical terms and proper nouns
 - Format numbers, dates, times naturally
 - Handle dictation commands when explicitly stated
-- Keep the original tone and flow - don't restructure into lists
-- Preserve natural speech patterns while fixing errors
+- Keep the original tone and flow - don't restructure or change style
 
 Return ONLY the cleaned text as natural dictation output."#;
 
