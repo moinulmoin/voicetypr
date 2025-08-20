@@ -76,6 +76,7 @@ pub fn build_enhancement_prompt(
 const DEFAULT_PROMPT: &str = r#"THEN clean up this voice transcription:
 
 - Remove filler words (um, uh, like) and stutters
+- Fix unnatural conjunctions or articles that seem out of place
 - Fix grammar, spelling, and common homophones  
 - Correct technical terms and programming terminology
 - Format numbers, dates, times naturally
