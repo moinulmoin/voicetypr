@@ -1,6 +1,6 @@
 [package]
 name = "voicetypr"
-version = "1.6.2"
+version = "1.7.0"
 description = "open source voice to text transcription app"
 authors = ["moinulmoin"]
 edition = "2021"
