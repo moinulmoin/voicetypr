@@ -77,10 +77,10 @@ export function EnhancementSettings({ settings, onSettingsChange, disabled = fal
         
         {/* Mode description */}
         <p className="text-sm text-muted-foreground">
-          {settings.preset === "Default" && "Comprehensive cleaning with grammar, spelling, formatting, and lists"}
-          {settings.preset === "Prompts" && "Transforms speech into well-structured AI prompts"}
-          {settings.preset === "Email" && "Formats speech into professional emails with subject and greeting"}
-          {settings.preset === "Commit" && "Creates conventional commit messages with type and scope"}
+          {settings.preset === "Default" && "Clean transcription with grammar, spelling, and punctuation fixes"}
+          {settings.preset === "Prompts" && "Transform speech into clear, actionable AI prompts"}
+          {settings.preset === "Email" && "Format as professional email with subject, greeting, and signature"}
+          {settings.preset === "Commit" && "Create conventional commit message (feat, fix, docs, etc.)"}
         </p>
       </div>
     </div>
