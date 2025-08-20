@@ -89,6 +89,21 @@ export function AppContainer() {
           toast.error(event.payload as string);
         });
 
+        // Listen for license-required event and navigate to Account section
+        registerEvent<{ title: string; message: string; action?: string }>(
+          "license-required", 
+          (data) => {
+            console.log("License required event received in AppContainer:", data);
+            // Navigate to Account section to show license management
+            setActiveSection("account");
+            // Show a toast to inform the user
+            toast.error(data.title || "License Required", {
+              description: data.message || "Please purchase or restore a license to continue",
+              duration: 5000
+            });
+          }
+        );
+
         // Listen for no models error (when trying to record without any models)
         registerEvent<ErrorEventPayload>("no-models-error", (data) => {
           console.error("No models available:", data);

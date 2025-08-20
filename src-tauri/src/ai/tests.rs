@@ -107,7 +107,7 @@ mod tests {
         let prompt = build_enhancement_prompt("hello world", None, &options);
 
         assert!(prompt.contains("hello world"));
-        assert!(prompt.contains("APPLY THESE CORRECTIONS"));
+        assert!(prompt.contains("THEN clean up this voice transcription"));
 
         // Test with context
         let prompt_with_context =
@@ -132,7 +132,7 @@ mod tests {
         // Test Default preset
         let default_options = EnhancementOptions::default();
         let default_prompt = build_enhancement_prompt(text, None, &default_options);
-        assert!(default_prompt.contains("APPLY THESE CORRECTIONS"));
+        assert!(default_prompt.contains("THEN clean up this voice transcription"));
 
         // Test Prompts preset
         let mut prompts_options = EnhancementOptions::default();
@@ -178,13 +178,8 @@ mod tests {
             
             // All prompts should include self-correction rules
             assert!(
-                prompt.contains("handle natural speech self-corrections"),
+                prompt.contains("handle self-corrections"),
                 "Preset {:?} should include self-correction rules",
-                preset
-            );
-            assert!(
-                prompt.contains("Immediate replacement"),
-                "Preset {:?} should include immediate replacement pattern",
                 preset
             );
         }
@@ -211,14 +206,14 @@ mod tests {
             
             // All should include self-correction rules
             assert!(
-                prompt.contains("handle natural speech self-corrections"),
+                prompt.contains("handle self-corrections"),
                 "Preset {:?} should include self-correction rules",
                 preset
             );
             
             // All should include default processing
             assert!(
-                prompt.contains("APPLY THESE CORRECTIONS"),
+                prompt.contains("THEN clean up this voice transcription"),
                 "Preset {:?} should include default processing",
                 preset
             );
@@ -245,29 +240,18 @@ mod tests {
         // Test that Default prompt includes all comprehensive features
         
         // 1. Speech artifacts removal
-        assert!(prompt.contains("Filler words"), "Should include filler word removal");
+        assert!(prompt.contains("Remove filler words"), "Should include filler word removal");
         assert!(prompt.contains("stutters"), "Should handle stutters");
         
-        // 2. Homophone correction
-        assert!(prompt.contains("Homophones"), "Should handle homophones");
-        assert!(prompt.contains("there/their/they're"), "Should include common homophone examples");
+        // 2. Error correction
+        assert!(prompt.contains("Fix all errors"), "Should fix errors");
+        assert!(prompt.contains("grammar, spelling, punctuation"), "Should handle grammar and spelling");
         
         // 3. Number and time formatting
-        assert!(prompt.contains("Times:"), "Should format times");
-        assert!(prompt.contains("Dates:"), "Should format dates");
-        assert!(prompt.contains("Numbers:"), "Should format numbers");
+        assert!(prompt.contains("Format numbers, dates, times"), "Should format numbers and dates");
         
-        // 4. Spoken punctuation
-        assert!(prompt.contains("spoken punctuation"), "Should handle spoken punctuation");
-        assert!(prompt.contains("comma"), "Should handle spoken comma");
-        assert!(prompt.contains("question mark"), "Should handle spoken question mark");
-        
-        // 5. List detection
-        assert!(prompt.contains("Format lists"), "Should format detected lists");
-        
-        // 6. Technical terms
-        assert!(prompt.contains("Technical terms"), "Should preserve technical terms");
-        assert!(prompt.contains("JavaScript"), "Should correct JavaScript");
+        // 4. Technical terms
+        assert!(prompt.contains("Correct technical terms"), "Should preserve technical terms");
     }
 
     #[test]

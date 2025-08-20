@@ -87,6 +87,13 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
         Ok(status) => {
             if matches!(status.status, LicenseState::Expired | LicenseState::None) {
                 log::error!("Invalid license");
+                
+                // Show and focus the main window
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+                
                 // Emit error event with guidance
                 let _ = emit_to_window(
                     app,
