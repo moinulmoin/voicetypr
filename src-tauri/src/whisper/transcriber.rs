@@ -139,6 +139,38 @@ impl Transcriber {
                 }
             }
         }
+        
+        // Linux: Try Vulkan GPU first, fallback to CPU if it fails (same as Windows!)
+        #[cfg(target_os = "linux")]
+        {
+            ctx_params.use_gpu(true);
+            gpu_used = true;
+            log::info!("🐧 Linux: Attempting Vulkan GPU acceleration...");
+            
+            // Try GPU first
+            match WhisperContext::new_with_params(model_path_str, ctx_params.clone()) {
+                Ok(ctx) => {
+                    let gpu_time = gpu_start.elapsed();
+                    log::info!("✅ Linux Vulkan GPU initialization successful! (took {:.2?})", gpu_time);
+                    log_success("TRANSCRIBER_INIT");
+                    return Ok(Self {
+                        ctx: Arc::new(ctx),
+                        model_path: model_path.to_path_buf(),
+                        gpu_accelerated: true,
+                    });
+                }
+                Err(gpu_err) => {
+                    log::warn!("⚠️ Linux Vulkan GPU initialization failed: {}", gpu_err);
+                    log::info!("📊 Falling back to CPU...");
+                    
+                    // Reset to CPU-only params
+                    ctx_params = WhisperContextParameters::default();
+                    ctx_params.use_gpu(false);
+                    gpu_used = false;
+                    log::info!("🔄 Attempting CPU-only initialization...");
+                }
+            }
+        }
 
         // Create context (for Windows CPU fallback or other platforms)
         let cpu_start = Instant::now();

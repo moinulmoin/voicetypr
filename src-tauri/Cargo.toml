@@ -71,6 +71,9 @@ windows = { version = "0.51", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+whisper-rs = { version = "0.14.3", features = ["vulkan"] }
+
 [dev-dependencies]
 tempfile = "3.10"
 tokio-test = "0.4"

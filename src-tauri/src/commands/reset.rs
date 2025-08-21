@@ -279,6 +279,12 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
         cleared_items.push("System permissions (N/A on Windows)".to_string());
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        // Linux doesn't have centralized permissions like macOS
+        cleared_items.push("System permissions (N/A on Linux)".to_string());
+    }
+
     // 8. Clear any runtime state
     use tauri::async_runtime::RwLock as AsyncRwLock;
     let whisper_state = app.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
