@@ -269,6 +269,20 @@ impl WindowManager {
             }
         }
 
+        // Apply Linux-specific window hints
+        #[cfg(target_os = "linux")]
+        {
+            // Linux window managers handle focus differently
+            // This will work for most X11 and Wayland environments
+            log::debug!("Configuring Linux window hints for pill window");
+            
+            // The window is already configured with skip_taskbar and always_on_top
+            // through Tauri's window builder, which should work on most Linux WMs
+            
+            // Additional Linux-specific behavior would require detecting X11 vs Wayland
+            // and using platform-specific APIs, but Tauri's abstractions handle most cases
+        }
+
         // Show the window after NSPanel conversion
         pill_window.show().map_err(|e| e.to_string())?;
 

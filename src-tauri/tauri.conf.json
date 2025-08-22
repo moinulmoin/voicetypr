@@ -63,7 +63,20 @@
                                                 "installMode":  "currentUser",
                                                 "installerHooks":  "./windows/smart-installer-hooks.nsh"
                                             }
-                               }
+                               },
+                   "linux":  {
+                                 "appimage":  {
+                                                 "bundleMediaFramework":  false,
+                                                 "files":  {
+                                                             "/usr/share/applications/voicetypr.desktop":  "./voicetypr.desktop",
+                                                             "/usr/share/icons/hicolor/128x128/apps/voicetypr.png":  "./icons/128x128.png",
+                                                             "/usr/share/icons/hicolor/256x256/apps/voicetypr.png":  "./icons/128x128@2x.png"
+                                                         }
+                                             },
+                                 "deb":  {
+                                             "desktopTemplate":  "./voicetypr.desktop"
+                                         }
+                             }
                },
     "plugins":  {
                     "updater":  {

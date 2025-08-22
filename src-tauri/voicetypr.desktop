@@ -1,0 +1,32 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=VoiceTypr
+GenericName=Voice Transcription
+Comment=Offline voice-to-text transcription powered by Whisper AI
+Exec=voicetypr %U
+Icon=voicetypr
+Terminal=false
+Categories=Utility;AudioVideo;Accessibility;Office;
+Keywords=voice;speech;transcription;whisper;ai;text;audio;dictation;
+MimeType=audio/wav;audio/mp3;audio/ogg;audio/flac;
+StartupNotify=true
+StartupWMClass=voicetypr
+Actions=Record;Settings;
+
+[Desktop Action Record]
+Name=Start Recording
+Exec=voicetypr --record
+Icon=audio-input-microphone
+
+[Desktop Action Settings]
+Name=Open Settings
+Exec=voicetypr --settings
+Icon=preferences-system
+
+# AppImage-specific extensions
+X-AppImage-Version=1.7.0
+X-AppImage-Arch=x86_64
+X-AppImage-Name=VoiceTypr
+X-AppImage-UpdateInformation=gh-releases-zsync|moinulmoin|voicetypr|latest|VoiceTypr-*.AppImage.zsync
+X-AppImage-Integrate=true
