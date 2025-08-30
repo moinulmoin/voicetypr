@@ -64,13 +64,19 @@ async fn build_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<tauri::menu::Menu<R>, Box<dyn std::error::Error>> {
     // Get current settings for menu state
-    let current_model = {
+    let (current_model, selected_microphone) = {
         match app.store("settings") {
-            Ok(store) => store
-                .get("current_model")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_default(),
-            Err(_) => "".to_string(),
+            Ok(store) => {
+                let model = store
+                    .get("current_model")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                let microphone = store
+                    .get("selected_microphone")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()));
+                (model, microphone)
+            }
+            Err(_) => ("".to_string(), None),
         }
     };
 
@@ -131,6 +137,61 @@ async fn build_tray_menu<R: tauri::Runtime>(
         None
     };
 
+    // Get available audio devices
+    let available_devices = audio::recorder::AudioRecorder::get_devices();
+    
+    // Create microphone submenu
+    let microphone_submenu = if !available_devices.is_empty() {
+        let mut mic_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
+        let mut mic_check_items = Vec::new();
+
+        // Add "Default" option first
+        let default_item = CheckMenuItem::with_id(
+            app,
+            "microphone_default",
+            "System Default",
+            true,
+            selected_microphone.is_none(), // Selected if no specific microphone is set
+            None::<&str>,
+        )?;
+        mic_check_items.push(default_item);
+
+        // Add available devices
+        for device_name in &available_devices {
+            let is_selected = selected_microphone.as_ref() == Some(device_name);
+            let mic_item = CheckMenuItem::with_id(
+                app,
+                &format!("microphone_{}", device_name),
+                device_name,
+                true,
+                is_selected,
+                None::<&str>,
+            )?;
+            mic_check_items.push(mic_item);
+        }
+
+        // Convert to trait objects
+        for item in &mic_check_items {
+            mic_items.push(item);
+        }
+
+        let current_mic_display = if let Some(ref mic_name) = selected_microphone {
+            format!("Microphone: {}", mic_name)
+        } else {
+            "Microphone: Default".to_string()
+        };
+
+        Some(Submenu::with_id_and_items(
+            app,
+            "microphones",
+            &current_mic_display,
+            true,
+            &mic_items,
+        )?)
+    } else {
+        None
+    };
+
     // Create menu items
     let separator1 = PredefinedMenuItem::separator(app)?;
     let settings_i = MenuItem::with_id(app, "settings", "Dashboard", true, None::<&str>)?;
@@ -141,6 +202,10 @@ async fn build_tray_menu<R: tauri::Runtime>(
 
     if let Some(model_submenu) = model_submenu {
         menu_builder = menu_builder.item(&model_submenu);
+    }
+    
+    if let Some(microphone_submenu) = microphone_submenu {
+        menu_builder = menu_builder.item(&microphone_submenu);
     }
 
     let menu = menu_builder
@@ -861,6 +926,43 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         });
+                    } else if event_id == "microphone_default" {
+                        // Handle default microphone selection
+                        let app_handle = app.app_handle().clone();
+                        
+                        tauri::async_runtime::spawn(async move {
+                            match crate::commands::settings::set_audio_device(app_handle.clone(), None).await {
+                                Ok(_) => {
+                                    log::info!("Microphone changed from tray to: System Default");
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to set default microphone from tray: {}", e);
+                                    let _ = app_handle.emit("tray-action-error", &format!("Failed to change microphone: {}", e));
+                                }
+                            }
+                        });
+                    } else if event_id.starts_with("microphone_") {
+                        // Handle specific microphone selection
+                        let device_name = match event_id.strip_prefix("microphone_") {
+                            Some(name) if name != "default" => Some(name.to_string()),
+                            _ => {
+                                // Already handled by microphone_default case above
+                                return;
+                            }
+                        };
+                        let app_handle = app.app_handle().clone();
+
+                        tauri::async_runtime::spawn(async move {
+                            match crate::commands::settings::set_audio_device(app_handle.clone(), device_name.clone()).await {
+                                Ok(_) => {
+                                    log::info!("Microphone changed from tray to: {:?}", device_name);
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to set microphone from tray: {}", e);
+                                    let _ = app_handle.emit("tray-action-error", &format!("Failed to change microphone: {}", e));
+                                }
+                            }
+                        });
                     }
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -1151,6 +1253,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             transcribe_audio,
             get_settings,
             save_settings,
+            set_audio_device,
             set_global_shortcut,
             get_supported_languages,
             set_model_from_tray,

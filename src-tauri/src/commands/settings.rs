@@ -20,6 +20,7 @@ pub struct Settings {
     pub onboarding_completed: bool,
     pub compact_recording_status: bool,
     pub check_updates_automatically: bool,
+    pub selected_microphone: Option<String>,
 }
 
 impl Default for Settings {
@@ -36,6 +37,7 @@ impl Default for Settings {
             onboarding_completed: false,      // Default to not completed
             compact_recording_status: true,   // Default to compact mode
             check_updates_automatically: true, // Default to automatic updates enabled
+            selected_microphone: None,        // Default to system default microphone
         }
     }
 }
@@ -97,6 +99,9 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("check_updates_automatically")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().check_updates_automatically),
+        selected_microphone: store
+            .get("selected_microphone")
+            .and_then(|v| v.as_str().map(|s| s.to_string())),
     };
 
     // Pill position is already loaded from store, no need for duplicate state
@@ -137,6 +142,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         "check_updates_automatically",
         json!(settings.check_updates_automatically),
     );
+    store.set("selected_microphone", json!(settings.selected_microphone));
 
     // Save pill position if provided
     if let Some((x, y)) = settings.pill_position {
@@ -327,5 +333,58 @@ pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
         log::warn!("Tray icon not found");
     }
 
+    Ok(())
+}
+
+/// Set the selected microphone device
+#[tauri::command]
+pub async fn set_audio_device(app: AppHandle, device_name: Option<String>) -> Result<(), String> {
+    log::info!("Setting audio device to: {:?}", device_name);
+    
+    // Get current settings
+    let mut settings = get_settings(app.clone()).await?;
+    
+    // Check if recording is in progress and stop it
+    let recorder_state = app.state::<crate::commands::audio::RecorderState>();
+    {
+        let mut recorder = recorder_state.inner().0.lock()
+            .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
+        
+        if recorder.is_recording() {
+            log::info!("Recording in progress, stopping it before changing microphone");
+            
+            // Update state to notify UI
+            crate::update_recording_state(&app, crate::RecordingState::Stopping, None);
+            
+            match recorder.stop_recording() {
+                Ok(msg) => {
+                    log::info!("Recording stopped: {}", msg);
+                    // Update state to idle after successful stop
+                    crate::update_recording_state(&app, crate::RecordingState::Idle, None);
+                },
+                Err(e) => {
+                    log::warn!("Failed to stop recording: {}", e);
+                    // Update state to error if stop failed
+                    crate::update_recording_state(&app, crate::RecordingState::Error, Some(e));
+                }
+            }
+        }
+    } // Lock released here
+    
+    // Update the selected microphone
+    settings.selected_microphone = device_name.clone();
+    
+    // Save the updated settings
+    save_settings(app.clone(), settings).await?;
+    
+    // Update tray menu to reflect the change
+    update_tray_menu(app.clone()).await?;
+    
+    // Emit event to notify frontend - just emit a signal, frontend will reload settings
+    if let Err(e) = app.emit("audio-device-changed", ()) {
+        log::warn!("Failed to emit audio-device-changed event: {}", e);
+    }
+    
+    log::info!("Audio device successfully set to: {:?}", device_name);
     Ok(())
 }

@@ -11,6 +11,7 @@ import { AlertCircle, Globe, Mic, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { LanguageSelection } from "../LanguageSelection";
+import { MicrophoneSelection } from "../MicrophoneSelection";
 
 export function GeneralSettings() {
   const { settings, updateSettings } = useSettings();
@@ -112,6 +113,29 @@ export function GeneralSettings() {
                   </span>
                 </div>
               )}
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label htmlFor="microphone">Microphone</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Select audio input device
+                  </p>
+                </div>
+                <MicrophoneSelection
+                  value={settings.selected_microphone || undefined}
+                  onValueChange={async (deviceName) => {
+                    try {
+                      console.log(`Setting microphone to: ${deviceName || 'Default'}`)
+                      // Always call set_audio_device, pass null for default
+                      await invoke("set_audio_device", { deviceName: deviceName || null });
+                      toast.success(`Microphone changed to: ${deviceName || 'Default'}`);
+                    } catch (error) {
+                      console.error("Failed to set microphone:", error);
+                      toast.error("Failed to change microphone");
+                    }
+                  }}
+                />
+              </div>
 
               <div className="flex items-center justify-between">
                 <div>

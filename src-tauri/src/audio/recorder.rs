@@ -74,7 +74,7 @@ impl AudioRecorder {
         }
     }
 
-    pub fn start_recording(&mut self, output_path: &str) -> Result<(), String> {
+    pub fn start_recording(&mut self, output_path: &str, device_name: Option<String>) -> Result<(), String> {
         log::info!(
             "AudioRecorder::start_recording called with path: {}",
             output_path
@@ -109,9 +109,25 @@ impl AudioRecorder {
         // Spawn recording thread
         let thread_handle = thread::spawn(move || -> Result<String, String> {
             let host = cpal::default_host();
-            let device = host
-                .default_input_device()
-                .ok_or("No input device available")?;
+            let device = if let Some(device_name) = device_name {
+                // Try to find the specified device
+                host.input_devices()
+                    .map_err(|e| format!("Failed to enumerate input devices: {}", e))?
+                    .find(|d| d.name().map(|n| n == device_name).unwrap_or(false))
+                    .ok_or_else(|| {
+                        log::warn!("Specified device '{}' not found, falling back to default", device_name);
+                        format!("Device '{}' not found", device_name)
+                    })
+                    .or_else(|_| {
+                        // Fallback to default device if specified device not found
+                        host.default_input_device()
+                            .ok_or("No input device available".to_string())
+                    })?
+            } else {
+                // Use default device
+                host.default_input_device()
+                    .ok_or("No input device available")?
+            };
 
             let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
             log::info!("======================================");

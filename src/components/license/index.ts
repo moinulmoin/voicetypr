@@ -1,1 +1,0 @@
-export { LicenseSection } from './LicenseSection';

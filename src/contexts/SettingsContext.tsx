@@ -62,6 +62,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       console.log('Language changed, refreshing settings');
       loadSettings();
     });
+    
+    const unlistenAudioDevice = listen('audio-device-changed', () => {
+      console.log('Audio device changed, refreshing settings');
+      loadSettings();
+    });
 
     const unlistenSettings = listen('settings-changed', () => {
       console.log('Settings changed, refreshing');
@@ -69,7 +74,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     });
 
     return () => {
-      Promise.all([unlistenModel, unlistenLanguage, unlistenSettings]).then(unsubs => {
+      Promise.all([unlistenModel, unlistenLanguage, unlistenAudioDevice, unlistenSettings]).then(unsubs => {
         unsubs.forEach(unsub => unsub());
       });
     };

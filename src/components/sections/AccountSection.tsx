@@ -19,7 +19,7 @@ import { toast } from 'sonner';
 import { updateService } from '@/services/updateService';
 
 export function AccountSection() {
-  const { status, isLoading, restoreLicense, activateLicense, deactivateLicense, openPurchasePage } = useLicense();
+  const { status, isLoading, activateLicense, deactivateLicense, openPurchasePage } = useLicense();
   const [licenseKey, setLicenseKey] = useState('');
   const [isActivating, setIsActivating] = useState(false);
   const [appVersion, setAppVersion] = useState<string>('Loading...');
@@ -162,14 +162,15 @@ export function AccountSection() {
                     Buy License
                   </Button>
                   <Button
-                    onClick={restoreLicense}
+                    onClick={() => openExternalLink("https://polar.sh/ideaplexa/portal")}
                     variant="outline"
                     size="sm"
                     className="flex-1"
                   >
-                    Restore
+                    Manage License
                   </Button>
                 </div>
+
 
                 <div className="space-y-2">
                   <p className="text-xs font-medium text-muted-foreground">Have a license key?</p>
@@ -244,7 +245,10 @@ export function AccountSection() {
                 </button>
                 
                 <button
-                  onClick={() => openExternalLink("mailto:support@voicetypr.com")}
+                  onClick={() => {
+                    navigator.clipboard.writeText("support@voicetypr.com");
+                    toast.success("Support email copied to clipboard!");
+                  }}
                   className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <Mail className="h-4 w-4" />

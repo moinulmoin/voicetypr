@@ -21,6 +21,7 @@ export interface AppSettings {
   onboarding_completed?: boolean;
   compact_recording_status?: boolean;
   check_updates_automatically?: boolean;
+  selected_microphone?: string | null;
 }
 
 export interface TranscriptionHistory {

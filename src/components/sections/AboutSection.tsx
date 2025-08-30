@@ -75,7 +75,10 @@ export function AboutSection() {
         {/* Links Section */}
         <div className="flex items-center gap-6 mt-8">
             <button
-              onClick={() => openExternalLink("mailto:support@voicetypr.com")}
+              onClick={() => {
+                navigator.clipboard.writeText("support@voicetypr.com");
+                toast.success("Support email copied to clipboard!");
+              }}
               className="flex items-center gap-2 text-sm text-gray-900 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-400 hover:underline underline-offset-4"
             >
               <Mail className="w-4 h-4" />

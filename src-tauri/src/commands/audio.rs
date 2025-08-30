@@ -3,6 +3,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::audio::recorder::AudioRecorder;
 use crate::audio::validator::{AudioValidator, AudioValidationResult};
 use crate::commands::license::check_license_status_internal;
+use crate::commands::settings::get_settings;
 use crate::license::LicenseState;
 use crate::utils::logger::*;
 #[cfg(debug_assertions)]
@@ -175,6 +176,23 @@ pub async fn start_recording(
         .map_err(|e| format!("Failed to acquire path lock: {}", e))?
         .replace(audio_path.clone());
 
+    // Get selected microphone from settings (before acquiring recorder lock)
+    let selected_microphone = match get_settings(app.clone()).await {
+        Ok(settings) => {
+            if let Some(mic) = settings.selected_microphone {
+                log::info!("Using selected microphone: {}", mic);
+                Some(mic)
+            } else {
+                log::info!("Using default microphone");
+                None
+            }
+        },
+        Err(e) => {
+            log::warn!("Failed to get settings for microphone selection: {}. Using default.", e);
+            None
+        }
+    };
+
     // Start recording (scoped to release mutex before async operations)
     {
         let mut recorder = state
@@ -226,10 +244,17 @@ pub async fn start_recording(
             
         log_file_operation("RECORDING_START", audio_path_str, false, None, None);
         
-        match recorder.start_recording(audio_path_str) {
+        // Start recording and get audio level receiver
+        let audio_level_rx = match recorder.start_recording(audio_path_str, selected_microphone.clone()) {
             Ok(_) => {
                 // Verify recording actually started
-                if !recorder.is_recording() {
+                let is_recording = recorder.is_recording();
+                
+                // Get the audio level receiver before potentially dropping recorder
+                let rx = recorder.take_audio_level_receiver();
+                
+                if !is_recording {
+                    drop(recorder); // Release the lock if we're erroring out
                     log_failed("RECORDER_INIT", "Recording failed to start after initialization");
                     log_with_context(log::Level::Debug, "Recorder initialization failed", &[
                         ("audio_path", audio_path_str),
@@ -257,6 +282,8 @@ pub async fn start_recording(
                     #[cfg(debug_assertions)]
                     system_monitor::log_resources_before_operation("RECORDING_START");
                 }
+                
+                rx // Return the audio level receiver
             }
             Err(e) => {
                 log_failed("RECORDER_START", &e);
@@ -282,10 +309,13 @@ pub async fn start_recording(
 
                 return Err(e);
             }
-        }
+        };
 
-        // Start audio level monitoring before releasing the lock
-        if let Some(audio_level_rx) = recorder.take_audio_level_receiver() {
+        // Release the recorder lock after successful start
+        drop(recorder);
+
+        // Start audio level monitoring 
+        if let Some(audio_level_rx) = audio_level_rx {
             let app_for_levels = app.clone();
             // Use a thread instead of tokio spawn for std::sync::mpsc
             std::thread::spawn(move || {
@@ -592,7 +622,7 @@ pub async fn stop_recording(
             
             return Ok("".to_string()); // Don't proceed to transcription
         }
-        Ok(AudioValidationResult::TooQuiet { energy, suggestion }) => {
+        Ok(AudioValidationResult::TooQuiet { energy, suggestion: _ }) => {
             log::warn!("Audio validation FAILED: Audio too quiet (RMS={:.6})", energy);
             
             // Clean up audio file
