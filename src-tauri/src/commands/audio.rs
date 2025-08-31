@@ -19,6 +19,111 @@ use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_store::StoreExt;
 
+/// Cached recording configuration to avoid repeated store access during transcription flow
+/// Cache is invalidated when settings change via update hooks
+#[derive(Clone, Debug)]
+pub struct RecordingConfig {
+    pub show_pill_widget: bool,
+    pub ai_enabled: bool,
+    pub ai_provider: String,
+    pub ai_model: String,
+    pub current_model: String,
+    pub language: String,
+    pub translate_to_english: bool,
+    pub show_recording_status: bool,
+    // Internal cache metadata
+    loaded_at: Instant,
+}
+
+impl RecordingConfig {
+    /// Maximum age of cache before considering it stale (5 minutes)
+    const MAX_CACHE_AGE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+    
+    /// Load all recording-relevant settings from store in one operation
+    pub async fn load_from_store(app: &AppHandle) -> Result<Self, String> {
+        let store = app.store("settings").map_err(|e| e.to_string())?;
+        
+        Ok(Self {
+            show_pill_widget: store
+                .get("show_pill_widget")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            ai_enabled: store
+                .get("ai_enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            ai_provider: store
+                .get("ai_provider")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "groq".to_string()),
+            ai_model: store
+                .get("ai_model")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "".to_string()),
+            current_model: store
+                .get("current_model")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "".to_string()),
+            language: store
+                .get("language")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "en".to_string()),
+            translate_to_english: store
+                .get("translate_to_english")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            show_recording_status: store
+                .get("show_recording_status")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            loaded_at: Instant::now(),
+        })
+    }
+    
+    /// Check if this cache entry is still fresh
+    pub fn is_fresh(&self) -> bool {
+        self.loaded_at.elapsed() < Self::MAX_CACHE_AGE
+    }
+}
+
+/// Helper function to invalidate recording config cache when settings change
+pub async fn invalidate_recording_config_cache(app: &AppHandle) {
+    let app_state = app.state::<AppState>();
+    let mut cache = app_state.recording_config_cache.write().await;
+    *cache = None;
+    log::debug!("Recording config cache invalidated due to settings change");
+}
+
+/// Helper function to get cached recording config or load from store
+pub async fn get_recording_config(app: &AppHandle) -> Result<RecordingConfig, String> {
+    let app_state = app.state::<AppState>();
+    
+    // Try to get from cache first
+    {
+        let cache = app_state.recording_config_cache.read().await;
+        if let Some(config) = cache.as_ref() {
+            if config.is_fresh() {
+                log::debug!("Using cached recording config (age: {:?})", config.loaded_at.elapsed());
+                return Ok(config.clone());
+            } else {
+                log::debug!("Recording config cache is stale, will reload");
+            }
+        }
+    }
+    
+    // Cache miss or stale - load from store
+    let config = RecordingConfig::load_from_store(app).await?;
+    
+    // Update cache
+    {
+        let mut cache = app_state.recording_config_cache.write().await;
+        *cache = Some(config.clone());
+        log::debug!("Recording config cached successfully");
+    }
+    
+    Ok(config)
+}
+
 // Global audio recorder state
 pub struct RecorderState(pub Mutex<AudioRecorder>);
 
@@ -82,36 +187,67 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
         );
     }
 
-    // Check license status
-    match check_license_status_internal(app).await {
-        Ok(status) => {
-            if matches!(status.status, LicenseState::Expired | LicenseState::None) {
-                log::error!("Invalid license");
-                
-                // Show and focus the main window
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-                
-                // Emit error event with guidance
-                let _ = emit_to_window(
-                    app,
-                    "main",
-                    "license-required",
-                    serde_json::json!({
-                        "title": "License Required",
-                        "message": "Your trial has expired. Please purchase a license to continue",
-                        "action": "purchase"
-                    }),
-                );
-                return Err("License required to record".to_string());
+    // Check license status (with caching to improve performance)
+    let license_status = {
+        let app_state = app.state::<AppState>();
+        let cache = app_state.license_cache.read().await;
+        
+        if let Some(cached) = cache.as_ref() {
+            if cached.is_valid() {
+                log::debug!("Using cached license status (age: {:?})", cached.age());
+                Some(cached.status.clone())
+            } else {
+                log::debug!("License cache is stale (age: {:?}), will refresh", cached.age());
+                None
+            }
+        } else {
+            log::debug!("No license cache found, will perform fresh check");
+            None
+        }
+    };
+    
+    let status = if let Some(cached_status) = license_status {
+        cached_status
+    } else {
+        // Cache miss or stale - perform fresh license check
+        match check_license_status_internal(app).await {
+            Ok(fresh_status) => {
+                // Update cache
+                let app_state = app.state::<AppState>();
+                let mut cache = app_state.license_cache.write().await;
+                *cache = Some(crate::commands::license::CachedLicense::new(fresh_status.clone()));
+                log::debug!("License status cached for 6 hours");
+                fresh_status
+            }
+            Err(e) => {
+                log::error!("Failed to check license status: {}", e);
+                // Allow recording if license check fails (graceful degradation)
+                return Ok(());
             }
         }
-        Err(e) => {
-            log::error!("Failed to check license status: {}", e);
-            // Allow recording if license check fails
+    };
+
+    if matches!(status.status, LicenseState::Expired | LicenseState::None) {
+        log::error!("Invalid license: {:?}", status.status);
+        
+        // Show and focus the main window
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.set_focus();
         }
+        
+        // Emit error event with guidance
+        let _ = emit_to_window(
+            app,
+            "main",
+            "license-required",
+            serde_json::json!({
+                "title": "License Required",
+                "message": "Your trial has expired. Please purchase a license to continue",
+                "action": "purchase"
+            }),
+        );
+        return Err("License required to record".to_string());
     }
 
     Ok(())
@@ -150,6 +286,14 @@ pub async fn start_recording(
     // All validation passed, update state to starting
     log_state_transition("RECORDING", "idle", "starting", true, None);
     update_recording_state(&app, RecordingState::Starting, None);
+
+    // Load recording config once to avoid repeated store access
+    let config = get_recording_config(&app).await.map_err(|e| {
+        log::error!("Failed to load recording config: {}", e);
+        format!("Configuration error: {}", e)
+    })?;
+    log::debug!("Using recording config: show_pill={}, ai_enabled={}, model={}", 
+        config.show_pill_widget, config.ai_enabled, config.current_model);
     // Get app data directory for recordings
     let recordings_dir = app
         .path()
@@ -348,36 +492,20 @@ pub async fn start_recording(
     update_recording_state(&app, RecordingState::Recording, None);
 
     // Show pill widget if enabled (graceful degradation)
-    match app.store("settings") {
-        Ok(store) => {
-            let show_pill = store
-                .get("show_pill_widget")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
+    if config.show_pill_widget {
+        match crate::commands::window::show_pill_widget(app.clone()).await {
+            Ok(_) => log::debug!("Pill widget shown successfully"),
+            Err(e) => {
+                log::warn!("Failed to show pill widget: {}. Recording will continue without visual feedback.", e);
 
-            if show_pill {
-                match crate::commands::window::show_pill_widget(app.clone()).await {
-                    Ok(_) => log::debug!("Pill widget shown successfully"),
-                    Err(e) => {
-                        log::warn!("Failed to show pill widget: {}. Recording will continue without visual feedback.", e);
-
-                        // Emit event so frontend knows pill isn't visible
-                        let _ = emit_to_window(
-                            &app,
-                            "main",
-                            "pill-widget-error",
-                            "Recording indicator unavailable. Recording is still active.",
-                        );
-                    }
-                }
+                // Emit event so frontend knows pill isn't visible
+                let _ = emit_to_window(
+                    &app,
+                    "main",
+                    "pill-widget-error",
+                    "Recording indicator unavailable. Recording is still active.",
+                );
             }
-        }
-        Err(e) => {
-            log::warn!(
-                "Could not access settings to check pill widget preference: {}",
-                e
-            );
-            // Continue without pill widget - recording still works
         }
     }
 
@@ -568,8 +696,13 @@ pub async fn stop_recording(
         ("stage", "pre_transcription")
     ]);
 
-    // Get current model from settings
-    let store = app.store("settings").map_err(|e| e.to_string())?;
+    // Get cached recording config to avoid repeated store access
+    let config = get_recording_config(&app).await.map_err(|e| {
+        log::error!("Failed to load recording config: {}", e);
+        format!("Configuration error: {}", e)
+    })?;
+    log::debug!("Using cached config: model={}, language={}, translate={}, ai_enabled={}", 
+        config.current_model, config.language, config.translate_to_english, config.ai_enabled);
 
     // Get available models
     let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
@@ -623,10 +756,11 @@ pub async fn stop_recording(
         ("available_count", &downloaded_models.len().to_string().as_str())
     ]);
     
-    let configured_model = store
-        .get("current_model")
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .filter(|s| !s.is_empty()); // Treat empty string as no configured model
+    let configured_model = if !config.current_model.is_empty() {
+        Some(config.current_model.clone())
+    } else {
+        None
+    }; // Treat empty string as no configured model
 
     let model_name = if let Some(configured_model) = configured_model {
         // Use configured model if it exists and is downloaded
@@ -693,14 +827,9 @@ pub async fn stop_recording(
 
     let model_name_clone = model_name.clone();
 
-    let language = store
-        .get("language")
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let language = Some(config.language.clone());
 
-    let translate_to_english = store
-        .get("translate_to_english")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let translate_to_english = config.translate_to_english;
 
     log::info!(
         "[LANGUAGE] stop_recording: language={:?}, translate={}",
@@ -855,14 +984,8 @@ pub async fn stop_recording(
                     return;
                 }
 
-                // Check if AI enhancement is enabled BEFORE spawning task
-                let ai_enabled = match app_for_task.store("settings") {
-                    Ok(store) => store
-                        .get("ai_enabled")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                    Err(_) => false,
-                };
+                // Check if AI enhancement is enabled from cached config
+                let ai_enabled = config.ai_enabled;
 
                 // If AI is enabled, emit enhancing event NOW while pill is still visible
                 if ai_enabled {
@@ -873,20 +996,13 @@ pub async fn stop_recording(
                 let app_for_process = app_for_task.clone();
                 let text_for_process = text.clone();
                 let model_for_process = model_name_clone.clone();
+                let ai_enabled_for_task = ai_enabled; // Capture from cached config
 
                 tokio::spawn(async move {
                     // 1. Process the transcription and enhancement
                     let final_text = {
-                        // Re-check AI enabled status inside the spawned task
-                        let ai_enabled = match app_for_process.store("settings") {
-                            Ok(store) => store
-                                .get("ai_enabled")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false),
-                            Err(_) => false,
-                        };
-
-                        if ai_enabled {
+                        // Use the captured AI enabled status from cached config
+                        if ai_enabled_for_task {
                             match crate::commands::ai::enhance_transcription(
                                 text_for_process.clone(),
                                 app_for_process.clone(),
@@ -1011,16 +1127,20 @@ pub async fn stop_recording(
                         }
                     }
 
-                    // 5. Save transcription to history
-                    match save_transcription(app_for_process.clone(), final_text, model_for_process)
-                        .await
-                    {
-                        Ok(_) => {
-                            // Event is emitted inside save_transcription now
-                            log::debug!("Transcription saved successfully");
+                    // 5. Save transcription to history (async, non-blocking)
+                    let app_for_history = app_for_process.clone();
+                    let history_text = final_text.clone();
+                    let history_model = model_for_process.clone();
+                    tokio::spawn(async move {
+                        match save_transcription(app_for_history.clone(), history_text, history_model).await {
+                            Ok(_) => {
+                                // Emit history-updated event to refresh UI
+                                let _ = emit_to_window(&app_for_history, "main", "history-updated", ());
+                                log::debug!("Transcription saved to history successfully");
+                            }
+                            Err(e) => log::error!("Failed to save transcription to history: {}", e),
                         }
-                        Err(e) => log::error!("Failed to save transcription: {}", e),
-                    }
+                    });
 
                     // 6. Transition to idle state
                     update_recording_state(&app_for_process, RecordingState::Idle, None);

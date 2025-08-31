@@ -2,8 +2,41 @@ use crate::license::{api_client::LicenseApiClient, device, keychain, LicenseStat
 use crate::AppState;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Instant;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_cache::{CacheExt, SetItemOptions};
+
+/// Cached license status to avoid repeated API calls
+/// Cache is valid for 6 hours to balance freshness with performance
+#[derive(Clone, Debug)]
+pub struct CachedLicense {
+    pub status: LicenseStatus,
+    cached_at: Instant,
+}
+
+impl CachedLicense {
+    /// Cache duration of 6 hours as requested by user
+    const CACHE_DURATION: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+    
+    pub fn new(status: LicenseStatus) -> Self {
+        Self {
+            status,
+            cached_at: Instant::now(),
+        }
+    }
+    
+    /// Check if this cache entry is still valid
+    pub fn is_valid(&self) -> bool {
+        self.cached_at.elapsed() < Self::CACHE_DURATION
+    }
+    
+    /// Get age of this cache entry for logging
+    pub fn age(&self) -> std::time::Duration {
+        self.cached_at.elapsed()
+    }
+}
 
 // Wrapper for cached license status with metadata
 #[derive(Serialize, Deserialize, Debug)]
@@ -759,6 +792,9 @@ pub async fn deactivate_license(app: AppHandle) -> Result<(), String> {
                 // Clear validation timestamp when deactivating - this is intentional removal
                 let _ = cache.remove(LAST_VALIDATION_KEY);
 
+                // Clear our performance cache too
+                invalidate_license_cache(&app).await;
+
                 log::info!("License deactivated successfully");
 
                 // Reset recording state when license is deactivated
@@ -845,20 +881,23 @@ pub async fn open_purchase_page() -> Result<(), String> {
     Ok(())
 }
 
-/// Internal function to check license status (for use by other commands)
-/// Helper function to invalidate license cache
-async fn invalidate_license_cache(app: &AppHandle) {
-    let cache = app.cache();
-    match cache.remove(LICENSE_CACHE_KEY) {
-        Ok(_) => log::info!("License cache invalidated"),
-        Err(e) => log::warn!("Failed to invalidate license cache: {}", e),
-    }
-    // Keep the validation timestamp - we're only clearing the cached status,
-    // not the validation history. The timestamp is important for grace period.
-    // Clear trial cache as well when license state changes
-    let _ = cache.remove(TRIAL_EXPIRES_KEY);
-}
-
 pub async fn check_license_status_internal(app: &AppHandle) -> Result<LicenseStatus, String> {
     check_license_status(app.clone()).await
+}
+
+/// Invalidate cached license status when license state changes
+pub async fn invalidate_license_cache(app: &AppHandle) {
+    // Clear both the old cache and the new performance cache
+    let cache = app.cache();
+    match cache.remove(LICENSE_CACHE_KEY) {
+        Ok(_) => log::debug!("Cleared old license cache"),
+        Err(e) => log::warn!("Failed to clear old license cache: {}", e),
+    }
+    let _ = cache.remove(LAST_VALIDATION_KEY);
+
+    // Clear the new performance cache
+    let app_state = app.state::<AppState>();
+    let mut perf_cache = app_state.license_cache.write().await;
+    *perf_cache = None;
+    log::debug!("License cache invalidated due to license state change");
 }

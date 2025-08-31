@@ -335,6 +335,9 @@ pub async fn update_ai_settings(
         .save()
         .map_err(|e| format!("Failed to save AI settings: {}", e))?;
 
+    // Invalidate recording config cache when AI settings change
+    crate::commands::audio::invalidate_recording_config_cache(&app).await;
+
     log::info!(
         "AI settings updated: enabled={}, provider={}, model={}",
         enabled,
@@ -354,6 +357,9 @@ pub async fn disable_ai_enhancement(app: tauri::AppHandle) -> Result<(), String>
     store
         .save()
         .map_err(|e| format!("Failed to save AI settings: {}", e))?;
+
+    // Invalidate recording config cache when AI settings change
+    crate::commands::audio::invalidate_recording_config_cache(&app).await;
 
     log::info!("AI enhancement disabled");
 

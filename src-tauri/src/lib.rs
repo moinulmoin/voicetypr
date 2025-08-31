@@ -266,6 +266,12 @@ pub struct AppState {
 
     // Window management runtime state
     pub window_manager: Arc<Mutex<Option<WindowManager>>>,
+
+    // Performance optimization: Cache frequently accessed settings
+    pub recording_config_cache: Arc<tokio::sync::RwLock<Option<crate::commands::audio::RecordingConfig>>>,
+
+    // License cache with 6-hour expiration
+    pub license_cache: Arc<tokio::sync::RwLock<Option<crate::commands::license::CachedLicense>>>,
 }
 
 impl AppState {
@@ -282,6 +288,8 @@ impl AppState {
             esc_pressed_once: Arc::new(AtomicBool::new(false)),
             esc_timeout_handle: Arc::new(Mutex::new(None)),
             window_manager: Arc::new(Mutex::new(None)),
+            recording_config_cache: Arc::new(tokio::sync::RwLock::new(None)),
+            license_cache: Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
 
