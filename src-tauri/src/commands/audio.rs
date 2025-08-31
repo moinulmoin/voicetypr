@@ -951,9 +951,10 @@ pub async fn stop_recording(
                         }
                     };
 
-                    // 2. NOW hide the pill window after enhancement is complete
-                    // Get window manager through AppState
+                    // 2. Hide pill window first, then insert text with reduced delay
                     let app_state = app_for_process.state::<AppState>();
+                    
+                    // Hide pill window first to avoid UI race conditions
                     if let Some(window_manager) = app_state.get_window_manager() {
                         if let Err(e) = window_manager.hide_pill_window().await {
                             log::error!("Failed to hide pill window: {}", e);
@@ -962,12 +963,10 @@ pub async fn stop_recording(
                         log::error!("WindowManager not initialized");
                     }
 
-                    // 3. Wait for pill to be fully hidden and system to stabilize
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    // Reduced delay to ensure UI is stable (was 100ms, now 50ms)
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-                    // 4. NOW handle text insertion - pill is gone, system is stable
-
-                    // Always insert text at cursor position (this also copies to clipboard)
+                    // Now handle text insertion with stable UI
                     match crate::commands::text::insert_text(
                         app_for_process.clone(),
                         final_text.clone(),

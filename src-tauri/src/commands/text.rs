@@ -30,7 +30,7 @@ pub async fn insert_text(app: tauri::AppHandle, text: String) -> Result<(), Stri
     let _guard = InsertionGuard;
 
     // Small delay to ensure the app doesn't interfere with text insertion
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Check accessibility permission
     #[cfg(target_os = "macos")]
@@ -58,10 +58,11 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool, app_ha
     let mut clipboard =
         Clipboard::new().map_err(|e| format!("Failed to initialize clipboard: {}", e))?;
 
-    // Save current clipboard content
-    let original_clipboard = clipboard.get_text().ok();
-
-    // Set new clipboard content
+    // Set transcribed text as clipboard content
+    // Note: We don't restore original clipboard because:
+    // 1. User expects transcribed text to be available for additional pastes
+    // 2. Restoring after 200ms would be confusing if user pastes again
+    // 3. The transcribed text IS the intended clipboard content
     clipboard
         .set_text(&text)
         .map_err(|e| format!("Failed to set clipboard: {}", e))?;
@@ -69,7 +70,7 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool, app_ha
     log::info!("Set clipboard content: {}", text);
 
     // Small delay to ensure clipboard is ready
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(50));
 
     // Verify clipboard content was set
     if let Ok(clipboard_check) = clipboard.get_text() {
@@ -129,18 +130,8 @@ fn insert_via_clipboard(text: String, has_accessibility_permission: bool, app_ha
         }
     }
 
-    // Restore original clipboard content after a delay
-    if let Some(original) = original_clipboard {
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(200)); // Delay before restoring clipboard
-            if let Ok(mut clipboard) = Clipboard::new() {
-                if let Err(e) = clipboard.set_text(&original) {
-                    log::error!("Failed to restore original clipboard: {}", e);
-                }
-            }
-        });
-    }
-
+    // Keep transcribed text in clipboard - no restoration needed
+    // User expects and wants the transcribed text available for future pastes
     Ok(())
 }
 
@@ -245,7 +236,7 @@ fn try_paste_with_rdev() -> Result<(), String> {
                cfg!(any(target_os = "macos", target_os = "linux")));
 
     // Add a small delay to ensure the app is not in focus
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(50));
 
     let result = {
         #[cfg(target_os = "macos")]
@@ -287,7 +278,7 @@ fn paste_mac() -> Result<(), SimulateError> {
     log::debug!("Starting macOS paste simulation with rdev");
     
     // Add initial delay to match Windows timing for better reliability
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(50));
     
     // Try paste with retry logic
     for attempt in 1..=2 {
@@ -341,7 +332,7 @@ fn paste_windows() -> Result<(), SimulateError> {
     log::debug!("Starting Windows paste simulation with rdev");
     
     // Add initial delay to match macOS timing for better reliability
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(50));
     
     // Try paste with retry logic
     for attempt in 1..=2 {
