@@ -127,10 +127,11 @@ mod panic_prevention_tests {
         let app_state = AppState::new();
         
         // Simulate what happens when mutex gets poisoned
-        let result = std::panic::catch_unwind(|| {
+        // Wrap in AssertUnwindSafe since cache fields aren't being tested for panic safety
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // This should return None instead of panicking
             app_state.get_window_manager()
-        });
+        }));
         
         assert!(result.is_ok());
         let window_manager = result.unwrap();
@@ -148,7 +149,8 @@ mod panic_prevention_tests {
         
         let app_state = AppState::new();
         
-        let result = std::panic::catch_unwind(|| {
+        // Wrap in AssertUnwindSafe since cache fields aren't being tested for panic safety
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Try various invalid transitions
             let results = vec![
                 app_state.transition_recording_state(RecordingState::Recording),
@@ -165,7 +167,7 @@ mod panic_prevention_tests {
             }
             
             "completed_transition_tests"
-        });
+        }));
         
         assert!(result.is_ok());
         log::info!("✅ State transitions handle errors gracefully");
@@ -179,7 +181,8 @@ mod panic_prevention_tests {
         
         let app_state = AppState::new();
         
-        let result = std::panic::catch_unwind(|| {
+        // Wrap in AssertUnwindSafe since cache fields aren't being tested for panic safety
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Try to emit to non-existent windows
             let results = vec![
                 app_state.emit_to_window("nonexistent", "test-event", "test-payload"),
@@ -195,7 +198,7 @@ mod panic_prevention_tests {
             }
             
             "completed_emission_tests"
-        });
+        }));
         
         assert!(result.is_ok());
         log::info!("✅ Event emission handles invalid windows gracefully");

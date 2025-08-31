@@ -13,6 +13,7 @@ use crate::whisper::manager::WhisperManager;
 use crate::{emit_to_window, update_recording_state, AppState, RecordingState};
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde_json;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Mutex;
 use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
@@ -85,6 +86,10 @@ impl RecordingConfig {
         self.loaded_at.elapsed() < Self::MAX_CACHE_AGE
     }
 }
+
+// Implement UnwindSafe traits for panic testing compatibility
+impl UnwindSafe for RecordingConfig {}
+impl RefUnwindSafe for RecordingConfig {}
 
 /// Helper function to invalidate recording config cache when settings change
 pub async fn invalidate_recording_config_cache(app: &AppHandle) {

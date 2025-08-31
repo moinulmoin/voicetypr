@@ -3,6 +3,7 @@ use crate::AppState;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Manager};
@@ -37,6 +38,10 @@ impl CachedLicense {
         self.cached_at.elapsed()
     }
 }
+
+// Implement UnwindSafe traits for panic testing compatibility
+impl UnwindSafe for CachedLicense {}
+impl RefUnwindSafe for CachedLicense {}
 
 // Wrapper for cached license status with metadata
 #[derive(Serialize, Deserialize, Debug)]
