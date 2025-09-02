@@ -4,9 +4,10 @@ import { TranscriptionHistory } from "@/types";
 import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, Mic, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Clock } from "lucide-react";
+import { useState, useMemo } from "react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 interface RecentRecordingsProps {
   history: TranscriptionHistory[];
@@ -16,8 +17,55 @@ interface RecentRecordingsProps {
 
 export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistoryUpdate }: RecentRecordingsProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const canRecord = useCanRecord();
   const canAutoInsert = useCanAutoInsert();
+
+  // Filter history based on search query
+  const filteredHistory = useMemo(() => {
+    if (!searchQuery.trim()) return history;
+    
+    const query = searchQuery.toLowerCase();
+    return history.filter(item => 
+      item.text.toLowerCase().includes(query) ||
+      (item.model && item.model.toLowerCase().includes(query))
+    );
+  }, [history, searchQuery]);
+
+  // Group history by date
+  const groupedHistory = useMemo(() => {
+    const groups: Record<string, TranscriptionHistory[]> = {};
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    filteredHistory.forEach(item => {
+      const itemDate = new Date(item.timestamp);
+      itemDate.setHours(0, 0, 0, 0);
+      
+      let groupKey: string;
+      if (itemDate.getTime() === today.getTime()) {
+        groupKey = "Today";
+      } else if (itemDate.getTime() === yesterday.getTime()) {
+        groupKey = "Yesterday";
+      } else {
+        groupKey = itemDate.toLocaleDateString('en-US', { 
+          weekday: 'long', 
+          month: 'short', 
+          day: 'numeric',
+          year: itemDate.getFullYear() !== today.getFullYear() ? 'numeric' : undefined
+        });
+      }
+      
+      if (!groups[groupKey]) {
+        groups[groupKey] = [];
+      }
+      groups[groupKey].push(item);
+    });
+
+    return groups;
+  }, [filteredHistory]);
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -79,47 +127,147 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
   };
 
   return (
-    <div className="h-full flex flex-col p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold">Recent Transcriptions</h2>
-        {history.length > 0 && (
-          <button
-            onClick={handleClearAll}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 rounded-md transition-colors"
-            title="Clear all transcriptions"
-          >
-
-            Clear All
-          </button>
-        )}
-      </div>
-      <div className="flex-1 min-h-0">
-      {history.length > 0 ? (
-        <ScrollArea className="h-full">
-          <div className="flex flex-col gap-2.5">
-            {history.map((item) => (
-              <div
-                key={item.id}
-                className="group flex items-center relative p-2 rounded-lg cursor-pointer bg-card hover:bg-accent/50 border border-border hover:border-accent transition-all duration-200"
-                onClick={() => handleCopy(item.text)}
-                onMouseEnter={() => setHoveredId(item.id)}
-                onMouseLeave={() => setHoveredId(null)}
-                title="Click to copy"
-              >
-                <p className="text-sm text-card-foreground transcription-text pr-4">{item.text}</p>
-                {hoveredId === item.id && (
-                  <button
-                    onClick={(e) => handleDelete(e, item.id)}
-                    className="absolute top-0 right-0 m-1 p-1 rounded hover:bg-destructive/10 transition-colors"
-                    title="Delete"
-                  >
-                    <Trash2 className="w-4 h-4 text-destructive" />
-                  </button>
-                )}
-              </div>
-            ))}
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="px-6 py-4 border-b border-border/40">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold">History</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              {history.length} total transcription{history.length !== 1 ? 's' : ''}
+            </p>
           </div>
-        </ScrollArea>
+          <div className="flex items-center gap-3">
+            {history.length > 5 && (
+              <button
+                onClick={handleClearAll}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 rounded-md transition-colors"
+                title="Clear all transcriptions"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Clear All
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Search Bar */}
+      {history.length > 0 && (
+        <div className="px-6 py-3 border-b border-border/20">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search transcriptions..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 text-sm bg-background border border-border/50 rounded-lg focus:outline-none focus:border-primary/50 transition-colors"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                ×
+              </button>
+            )}
+          </div>
+          {searchQuery && (
+            <p className="text-xs text-muted-foreground mt-2">
+              Found {filteredHistory.length} result{filteredHistory.length !== 1 ? 's' : ''}
+            </p>
+          )}
+        </div>
+      )}
+      <div className="flex-1 min-h-0 overflow-hidden">
+      {history.length > 0 ? (
+        filteredHistory.length > 0 ? (
+          <ScrollArea className="h-full">
+            <div className="px-6 py-4 space-y-6">
+              {Object.entries(groupedHistory).map(([date, items]) => (
+                <div key={date} className="space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                    <Calendar className="h-3 w-3" />
+                    {date}
+                    <span className="text-muted-foreground/50">({items.length})</span>
+                  </div>
+                  <div className="space-y-2">
+                    {items.map((item) => (
+                      <div
+                        key={item.id}
+                        className={cn(
+                          "group relative p-4 rounded-lg cursor-pointer",
+                          "bg-card border border-border/50",
+                          "hover:bg-accent/30 hover:border-border",
+                          "transition-all duration-200"
+                        )}
+                        onClick={() => handleCopy(item.text)}
+                        onMouseEnter={() => setHoveredId(item.id)}
+                        onMouseLeave={() => setHoveredId(null)}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-foreground leading-relaxed">
+                              {item.text}
+                            </p>
+                            <div className="flex items-center gap-4 mt-2">
+                              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <Clock className="h-3 w-3" />
+                                {new Date(item.timestamp).toLocaleTimeString('en-US', { 
+                                  hour: 'numeric', 
+                                  minute: '2-digit',
+                                  hour12: true 
+                                })}
+                              </span>
+                              {item.model && (
+                                <span className="text-xs text-muted-foreground">
+                                  {item.model}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className={cn(
+                            "flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity",
+                            hoveredId === item.id && "opacity-100"
+                          )}>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCopy(item.text);
+                              }}
+                              className="p-1.5 rounded hover:bg-accent transition-colors"
+                              title="Copy"
+                            >
+                              <Copy className="w-4 h-4 text-muted-foreground" />
+                            </button>
+                            <button
+                              onClick={(e) => handleDelete(e, item.id)}
+                              className="p-1.5 rounded hover:bg-destructive/10 transition-colors"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-4 h-4 text-destructive" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+        ) : (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <Search className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
+              <p className="text-sm text-muted-foreground">No transcriptions found</p>
+              <p className="text-xs text-muted-foreground/70 mt-2">
+                Try adjusting your search query
+              </p>
+            </div>
+          </div>
+        )
       ) : (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
