@@ -165,7 +165,7 @@ export function OverviewTab({ history }: OverviewTabProps) {
             <div 
               className={cn(
                 "p-4 rounded-lg bg-card border border-border/50 hover:border-border transition-all cursor-pointer",
-                selectedPeriod === 'all' && "border-primary bg-primary/5"
+                selectedPeriod === 'all' && "bg-primary/5"
               )}
               onClick={() => setSelectedPeriod('all')}
               title="Click to filter all time"
@@ -181,7 +181,7 @@ export function OverviewTab({ history }: OverviewTabProps) {
             <div 
               className={cn(
                 "p-4 rounded-lg bg-card border border-border/50 hover:border-border transition-all cursor-pointer",
-                selectedPeriod === 'month' && "border-primary bg-primary/5"
+                selectedPeriod === 'month' && "bg-primary/5"
               )}
               onClick={() => setSelectedPeriod('month')}
               title="Click to filter last 30 days"
@@ -195,7 +195,11 @@ export function OverviewTab({ history }: OverviewTabProps) {
             </div>
             
             <div 
-              className="p-4 rounded-lg bg-card border border-border/50 hover:border-border transition-all cursor-pointer"
+              className={cn(
+                "p-4 rounded-lg bg-card border border-border/50 hover:border-border transition-all cursor-pointer",
+                selectedPeriod === 'today' && "bg-primary/5"
+              )}
+              onClick={() => setSelectedPeriod('today')}
               title="Based on 40 WPM typing speed"
             >
               <Clock className="h-5 w-5 text-muted-foreground/50 mb-3" />
@@ -209,7 +213,7 @@ export function OverviewTab({ history }: OverviewTabProps) {
             <div 
               className={cn(
                 "p-4 rounded-lg bg-card border border-border/50 hover:border-border transition-all cursor-pointer",
-                selectedPeriod === 'week' && "border-primary bg-primary/5"
+                selectedPeriod === 'week' && "bg-primary/5"
               )}
               onClick={() => setSelectedPeriod('week')}
               title="Click to filter last 7 days"

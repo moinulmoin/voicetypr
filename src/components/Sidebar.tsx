@@ -7,6 +7,7 @@ import {
   SidebarMenuItem,
   Sidebar as SidebarPrimitive,
 } from "@/components/ui/sidebar";
+import { Button } from "@/components/ui/button";
 import { useLicense } from "@/contexts/LicenseContext";
 import { cn } from "@/lib/utils";
 import {
@@ -156,14 +157,19 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
                         : "No License"}
                   </span>
                 </div>
-                <a
-                  href="https://voicetypr.com/#pricing"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full inline-flex items-center justify-center px-3 py-2 text-xs font-medium text-white bg-primary rounded-md hover:bg-primary/90 transition-colors"
+                <Button
+                  asChild
+                  className="w-full text-sm"
+                  size="sm"
                 >
-                  Upgrade to Pro
-                </a>
+                  <a
+                    href="https://voicetypr.com/#pricing"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Upgrade to Pro
+                  </a>
+                </Button>
               </>
             )}
           </div>

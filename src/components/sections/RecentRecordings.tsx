@@ -1,10 +1,11 @@
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Button } from "@/components/ui/button";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { TranscriptionHistory } from "@/types";
 import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Clock } from "lucide-react";
+import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Clock, Download } from "lucide-react";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -126,6 +127,33 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     }
   };
 
+  const handleExport = async () => {
+    if (history.length === 0) return;
+
+    try {
+      // Show confirmation dialog with location info
+      const confirmed = await ask(
+        `Export ${history.length} transcription${history.length !== 1 ? 's' : ''} to JSON?\n\nThe file will be saved to your Downloads folder.`, 
+        {
+          title: "Export Transcriptions",
+          kind: "info"
+        }
+      );
+
+      if (!confirmed) return;
+
+      // Call the backend export command
+      const filePath = await invoke<string>("export_transcriptions");
+      
+      toast.success(`Exported ${history.length} transcriptions`, {
+        description: `Saved to Downloads folder`
+      });
+    } catch (error) {
+      console.error("Failed to export transcriptions:", error);
+      toast.error("Failed to export transcriptions");
+    }
+  };
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -138,15 +166,27 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {history.length > 0 && (
+              <Button
+                onClick={handleExport}
+                size="sm"
+                title="Export transcriptions to JSON"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Export
+              </Button>
+            )}
             {history.length > 5 && (
-              <button
+              <Button
                 onClick={handleClearAll}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 rounded-md transition-colors"
+                variant="ghost"
+                size="sm"
+                className="text-destructive hover:text-destructive"
                 title="Clear all transcriptions"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 Clear All
-              </button>
+              </Button>
             )}
           </div>
         </div>

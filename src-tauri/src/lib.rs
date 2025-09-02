@@ -52,6 +52,7 @@ use commands::{
     reset::reset_app_data,
     settings::*,
     text::*,
+    utils::export_transcriptions,
     window::*,
 };
 use state::unified_state::UnifiedRecordingState;
@@ -1266,6 +1267,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_transcription_history,
             delete_transcription_entry,
             clear_all_transcriptions,
+            export_transcriptions,
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,
