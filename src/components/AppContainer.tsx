@@ -27,7 +27,7 @@ interface ErrorEventPayload {
 
 export function AppContainer() {
   const { registerEvent } = useEventCoordinator("main");
-  const [activeSection, setActiveSection] = useState<string>("recordings");
+  const [activeSection, setActiveSection] = useState<string>("overview");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const { settings, refreshSettings } = useSettings();
   const { checkAccessibilityPermission, checkMicrophonePermission } = useReadiness();

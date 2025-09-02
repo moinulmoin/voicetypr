@@ -20,7 +20,7 @@
         "center": true,
         "visible": true,
         "skipTaskbar": true,
-        "alwaysOnTop": false
+        "alwaysOnTop": true
       }
     ],
     "security": {
@@ -38,11 +38,7 @@
   "bundle": {
     "publisher": "Ideaplexa LLC",
     "active": true,
-    "targets": [
-      "nsis",
-      "app",
-      "dmg"
-    ],
+    "targets": ["nsis", "app", "dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
