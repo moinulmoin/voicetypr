@@ -36,10 +36,22 @@ export function RecordingsTab() {
         // Load initial transcription history
         await loadHistory();
 
-        // Listen for history updates from backend
-        // Backend is the single source of truth for transcription history
+        // Listen for new transcriptions (append-only for efficiency)
+        registerEvent<{text: string; model: string; timestamp: string}>("transcription-added", (data) => {
+          console.log("[RecordingsTab] New transcription added:", data.timestamp);
+          const newItem: TranscriptionHistory = {
+            id: data.timestamp,
+            text: data.text,
+            timestamp: new Date(data.timestamp),
+            model: data.model
+          };
+          // Prepend new item to history (newest first)
+          setHistory(prev => [newItem, ...prev]);
+        });
+        
+        // Listen for history-updated for delete/clear operations
         registerEvent("history-updated", async () => {
-          console.log("[EventCoordinator] Recordings tab: reloading history after update");
+          console.log("[RecordingsTab] Full reload (delete/clear operation)");
           await loadHistory();
         });
 

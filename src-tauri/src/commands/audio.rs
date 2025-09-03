@@ -1159,8 +1159,8 @@ pub async fn stop_recording(
                         .await
                     {
                         Ok(_) => {
-                            // Emit history-updated event to refresh UI
-                            let _ = emit_to_window(&app_for_process, "main", "history-updated", ());
+                            // Event is emitted inside save_transcription now
+                            log::debug!("Transcription saved successfully");
                         }
                         Err(e) => log::error!("Failed to save transcription: {}", e),
                     }
@@ -1273,21 +1273,20 @@ pub async fn save_transcription(app: AppHandle, text: String, model: String) -> 
         .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
 
     let timestamp = chrono::Utc::now().to_rfc3339();
-    store.set(
-        &timestamp,
-        serde_json::json!({
-            "text": text,
-            "model": model,
-            "timestamp": timestamp
-        }),
-    );
+    let transcription_data = serde_json::json!({
+        "text": text.clone(),
+        "model": model,
+        "timestamp": timestamp.clone()
+    });
+    
+    store.set(&timestamp, transcription_data.clone());
 
     store
         .save()
         .map_err(|e| format!("Failed to save transcription: {}", e))?;
 
-    // Emit event to main window to notify that history was updated
-    let _ = emit_to_window(&app, "main", "history-updated", ());
+    // Emit the new transcription data to frontend for append-only update
+    let _ = emit_to_window(&app, "main", "transcription-added", transcription_data);
 
     log::info!("Saved transcription with {} characters", text.len());
     Ok(())

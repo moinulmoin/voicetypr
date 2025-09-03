@@ -10,6 +10,7 @@ import { SettingsTab } from "./SettingsTab";
 import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { TranscriptionHistory } from "@/types";
+import { useEventCoordinator } from "@/hooks/useEventCoordinator";
 
 interface TabContainerProps {
   activeSection: string;
@@ -17,12 +18,13 @@ interface TabContainerProps {
 
 export function TabContainer({ activeSection }: TabContainerProps) {
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
+  const { registerEvent } = useEventCoordinator("main");
 
   // Load history function shared between overview and recordings tabs
   const loadHistory = useCallback(async () => {
     try {
       const storedHistory = await invoke<any[]>("get_transcription_history", {
-        limit: 50
+        limit: 500  // Increased to ensure we get enough data for monthly stats
       });
       const formattedHistory: TranscriptionHistory[] = storedHistory.map((item) => ({
         id: item.timestamp || Date.now().toString(),
@@ -36,10 +38,30 @@ export function TabContainer({ activeSection }: TabContainerProps) {
     }
   }, []);
 
-  // Load history on mount
+  // Load history on mount and listen for updates
   useEffect(() => {
     loadHistory();
-  }, [loadHistory]);
+    
+    // Listen for new transcriptions (append-only for efficiency)
+    registerEvent<{text: string; model: string; timestamp: string}>("transcription-added", (data) => {
+      console.log("[TabContainer] New transcription added:", data.timestamp);
+      const newItem: TranscriptionHistory = {
+        id: data.timestamp,
+        text: data.text,
+        timestamp: new Date(data.timestamp),
+        model: data.model
+      };
+      // Prepend new item to history (newest first)
+      setHistory(prev => [newItem, ...prev]);
+    });
+    
+    // Listen for history-updated only for delete/clear operations
+    // (These still emit history-updated from backend)
+    registerEvent("history-updated", async () => {
+      console.log("[TabContainer] Full history reload (delete/clear operation)");
+      await loadHistory();
+    });
+  }, [loadHistory, registerEvent]);
 
   const renderTabContent = () => {
     switch (activeSection) {

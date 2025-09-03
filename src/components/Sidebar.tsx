@@ -72,7 +72,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
                         isActive && "text-primary",
                       )}
                     />
-                    <span className="ml-3">{section.label}</span>
+                    <span className="ml-2">{section.label}</span>
                     {isActive && (
                       <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-primary rounded-r-full" />
                     )}
@@ -105,7 +105,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
                         isActive && "text-primary",
                       )}
                     />
-                    <span className="ml-3">{section.label}</span>
+                    <span className="ml-2">{section.label}</span>
                     {isActive && (
                       <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-primary rounded-r-full" />
                     )}
@@ -122,7 +122,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
                 className="group relative rounded-lg px-3 py-2 hover:bg-accent/50 transition-colors"
               >
                 <HelpCircle className="h-4 w-4 transition-transform group-hover:scale-110" />
-                <span className="ml-3">Help</span>
+                <span className="ml-2">Help</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

@@ -61,41 +61,63 @@ export function OverviewTab({ history }: OverviewTabProps) {
       ? `${timeSavedHours}h ${timeSavedMinutes % 60}m`
       : `${timeSavedMinutes}m`;
 
-    // Calculate streak
+    // Calculate current streak and longest streak
     let currentStreak = 0;
+    let longestStreak = 0;
+    
     if (history.length > 0) {
-      // Sort history by date (newest first)
-      const sortedHistory = [...history].sort((a, b) => 
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      );
-      
-      const streakToday = new Date();
-      streakToday.setHours(0, 0, 0, 0);
-      
-      // Check if there's activity today
-      const hasToday = sortedHistory.some(item => {
-        const itemDate = new Date(item.timestamp);
-        itemDate.setHours(0, 0, 0, 0);
-        return itemDate.getTime() === streakToday.getTime();
+      // Create a set of unique days with activity (normalized to midnight)
+      const activeDays = new Set<number>();
+      history.forEach(item => {
+        const date = new Date(item.timestamp);
+        date.setHours(0, 0, 0, 0);
+        activeDays.add(date.getTime());
       });
       
-      if (hasToday) {
-        currentStreak = 1;
-        const checkDate = new Date(streakToday);
+      // Convert to sorted array of dates
+      const sortedDays = Array.from(activeDays).sort((a, b) => b - a);
+      
+      if (sortedDays.length > 0) {
+        // Check current streak (must include today or yesterday)
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
         
-        // Check previous days
-        for (let i = 1; i < 365; i++) {
-          checkDate.setDate(checkDate.getDate() - 1);
-          const hasActivity = sortedHistory.some(item => {
-            const itemDate = new Date(item.timestamp);
-            itemDate.setHours(0, 0, 0, 0);
-            return itemDate.getTime() === checkDate.getTime();
-          });
+        const mostRecentDay = sortedDays[0];
+        const isToday = mostRecentDay === today.getTime();
+        const isYesterday = mostRecentDay === yesterday.getTime();
+        
+        // Only count current streak if last activity was today or yesterday
+        if (isToday || isYesterday) {
+          currentStreak = 1;
           
-          if (hasActivity) {
-            currentStreak++;
+          // Count consecutive days backwards
+          for (let i = 1; i < sortedDays.length; i++) {
+            const expectedDate = new Date(sortedDays[i - 1]);
+            expectedDate.setDate(expectedDate.getDate() - 1);
+            
+            if (sortedDays[i] === expectedDate.getTime()) {
+              currentStreak++;
+            } else {
+              break; // Gap found, streak is broken
+            }
+          }
+        }
+        
+        // Calculate longest streak ever
+        let tempStreak = 1;
+        longestStreak = 1;
+        
+        for (let i = 1; i < sortedDays.length; i++) {
+          const expectedDate = new Date(sortedDays[i - 1]);
+          expectedDate.setDate(expectedDate.getDate() - 1);
+          
+          if (sortedDays[i] === expectedDate.getTime()) {
+            tempStreak++;
+            longestStreak = Math.max(longestStreak, tempStreak);
           } else {
-            break;
+            tempStreak = 1; // Reset temp streak
           }
         }
       }
@@ -113,7 +135,8 @@ export function OverviewTab({ history }: OverviewTabProps) {
       timeSavedDisplay,
       productivityScore,
       totalTranscriptions: history.length,
-      currentStreak
+      currentStreak,
+      longestStreak
     };
   }, [history]);
 
@@ -142,6 +165,11 @@ export function OverviewTab({ history }: OverviewTabProps) {
             </div>
             <p className="text-sm text-muted-foreground mt-1">
               {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+              {stats.longestStreak > stats.currentStreak && (
+                <span className="ml-2 text-xs">
+                  • Best streak: {stats.longestStreak} days
+                </span>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-3">
