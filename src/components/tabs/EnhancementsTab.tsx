@@ -14,7 +14,7 @@ export function EnhancementsTab() {
         registerEvent("ai-enhancement-auth-error", (event) => {
           console.error("AI authentication error:", event.payload);
           toast.error(event.payload as string, {
-            description: "Please update your API key in the Enhancements section",
+            description: "Please update your API key in the Formatting section",
             action: {
               label: "Update API Key",
               onClick: () => {
@@ -29,7 +29,7 @@ export function EnhancementsTab() {
         });
 
         registerEvent("ai-enhancement-error", (event) => {
-          console.warn("AI enhancement error:", event.payload);
+          console.warn("AI formatting error:", event.payload);
           toast.warning(event.payload as string);
         });
       } catch (error) {

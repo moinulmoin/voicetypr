@@ -32,7 +32,7 @@ const mainSections = [
   { id: "recordings", label: "History", icon: Clock },
   { id: "general", label: "Settings", icon: Settings2 },
   { id: "models", label: "Models", icon: Cpu },
-  { id: "enhancements", label: "Enhancements", icon: Sparkles },
+  { id: "formatting", label: "Formatting", icon: Sparkles },
   { id: "account", label: "Account", icon: Key },
 ];
 

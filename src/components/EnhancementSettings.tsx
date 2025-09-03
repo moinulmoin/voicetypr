@@ -53,7 +53,6 @@ export function EnhancementSettings({ settings, onSettingsChange, disabled = fal
     <div className={`space-y-6 ${disabled ? 'opacity-50' : ''}`}>
       {/* Enhancement Mode */}
       <div className="space-y-3">
-        <Label className="text-sm font-medium">Enhancement Mode</Label>
         <div className="flex flex-wrap gap-2">
           {presets.map((preset) => {
             const Icon = preset.icon;
@@ -77,7 +76,7 @@ export function EnhancementSettings({ settings, onSettingsChange, disabled = fal
         
         {/* Mode description */}
         <p className="text-sm text-muted-foreground">
-          {settings.preset === "Default" && "Clean transcription with grammar, spelling, and punctuation fixes"}
+          {settings.preset === "Default" && "Format transcription with grammar, spelling, punctuation, and semantic corrections"}
           {settings.preset === "Prompts" && "Transform speech into clear, actionable AI prompts"}
           {settings.preset === "Email" && "Format as professional email with subject, greeting, and signature"}
           {settings.preset === "Commit" && "Create conventional commit message (feat, fix, docs, etc.)"}

@@ -3,6 +3,7 @@ import { EnhancementModelCard } from "@/components/EnhancementModelCard";
 import { EnhancementSettings } from "@/components/EnhancementSettings";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import type { EnhancementOptions } from "@/types/ai";
 import { fromBackendOptions, toBackendOptions } from "@/types/ai";
 import { hasApiKey, removeApiKey, saveApiKey, getApiKey } from "@/utils/keyring";
@@ -11,6 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
+import { Sparkles, Info, Wand2 } from "lucide-react";
 
 interface AIModel {
   id: string;
@@ -252,7 +254,7 @@ export function EnhancementsSection() {
       });
 
       setAISettings(prev => ({ ...prev, enabled }));
-      toast.success(enabled ? "AI enhancement enabled" : "AI enhancement disabled");
+      toast.success(enabled ? "AI formatting enabled" : "AI formatting disabled");
     } catch (error) {
       toast.error(`Failed to update settings: ${error}`);
     }
@@ -331,40 +333,69 @@ export function EnhancementsSection() {
   const hasAnyApiKey = Object.values(providerApiKeys).some(v => v);
   const selectedModelProvider = models.find(m => m.id === aiSettings.model)?.provider;
   const hasSelectedModel = Boolean(aiSettings.model && selectedModelProvider && providerApiKeys[selectedModelProvider]);
+  const selectedModelName = models.find(m => m.id === aiSettings.model)?.name;
 
   return (
-    <div className="h-full flex flex-col p-6">
-      <div className="flex-shrink-0 space-y-4 mb-4">
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="px-6 py-4 border-b border-border/40">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">AI Enhancement</h2>
-          <Switch
-            id="ai-enhancement"
-            checked={aiSettings.enabled}
-            onCheckedChange={handleToggleEnabled}
-            disabled={!hasAnyApiKey || !hasSelectedModel}
-          />
+          <div>
+            <h1 className="text-2xl font-semibold">Formatting</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              AI-powered text formatting and enhancement
+            </p>
+          </div>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-card border border-border/50">
+            <Label htmlFor="ai-formatting" className="text-sm font-medium cursor-pointer">
+              AI Formatting
+            </Label>
+            <Switch
+              id="ai-formatting"
+              checked={aiSettings.enabled}
+              onCheckedChange={handleToggleEnabled}
+              disabled={!hasAnyApiKey || !hasSelectedModel}
+            />
+          </div>
         </div>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="space-y-4">
-          {/* Models */}
-          <div className="space-y-3">
-            {models.map((model) => (
-              <EnhancementModelCard
-                key={model.id}
-                model={model}
-                hasApiKey={providerApiKeys[model.provider] || false}
-                isSelected={aiSettings.model === model.id && providerApiKeys[model.provider]}
-                onSetupApiKey={() => handleSetupApiKey(model.provider)}
-                onSelect={() => handleModelSelect(model.id, model.provider)}
-                onRemoveApiKey={() => handleRemoveApiKey(model.provider)}
-              />
-            ))}
+      <ScrollArea className="flex-1">
+        <div className="p-6 space-y-6">
+          {/* AI Models Section */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-semibold">AI Models</h2>
+              <div className="h-px bg-border/50 flex-1" />
+              {selectedModelName && (
+                <span className="text-sm text-muted-foreground">
+                  Active: <span className="text-amber-600 dark:text-amber-500">{selectedModelName}</span>
+                </span>
+              )}
+            </div>
+            
+            <div className="grid gap-3">
+              {models.map((model) => (
+                <EnhancementModelCard
+                  key={model.id}
+                  model={model}
+                  hasApiKey={providerApiKeys[model.provider] || false}
+                  isSelected={aiSettings.model === model.id && providerApiKeys[model.provider]}
+                  onSetupApiKey={() => handleSetupApiKey(model.provider)}
+                  onSelect={() => handleModelSelect(model.id, model.provider)}
+                  onRemoveApiKey={() => handleRemoveApiKey(model.provider)}
+                />
+              ))}
+            </div>
           </div>
 
-          {/* Enhancement Settings - Always visible, disabled when AI is off */}
-          <div className="mt-4 pt-4">
+          {/* Formatting Options */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-semibold">Formatting Options</h2>
+              <div className="h-px bg-border/50 flex-1" />
+            </div>
+
             <div className={!aiSettings.enabled ? "opacity-50 pointer-events-none" : ""}>
               <EnhancementSettings
                 settings={enhancementOptions}
@@ -373,17 +404,27 @@ export function EnhancementsSection() {
             </div>
           </div>
 
-          {/* Simple setup guide when AI is disabled */}
+          {/* Setup Guide */}
           {!aiSettings.enabled && (
-            <div className="bg-muted/50 rounded-lg p-4 space-y-3 mt-4">
-              <h3 className="font-medium text-sm">Quick Setup Guide</h3>
-              <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-                <li>Click "Add Key" on a model above</li>
-                <li>Visit the provider's website to get your API key</li>
-                <li>Paste the API key and submit</li>
-                <li>Select the model you want to use</li>
-                <li>Toggle the switch above to enable AI enhancement</li>
-              </ol>
+            <div className="rounded-lg border border-border/50 bg-card p-4">
+              <div className="flex items-start gap-3">
+                <div className="p-1.5 rounded-md bg-amber-500/10">
+                  <Info className="h-4 w-4 text-amber-500" />
+                </div>
+                <div className="space-y-2 flex-1">
+                  <h3 className="font-medium text-sm">Quick Setup</h3>
+                  <ol className="text-sm text-muted-foreground space-y-1.5 list-decimal list-inside">
+                    <li>Click "Add Key" on a model above</li>
+                    <li>Get your API key from the provider's website</li>
+                    <li>Paste the API key and save</li>
+                    <li>Select the model you want to use</li>
+                    <li>Toggle AI Formatting on to enable</li>
+                  </ol>
+                  <p className="text-xs text-muted-foreground mt-3">
+                    AI formatting automatically improves your transcribed text with proper punctuation, capitalization, and style.
+                  </p>
+                </div>
+              </div>
             </div>
           )}
         </div>

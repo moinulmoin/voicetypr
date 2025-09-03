@@ -57,7 +57,7 @@ export function TabContainer({ activeSection }: TabContainerProps) {
       case "advanced":
         return <AdvancedTab />;
 
-      case "enhancements":
+      case "formatting":
         return <EnhancementsTab />;
 
       case "account":
