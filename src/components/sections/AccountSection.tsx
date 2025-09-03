@@ -1,33 +1,22 @@
-import { XformerlyTwitter } from "@/assets/icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useLicense } from "@/contexts/LicenseContext";
-import { getVersion } from '@tauri-apps/api/app';
 import { open } from '@tauri-apps/plugin-shell';
 import { 
   Check, 
-  Globe, 
-  Info, 
-  KeyRound, 
-  Mail, 
-  RefreshCw
+  Shield,
+  Sparkles,
+  Crown
 } from "lucide-react";
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { toast } from 'sonner';
-import { updateService } from '@/services/updateService';
 
 export function AccountSection() {
   const { status, isLoading, activateLicense, deactivateLicense, openPurchasePage } = useLicense();
   const [licenseKey, setLicenseKey] = useState('');
   const [isActivating, setIsActivating] = useState(false);
-  const [appVersion, setAppVersion] = useState<string>('Loading...');
-  const [checking, setChecking] = useState(false);
-
-  useEffect(() => {
-    getVersion().then(setAppVersion).catch(() => setAppVersion('Unknown'));
-  }, []);
 
   const handleActivate = async () => {
     if (!licenseKey.trim()) return;
@@ -36,15 +25,6 @@ export function AccountSection() {
     await activateLicense(licenseKey.trim());
     setIsActivating(false);
     setLicenseKey('');
-  };
-
-  const handleCheckForUpdates = async () => {
-    setChecking(true);
-    try {
-      await updateService.checkForUpdatesManually();
-    } finally {
-      setChecking(false);
-    }
   };
 
   const openExternalLink = async (url: string) => {
@@ -95,174 +75,153 @@ export function AccountSection() {
   };
 
   return (
-    <div className="h-full flex flex-col p-6">
-      <div className="flex-shrink-0 mb-4 space-y-3">
-        <h2 className="text-lg font-semibold">Account</h2>
-        <p className="text-sm text-muted-foreground">
-          Manage your license and app information
-        </p>
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="px-6 py-4 border-b border-border/40">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold">License</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Manage your VoiceTypr license
+            </p>
+          </div>
+          {status && status.status === 'licensed' && (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-500/10">
+              <Crown className="h-4 w-4 text-green-600 dark:text-green-400" />
+              <span className="text-sm font-medium text-green-600 dark:text-green-400">
+                Pro Licensed
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="space-y-6">
+      <ScrollArea className="flex-1">
+        <div className="p-6 space-y-6">
           {/* License Status Section */}
-          <div className="rounded-lg border bg-card p-4 space-y-4">
-            <div className="flex items-center gap-2 mb-2">
-              <KeyRound className="h-4 w-4 text-muted-foreground" />
-              <h3 className="text-sm font-medium">License Status</h3>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Status</span>
-              <Badge variant={getStatusBadgeVariant()}>
-                {isLoading ? 'Loading...' : formatLicenseStatus()}
-              </Badge>
-            </div>
-
-            {/* Licensed user info */}
-            {status && status.status === 'licensed' && (
-              <div className="space-y-4">
-                <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
-                    <span className="text-sm font-medium text-green-900 dark:text-green-100">
-                      VoiceTypr Pro Active
-                    </span>
-                  </div>
-                  {status.license_key && (
-                    <p className="text-xs text-green-700 dark:text-green-300 font-mono">
-                      License: ****-****-****-{status.license_key.slice(-4)}
-                    </p>
-                  )}
+          <div className="space-y-4">
+            <div className="rounded-lg border border-border/50 bg-card p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">Status</span>
                 </div>
-
-                <Button
-                  onClick={deactivateLicense}
-                  variant="outline"
-                  size="sm"
-                  className="w-full"
-                >
-                  Deactivate License
-                </Button>
-                <p className="text-xs text-muted-foreground text-center">
-                  Deactivate to use this license on another device
-                </p>
+                <Badge variant={getStatusBadgeVariant()} className="font-medium">
+                  {isLoading ? 'Loading...' : formatLicenseStatus()}
+                </Badge>
               </div>
-            )}
 
-            {/* Actions for unlicensed/expired users */}
-            {status && (status.status === 'expired' || status.status === 'none' || status.status === 'trial') && (
-              <div className="space-y-4">
-                <div className="flex gap-2">
+              {/* Licensed user info */}
+              {status && status.status === 'licensed' && (
+                <div className="space-y-4">
+                  <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-4 space-y-3">
+                    <div className="flex items-start gap-3">
+                      <div className="p-1.5 rounded-md bg-green-500/10">
+                        <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
+                      </div>
+                      <div className="flex-1 space-y-1">
+                        <p className="text-sm font-medium text-green-900 dark:text-green-100">
+                          VoiceTypr Pro Active
+                        </p>
+                        {status.license_key && (
+                          <p className="text-xs text-green-700 dark:text-green-300 font-mono">
+                            License: ****-****-****-{status.license_key.slice(-4)}
+                          </p>
+                        )}
+                        <p className="text-xs text-muted-foreground mt-2">
+                          All pro features unlocked
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
                   <Button
-                    onClick={openPurchasePage}
-                    className="flex-1"
-                    size="sm"
-                  >
-                    Buy License
-                  </Button>
-                  <Button
-                    onClick={() => openExternalLink("https://polar.sh/ideaplexa/portal")}
+                    onClick={deactivateLicense}
                     variant="outline"
                     size="sm"
-                    className="flex-1"
+                    className="w-full"
                   >
-                    Manage License
+                    Deactivate License
                   </Button>
-                </div>
-
-
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground">Have a license key?</p>
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="Enter license key"
-                      value={licenseKey}
-                      onChange={(e) => setLicenseKey(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleActivate();
-                        }
-                      }}
-                      className="flex-1 h-8 text-sm"
-                    />
-                    <Button
-                      onClick={handleActivate}
-                      disabled={!licenseKey.trim() || isActivating}
-                      size="sm"
-                    >
-                      {isActivating ? 'Activating...' : 'Activate'}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Note: You may be prompted for your password to securely store the license
+                  <p className="text-xs text-muted-foreground text-center">
+                    Deactivate to use this license on another device
                   </p>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
 
-          {/* App Info Section */}
-          <div className="rounded-lg border bg-card p-4 space-y-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Info className="h-4 w-4 text-muted-foreground" />
-              <h3 className="text-sm font-medium">App Info</h3>
-            </div>
-            
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Version</span>
-                <span className="text-sm font-medium">{appVersion}</span>
-              </div>
+              {/* Actions for unlicensed/expired users */}
+              {status && (status.status === 'expired' || status.status === 'none' || status.status === 'trial') && (
+                <div className="space-y-4">
+                  {/* Trial/Expired Notice */}
+                  {(status.status === 'trial' || status.status === 'expired') && (
+                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4">
+                      <div className="flex items-start gap-3">
+                        <div className="p-1.5 rounded-md bg-amber-500/10">
+                          <Sparkles className="h-4 w-4 text-amber-500" />
+                        </div>
+                        <div className="flex-1 space-y-1">
+                          <p className="text-sm font-medium text-amber-900 dark:text-amber-400">
+                            {status.status === 'trial' ? 'Trial Active' : 'Trial Expired'}
+                          </p>
+                          <p className="text-xs text-amber-800 dark:text-amber-500">
+                            {status.status === 'trial' && status.trial_days_left !== undefined
+                              ? status.trial_days_left > 0
+                                ? `${status.trial_days_left} day${status.trial_days_left !== 1 ? 's' : ''} remaining in your trial`
+                                : 'Trial expires today'
+                              : 'Upgrade to Pro to continue using VoiceTypr'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
-              <Button
-                onClick={handleCheckForUpdates}
-                disabled={checking}
-                variant="outline"
-                size="sm"
-                className="w-full"
-              >
-                {checking ? (
-                  <>
-                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                    Checking for Updates...
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Check for Updates
-                  </>
-                )}
-              </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={openPurchasePage}
+                      className="flex-1"
+                      size="sm"
+                    >
+                      <Crown className="h-3.5 w-3.5 mr-1.5" />
+                      Buy License
+                    </Button>
+                    <Button
+                      onClick={() => openExternalLink("https://polar.sh/ideaplexa/portal")}
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                    >
+                      Manage License
+                    </Button>
+                  </div>
 
-              <div className="pt-3 flex items-center justify-between text-sm">
-                <button
-                  onClick={() => openExternalLink("https://voicetypr.com")}
-                  className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <Globe className="h-4 w-4" />
-                  <span>Website</span>
-                </button>
-                
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText("support@voicetypr.com");
-                    toast.success("Support email copied to clipboard!");
-                  }}
-                  className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <Mail className="h-4 w-4" />
-                  <span>Support</span>
-                </button>
-                
-                <button
-                  onClick={() => openExternalLink("https://twitter.com/voicetypr")}
-                  className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <XformerlyTwitter className="h-4 w-4" />
-                  <span>@voicetypr</span>
-                </button>
-              </div>
+                  <div className="space-y-2 pt-2 border-t border-border/50">
+                    <p className="text-sm font-medium">Have a license key?</p>
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Enter license key"
+                        value={licenseKey}
+                        onChange={(e) => setLicenseKey(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleActivate();
+                          }
+                        }}
+                        className="flex-1 text-sm"
+                      />
+                      <Button
+                        onClick={handleActivate}
+                        disabled={!licenseKey.trim() || isActivating}
+                        size="sm"
+                      >
+                        {isActivating ? 'Activating...' : 'Activate'}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      You may be prompted for your password to securely store the license
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

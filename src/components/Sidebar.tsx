@@ -15,6 +15,7 @@ import {
   Cpu,
   HelpCircle,
   Home,
+  Info,
   Key,
   Layers,
   Settings2,
@@ -33,7 +34,8 @@ const mainSections = [
   { id: "general", label: "Settings", icon: Settings2 },
   { id: "models", label: "Models", icon: Cpu },
   { id: "formatting", label: "Formatting", icon: Sparkles },
-  { id: "account", label: "Account", icon: Key },
+  { id: "license", label: "License", icon: Key },
+  { id: "about", label: "About", icon: Info },
 ];
 
 const bottomSections = [{ id: "advanced", label: "Advanced", icon: Layers }];

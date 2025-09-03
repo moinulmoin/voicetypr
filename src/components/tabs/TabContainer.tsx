@@ -1,4 +1,5 @@
 // Direct imports for instant desktop app experience
+import { AboutTab } from "./AboutTab";
 import { AccountTab } from "./AccountTab";
 import { AdvancedTab } from "./AdvancedTab";
 import { EnhancementsTab } from "./EnhancementsTab";
@@ -60,10 +61,11 @@ export function TabContainer({ activeSection }: TabContainerProps) {
       case "formatting":
         return <EnhancementsTab />;
 
-      case "account":
-      case "about":
       case "license":
         return <AccountTab />;
+        
+      case "about":
+        return <AboutTab />;
 
       default:
         return <OverviewTab history={history} />;
