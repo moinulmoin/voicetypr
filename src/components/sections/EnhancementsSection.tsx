@@ -12,7 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
-import { Sparkles, Info, Wand2 } from "lucide-react";
+import { Info } from "lucide-react";
 
 interface AIModel {
   id: string;

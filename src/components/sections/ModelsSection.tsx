@@ -104,11 +104,9 @@ export function ModelsSection({
             {installedModels.length > 0 && (
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <h2 className="text-base font-semibold text-foreground">Installed Models</h2>
-                  <div className="h-px bg-border/50 flex-1" />
-                  <span className="text-xs text-muted-foreground px-2 py-1 bg-muted/50 rounded">
-                    {installedModels.length}
-                  </span>
+                  <h2 className="text-base font-semibold text-foreground">
+                    Installed Models ({installedModels.length})
+                  </h2>
                 </div>
                 <div className="grid gap-3">
                   {installedModels.map(([name, model]) => (
@@ -138,11 +136,9 @@ export function ModelsSection({
             {availableModels.length > 0 && (
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
-                  <h2 className="text-base font-semibold text-foreground">Available to Download</h2>
-                  <div className="h-px bg-border/50 flex-1" />
-                  <span className="text-xs text-muted-foreground px-2 py-1 bg-muted/50 rounded">
-                    {availableModels.length}
-                  </span>
+                  <h2 className="text-base font-semibold text-foreground">
+                    Available to Download ({availableModels.length})
+                  </h2>
                 </div>
                 <div className="grid gap-3">
                   {availableModels.map(([name, model]) => (

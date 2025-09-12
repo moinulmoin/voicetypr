@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import {
   SidebarContent,
   SidebarFooter,
@@ -7,7 +8,6 @@ import {
   SidebarMenuItem,
   Sidebar as SidebarPrimitive,
 } from "@/components/ui/sidebar";
-import { Button } from "@/components/ui/button";
 import { useLicense } from "@/contexts/LicenseContext";
 import { cn } from "@/lib/utils";
 import {
@@ -46,10 +46,10 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
   // Show license status for all states (not just trial)
   const showLicenseInfo = !isLoading && status;
   const daysLeft = status?.trial_days_left || -1;
-  
+
   return (
-    <SidebarPrimitive className="border-r-0">
-      <SidebarContent className="px-2 pt-4">
+    <SidebarPrimitive >
+      <SidebarContent className="px-2">
         <SidebarGroup className="flex-1">
           <SidebarMenu>
             {mainSections.map((section) => {
@@ -116,13 +116,24 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
 
             <SidebarMenuItem>
               <SidebarMenuButton
-                onClick={() =>
-                  window.open("https://voicetypr.com/docs", "_blank")
-                }
-                className="group relative rounded-lg px-3 py-2 hover:bg-accent/50 transition-colors"
+                onClick={() => onSectionChange("help")}
+                isActive={activeSection === "help"}
+                className={cn(
+                  "group relative rounded-lg px-3 py-2 hover:bg-accent/50 transition-colors",
+                  activeSection === "help" &&
+                    "bg-accent text-accent-foreground font-medium",
+                )}
               >
-                <HelpCircle className="h-4 w-4 transition-transform group-hover:scale-110" />
+                <HelpCircle
+                  className={cn(
+                    "h-4 w-4 transition-transform group-hover:scale-110",
+                    activeSection === "help" && "text-primary",
+                  )}
+                />
                 <span className="ml-2">Help</span>
+                {activeSection === "help" && (
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-primary rounded-r-full" />
+                )}
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
@@ -142,7 +153,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
               <>
                 <div className={cn(
                   "px-2 py-1.5 rounded-md text-center",
-                  status.status === "trial" && daysLeft > 0 && "bg-accent/50"
+                  status.status === "trial" && daysLeft > 0
                 )}>
                   <span className={cn(
                     "text-xs font-medium",

@@ -4,11 +4,11 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useLicense } from "@/contexts/LicenseContext";
 import { open } from '@tauri-apps/plugin-shell';
-import { 
-  Check, 
-  Shield,
-  Sparkles,
-  Crown
+import {
+  Check,
+  Clock,
+  Crown,
+  Shield
 } from "lucide-react";
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -157,7 +157,7 @@ export function AccountSection() {
                     <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4">
                       <div className="flex items-start gap-3">
                         <div className="p-1.5 rounded-md bg-amber-500/10">
-                          <Sparkles className="h-4 w-4 text-amber-500" />
+                          <Clock className="h-4 w-4 text-amber-500" />
                         </div>
                         <div className="flex-1 space-y-1">
                           <p className="text-sm font-medium text-amber-900 dark:text-amber-400">
@@ -168,7 +168,7 @@ export function AccountSection() {
                               ? status.trial_days_left > 0
                                 ? `${status.trial_days_left} day${status.trial_days_left !== 1 ? 's' : ''} remaining in your trial`
                                 : 'Trial expires today'
-                              : 'Upgrade to Pro to continue using VoiceTypr'}
+                              : 'Upgrade to Pro to continue'}
                           </p>
                         </div>
                       </div>

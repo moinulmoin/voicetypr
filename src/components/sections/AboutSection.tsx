@@ -8,9 +8,9 @@ import {
   ExternalLink,
   Globe,
   Info,
-  RefreshCw,
-  X
+  RefreshCw
 } from "lucide-react";
+import XIcon from "@/components/icons/XIcon";
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -130,7 +130,7 @@ export function AboutSection() {
               >
                 <div className="flex items-center gap-3">
                   <div className="p-1.5 rounded-md bg-accent">
-                    <X className="h-4 w-4 text-foreground" />
+                    <XIcon className="h-4 w-4 text-foreground" />
                   </div>
                   <div className="text-left">
                     <p className="text-sm font-medium">X</p>

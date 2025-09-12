@@ -36,10 +36,11 @@ use commands::{
         update_enhancement_options, validate_and_cache_api_key,
     },
     audio::*,
+    clipboard::{copy_image_to_clipboard, save_image_to_file},
     debug::{debug_transcription_flow, test_transcription_event},
     keyring::{keyring_delete, keyring_get, keyring_has, keyring_set},
     license::*,
-    logs::{get_log_directory, open_logs_folder},
+    logs::{clear_old_logs, get_log_directory, open_logs_folder},
     model::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model, verify_model,
@@ -862,6 +863,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let window_manager = WindowManager::new(app.app_handle().clone());
             app_state.set_window_manager(window_manager);
 
+            // Clean up old logs on startup (keep only today's log)
+            let app_handle_for_logs = app.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match clear_old_logs(app_handle_for_logs, 1).await {
+                    Ok(deleted_count) => {
+                        if deleted_count > 0 {
+                            log::info!("Cleaned up {} old log files (keeping only today)", deleted_count);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to clean up old logs: {}. App will continue normally.", e);
+                    }
+                }
+            });
+
             // Pill position is loaded from settings when needed, no duplicate state
 
             // Initialize recorder state (kept separate for backwards compatibility)
@@ -1283,6 +1299,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             deactivate_license,
             open_purchase_page,
             reset_app_data,
+            copy_image_to_clipboard,
+            save_image_to_file,
             get_ai_settings,
             get_ai_settings_for_provider,
             cache_ai_api_key,

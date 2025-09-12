@@ -15,7 +15,6 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   CheckCircle,
-  FileText,
   Keyboard,
   Loader2,
   Mic,
@@ -286,35 +285,6 @@ export function AdvancedSection() {
               </div>
             </div>
 
-            {/* Diagnostics Section */}
-            <div className="space-y-4">
-              <h2 className="text-base font-semibold">Diagnostics</h2>
-
-              <div className="rounded-lg border border-border/50 bg-card p-4 space-y-3">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={async () => {
-                    try {
-                      await invoke("open_logs_folder");
-                    } catch (error) {
-                      console.error("Failed to open logs folder:", error);
-                      toast.error("Failed to open logs folder");
-                    }
-                  }}
-                  className="w-full justify-start"
-                >
-                  <FileText className="mr-2 h-4 w-4" />
-                  Open Logs Folder
-                </Button>
-
-                <div className="text-xs text-muted-foreground space-y-1">
-                  <p>• Debug logs are saved automatically with daily rotation</p>
-                  <p>• Logs older than 30 days are automatically deleted</p>
-                  <p>• Share logs when reporting issues</p>
-                </div>
-              </div>
-            </div>
           </div>
         </ScrollArea>
       </div>

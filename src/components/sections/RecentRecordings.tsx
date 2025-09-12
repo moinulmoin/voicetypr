@@ -143,7 +143,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       if (!confirmed) return;
 
       // Call the backend export command
-      const filePath = await invoke<string>("export_transcriptions");
+      await invoke<string>("export_transcriptions");
       
       toast.success(`Exported ${history.length} transcriptions`, {
         description: `Saved to Downloads folder`

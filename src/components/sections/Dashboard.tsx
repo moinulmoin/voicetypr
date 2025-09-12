@@ -2,7 +2,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { TranscriptionHistory } from "@/types";
 import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
-import { useSettings } from "@/contexts/SettingsContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { 
@@ -31,7 +30,6 @@ export function Dashboard({ history, hotkey = "Cmd+Shift+Space", onHistoryUpdate
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const canRecord = useCanRecord();
   const canAutoInsert = useCanAutoInsert();
-  const { settings } = useSettings();
 
   // Calculate stats
   const stats = useMemo(() => {
@@ -121,7 +119,7 @@ export function Dashboard({ history, hotkey = "Cmd+Shift+Space", onHistoryUpdate
       <div className="px-6 py-4 border-b border-border/40">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold">Welcome back, {settings?.user_name || 'there'}</h1>
+            <h1 className="text-2xl font-semibold">Welcome back</h1>
             <p className="text-sm text-muted-foreground mt-1">
               {canRecord ? 'Ready to transcribe' : 'Setup required'}
             </p>

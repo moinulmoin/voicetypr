@@ -27,6 +27,8 @@
     "benchmark": "node scripts/benchmark-runner.js"
   },
   "dependencies": {
+    "@radix-ui/react-collapsible": "^1.1.12",
+    "@radix-ui/react-slot": "^1.2.3",
     "@tailwindcss/vite": "^4.1.11",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-autostart": "^2.5.0",
