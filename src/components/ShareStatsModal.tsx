@@ -1,14 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Copy, Check, Loader2, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
+import { Check, Copy, Download, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 interface ShareStatsModalProps {
@@ -31,6 +31,7 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
   const [copied, setCopied] = useState(false);
   const [imageDataUrl, setImageDataUrl] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
+  const [isCopying, setIsCopying] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -68,7 +69,7 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
     const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
     gradient.addColorStop(0, "#0f0f0f");
     gradient.addColorStop(1, "#1a1a1a");
-    
+
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -123,7 +124,7 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
       const col = index % 2;
       const x = gridStartX + col * (cardWidth + cardGap);
       const y = gridStartY + row * (cardHeight + cardGap);
-      
+
       // Simple card background
       ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
       ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
@@ -134,7 +135,7 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
       ctx.stroke();
 
       // Card label - scaled up
-      ctx.font = "40px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.font = "48px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
       ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
       ctx.textAlign = "center";
       ctx.fillText(card.label, x + cardWidth/2, y + 90);
@@ -145,22 +146,22 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
       ctx.fillText(card.value, x + cardWidth/2, y + 220);
 
       // Card subtitle - scaled up
-      ctx.font = "36px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      ctx.font = "40px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
       ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
       ctx.fillText(card.subtitle, x + cardWidth/2, y + 290);
     });
 
-    // Current Streak at the bottom - scaled up
-    if (stats.currentStreak > 0) {
-      ctx.font = "bold 80px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-      ctx.fillStyle = "#ffffff";
-      ctx.textAlign = "center";
-      const streakY = gridStartY + 2 * (cardHeight + cardGap) + 120;
-      ctx.fillText(`🔥 ${stats.currentStreak} Day Streak`, canvas.width / 2, streakY);
-    }
+    // // Current Streak at the bottom - scaled up
+    // if (stats.currentStreak > 0) {
+    //   ctx.font = "bold 80px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    //   ctx.fillStyle = "#ffffff";
+    //   ctx.textAlign = "center";
+    //   const streakY = gridStartY + 2 * (cardHeight + cardGap) + 120;
+    //   ctx.fillText(`🔥 ${stats.currentStreak} Day Streak`, canvas.width / 2, streakY);
+    // }
 
     // Website at the bottom - scaled up
-    ctx.font = "48px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+    ctx.font = "56px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
     ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
     ctx.textAlign = "center";
     ctx.fillText("voicetypr.com", canvas.width / 2, canvas.height - 80);
@@ -171,20 +172,24 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
   };
 
   const copyImageToClipboard = async () => {
-    if (!canvasRef.current || !imageDataUrl) return;
+    if (!canvasRef.current || !imageDataUrl || isCopying) return;
 
+    setIsCopying(true);
+    
     try {
       // Use Tauri's clipboard API for system-level copy
-      await invoke("copy_image_to_clipboard", { 
-        imageDataUrl: imageDataUrl 
+      await invoke("copy_image_to_clipboard", {
+        imageDataUrl: imageDataUrl
       });
-      
+
       setCopied(true);
       toast.success("Stats image copied to clipboard!");
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error("Failed to copy image to clipboard:", err);
       toast.error("Failed to copy image. Try the download button instead.");
+    } finally {
+      setIsCopying(false);
     }
   };
 
@@ -193,7 +198,7 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
 
     try {
       const fileName = `voicetypr-stats-${Date.now()}.png`;
-      
+
       // Use Tauri's save dialog to let user choose location
       const { save } = await import('@tauri-apps/plugin-dialog');
       const filePath = await save({
@@ -206,7 +211,7 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
 
       if (filePath) {
         // Use the Rust backend to save the file (best practice)
-        await invoke("save_image_to_file", { 
+        await invoke("save_image_to_file", {
           imageDataUrl: imageDataUrl,
           filePath: filePath
         });
@@ -229,7 +234,7 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
         <DialogHeader>
           <DialogTitle>Share Your Stats</DialogTitle>
         </DialogHeader>
-        
+
         <div className="space-y-4">
           {/* Canvas Preview */}
           <div className="relative rounded-lg overflow-hidden bg-black/5 border border-border/50 min-h-[300px]">
@@ -252,12 +257,18 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
           <div className="flex justify-center gap-2">
             <Button
               onClick={copyImageToClipboard}
+              disabled={isCopying || !imageDataUrl}
               className={cn(
-                "gap-2",
+                "gap-2 min-w-[120px]",
                 copied && "bg-green-600 hover:bg-green-600"
               )}
             >
-              {copied ? (
+              {isCopying ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Copying...
+                </>
+              ) : copied ? (
                 <>
                   <Check className="h-4 w-4" />
                   Copied!

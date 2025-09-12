@@ -4,6 +4,14 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { 
   ChevronDown,
   Mail,
@@ -12,7 +20,9 @@ import {
   Type,
   Download,
   Copy,
-  FileText
+  FileText,
+  Globe,
+  Monitor
 } from "lucide-react";
 import XIcon from "@/components/icons/XIcon";
 import { useState, useEffect } from 'react';
@@ -20,6 +30,7 @@ import { toast } from 'sonner';
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { platform, version as osVersion } from '@tauri-apps/plugin-os';
+import { open } from '@tauri-apps/plugin-shell';
 import { useSettings } from '@/contexts/SettingsContext';
 import { useCanRecord, useCanAutoInsert } from '@/contexts/ReadinessContext';
 
@@ -37,6 +48,9 @@ export function HelpSection() {
   const [platformName, setPlatformName] = useState<string>('');
   const [openItems, setOpenItems] = useState<string[]>([]);
   const [diagnostics, setDiagnostics] = useState<string>('');
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [emailSubject, setEmailSubject] = useState<string>('');
+  const [emailBody, setEmailBody] = useState<string>('');
   const { settings } = useSettings();
   const canRecord = useCanRecord();
   const canAutoInsert = useCanAutoInsert();
@@ -131,14 +145,44 @@ Actual behavior:
 
 `;
     
-    const mailtoUrl = `mailto:support@voicetypr.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.open(mailtoUrl, '_blank');
+    setEmailSubject(subject);
+    setEmailBody(body);
+    setShowEmailModal(true);
+  };
+
+  const handleOpenInGmail = async () => {
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=support@voicetypr.com&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+    try {
+      await open(gmailUrl);
+      setShowEmailModal(false);
+      toast.success('Opening Gmail in browser');
+    } catch (error) {
+      console.error('Failed to open Gmail:', error);
+      toast.error('Failed to open Gmail');
+    }
+  };
+
+  const handleOpenInDefaultClient = async () => {
+    const mailtoUrl = `mailto:support@voicetypr.com?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+    try {
+      await open(mailtoUrl);
+      setShowEmailModal(false);
+      toast.success('Opening default email client');
+    } catch (error) {
+      console.error('Failed to open email client:', error);
+      toast.error('Failed to open email client');
+    }
   };
 
 
-  const handleTwitterSupport = () => {
-    const twitterUrl = 'https://twitter.com/messages/compose?recipient_id=voicetypr';
-    window.open(twitterUrl, '_blank');
+  const handleXSupport = async () => {
+    const xUrl = 'https://x.com/voicetypr';
+    try {
+      await open(xUrl);
+    } catch (error) {
+      console.error('Failed to open X profile:', error);
+      toast.error('Failed to open X profile');
+    }
   };
 
   const handleCopySystemInfo = async () => {
@@ -229,7 +273,7 @@ Actual behavior:
             
             <div className="space-y-3">
               <button
-                onClick={handleTwitterSupport}
+                onClick={handleXSupport}
                 className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
               >
                 <div className="flex items-center gap-3">
@@ -237,9 +281,9 @@ Actual behavior:
                     <XIcon className="h-4 w-4" />
                   </div>
                   <div className="text-left">
-                    <p className="text-sm font-medium">DM us on X</p>
+                    <p className="text-sm font-medium">Follow us on X</p>
                     <p className="text-xs text-muted-foreground">
-                      Get quick support via direct message
+                      @voicetypr - Get updates and support
                     </p>
                   </div>
                 </div>
@@ -318,6 +362,46 @@ Actual behavior:
           </div>
         </div>
       </ScrollArea>
+
+      {/* Email Client Selection Modal */}
+      <Dialog open={showEmailModal} onOpenChange={setShowEmailModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Choose Email Client</DialogTitle>
+            <DialogDescription>
+              How would you like to send your support request?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 mt-4">
+            <Button
+              onClick={handleOpenInGmail}
+              className="w-full justify-start gap-3"
+              variant="outline"
+            >
+              <Globe className="h-4 w-4" />
+              <div className="text-left flex-1">
+                <p className="font-medium">Open in Gmail</p>
+                <p className="text-xs text-muted-foreground">
+                  Use Gmail in your web browser
+                </p>
+              </div>
+            </Button>
+            <Button
+              onClick={handleOpenInDefaultClient}
+              className="w-full justify-start gap-3"
+              variant="outline"
+            >
+              <Monitor className="h-4 w-4" />
+              <div className="text-left flex-1">
+                <p className="font-medium">Open in Default App</p>
+                <p className="text-xs text-muted-foreground">
+                  Use your system's default email client
+                </p>
+              </div>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

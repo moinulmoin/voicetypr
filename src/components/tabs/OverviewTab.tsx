@@ -5,7 +5,7 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { cn } from "@/lib/utils";
 import { TranscriptionHistory } from "@/types";
-import { BarChart3, Clock, FileText, Flame, Share2, TrendingUp, Zap } from "lucide-react";
+import { BarChart3, Clock, FileText, Flame, Share2, TrendingUp, Zap, Info } from "lucide-react";
 import { useMemo, useState } from "react";
 
 interface OverviewTabProps {
@@ -240,32 +240,33 @@ export function OverviewTab({ history }: OverviewTabProps) {
             </div>
           </div>
 
-          {/* Empty State or Guide */}
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center max-w-md">
-              {canRecord && (
-                <>
-                  <h3 className="text-lg font-semibold mb-2">Ready to start</h3>
-                  <p className="text-sm text-muted-foreground mb-4">
-                    {canAutoInsert ? (
-                      <>Press {formatHotkey(hotkey)} in any app to start voice typing</>
-                    ) : (
-                      "Recording available but accessibility permission needed for hotkeys"
-                    )}
-                  </p>
-                  <div className="space-y-2 text-left bg-accent/30 rounded-lg p-4">
-                    <p className="text-xs font-medium text-foreground">Quick tips:</p>
-                    <ul className="text-xs text-muted-foreground space-y-1">
-                      <li>• Hold the hotkey while speaking</li>
-                      <li>• Release to stop and transcribe</li>
-                      <li>• Text appears at your cursor</li>
-                      <li>• Works in any text field</li>
-                    </ul>
+          {/* Quick Tips Section */}
+          {canRecord && (
+            <div className="rounded-lg border border-border/50 bg-card overflow-hidden">
+              <div className="p-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-1.5 rounded-md bg-amber-500/10">
+                    <Info className="h-4 w-4 text-amber-500" />
                   </div>
-                </>
-              )}
+                  <div className="space-y-2 flex-1">
+                    <h3 className="font-medium text-sm">Quick Tips</h3>
+                    <ol className="text-sm text-muted-foreground space-y-1.5 list-decimal list-inside">
+                      <li>Hold {formatHotkey(hotkey)} while speaking</li>
+                      <li>Release the key to stop and transcribe</li>
+                      <li>Text appears at your cursor automatically</li>
+                      <li>Works in any text field across all apps</li>
+                      <li>Double tap ESC to cancel recording</li>
+                    </ol>
+                    <p className="text-xs text-muted-foreground mt-3">
+                      {canAutoInsert 
+                        ? "Voice typing saves an average of 3x time compared to manual typing."
+                        : "Note: Accessibility permission needed for automatic text insertion."}
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 
