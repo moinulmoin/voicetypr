@@ -199,16 +199,35 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     let unregisterCancelled: (() => void) | undefined;
 
     const setupListeners = async () => {
+      // DEBUG: Add direct listener to verify events are reaching frontend
+      if (typeof window !== 'undefined') {
+        const { listen } = await import('@tauri-apps/api/event');
+
+        // Direct debug listener bypassing EventCoordinator
+        const debugUnlisten = await listen('download-progress', (event) => {
+          console.log('[DEBUG] Direct download-progress event received:', event);
+        });
+
+        // Clean up debug listener on unmount
+        const originalCleanup = () => {
+          debugUnlisten();
+        };
+
+        // Store for cleanup
+        (window as any).__debugUnlisten = originalCleanup;
+      }
       // Progress updates
       unregisterProgress = await registerEvent<{ model: string; downloaded: number; total: number; progress: number }>(
         "download-progress",
         (payload) => {
-          const { model, progress } = payload;
+          const { model, progress, downloaded, total } = payload;
+
+          console.log(`[useModelManagement] Download progress for ${model}: ${progress.toFixed(1)}% (${downloaded}/${total} bytes)`);
 
           // Keep updating progress until we receive the verifying event
           setDownloadProgress((prev) => ({
             ...prev,
-            [model]: progress
+            [model]: Math.min(progress, 100) // Ensure progress doesn't exceed 100%
           }));
         }
       );
@@ -216,16 +235,24 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       // Model verifying (after download, before verification)
       unregisterVerifying = await registerEvent<{ model: string }>("model-verifying", (event) => {
         const modelName = event.model;
-        
-        // Remove from download progress
-        setDownloadProgress((prev) => {
-          const newProgress = { ...prev };
-          delete newProgress[modelName];
-          return newProgress;
-        });
-        
+
+        // First ensure the progress shows 100% before transitioning to verification
+        setDownloadProgress((prev) => ({
+          ...prev,
+          [modelName]: 100
+        }));
+
         // Add to verifying set
         setVerifyingModels((prev) => new Set(prev).add(modelName));
+
+        // Remove from download progress after a brief delay to ensure UI updates
+        setTimeout(() => {
+          setDownloadProgress((prev) => {
+            const newProgress = { ...prev };
+            delete newProgress[modelName];
+            return newProgress;
+          });
+        }, 500);
       });
 
       // Download complete
@@ -279,6 +306,11 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
     // Cleanup
     return () => {
+      // Clean up debug listener
+      if ((window as any).__debugUnlisten) {
+        (window as any).__debugUnlisten();
+        delete (window as any).__debugUnlisten;
+      }
       unregisterProgress?.();
       unregisterVerifying?.();
       unregisterComplete?.();

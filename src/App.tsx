@@ -4,6 +4,7 @@ import { AppContainer } from "./components/AppContainer";
 import { LicenseProvider } from "./contexts/LicenseContext";
 import { ReadinessProvider } from "./contexts/ReadinessContext";
 import { SettingsProvider } from "./contexts/SettingsContext";
+import { ModelManagementProvider } from "./contexts/ModelManagementContext";
 
 export default function App() {
   return (
@@ -11,8 +12,10 @@ export default function App() {
       <LicenseProvider>
         <SettingsProvider>
           <ReadinessProvider>
-            <AppContainer />
-            <Toaster position="top-center" />
+            <ModelManagementProvider>
+              <AppContainer />
+              <Toaster position="top-center" />
+            </ModelManagementProvider>
           </ReadinessProvider>
         </SettingsProvider>
       </LicenseProvider>

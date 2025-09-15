@@ -9,7 +9,7 @@ import { TabContainer } from "./tabs/TabContainer";
 import { useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
-import { useModelManagement } from "@/hooks/useModelManagement";
+import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { updateService } from "@/services/updateService";
 import { loadApiKeysToCache } from "@/utils/keyring";
 
@@ -32,11 +32,8 @@ export function AppContainer() {
   const { settings, refreshSettings } = useSettings();
   const { checkAccessibilityPermission, checkMicrophonePermission } = useReadiness();
 
-  // Use the new model management hook for onboarding
-  const modelManagement = useModelManagement({
-    windowId: "main",
-    showToasts: true
-  });
+  // Use the model management context for onboarding
+  const modelManagement = useModelManagementContext();
 
   // Use a ref to track if we've just completed onboarding
   const hasJustCompletedOnboarding = useRef(false);

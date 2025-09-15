@@ -17,7 +17,7 @@ export class EventCoordinator {
   private static instance: EventCoordinator;
   private registrations: Map<string, EventRegistration[]> = new Map();
   private activeWindow: WindowId = "main";
-  private debug = false;
+  private debug = true; // Enable debug logging to diagnose event issues
 
   private constructor() {
     // Singleton pattern
@@ -49,17 +49,18 @@ export class EventCoordinator {
     eventName: string,
     handler: EventHandler<T>
   ): Promise<UnlistenFn> {
-    // Check for existing registration
+    // Check for existing registration and clean it up if found
     const existing = this.registrations.get(eventName);
     if (existing) {
       const existingForWindow = existing.find(reg => reg.windowId === windowId);
       if (existingForWindow) {
         if (this.debug) {
-          console.warn(
-            `[EventCoordinator] Event "${eventName}" already registered for window "${windowId}". Skipping duplicate.`
+          console.log(
+            `[EventCoordinator] Event "${eventName}" already registered for window "${windowId}". Cleaning up old registration.`
           );
         }
-        return () => {}; // Return no-op unlisten function
+        // Clean up the old registration before creating a new one
+        this.unregister(windowId, eventName);
       }
     }
 
@@ -146,8 +147,9 @@ export class EventCoordinator {
       // Model events should go to all windows (for onboarding support)
       "download-progress": "all",
       "model-downloaded": "all",
+      "model-verifying": "all",
       "download-cancelled": "all",
-      "download-retry": "all",
+      "download-error": "all",
       
       // Error events go to pill window (where recording UI is shown)
       "transcription-error": "pill",
