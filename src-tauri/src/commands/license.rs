@@ -17,7 +17,7 @@ struct CachedLicenseStatus {
 }
 
 // Constants for cache and grace periods
-const OFFLINE_GRACE_PERIOD_DAYS: i64 = 7; // 7 days offline grace for licensed users
+const OFFLINE_GRACE_PERIOD_DAYS: i64 = 90; // 90 days offline grace for licensed users - supports extended offline use
 const LICENSE_CACHE_KEY: &str = "license_status";
 const LAST_VALIDATION_KEY: &str = "last_license_validation";
 
