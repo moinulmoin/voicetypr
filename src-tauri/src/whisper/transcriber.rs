@@ -453,7 +453,14 @@ impl Transcriber {
 
         let samples_count = resampled_audio.len();
         let duration_seconds = samples_count as f32 / 16_000_f32;
-        
+
+        // Check minimum duration (0.5 seconds)
+        if duration_seconds < 0.5 {
+            let error = format!("Recording too short ({:.1}s). Minimum duration is 0.5 seconds", duration_seconds);
+            log::warn!("[TRANSCRIPTION_DEBUG] {}", error);
+            return Err(error);
+        }
+
         log_audio_metrics("WHISPER_INPUT", 0.0, 0.0, duration_seconds, None);
 
         let inference_start = Instant::now();

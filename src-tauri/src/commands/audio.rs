@@ -1,7 +1,6 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
-use crate::audio::validator::{AudioValidator, AudioValidationResult};
 use crate::commands::license::check_license_status_internal;
 use crate::commands::settings::get_settings;
 use crate::license::LicenseState;
@@ -562,182 +561,12 @@ pub async fn stop_recording(
         }
     };
 
-    // === AUDIO VALIDATION - Check quality before transcription ===
-    // Important: Keep pill window visible during validation for feedback
-    let validation_start = Instant::now();
-    log_start("AUDIO_VALIDATION");
-    log_with_context(log::Level::Debug, "Validating audio", &[
+    // === Audio validation now handled by transcriber ===
+    // Transcriber will check duration and format during processing
+    log_with_context(log::Level::Debug, "Proceeding directly to transcription", &[
         ("audio_path", &format!("{:?}", audio_path).as_str()),
         ("stage", "pre_transcription")
     ]);
-    
-    let validator = AudioValidator::new();
-    
-    match validator.validate_audio_file(&audio_path) {
-        Ok(AudioValidationResult::Valid { energy, duration, peak, .. }) => {
-            log_audio_metrics("VALIDATION_PASSED", energy as f64, peak as f64, duration, 
-                Some(&{
-                    let mut ctx = std::collections::HashMap::new();
-                    ctx.insert("validation_time_ms".to_string(), validation_start.elapsed().as_millis().to_string());
-                    ctx
-                }));
-            log_with_context(log::Level::Info, "Audio validation passed", &[
-                ("operation", "AUDIO_VALIDATION"),
-                ("result", "valid"),
-                ("energy", &energy.to_string().as_str()),
-                ("duration", &format!("{:.2}", duration).as_str()),
-                ("peak", &peak.to_string().as_str())
-            ]);
-            // Continue with transcription
-        }
-        Ok(AudioValidationResult::Silent) => {
-            log::warn!("Audio validation FAILED: No speech detected (silent audio)");
-            
-            // Clean up audio file
-            if let Err(e) = std::fs::remove_file(&audio_path) {
-                log::warn!("Failed to remove silent audio file: {}", e);
-            }
-            
-            // Emit to pill window for immediate user feedback
-            let _ = emit_to_window(
-                &app,
-                "pill",
-                "transcription-empty",
-                "No speech detected"
-            );
-            
-            // Wait for feedback to show before hiding pill
-            let app_for_hide = app.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-                
-                // Hide pill window
-                if let Err(e) = crate::commands::window::hide_pill_widget(app_for_hide.clone()).await {
-                    log::error!("Failed to hide pill window: {}", e);
-                }
-                
-                // Transition back to Idle
-                update_recording_state(&app_for_hide, RecordingState::Idle, None);
-            });
-            
-            return Ok("".to_string()); // Don't proceed to transcription
-        }
-        Ok(AudioValidationResult::TooQuiet { energy, suggestion: _ }) => {
-            log::warn!("Audio validation FAILED: Audio too quiet (RMS={:.6})", energy);
-            
-            // Clean up audio file
-            if let Err(e) = std::fs::remove_file(&audio_path) {
-                log::warn!("Failed to remove quiet audio file: {}", e);
-            }
-            
-            // Emit to pill window for immediate user feedback  
-            let _ = emit_to_window(
-                &app,
-                "pill",
-                "transcription-empty",
-                "Audio too quiet - please speak louder"
-            );
-            
-            // Wait for feedback to show before hiding pill
-            let app_for_hide = app.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-                
-                // Hide pill window
-                if let Err(e) = crate::commands::window::hide_pill_widget(app_for_hide.clone()).await {
-                    log::error!("Failed to hide pill window: {}", e);
-                }
-                
-                // Transition back to Idle
-                update_recording_state(&app_for_hide, RecordingState::Idle, None);
-            });
-            
-            return Ok("".to_string()); // Don't proceed to transcription
-        }
-        Ok(AudioValidationResult::TooShort { duration }) => {
-            log::warn!("Audio validation FAILED: Recording too short ({:.2}s)", duration);
-            
-            // Clean up audio file
-            if let Err(e) = std::fs::remove_file(&audio_path) {
-                log::warn!("Failed to remove short audio file: {}", e);
-            }
-            
-            // Emit to pill window for immediate user feedback
-            let _ = emit_to_window(
-                &app,
-                "pill",
-                "transcription-empty",
-                format!("Recording too short ({:.1}s)", duration)
-            );
-            
-            // Wait for feedback to show before hiding pill
-            let app_for_hide = app.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-                
-                // Hide pill window
-                if let Err(e) = crate::commands::window::hide_pill_widget(app_for_hide.clone()).await {
-                    log::error!("Failed to hide pill window: {}", e);
-                }
-                
-                // Transition back to Idle
-                update_recording_state(&app_for_hide, RecordingState::Idle, None);
-            });
-            
-            return Ok("".to_string()); // Don't proceed to transcription
-        }
-        Ok(AudioValidationResult::InvalidFormat(error)) => {
-            log::error!("Audio validation FAILED: Invalid format - {}", error);
-            
-            // Clean up audio file
-            if let Err(e) = std::fs::remove_file(&audio_path) {
-                log::warn!("Failed to remove invalid audio file: {}", e);
-            }
-            
-            // Emit error event
-            let _ = emit_to_window(
-                &app,
-                "main",
-                "no-speech-detected",
-                serde_json::json!({
-                    "title": "Audio Format Error", 
-                    "message": "There was a problem with the audio recording. Please try again.",
-                    "severity": "error",
-                    "actions": ["retry"]
-                }),
-            );
-            
-            // Hide pill window
-            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-                log::error!("Failed to hide pill window: {}", e);
-            }
-            
-            // Transition to error state
-            update_recording_state(&app, RecordingState::Error, Some(error));
-            
-            return Err("Audio format error".to_string());
-        }
-        Err(validation_error) => {
-            log::error!("Audio validation ERROR: {}", validation_error);
-            
-            // Don't clean up audio file - let transcription proceed in degraded mode
-            log::warn!("Proceeding with transcription despite validation error (degraded mode)");
-            
-            // Emit warning but don't stop transcription
-            let _ = emit_to_window(
-                &app,
-                "main",
-                "audio-validation-warning",
-                serde_json::json!({
-                    "title": "Audio Validation Warning",
-                    "message": "Unable to validate audio quality, but proceeding with transcription.",
-                    "severity": "info"
-                }),
-            );
-            
-            // Continue with transcription...
-        }
-    }
 
     // Get current model from settings
     let store = app.store("settings").map_err(|e| e.to_string())?;
@@ -997,6 +826,35 @@ pub async fn stop_recording(
 
                 log::debug!("Transcription successful, {} chars", text.len());
 
+                // Check if transcription is empty or just noise
+                if text.is_empty() || text.trim().is_empty() || text == "[BLANK_AUDIO]" {
+                    log::info!("Whisper returned empty transcription - no speech detected");
+
+                    // Emit graceful feedback to user
+                    let _ = emit_to_window(
+                        &app_for_task,
+                        "pill",
+                        "transcription-empty",
+                        "No speech detected - try speaking closer to the microphone"
+                    );
+
+                    // Wait for feedback to show before hiding pill
+                    let app_for_hide = app_for_task.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+
+                        // Hide pill window
+                        if let Err(e) = crate::commands::window::hide_pill_widget(app_for_hide.clone()).await {
+                            log::error!("Failed to hide pill window: {}", e);
+                        }
+
+                        // Transition back to Idle
+                        update_recording_state(&app_for_hide, RecordingState::Idle, None);
+                    });
+
+                    return;
+                }
+
                 // Check if AI enhancement is enabled BEFORE spawning task
                 let ai_enabled = match app_for_task.store("settings") {
                     Ok(store) => store
@@ -1180,6 +1038,31 @@ pub async fn stop_recording(
                         log::error!("Failed to hide pill window on cancellation: {}", hide_err);
                     }
                     update_recording_state(&app_for_task, RecordingState::Idle, None);
+                } else if e.contains("too short") {
+                    // Handle "too short" errors with specific user feedback
+                    log::info!("Recording was too short: {}", e);
+
+                    // Clean up the audio file
+                    if let Err(cleanup_err) = std::fs::remove_file(&audio_path_clone) {
+                        log::warn!("Failed to remove short audio file: {}", cleanup_err);
+                    }
+
+                    // Emit specific feedback to pill window
+                    let _ = emit_to_window(&app_for_task, "pill", "transcription-empty", &e);
+
+                    // Hide pill after showing feedback
+                    let app_for_reset = app_for_task.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+
+                        if let Err(e) =
+                            crate::commands::window::hide_pill_widget(app_for_reset.clone()).await
+                        {
+                            log::error!("Failed to hide pill window: {}", e);
+                        }
+
+                        update_recording_state(&app_for_reset, RecordingState::Idle, None);
+                    });
                 } else {
                     // For other errors, show error state briefly
                     update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
