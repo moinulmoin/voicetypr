@@ -16,7 +16,8 @@
       "WebSearch",
       "Bash(gh pr diff:*)",
       "Read(//Users/moinulmoin/Developer/oss/voicetypr-streaming/**)",
-      "mcp__sequential-thinking__sequentialthinking"
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(pnpm audit:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits"

@@ -312,12 +312,17 @@ impl Transcriber {
         }
 
         /* ----------------------------------------------
-        3) stereo → mono  (Whisper needs mono)
+        3) multi-channel → mono  (Whisper needs mono)
         ---------------------------------------------- */
         if spec.channels == 2 {
+            // Use the built-in stereo to mono conversion
             audio = convert_stereo_to_mono_audio(&audio).map_err(|e| e.to_string())?;
+        } else if spec.channels > 2 {
+            // Handle multi-channel audio (3, 4, 5.1, 7.1, etc.)
+            log::info!("[TRANSCRIPTION_DEBUG] Converting {}-channel audio to mono", spec.channels);
+            audio = convert_multichannel_to_mono(&audio, spec.channels as usize)?;
         } else if spec.channels != 1 {
-            return Err(format!("Unsupported channel count: {}", spec.channels));
+            return Err(format!("Invalid channel count: {}", spec.channels));
         }
 
         // Store original audio length before the move
@@ -557,5 +562,95 @@ impl Transcriber {
         }
 
         Ok(result)
+    }
+}
+
+/// Convert multi-channel audio to mono by averaging all channels
+///
+/// # Arguments
+/// * `audio` - Interleaved audio samples (ch1, ch2, ch3, ch4, ch1, ch2, ...)
+/// * `channels` - Number of channels in the audio
+///
+/// # Returns
+/// Mono audio with averaged samples from all channels
+fn convert_multichannel_to_mono(audio: &[f32], channels: usize) -> Result<Vec<f32>, String> {
+    if channels == 0 {
+        return Err("Channel count cannot be zero".to_string());
+    }
+
+    if channels == 1 {
+        // Already mono, just return a copy
+        return Ok(audio.to_vec());
+    }
+
+    let samples_per_channel = audio.len() / channels;
+    let mut mono_audio = Vec::with_capacity(samples_per_channel);
+
+    // Process each frame (set of samples across all channels)
+    for i in 0..samples_per_channel {
+        let mut sum = 0.0f32;
+
+        // Sum all channels for this sample position
+        for ch in 0..channels {
+            let idx = i * channels + ch;
+            if idx < audio.len() {
+                sum += audio[idx];
+            }
+        }
+
+        // Average the channels
+        mono_audio.push(sum / channels as f32);
+    }
+
+    log::info!(
+        "[AUDIO] Downmixed {}-channel audio to mono: {} samples -> {} samples",
+        channels,
+        audio.len(),
+        mono_audio.len()
+    );
+
+    Ok(mono_audio)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_convert_multichannel_to_mono() {
+        // Test 4-channel audio downmixing
+        // Simulating interleaved 4-channel audio: [ch1, ch2, ch3, ch4, ch1, ch2, ...]
+        let four_channel_audio = vec![
+            1.0, 2.0, 3.0, 4.0,  // Frame 1: channels 1-4
+            5.0, 6.0, 7.0, 8.0,  // Frame 2: channels 1-4
+            -1.0, -2.0, -3.0, -4.0,  // Frame 3: channels 1-4
+        ];
+
+        let result = convert_multichannel_to_mono(&four_channel_audio, 4).unwrap();
+
+        // Expected: average of each frame's channels
+        // Frame 1: (1+2+3+4)/4 = 2.5
+        // Frame 2: (5+6+7+8)/4 = 6.5
+        // Frame 3: (-1-2-3-4)/4 = -2.5
+        assert_eq!(result.len(), 3);
+        assert!((result[0] - 2.5).abs() < 0.001);
+        assert!((result[1] - 6.5).abs() < 0.001);
+        assert!((result[2] - (-2.5)).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_convert_stereo_passthrough() {
+        // Test that mono audio passes through unchanged
+        let mono_audio = vec![1.0, 2.0, 3.0, 4.0];
+        let result = convert_multichannel_to_mono(&mono_audio, 1).unwrap();
+        assert_eq!(result, mono_audio);
+    }
+
+    #[test]
+    fn test_convert_invalid_channels() {
+        // Test that zero channels returns an error
+        let audio = vec![1.0, 2.0];
+        let result = convert_multichannel_to_mono(&audio, 0);
+        assert!(result.is_err());
     }
 }

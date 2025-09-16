@@ -34,6 +34,22 @@ vi.mock('@/contexts/ReadinessContext', () => ({
   })
 }));
 
+// Mock ModelManagementContext that AppContainer actually uses
+vi.mock('@/contexts/ModelManagementContext', () => ({
+  useModelManagementContext: () => ({
+    models: {},
+    downloadProgress: {},
+    verifyingModels: new Set(),
+    downloadModel: vi.fn(),
+    retryDownload: vi.fn(),
+    cancelDownload: vi.fn(),
+    deleteModel: vi.fn(),
+    refreshModels: vi.fn(),
+    preloadModel: vi.fn(),
+    verifyModel: vi.fn()
+  })
+}));
+
 // Mock services
 vi.mock('@/services/updateService', () => ({
   updateService: {
