@@ -5,10 +5,29 @@ import { TranscriptionHistory } from "@/types";
 import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Clock, Download } from "lucide-react";
+import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Download } from "lucide-react";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+
+// Static mapping for model display names
+const MODEL_DISPLAY_NAMES: Record<string, string> = {
+  // Turbo models
+  'large-v3-turbo': 'Large v3 Turbo',
+  'large-v3-turbo-q8_0': 'Large v3 Turbo (Q8)',
+  // Large models
+  'large-v3': 'Large v3',
+  'large-v3-q5_0': 'Large v3 (Q5)',
+  // Small models
+  'small.en': 'Small (English)',
+  'small': 'Small',
+  // Base models
+  'base.en': 'Base (English)',
+  'base': 'Base',
+  // Tiny models
+  'tiny.en': 'Tiny (English)',
+  'tiny': 'Tiny',
+};
 
 interface RecentRecordingsProps {
   history: TranscriptionHistory[];
@@ -194,7 +213,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
 
       {/* Search Bar */}
       {history.length > 0 && (
-        <div className="px-6 py-3 border-b border-border/20">
+        <div className="px-6 py-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <input
@@ -251,21 +270,13 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                             <p className="text-sm text-foreground leading-relaxed">
                               {item.text}
                             </p>
-                            <div className="flex items-center gap-4 mt-2">
-                              <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                                <Clock className="h-3 w-3" />
-                                {new Date(item.timestamp).toLocaleTimeString('en-US', { 
-                                  hour: 'numeric', 
-                                  minute: '2-digit',
-                                  hour12: true 
-                                })}
-                              </span>
-                              {item.model && (
+                            {item.model && (
+                              <div className="mt-2">
                                 <span className="text-xs text-muted-foreground">
-                                  {item.model}
+                                  {MODEL_DISPLAY_NAMES[item.model] || item.model}
                                 </span>
-                              )}
-                            </div>
+                              </div>
+                            )}
                           </div>
                           <div className={cn(
                             "flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity",
