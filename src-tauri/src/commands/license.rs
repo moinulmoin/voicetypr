@@ -17,9 +17,9 @@ struct CachedLicenseStatus {
 }
 
 // Constants for cache and grace periods
-const OFFLINE_GRACE_PERIOD_DAYS: i64 = 90; // 90 days offline grace for licensed users - supports extended offline use
 const LICENSE_CACHE_KEY: &str = "license_status";
 const LAST_VALIDATION_KEY: &str = "last_license_validation";
+const TRIAL_EXPIRES_KEY: &str = "trial_expires_at"; // Cache key for trial expiry date
 
 // Global deduplication map for license status checks
 static LICENSE_CHECK_DEDUP: OnceCell<
@@ -132,7 +132,9 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                     // For trials, adjust days left based on elapsed time
                     if matches!(status.status, LicenseState::Trial) {
                         if let Some(original_days) = status.trial_days_left {
-                            let elapsed_days = elapsed.num_days() as i32;
+                            // Use ceiling for consistent day calculation (matches offline validation)
+                            let hours_elapsed = elapsed.num_hours();
+                            let elapsed_days = ((hours_elapsed as f64 / 24.0).ceil() as i32);
                             let current_days = (original_days - elapsed_days).max(0);
 
                             log::info!("Trial days adjustment: {} days cached - {} days elapsed = {} days left",
@@ -257,56 +259,36 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
             Err(e) => {
                 log::error!("Failed to validate license: {}", e);
 
-                // Check for offline grace period
-                if let Ok(Some(last_validation_json)) = cache.get(LAST_VALIDATION_KEY) {
-                    if let Ok(last_validation) =
-                        serde_json::from_value::<DateTime<Utc>>(last_validation_json)
-                    {
-                        let elapsed = Utc::now().signed_duration_since(last_validation);
-                        let grace_period = Duration::days(OFFLINE_GRACE_PERIOD_DAYS);
+                // API is down but we have a stored license key - grant access
+                // Lifetime licenses should always work offline
+                log::info!("API unavailable but stored license key exists - granting licensed access");
 
-                        if elapsed < grace_period {
-                            log::info!("License validation failed but within {} day grace period (last validated {} ago)",
-                                OFFLINE_GRACE_PERIOD_DAYS, format_duration(&elapsed));
+                let status = LicenseStatus {
+                    status: LicenseState::Licensed,
+                    trial_days_left: None,
+                    license_type: Some("pro".to_string()),
+                    license_key: Some(license_key),
+                    expires_at: None,
+                };
 
-                            let status = LicenseStatus {
-                                status: LicenseState::Licensed,
-                                trial_days_left: None,
-                                license_type: Some("pro".to_string()),
-                                license_key: Some(license_key),
-                                expires_at: None,
-                            };
+                // Cache the status for 4 hours to reduce validation attempts
+                let wrapped_status = CachedLicenseStatus {
+                    status: status.clone(),
+                    cached_at: Utc::now(),
+                };
 
-                            // Cache with shorter TTL during offline grace
-                            let wrapped_status = CachedLicenseStatus {
-                                status: status.clone(),
-                                cached_at: Utc::now(),
-                            };
+                let cache_options = Some(SetItemOptions {
+                    ttl: Some(24 * 60 * 60), // 24 hours cache to reduce validation attempts
+                    compress: None,
+                    compression_method: None,
+                });
+                let _ = cache.set(
+                    LICENSE_CACHE_KEY.to_string(),
+                    serde_json::to_value(&wrapped_status).unwrap_or_default(),
+                    cache_options,
+                );
 
-                            let cache_options = Some(SetItemOptions {
-                                ttl: Some(4 * 60 * 60), // 4 hours during grace period
-                                compress: None,
-                                compression_method: None,
-                            });
-                            let _ = cache.set(
-                                LICENSE_CACHE_KEY.to_string(),
-                                serde_json::to_value(&wrapped_status).unwrap_or_default(),
-                                cache_options,
-                            );
-
-                            return Ok(status);
-                        } else {
-                            log::warn!(
-                                "License validation failed and grace period expired ({} > {} days)",
-                                elapsed.num_days(),
-                                OFFLINE_GRACE_PERIOD_DAYS
-                            );
-                        }
-                    }
-                }
-
-                // Grace period expired or no last validation found
-                // Fall through to trial check
+                return Ok(status);
             }
         }
     }
@@ -343,6 +325,28 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                     expires_at: None,
                 };
 
+                // Cache the trial expiry date from server for offline validation
+                if let Some(expires_at) = &response.data.expires_at {
+                    log::info!("Caching trial expiry date from server: {}", expires_at);
+                    let cache_options = Some(SetItemOptions {
+                        ttl: Some(24 * 60 * 60), // 24 hours TTL for trial cache
+                        compress: None,
+                        compression_method: None,
+                    });
+                    match cache.set(
+                        TRIAL_EXPIRES_KEY.to_string(),
+                        serde_json::to_value(expires_at).unwrap_or_default(),
+                        cache_options,
+                    ) {
+                        Ok(_) => log::info!("Cached trial expiry date for offline validation"),
+                        Err(e) => log::error!("Failed to cache trial expiry date: {}", e),
+                    }
+                } else {
+                    // No expires_at means something is wrong with device/trial creation
+                    // Don't provide offline support - force online validation
+                    log::error!("API returned trial without expires_at - this indicates a server issue. No offline support.");
+                }
+
                 // Only cache trial status if more than 1 day remaining
                 // This prevents caching a trial that's about to expire
                 if trial_days_left > 1 {
@@ -352,7 +356,7 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                     };
 
                     let cache_options = Some(SetItemOptions {
-                        ttl: Some(6 * 60 * 60), // 6 hours in seconds
+                        ttl: Some(24 * 60 * 60), // 24 hours in seconds
                         compress: None,
                         compression_method: None,
                     });
@@ -362,7 +366,7 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                         cache_options,
                     ) {
                         Ok(_) => log::info!(
-                            "Cached trial status for 6 hours with metadata - {} days remaining",
+                            "Cached trial status for 24 hours with metadata - {} days remaining",
                             trial_days_left
                         ),
                         Err(e) => log::error!("Failed to cache trial status: {}", e),
@@ -379,7 +383,72 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
         }
         Err(e) => {
             log::error!("Failed to check trial status: {}", e);
-            // Assume no license/trial if we can't check
+
+            // Check for cached trial expiry date for offline validation
+            if let Ok(Some(expires_json)) = cache.get(TRIAL_EXPIRES_KEY) {
+                if let Ok(expires_at_str) = serde_json::from_value::<String>(expires_json) {
+                    // Parse the ISO8601 date string
+                    if let Ok(expires_at) = DateTime::parse_from_rfc3339(&expires_at_str) {
+                        let expires_utc = expires_at.with_timezone(&Utc);
+                        let now = Utc::now();
+
+                        if now < expires_utc {
+                            // Trial is still valid based on cached expiry
+                            // Use ceiling division to show 1 day even if only hours remain
+                            let hours_left = (expires_utc - now).num_hours();
+                            let days_left = ((hours_left as f64 / 24.0).ceil() as i32).max(0);
+                            log::info!("Offline trial validation: {} days left (cached expiry: {})",
+                                     days_left, expires_at_str);
+
+                            let status = LicenseStatus {
+                                status: if days_left > 0 { LicenseState::Trial } else { LicenseState::Expired },
+                                trial_days_left: Some(days_left.max(0)),
+                                license_type: None,
+                                license_key: None,
+                                expires_at: None,
+                            };
+
+                            // Don't re-cache during offline validation
+                            return Ok(status);
+                        } else {
+                            log::info!("Cached trial has expired (was valid until {})", expires_at_str);
+                            // Trial has expired - clear the cache
+                            let _ = cache.remove(TRIAL_EXPIRES_KEY);
+                        }
+                    } else {
+                        log::warn!("Failed to parse cached trial expiry date: {}", expires_at_str);
+                    }
+                }
+            }
+
+            // Check if we have a cached license status to fall back on
+            if let Ok(Some(cached_json)) = cache.get(LICENSE_CACHE_KEY) {
+                if let Ok(cached) = serde_json::from_value::<CachedLicenseStatus>(cached_json) {
+                    let age = Utc::now().signed_duration_since(cached.cached_at);
+
+                    // Use cached status if it's less than 24 hours old
+                    if age < Duration::hours(24) {
+                        log::info!("API unavailable, using cached license status from {} ago",
+                                 format_duration(&age));
+
+                        // For trial users, adjust days remaining based on cache age
+                        let mut status = cached.status.clone();
+                        if status.status == LicenseState::Trial {
+                            if let Some(days) = status.trial_days_left {
+                                // Use ceiling for consistent day calculation
+                                let hours_elapsed = age.num_hours();
+                                let days_elapsed = ((hours_elapsed as f64 / 24.0).ceil() as i32);
+                                status.trial_days_left = Some((days - days_elapsed).max(0));
+                            }
+                        }
+
+                        return Ok(status);
+                    }
+                }
+            }
+
+            // No cached trial data - return no license status
+            log::info!("No cached trial data - returning no license status");
             let status = LicenseStatus {
                 status: LicenseState::None,
                 trial_days_left: None,
@@ -389,7 +458,6 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
             };
 
             // Don't cache None status - always check
-            log::info!("Not caching None status - will check on every call");
             Ok(status)
         }
     }
@@ -470,6 +538,11 @@ pub async fn activate_license(
         return Err("Invalid license key format".to_string());
     }
 
+    // Check for VoiceTypr license format: must start with VT and contain hyphens
+    if !trimmed_key.starts_with("VT") || !trimmed_key.contains('-') {
+        return Err("Invalid license key format".to_string());
+    }
+
     // Check for valid characters (alphanumeric, hyphens, underscores)
     if !trimmed_key
         .chars()
@@ -500,9 +573,10 @@ async fn activate_license_internal(
 ) -> Result<LicenseStatus, String> {
     let device_hash = device::get_device_hash()?;
     let api_client = LicenseApiClient::new()?;
+    let app_version = app.package_info().version.to_string();
 
     match api_client
-        .activate_license(&license_key, &device_hash)
+        .activate_license(&license_key, &device_hash, Some(&app_version))
         .await
     {
         Ok(response) => {
@@ -682,6 +756,8 @@ async fn invalidate_license_cache(app: &AppHandle) {
     }
     // Also remove last validation timestamp when invalidating
     let _ = cache.remove(LAST_VALIDATION_KEY);
+    // Clear trial cache as well when license state changes
+    let _ = cache.remove(TRIAL_EXPIRES_KEY);
 }
 
 pub async fn check_license_status_internal(app: &AppHandle) -> Result<LicenseStatus, String> {

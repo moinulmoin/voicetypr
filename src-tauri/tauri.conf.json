@@ -28,9 +28,9 @@
         "default-src": "'self' customprotocol: asset:",
         "script-src": "'self'",
         "style-src": "'self' 'unsafe-inline'",
-        "img-src": "'self' asset: https: http: data:",
+        "img-src": "'self' asset: data:",
         "font-src": "'self'",
-        "connect-src": "'self' ipc: https: http: asset:",
+        "connect-src": "'self' ipc: https://voicetypr.com https://api.voicetypr.com https://github.com asset:",
         "media-src": "'self'"
       }
     }

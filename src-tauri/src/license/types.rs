@@ -29,6 +29,7 @@ pub struct TrialCheckResponse {
 pub struct TrialData {
     pub is_expired: bool,
     pub days_left: Option<i32>,
+    pub expires_at: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

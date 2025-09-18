@@ -1,12 +1,18 @@
-import { ShareStatsModal } from "@/components/ShareStatsModal";
 import { Button } from "@/components/ui/button";
 import { useCanAutoInsert, useCanRecord } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { cn } from "@/lib/utils";
 import { TranscriptionHistory } from "@/types";
-import { BarChart3, Clock, FileText, Flame, Share2, TrendingUp, Zap, Info } from "lucide-react";
-import { useMemo, useState } from "react";
+import { BarChart3, Clock, FileText, Flame, Share2, TrendingUp, Zap, Info, Loader2 } from "lucide-react";
+import { lazy, Suspense, useMemo, useState } from "react";
+
+// Lazy load ShareStatsModal for better performance
+const ShareStatsModal = lazy(() =>
+  import("@/components/ShareStatsModal").then(module => ({
+    default: module.ShareStatsModal
+  }))
+);
 
 interface OverviewTabProps {
   history: TranscriptionHistory[];
@@ -270,21 +276,32 @@ export function OverviewTab({ history }: OverviewTabProps) {
         </div>
       </div>
 
-      {/* Share Stats Modal */}
-      <ShareStatsModal
-        open={shareModalOpen}
-        onOpenChange={setShareModalOpen}
-        stats={{
-          totalTranscriptions: stats.totalTranscriptions,
-          todayCount: stats.todayCount,
-          totalWords: stats.totalWords,
-          avgLength: stats.avgLength,
-          timeSavedDisplay: stats.timeSavedDisplay,
-          productivityScore: stats.productivityScore,
-          currentStreak: stats.currentStreak,
-          longestStreak: stats.longestStreak
-        }}
-      />
+      {/* Share Stats Modal - Lazy loaded with Suspense */}
+      <Suspense
+        fallback={
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="flex items-center gap-2 rounded-lg bg-background p-4">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              <span>Loading share modal...</span>
+            </div>
+          </div>
+        }
+      >
+        <ShareStatsModal
+          open={shareModalOpen}
+          onOpenChange={setShareModalOpen}
+          stats={{
+            totalTranscriptions: stats.totalTranscriptions,
+            todayCount: stats.todayCount,
+            totalWords: stats.totalWords,
+            avgLength: stats.avgLength,
+            timeSavedDisplay: stats.timeSavedDisplay,
+            productivityScore: stats.productivityScore,
+            currentStreak: stats.currentStreak,
+            longestStreak: stats.longestStreak
+          }}
+        />
+      </Suspense>
     </div>
   );
 }

@@ -20,7 +20,10 @@
       "Bash(pnpm audit:*)"
     ],
     "deny": [],
-    "defaultMode": "acceptEdits"
+    "defaultMode": "acceptEdits",
+    "additionalDirectories": [
+      "/Users/moinulmoin/Developer/oss/voicetypr-web"
+    ]
   },
   "hooks": {
     "PreToolUse": [
