@@ -1285,7 +1285,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             delete_transcription_entry,
             clear_all_transcriptions,
             export_transcriptions,
-            read_audio_file,
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,

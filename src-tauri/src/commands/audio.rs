@@ -1280,6 +1280,8 @@ pub async fn transcribe_audio_file(
     if is_converted {
         if let Err(e) = std::fs::remove_file(&wav_path) {
             log::warn!("Failed to remove temporary WAV file: {}", e);
+        } else {
+            log::debug!("Cleaned up temporary converted WAV file");
         }
     }
 
@@ -1479,11 +1481,6 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub async fn read_audio_file(file_path: String) -> Result<Vec<u8>, String> {
-    std::fs::read(&file_path)
-        .map_err(|e| format!("Failed to read audio file: {}", e))
-}
 
 #[tauri::command]
 pub async fn delete_transcription_entry(app: AppHandle, timestamp: String) -> Result<(), String> {
