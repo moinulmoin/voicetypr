@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import {
   Clock,
   Cpu,
+  FileAudio,
   HelpCircle,
   Home,
   Info,
@@ -31,6 +32,7 @@ interface SidebarProps {
 const mainSections = [
   { id: "overview", label: "Overview", icon: Home },
   { id: "recordings", label: "History", icon: Clock },
+  { id: "audio", label: "Upload", icon: FileAudio },
   { id: "general", label: "Settings", icon: Settings2 },
   { id: "models", label: "Models", icon: Cpu },
   { id: "formatting", label: "Formatting", icon: Sparkles },

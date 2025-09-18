@@ -29,6 +29,9 @@ mod test_data_helpers;
 mod logging_performance_tests;
 
 #[cfg(test)]
+mod audio_file_transcription;
+
+#[cfg(test)]
 mod integration_tests {
     use crate::whisper::manager::{ModelSize, WhisperManager};
     use tempfile::TempDir;

@@ -267,7 +267,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                       >
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm text-foreground leading-relaxed">
+                            <p className="text-sm text-foreground leading-relaxed line-clamp-5">
                               {item.text}
                             </p>
                             {item.model && (

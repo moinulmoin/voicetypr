@@ -8,6 +8,7 @@ import { ModelsTab } from "./ModelsTab";
 import { OverviewTab } from "./OverviewTab";
 import { RecordingsTab } from "./RecordingsTab";
 import { SettingsTab } from "./SettingsTab";
+import { AudioUploadSection } from "../sections/AudioUploadSection";
 import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { TranscriptionHistory } from "@/types";
@@ -68,9 +69,12 @@ export function TabContainer({ activeSection }: TabContainerProps) {
     switch (activeSection) {
       case "overview":
         return <OverviewTab history={history} />;
-        
+
       case "recordings":
         return <RecordingsTab />;
+
+      case "audio":
+        return <AudioUploadSection />;
 
       case "general":
         return <SettingsTab />;
@@ -86,10 +90,10 @@ export function TabContainer({ activeSection }: TabContainerProps) {
 
       case "license":
         return <AccountTab />;
-        
+
       case "help":
         return <HelpTab />;
-        
+
       case "about":
         return <AboutTab />;
 

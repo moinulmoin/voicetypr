@@ -375,7 +375,7 @@ Actual behavior:
           <div className="flex flex-col gap-3 mt-4">
             <Button
               onClick={handleOpenInGmail}
-              className="w-full justify-start gap-3"
+              className="w-full justify-start gap-3 h-auto py-4"
               variant="outline"
             >
               <Globe className="h-4 w-4" />
@@ -388,7 +388,7 @@ Actual behavior:
             </Button>
             <Button
               onClick={handleOpenInDefaultClient}
-              className="w-full justify-start gap-3"
+              className="w-full justify-start gap-3 h-auto py-4"
               variant="outline"
             >
               <Monitor className="h-4 w-4" />

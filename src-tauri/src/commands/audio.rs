@@ -1203,6 +1203,90 @@ pub async fn get_transcription_history(
 }
 
 #[tauri::command]
+pub async fn transcribe_audio_file(
+    app: AppHandle,
+    file_path: String,
+    model_name: String,
+) -> Result<String, String> {
+    // Validate requirements (includes license check)
+    validate_recording_requirements(&app).await?;
+
+    // Use the provided file path directly
+    let audio_path = std::path::Path::new(&file_path);
+
+    // Validate file exists
+    if !audio_path.exists() {
+        return Err(format!("Audio file not found: {}", file_path));
+    }
+
+    // Convert to WAV if needed
+    let recordings_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recordings");
+
+    std::fs::create_dir_all(&recordings_dir)
+        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+
+    let wav_path = crate::audio::converter::convert_to_wav(audio_path, &recordings_dir)?;
+    let is_converted = wav_path != audio_path;
+
+    // Get model path
+    let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
+    let model_path = whisper_manager
+        .read()
+        .await
+        .get_model_path(&model_name)
+        .ok_or("Model not found")?;
+
+    // Get language and translation settings
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    let language = {
+        let lang = store
+            .get("language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "en".to_string());
+
+        // Validate using centralized function
+        validate_language(Some(&lang))
+    };
+
+    let translate_to_english = store
+        .get("translate_to_english")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    log::info!(
+        "[LANGUAGE] transcribe_audio_file using language: {}, translate: {}",
+        language,
+        translate_to_english
+    );
+
+    // Transcribe from the (possibly converted) WAV file
+    let transcriber = {
+        let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
+        let mut cache = cache_state.lock().await;
+        cache.get_or_create(&model_path)?
+    };
+
+    let text = transcriber.transcribe_with_translation(
+        &wav_path,
+        Some(&language),
+        translate_to_english,
+    )?;
+
+    // Clean up temporary WAV file if we created one
+    if is_converted {
+        if let Err(e) = std::fs::remove_file(&wav_path) {
+            log::warn!("Failed to remove temporary WAV file: {}", e);
+        }
+    }
+
+    Ok(text)
+}
+
+#[tauri::command]
 pub async fn transcribe_audio(
     app: AppHandle,
     audio_data: Vec<u8>,
@@ -1393,6 +1477,12 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
 
     log::info!("=== CANCEL RECORDING COMPLETED ===");
     Ok(())
+}
+
+#[tauri::command]
+pub async fn read_audio_file(file_path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(&file_path)
+        .map_err(|e| format!("Failed to read audio file: {}", e))
 }
 
 #[tauri::command]
