@@ -12,6 +12,7 @@ export function formatHotkey(hotkey: string): React.ReactNode {
   // Normalize the hotkey string based on platform
   const normalized = hotkey.toLowerCase()
     .replace('commandorcontrol', isMacOS ? 'cmd' : 'ctrl')
+    .replace('super', isMacOS ? 'cmd' : 'win')  // Super is Command on Mac
     .replace('command', 'cmd')
     .replace('control', 'ctrl')
     .replace('option', 'alt')
@@ -28,7 +29,9 @@ export function formatHotkey(hotkey: string): React.ReactNode {
   // Map common key names to display names
   const keyDisplayMap: Record<string, string> = {
     'cmd': isMacOS ? '⌘' : 'Ctrl',
-    'ctrl': 'Ctrl',
+    'ctrl': isMacOS ? '⌃' : 'Ctrl',  // Use proper Control symbol on Mac
+    'super': isMacOS ? '⌘' : 'Win',  // Super is Command on Mac
+    'win': 'Win',
     'commandorcontrol': isMacOS ? '⌘' : 'Ctrl',
     'command': isMacOS ? '⌘' : 'Ctrl',
     'shift': isMacOS ? '⇧' : 'Shift',

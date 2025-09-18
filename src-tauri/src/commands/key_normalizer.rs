@@ -17,9 +17,10 @@ fn normalize_single_key(key: &str) -> &str {
     match key.to_lowercase().as_str() {
         "cmd" => return "CommandOrControl",
         "ctrl" => return "CommandOrControl",
-        "control" => return "CommandOrControl",
+        "control" => return "Control",  // Keep Control separate for macOS Cmd+Ctrl support
         "command" => return "CommandOrControl",
         "meta" => return "CommandOrControl",
+        "super" => return "Super",  // Super is Command on macOS
         "option" => return "Alt",
         "alt" => return "Alt",
         "shift" => return "Shift",
@@ -69,8 +70,9 @@ fn normalize_single_key(key: &str) -> &str {
             "CommandOrControl" => "CommandOrControl", // Keep as-is for Tauri
             "Cmd" => "CommandOrControl",
             "Ctrl" => "CommandOrControl",
-            "Control" => "CommandOrControl",
+            "Control" => "Control",  // Keep Control separate
             "Command" => "CommandOrControl",
+            "Super" => "Super",  // Super is Command on macOS
             "Option" => "Alt",
             "Meta" => "CommandOrControl",
             _ => key,
@@ -129,6 +131,7 @@ pub fn validate_key_combination_with_rules(
         matches!(
             key,
             "CommandOrControl"
+                | "Super"
                 | "Shift"
                 | "Alt"
                 | "Control"
@@ -231,7 +234,7 @@ mod tests {
         // Test modifier keys stay as-is (no special single key handling anymore)
         assert_eq!(normalize_shortcut_keys("Alt"), "Alt");
         assert_eq!(normalize_shortcut_keys("Shift"), "Shift");
-        assert_eq!(normalize_shortcut_keys("Control"), "CommandOrControl");
+        assert_eq!(normalize_shortcut_keys("Control"), "Control");
         assert_eq!(normalize_shortcut_keys("Ctrl"), "CommandOrControl");
         assert_eq!(normalize_shortcut_keys("Command"), "CommandOrControl");
         assert_eq!(normalize_shortcut_keys("Cmd"), "CommandOrControl");
@@ -239,6 +242,12 @@ mod tests {
         // In combinations, they get normalized too
         assert_eq!(normalize_shortcut_keys("Alt+A"), "Alt+A");
         assert_eq!(normalize_shortcut_keys("Shift+Space"), "Shift+Space");
+
+        // Test Super modifier (Command on macOS)
+        assert_eq!(normalize_shortcut_keys("Super+A"), "Super+A");
+        assert_eq!(normalize_shortcut_keys("Super+Control+A"), "Super+Control+A");
+        assert_eq!(normalize_shortcut_keys("Super+Control+Alt+A"), "Super+Control+Alt+A");
+        assert_eq!(normalize_shortcut_keys("Super+Control+Alt+Shift+A"), "Super+Control+Alt+Shift+A");
     }
 
     #[test]
@@ -291,6 +300,14 @@ mod tests {
         // Test international keys
         assert!(validate_key_combination("CommandOrControl+ü").is_ok());
         assert!(validate_key_combination("Alt+ñ").is_ok());
+
+        // Test Super modifier combinations (Command on macOS)
+        assert!(validate_key_combination("Super+A").is_ok());
+        assert!(validate_key_combination("Super+Control+A").is_ok());
+        assert!(validate_key_combination("Super+Control+Alt+A").is_ok());
+        assert!(validate_key_combination("Super+Control+Alt+Shift+A").is_ok());
+        assert!(validate_key_combination("Control+Alt+A").is_ok());
+        assert!(validate_key_combination("Control+Shift+A").is_ok());
     }
 
     #[test]

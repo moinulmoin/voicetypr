@@ -49,8 +49,15 @@ export const HotkeyInput = React.memo(function HotkeyInput({
 
       const newKeys = new Set(keys);
 
-      // Add modifier keys
-      if (e.metaKey || e.ctrlKey) newKeys.add("CommandOrControl");
+      // Add modifier keys - handle macOS separately to support Cmd+Ctrl combinations
+      if (isMacOS) {
+        // On macOS, handle Command and Control as separate modifiers
+        if (e.metaKey) newKeys.add("Super"); // Command key
+        if (e.ctrlKey) newKeys.add("Control"); // Control key
+      } else {
+        // On Windows/Linux, use CommandOrControl for compatibility
+        if (e.ctrlKey) newKeys.add("CommandOrControl");
+      }
       if (e.shiftKey) newKeys.add("Shift");
       if (e.altKey) newKeys.add("Alt");
 
@@ -91,22 +98,26 @@ export const HotkeyInput = React.memo(function HotkeyInput({
       const regularKeys: string[] = [];
 
       newKeys.forEach((k) => {
-        if (["CommandOrControl", "Shift", "Alt"].includes(k)) {
+        if (["CommandOrControl", "Super", "Control", "Shift", "Alt"].includes(k)) {
           modifiers.push(k);
         } else {
           regularKeys.push(k);
         }
       });
 
-      const orderedModifiers = ["CommandOrControl", "Alt", "Shift"].filter((mod) =>
+      const orderedModifiers = ["Super", "CommandOrControl", "Control", "Alt", "Shift"].filter((mod) =>
         modifiers.includes(mod)
       );
       const shortcut = [...orderedModifiers, ...regularKeys].join("+");
       if (shortcut) {
         // Update current keys display
         const displayKeys = [];
+        if (modifiers.includes("Super"))
+          displayKeys.push(formatKeyForDisplay("Super", isMacOS));
         if (modifiers.includes("CommandOrControl"))
           displayKeys.push(formatKeyForDisplay("CommandOrControl", isMacOS));
+        if (modifiers.includes("Control"))
+          displayKeys.push(formatKeyForDisplay("Control", isMacOS));
         if (modifiers.includes("Alt")) displayKeys.push(formatKeyForDisplay("Alt", isMacOS));
         if (modifiers.includes("Shift")) displayKeys.push(formatKeyForDisplay("Shift", isMacOS));
         displayKeys.push(...regularKeys.map(k => formatKeyForDisplay(k, isMacOS)));
@@ -134,15 +145,15 @@ export const HotkeyInput = React.memo(function HotkeyInput({
         const regularKeys: string[] = [];
 
         keys.forEach((key) => {
-          if (["CommandOrControl", "Shift", "Alt"].includes(key)) {
+          if (["CommandOrControl", "Super", "Control", "Shift", "Alt"].includes(key)) {
             modifiers.push(key);
           } else {
             regularKeys.push(key);
           }
         });
 
-        // Standard order: CommandOrControl+Alt+Shift+Key
-        const orderedModifiers = ["CommandOrControl", "Alt", "Shift"].filter((mod) =>
+        // Standard order: Super+Control+Alt+Shift+Key (macOS) or CommandOrControl+Alt+Shift+Key (Windows/Linux)
+        const orderedModifiers = ["Super", "CommandOrControl", "Control", "Alt", "Shift"].filter((mod) =>
           modifiers.includes(mod)
         );
         const shortcut = [...orderedModifiers, ...regularKeys].join("+");
