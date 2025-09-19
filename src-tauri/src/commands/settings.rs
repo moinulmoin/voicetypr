@@ -232,12 +232,40 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
 
     // Register new shortcut immediately
     log::debug!("Registering new shortcut: {}", normalized_shortcut);
-    if let Err(e) = shortcuts.register(new_shortcut.clone()) {
-        log::error!("Failed to register new shortcut '{}': {}", normalized_shortcut, e);
-        return Err("Failed to register hotkey. It may already be in use by another application.".to_string());
+
+    // Attempt registration - according to docs, ANY error means hotkey won't work
+    let registration_result = shortcuts.register(new_shortcut.clone());
+
+    match registration_result {
+        Ok(_) => {
+            log::info!("Successfully registered hotkey: {}", normalized_shortcut);
+            // Hotkey registered successfully, no conflicts
+        }
+        Err(e) => {
+            let error_msg = e.to_string();
+            let error_lower = error_msg.to_lowercase();
+
+            // According to tauri-plugin-global-shortcut docs:
+            // If register() returns an error, the shortcut is NOT functional
+            // Registration is atomic - it either succeeds completely or fails
+            log::error!("Failed to register hotkey '{}': {}", normalized_shortcut, e);
+
+            // Provide helpful error message based on error type
+            let detailed_error = if error_lower.contains("already registered") ||
+                                   error_lower.contains("conflict") ||
+                                   error_lower.contains("in use") {
+                format!("Hotkey is already in use by another application. Please choose a different combination.")
+            } else if error_lower.contains("parse") || error_lower.contains("invalid") {
+                format!("Invalid hotkey combination. Please use a valid key combination.")
+            } else {
+                format!("Failed to register hotkey: {}", e)
+            };
+
+            return Err(detailed_error);
+        }
     }
 
-    // Update the recording shortcut in managed state
+    // Update the recording shortcut in managed state regardless of registration warnings
     match app_state.recording_shortcut.lock() {
         Ok(mut shortcut_guard) => {
             *shortcut_guard = Some(new_shortcut);
@@ -245,9 +273,8 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
         }
         Err(e) => {
             log::error!("Failed to acquire recording shortcut lock: {}", e);
-            // Even if we can't update the managed state, the shortcut was registered
-            // so we should still save it and return success
-            log::warn!("Continuing despite lock failure - shortcut is registered");
+            // Continue anyway since the hotkey might be registered
+            log::warn!("Continuing despite lock failure");
         }
     }
 
@@ -265,7 +292,7 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
     }
 
     log::info!("Successfully updated global shortcut to: {}", shortcut);
-    
+
     Ok(())
 }
 

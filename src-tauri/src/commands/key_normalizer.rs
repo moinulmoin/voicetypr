@@ -12,70 +12,156 @@ pub fn normalize_shortcut_keys(shortcut: &str) -> String {
 }
 
 /// Normalize a single key string
-fn normalize_single_key(key: &str) -> &str {
+fn normalize_single_key(key: &str) -> String {
     // First check case-insensitive matches for common modifiers
     match key.to_lowercase().as_str() {
-        "cmd" => return "CommandOrControl",
-        "ctrl" => return "CommandOrControl",
-        "control" => return "Control",  // Keep Control separate for macOS Cmd+Ctrl support
-        "command" => return "CommandOrControl",
-        "meta" => return "CommandOrControl",
-        "super" => return "Super",  // Super is Command on macOS
-        "option" => return "Alt",
-        "alt" => return "Alt",
-        "shift" => return "Shift",
-        "space" => return "Space",
+        "cmd" => return "CommandOrControl".to_string(),
+        "ctrl" => return "CommandOrControl".to_string(),
+        "control" => return "Control".to_string(),  // Keep Control separate for macOS Cmd+Ctrl support
+        "command" => return "CommandOrControl".to_string(),
+        "meta" => return "CommandOrControl".to_string(),
+        "super" => return "CommandOrControl".to_string(),  // Super maps to CommandOrControl for Tauri
+        "option" => return "Alt".to_string(),
+        "alt" => return "Alt".to_string(),
+        "shift" => return "Shift".to_string(),
+        "space" => return "Space".to_string(),
+        _ => {}
+    }
+
+    // Handle shifted characters - convert them back to their base keys
+    // This is needed because frontend might capture shifted characters
+    // Complete mapping for US/UK keyboard shifted characters
+    match key {
+        // Shifted punctuation
+        "<" => return "Comma".to_string(),
+        ">" => return "Period".to_string(),
+        "?" => return "Slash".to_string(),
+        ":" => return "Semicolon".to_string(),
+        "\"" => return "Quote".to_string(),
+        "{" => return "BracketLeft".to_string(),
+        "}" => return "BracketRight".to_string(),
+        "|" => return "Backslash".to_string(),
+        "+" => return "Equal".to_string(),
+        "_" => return "Minus".to_string(),
+        "~" => return "Backquote".to_string(),
+
+        // Shifted numbers (top row)
+        "!" => return "Digit1".to_string(),
+        "@" => return "Digit2".to_string(),
+        "#" => return "Digit3".to_string(),
+        "$" => return "Digit4".to_string(),
+        "%" => return "Digit5".to_string(),
+        "^" => return "Digit6".to_string(),
+        "&" => return "Digit7".to_string(),
+        "*" => return "Digit8".to_string(),
+        "(" => return "Digit9".to_string(),
+        ")" => return "Digit0".to_string(),
+
+        // Common punctuation (unshifted) - normalize these too
+        "," => return "Comma".to_string(),
+        "." => return "Period".to_string(),
+        "/" => return "Slash".to_string(),
+        ";" => return "Semicolon".to_string(),
+        "'" => return "Quote".to_string(),
+        "[" => return "BracketLeft".to_string(),
+        "]" => return "BracketRight".to_string(),
+        "\\" => return "Backslash".to_string(),
+        "=" => return "Equal".to_string(),
+        "-" => return "Minus".to_string(),
+        "`" => return "Backquote".to_string(),
+
         _ => {}
     }
 
     // First, try to parse as keyboard_types::Key for semantic normalization
     if let Ok(parsed_key) = Key::from_str(key) {
         match parsed_key {
-            Key::Enter => "Enter",
-            Key::Tab => "Tab",
-            Key::Backspace => "Backspace",
-            Key::Escape => "Escape",
-            Key::Character(s) if s == " " => "Space",
-            Key::ArrowDown => "Down",
-            Key::ArrowLeft => "Left",
-            Key::ArrowRight => "Right",
-            Key::ArrowUp => "Up",
-            Key::End => "End",
-            Key::Home => "Home",
-            Key::PageDown => "PageDown",
-            Key::PageUp => "PageUp",
-            Key::Delete => "Delete",
-            Key::F1 => "F1",
-            Key::F2 => "F2",
-            Key::F3 => "F3",
-            Key::F4 => "F4",
-            Key::F5 => "F5",
-            Key::F6 => "F6",
-            Key::F7 => "F7",
-            Key::F8 => "F8",
-            Key::F9 => "F9",
-            Key::F10 => "F10",
-            Key::F11 => "F11",
-            Key::F12 => "F12",
-            _ => key, // Return original if no normalization needed
+            Key::Enter => "Enter".to_string(),
+            Key::Tab => "Tab".to_string(),
+            Key::Backspace => "Backspace".to_string(),
+            Key::Escape => "Escape".to_string(),
+            Key::Character(s) if s == " " => "Space".to_string(),
+            Key::ArrowDown => "Down".to_string(),
+            Key::ArrowLeft => "Left".to_string(),
+            Key::ArrowRight => "Right".to_string(),
+            Key::ArrowUp => "Up".to_string(),
+            Key::End => "End".to_string(),
+            Key::Home => "Home".to_string(),
+            Key::PageDown => "PageDown".to_string(),
+            Key::PageUp => "PageUp".to_string(),
+            Key::Delete => "Delete".to_string(),
+            Key::F1 => "F1".to_string(),
+            Key::F2 => "F2".to_string(),
+            Key::F3 => "F3".to_string(),
+            Key::F4 => "F4".to_string(),
+            Key::F5 => "F5".to_string(),
+            Key::F6 => "F6".to_string(),
+            Key::F7 => "F7".to_string(),
+            Key::F8 => "F8".to_string(),
+            Key::F9 => "F9".to_string(),
+            Key::F10 => "F10".to_string(),
+            Key::F11 => "F11".to_string(),
+            Key::F12 => "F12".to_string(),
+            _ => key.to_string(), // Return original if no normalization needed
         }
     } else {
         // Handle special cases that might not parse
         match key {
-            "Return" => "Enter",
-            "ArrowUp" => "Up",
-            "ArrowDown" => "Down",
-            "ArrowLeft" => "Left",
-            "ArrowRight" => "Right",
-            "CommandOrControl" => "CommandOrControl", // Keep as-is for Tauri
-            "Cmd" => "CommandOrControl",
-            "Ctrl" => "CommandOrControl",
-            "Control" => "Control",  // Keep Control separate
-            "Command" => "CommandOrControl",
-            "Super" => "Super",  // Super is Command on macOS
-            "Option" => "Alt",
-            "Meta" => "CommandOrControl",
-            _ => key,
+            // Navigation keys
+            "Return" => "Enter".to_string(),
+            "ArrowUp" => "Up".to_string(),
+            "ArrowDown" => "Down".to_string(),
+            "ArrowLeft" => "Left".to_string(),
+            "ArrowRight" => "Right".to_string(),
+            "Insert" => "Insert".to_string(),
+
+            // Modifiers
+            "CommandOrControl" => "CommandOrControl".to_string(), // Keep as-is for Tauri
+            "Cmd" => "CommandOrControl".to_string(),
+            "Ctrl" => "CommandOrControl".to_string(),
+            "Control" => "Control".to_string(),  // Keep Control separate
+            "Command" => "CommandOrControl".to_string(),
+            "Super" => "CommandOrControl".to_string(),  // Super maps to CommandOrControl for Tauri
+            "Option" => "Alt".to_string(),
+            "Meta" => "CommandOrControl".to_string(),
+
+            // Function keys (F1-F24)
+            k if k.starts_with('F') && k.len() <= 3 => {
+                // Validate it's a function key F1-F24
+                if let Ok(num) = k[1..].parse::<u8>() {
+                    if num >= 1 && num <= 24 {
+                        return key.to_string(); // Valid function key
+                    }
+                }
+                key.to_string() // Return as-is if not valid
+            }
+
+            // Numpad keys
+            k if k.starts_with("Numpad") => key.to_string(), // NumpadX, NumpadAdd, etc.
+            "NumLock" => "NumLock".to_string(),
+            "ScrollLock" => "ScrollLock".to_string(),
+            "Pause" => "Pause".to_string(),
+            "PrintScreen" => "PrintScreen".to_string(),
+            "Clear" => "Clear".to_string(),
+
+            // Media keys (common ones)
+            "AudioVolumeUp" => "AudioVolumeUp".to_string(),
+            "AudioVolumeDown" => "AudioVolumeDown".to_string(),
+            "AudioVolumeMute" => "AudioVolumeMute".to_string(),
+            "MediaPlayPause" => "MediaPlayPause".to_string(),
+            "MediaStop" => "MediaStop".to_string(),
+            "MediaTrackNext" => "MediaTrackNext".to_string(),
+            "MediaTrackPrevious" => "MediaTrackPrevious".to_string(),
+
+            // Letter keys - ensure uppercase
+            k if k.len() == 1 && k.chars().all(|c| c.is_alphabetic()) => {
+                k.to_uppercase()
+            }
+
+            // Number keys (already handled above for shifted versions)
+            "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => key.to_string(),
+
+            _ => key.to_string(),
         }
     }
 }
@@ -131,7 +217,6 @@ pub fn validate_key_combination_with_rules(
         matches!(
             key,
             "CommandOrControl"
-                | "Super"
                 | "Shift"
                 | "Alt"
                 | "Control"
@@ -140,6 +225,7 @@ pub fn validate_key_combination_with_rules(
                 | "Ctrl"
                 | "Option"
                 | "Meta"
+                | "Super"  // Super will be normalized to CommandOrControl
         )
     };
 
@@ -243,11 +329,11 @@ mod tests {
         assert_eq!(normalize_shortcut_keys("Alt+A"), "Alt+A");
         assert_eq!(normalize_shortcut_keys("Shift+Space"), "Shift+Space");
 
-        // Test Super modifier (Command on macOS)
-        assert_eq!(normalize_shortcut_keys("Super+A"), "Super+A");
-        assert_eq!(normalize_shortcut_keys("Super+Control+A"), "Super+Control+A");
-        assert_eq!(normalize_shortcut_keys("Super+Control+Alt+A"), "Super+Control+Alt+A");
-        assert_eq!(normalize_shortcut_keys("Super+Control+Alt+Shift+A"), "Super+Control+Alt+Shift+A");
+        // Test Super modifier (maps to CommandOrControl for Tauri)
+        assert_eq!(normalize_shortcut_keys("Super+A"), "CommandOrControl+A");
+        assert_eq!(normalize_shortcut_keys("Super+Control+A"), "CommandOrControl+Control+A");
+        assert_eq!(normalize_shortcut_keys("Super+Control+Alt+A"), "CommandOrControl+Control+Alt+A");
+        assert_eq!(normalize_shortcut_keys("Super+Control+Alt+Shift+A"), "CommandOrControl+Control+Alt+Shift+A");
     }
 
     #[test]
@@ -301,8 +387,8 @@ mod tests {
         assert!(validate_key_combination("CommandOrControl+ü").is_ok());
         assert!(validate_key_combination("Alt+ñ").is_ok());
 
-        // Test Super modifier combinations (Command on macOS)
-        assert!(validate_key_combination("Super+A").is_ok());
+        // Test Super modifier combinations (maps to CommandOrControl for Tauri)
+        assert!(validate_key_combination("Super+A").is_ok()); // Will be normalized to CommandOrControl
         assert!(validate_key_combination("Super+Control+A").is_ok());
         assert!(validate_key_combination("Super+Control+Alt+A").is_ok());
         assert!(validate_key_combination("Super+Control+Alt+Shift+A").is_ok());

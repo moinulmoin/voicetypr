@@ -1,39 +1,21 @@
-import { useState, useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { LicenseStatus } from '@/types';
+import { useLicense } from '@/contexts/LicenseContext';
 
+/**
+ * A thin wrapper around useLicense that provides derived values for readiness checks.
+ * This hook simply uses the LicenseContext data and adds computed properties.
+ */
 export function useLicenseStatus() {
-  const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null);
-  const [isChecking, setIsChecking] = useState(false);
+  const { status, isLoading, checkStatus } = useLicense();
 
-  const checkLicense = useCallback(async () => {
-    setIsChecking(true);
-    try {
-      const status = await invoke<LicenseStatus>('check_license_status');
-      setLicenseStatus(status);
-      return status;
-    } catch (error) {
-      console.error('Failed to check license status:', error);
-      return null;
-    } finally {
-      setIsChecking(false);
-    }
-  }, []);
-
-  // Check on mount
-  useEffect(() => {
-    checkLicense();
-  }, [checkLicense]);
-
-  // Provide computed values
-  const isValid = licenseStatus ? 
-    ['active', 'trial'].includes(licenseStatus.status) : 
+  // Derive the isValid computed value
+  const isValid = status ?
+    ['active', 'trial'].includes(status.status) :
     false;
 
   return {
-    licenseStatus,
+    licenseStatus: status,
     isValid,
-    isChecking,
-    checkLicense
+    isChecking: isLoading,
+    checkLicense: checkStatus
   };
 }

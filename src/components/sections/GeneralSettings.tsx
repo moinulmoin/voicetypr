@@ -104,12 +104,16 @@ export function GeneralSettings() {
                     try {
                       // First update the global shortcut in the backend
                       await invoke("set_global_shortcut", { shortcut: hotkey });
+
                       // Then update the settings
                       await updateSettings({ hotkey });
+
                       toast.success("Hotkey updated successfully!");
                     } catch (err) {
                       console.error("Failed to update hotkey:", err);
-                      toast.error("Failed to update hotkey. Please try a different combination.");
+                      // Show the specific error message from backend
+                      const errorMessage = err instanceof Error ? err.message : String(err);
+                      toast.error(errorMessage || "Failed to update hotkey. Please try a different combination.");
                     }
                   }}
                   placeholder="Click to set"

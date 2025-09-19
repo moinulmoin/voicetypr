@@ -180,6 +180,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const saveSettings = async () => {
     try {
       await invoke("set_global_shortcut", { shortcut: hotkey });
+
       await updateSettings({
         hotkey: hotkey,
         current_model: selectedModel || "",
@@ -187,7 +188,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
       });
     } catch (error) {
       console.error("Failed to save settings:", error);
-      toast.error("Failed to save settings. Please try again.");
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      toast.error(errorMessage || "Failed to save settings. Please try again.");
       throw error; // Re-throw to prevent navigation
     }
   };

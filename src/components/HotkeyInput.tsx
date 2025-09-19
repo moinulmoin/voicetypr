@@ -3,13 +3,14 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Button } from "./ui/button";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { isMacOS } from "@/lib/platform";
-import { 
-  normalizeShortcutKeys, 
+import {
+  normalizeShortcutKeys,
   validateKeyCombinationWithRules,
   formatKeyForDisplay,
   KeyValidationRules,
-  ValidationPresets 
+  ValidationPresets
 } from "@/lib/keyboard-normalizer";
+import { mapCodeToKey } from "@/lib/keyboard-mapper";
 
 interface HotkeyInputProps {
   value: string;
@@ -40,6 +41,7 @@ export const HotkeyInput = React.memo(function HotkeyInput({
       e.stopPropagation();
 
       const key = e.key;
+      const code = e.code || ""; // Get physical key code with fallback for older browsers
 
       // Handle Escape to cancel
       if (key === "Escape") {
@@ -49,38 +51,54 @@ export const HotkeyInput = React.memo(function HotkeyInput({
 
       const newKeys = new Set(keys);
 
-      // Add modifier keys - handle macOS separately to support Cmd+Ctrl combinations
+      // Add modifier keys - handle platform differences correctly
       if (isMacOS) {
-        // On macOS, handle Command and Control as separate modifiers
-        if (e.metaKey) newKeys.add("Super"); // Command key
-        if (e.ctrlKey) newKeys.add("Control"); // Control key
+        // On macOS, handle Command and Control carefully
+        // Tauri doesn't accept both CommandOrControl AND Control together
+        if (e.metaKey && !e.ctrlKey) {
+          // Only Command pressed → CommandOrControl
+          newKeys.add("CommandOrControl");
+        } else if (e.ctrlKey && !e.metaKey) {
+          // Only Control pressed → Control
+          newKeys.add("Control");
+        } else if (e.metaKey && e.ctrlKey) {
+          // BOTH pressed → Just use Control (since Cmd+Ctrl is rare and Control is more specific)
+          // Note: This is a limitation - true Cmd+Ctrl combos aren't supported by Tauri
+          newKeys.add("Control");
+        }
       } else {
-        // On Windows/Linux, use CommandOrControl for compatibility
+        // On Windows/Linux, Control key maps to CommandOrControl
         if (e.ctrlKey) newKeys.add("CommandOrControl");
       }
       if (e.shiftKey) newKeys.add("Shift");
       if (e.altKey) newKeys.add("Alt");
 
-      // Add the actual key (capitalize it)
+      // Add the actual key using physical position (e.code) for international keyboard support
       if (!["Control", "Shift", "Alt", "Meta"].includes(key)) {
-        if (key === " " || key === "Space") {
-          newKeys.add("Space");
-        } else if (key === "Tab") {
-          newKeys.add("Tab");
-        } else if (key === "Enter") {
-          newKeys.add("Return");
-        } else if (key === "Backspace") {
-          newKeys.add("Backspace");
-        } else if (key === "Delete") {
-          newKeys.add("Delete");
-        } else if (key.startsWith("Arrow")) {
-          newKeys.add(key); // ArrowUp, ArrowDown, ArrowLeft, ArrowRight
-        } else if (key.startsWith("F") && key.length <= 3) {
-          newKeys.add(key); // F1-F12
-        } else if (key === "PageUp" || key === "PageDown" || key === "Home" || key === "End") {
-          newKeys.add(key);
+        // Use physical key code when available, fallback to key for older browsers
+        const mappedKey = code ? mapCodeToKey(code) : key;
+
+        // Special handling for keys that need it
+        if (mappedKey === "Enter") {
+          newKeys.add("Return"); // Tauri expects "Return" not "Enter"
+        } else if (mappedKey === "Up" || mappedKey === "Down" || mappedKey === "Left" || mappedKey === "Right") {
+          newKeys.add(mappedKey); // Arrow keys
+        } else if (mappedKey.startsWith("F") && mappedKey.length <= 3) {
+          newKeys.add(mappedKey); // Function keys
+        } else if (["PageUp", "PageDown", "Home", "End", "Insert", "Delete", "Backspace", "Tab", "Space", "Escape"].includes(mappedKey)) {
+          newKeys.add(mappedKey); // Special keys
+        } else if (mappedKey.startsWith("Numpad")) {
+          newKeys.add(mappedKey); // Numpad keys
+        } else if (["Comma", "Period", "Semicolon", "Quote", "BracketLeft", "BracketRight",
+                    "Backslash", "Slash", "Equal", "Minus", "Backquote"].includes(mappedKey)) {
+          // Punctuation keys - use the physical position name
+          newKeys.add(mappedKey);
+        } else if (mappedKey.length === 1) {
+          // Single character (letter or number)
+          newKeys.add(mappedKey.toUpperCase());
         } else {
-          newKeys.add(key.length === 1 ? key.toUpperCase() : key);
+          // Fallback to the mapped key
+          newKeys.add(mappedKey);
         }
       }
 
@@ -98,22 +116,20 @@ export const HotkeyInput = React.memo(function HotkeyInput({
       const regularKeys: string[] = [];
 
       newKeys.forEach((k) => {
-        if (["CommandOrControl", "Super", "Control", "Shift", "Alt"].includes(k)) {
+        if (["CommandOrControl", "Control", "Shift", "Alt"].includes(k)) {
           modifiers.push(k);
         } else {
           regularKeys.push(k);
         }
       });
 
-      const orderedModifiers = ["Super", "CommandOrControl", "Control", "Alt", "Shift"].filter((mod) =>
+      const orderedModifiers = ["CommandOrControl", "Control", "Alt", "Shift"].filter((mod) =>
         modifiers.includes(mod)
       );
       const shortcut = [...orderedModifiers, ...regularKeys].join("+");
       if (shortcut) {
         // Update current keys display
         const displayKeys = [];
-        if (modifiers.includes("Super"))
-          displayKeys.push(formatKeyForDisplay("Super", isMacOS));
         if (modifiers.includes("CommandOrControl"))
           displayKeys.push(formatKeyForDisplay("CommandOrControl", isMacOS));
         if (modifiers.includes("Control"))
@@ -145,15 +161,15 @@ export const HotkeyInput = React.memo(function HotkeyInput({
         const regularKeys: string[] = [];
 
         keys.forEach((key) => {
-          if (["CommandOrControl", "Super", "Control", "Shift", "Alt"].includes(key)) {
+          if (["CommandOrControl", "Control", "Shift", "Alt"].includes(key)) {
             modifiers.push(key);
           } else {
             regularKeys.push(key);
           }
         });
 
-        // Standard order: Super+Control+Alt+Shift+Key (macOS) or CommandOrControl+Alt+Shift+Key (Windows/Linux)
-        const orderedModifiers = ["Super", "CommandOrControl", "Control", "Alt", "Shift"].filter((mod) =>
+        // Standard order: CommandOrControl+Control+Alt+Shift+Key
+        const orderedModifiers = ["CommandOrControl", "Control", "Alt", "Shift"].filter((mod) =>
           modifiers.includes(mod)
         );
         const shortcut = [...orderedModifiers, ...regularKeys].join("+");

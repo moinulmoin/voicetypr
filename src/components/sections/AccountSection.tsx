@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useLicense } from "@/contexts/LicenseContext";
 import { open } from '@tauri-apps/plugin-shell';
+import { ask } from '@tauri-apps/plugin-dialog';
 import {
   Check,
   Clock,
@@ -25,6 +26,22 @@ export function AccountSection() {
     await activateLicense(licenseKey.trim());
     setIsActivating(false);
     setLicenseKey('');
+  };
+
+  const handleDeactivate = async () => {
+    const confirmed = await ask(
+      'Deactivating your license will make the app unusable.',
+      {
+        title: 'Deactivate License',
+        kind: 'warning',
+        okLabel: 'Confirm',
+        cancelLabel: 'Cancel'
+      }
+    );
+
+    if (confirmed) {
+      await deactivateLicense();
+    }
   };
 
   const openExternalLink = async (url: string) => {
@@ -136,16 +153,13 @@ export function AccountSection() {
                   </div>
 
                   <Button
-                    onClick={deactivateLicense}
+                    onClick={handleDeactivate}
                     variant="outline"
                     size="sm"
                     className="w-full"
                   >
                     Deactivate License
                   </Button>
-                  <p className="text-xs text-muted-foreground text-center">
-                    Deactivate to use this license on another device
-                  </p>
                 </div>
               )}
 
