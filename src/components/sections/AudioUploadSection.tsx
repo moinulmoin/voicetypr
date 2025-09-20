@@ -215,14 +215,14 @@ export function AudioUploadSection() {
                         </div>
                       ) : (
                         <div className={cn(
-                          "relative rounded-lg border-2 border-dashed p-8 text-center transition-all",
+                          "relative rounded-lg border-2 border-dashed p-6 text-center transition-all",
                           isDragging
                             ? "border-primary bg-primary/5"
                             : "border-border/50 hover:border-border"
                         )}>
                           {isDragging ? (
-                            <div className="space-y-2">
-                              <Upload className="h-8 w-8 mx-auto text-primary animate-bounce" />
+                            <div className="space-y-1">
+                              <Upload className="h-7 w-7 mx-auto text-primary animate-bounce" />
                               <p className="text-sm font-medium text-primary">
                                 Drop your audio file here
                               </p>
@@ -231,9 +231,9 @@ export function AudioUploadSection() {
                               </p>
                             </div>
                           ) : (
-                            <div className="space-y-4">
-                              <div className="space-y-2">
-                                <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
+                            <div className="space-y-3">
+                              <div className="space-y-1">
+                                <Upload className="h-7 w-7 mx-auto text-muted-foreground" />
                                 <p className="text-sm font-medium">
                                   Drag & drop your audio file here
                                 </p>
