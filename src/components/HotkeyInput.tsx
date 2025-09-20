@@ -18,13 +18,15 @@ interface HotkeyInputProps {
   placeholder?: string;
   validationRules?: KeyValidationRules;
   label?: string; // e.g., "Recording Hotkey", "Custom Hotkey"
+  onEditingChange?: (isEditing: boolean) => void; // Notify parent when edit mode changes
 }
 
 export const HotkeyInput = React.memo(function HotkeyInput({ 
   value, 
   onChange, 
   placeholder,
-  validationRules = ValidationPresets.standard()
+  validationRules = ValidationPresets.standard(),
+  onEditingChange
 }: HotkeyInputProps) {
   const [mode, setMode] = useState<"display" | "edit">("display");
   const [keys, setKeys] = useState<Set<string>>(new Set());
@@ -209,16 +211,14 @@ export const HotkeyInput = React.memo(function HotkeyInput({
       
       onChange(normalizedShortcut);
       setSaveStatus("success");
-
-      setTimeout(() => {
-        setMode("display");
-        setSaveStatus("idle");
-        setPendingHotkey("");
-        setKeys(new Set());
-        setCurrentKeysDisplay("");
-      }, 1500);
+      setMode("display");
+      setSaveStatus("idle");
+      setPendingHotkey("");
+      setKeys(new Set());
+      setCurrentKeysDisplay("");
+      onEditingChange?.(false); // Notify parent that editing is done
     }
-  }, [pendingHotkey, validationError, onChange]);
+  }, [pendingHotkey, validationError, onChange, onEditingChange]);
 
   const handleCancel = useCallback(() => {
     setPendingHotkey("");
@@ -227,7 +227,8 @@ export const HotkeyInput = React.memo(function HotkeyInput({
     setSaveStatus("idle");
     setValidationError("");
     setCurrentKeysDisplay("");
-  }, []);
+    onEditingChange?.(false); // Notify parent that editing is cancelled
+  }, [onEditingChange]);
 
   const handleEdit = useCallback(() => {
     setPendingHotkey("");
@@ -236,7 +237,8 @@ export const HotkeyInput = React.memo(function HotkeyInput({
     setValidationError("");
     setCurrentKeysDisplay("");
     setKeys(new Set());
-  }, []);
+    onEditingChange?.(true); // Notify parent that editing has started
+  }, [onEditingChange]);
 
   // Reset save status after showing success
   useEffect(() => {
