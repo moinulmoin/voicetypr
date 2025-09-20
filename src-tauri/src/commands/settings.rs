@@ -21,6 +21,10 @@ pub struct Settings {
     pub compact_recording_status: bool,
     pub check_updates_automatically: bool,
     pub selected_microphone: Option<String>,
+    // Push-to-talk support
+    pub recording_mode: String,  // "toggle" or "push_to_talk"
+    pub use_different_ptt_key: bool,
+    pub ptt_hotkey: Option<String>,
 }
 
 impl Default for Settings {
@@ -38,6 +42,9 @@ impl Default for Settings {
             compact_recording_status: true,   // Default to compact mode
             check_updates_automatically: true, // Default to automatic updates enabled
             selected_microphone: None,        // Default to system default microphone
+            recording_mode: "toggle".to_string(), // Default to toggle mode for backward compatibility
+            use_different_ptt_key: false,    // Default to using same key
+            ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
         }
     }
 }
@@ -102,6 +109,17 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
         selected_microphone: store
             .get("selected_microphone")
             .and_then(|v| v.as_str().map(|s| s.to_string())),
+        recording_mode: store
+            .get("recording_mode")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| Settings::default().recording_mode),
+        use_different_ptt_key: store
+            .get("use_different_ptt_key")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().use_different_ptt_key),
+        ptt_hotkey: store
+            .get("ptt_hotkey")
+            .and_then(|v| v.as_str().map(|s| s.to_string())),
     };
 
     // Pill position is already loaded from store, no need for duplicate state
@@ -144,12 +162,70 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     );
     store.set("selected_microphone", json!(settings.selected_microphone));
 
+    // Save push-to-talk settings
+    store.set("recording_mode", json!(settings.recording_mode.clone()));
+    store.set("use_different_ptt_key", json!(settings.use_different_ptt_key));
+    if let Some(ref ptt_hotkey) = settings.ptt_hotkey {
+        store.set("ptt_hotkey", json!(ptt_hotkey));
+    }
+
     // Save pill position if provided
     if let Some((x, y)) = settings.pill_position {
         store.set("pill_position", json!([x, y]));
     }
 
     store.save().map_err(|e| e.to_string())?;
+
+    // Update recording mode in AppState
+    let app_state = app.state::<crate::AppState>();
+    let recording_mode = match settings.recording_mode.as_str() {
+        "push_to_talk" => crate::RecordingMode::PushToTalk,
+        _ => crate::RecordingMode::Toggle,
+    };
+
+    if let Ok(mut mode_guard) = app_state.recording_mode.lock() {
+        *mode_guard = recording_mode;
+        log::info!("Recording mode updated to: {:?}", recording_mode);
+    }
+
+    // Handle PTT shortcut registration if needed
+    if recording_mode == crate::RecordingMode::PushToTalk && settings.use_different_ptt_key {
+        if let Some(ptt_hotkey) = settings.ptt_hotkey.clone() {
+            let normalized_ptt = crate::commands::key_normalizer::normalize_shortcut_keys(&ptt_hotkey);
+
+            if let Ok(ptt_shortcut) = normalized_ptt.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+                let shortcuts = app.global_shortcut();
+
+                // Unregister old PTT shortcut if exists
+                if let Ok(ptt_guard) = app_state.ptt_shortcut.lock() {
+                    if let Some(old_ptt) = ptt_guard.clone() {
+                        let _ = shortcuts.unregister(old_ptt);
+                    }
+                }
+
+                // Register new PTT shortcut
+                match shortcuts.register(ptt_shortcut.clone()) {
+                    Ok(_) => {
+                        if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
+                            *ptt_guard = Some(ptt_shortcut);
+                        }
+                        log::info!("PTT shortcut updated to: {}", ptt_hotkey);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to register PTT shortcut: {}", e);
+                    }
+                }
+            }
+        }
+    } else {
+        // Clear PTT shortcut if not using different key
+        if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
+            if let Some(old_ptt) = ptt_guard.clone() {
+                let _ = app.global_shortcut().unregister(old_ptt);
+            }
+            *ptt_guard = None;
+        }
+    }
 
     // Preload new model and update tray menu if model changed
     if !settings.current_model.is_empty() && old_model != settings.current_model {

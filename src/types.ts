@@ -10,6 +10,8 @@ export interface ModelInfo {
   recommended: boolean;    // Whether this model is recommended
 }
 
+export type RecordingMode = 'toggle' | 'push_to_talk';
+
 export interface AppSettings {
   hotkey: string;
   current_model: string;
@@ -22,6 +24,10 @@ export interface AppSettings {
   compact_recording_status?: boolean;
   check_updates_automatically?: boolean;
   selected_microphone?: string | null;
+  // Push-to-talk support
+  recording_mode?: RecordingMode;
+  use_different_ptt_key?: boolean;
+  ptt_hotkey?: string;
 }
 
 export interface TranscriptionHistory {

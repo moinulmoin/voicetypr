@@ -237,6 +237,13 @@ impl Default for RecordingState {
     }
 }
 
+// Recording mode enum to distinguish between toggle and push-to-talk
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingMode {
+    Toggle,      // Click to start/stop recording
+    PushToTalk,  // Hold to record, release to stop
+}
+
 // Application state - managed by Tauri (runtime state only)
 pub struct AppState {
     // Recording-related runtime state
@@ -244,6 +251,11 @@ pub struct AppState {
     pub recording_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
     pub current_recording_path: Arc<Mutex<Option<PathBuf>>>,
     pub transcription_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+
+    // Push-to-talk support
+    pub recording_mode: Arc<Mutex<RecordingMode>>,
+    pub ptt_key_held: Arc<AtomicBool>,
+    pub ptt_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
 
     // Cancellation flag for graceful shutdown
     pub should_cancel_recording: Arc<AtomicBool>,
@@ -263,6 +275,9 @@ impl AppState {
             recording_shortcut: Arc::new(Mutex::new(None)),
             current_recording_path: Arc::new(Mutex::new(None)),
             transcription_task: Arc::new(Mutex::new(None)),
+            recording_mode: Arc::new(Mutex::new(RecordingMode::Toggle)), // Default to toggle mode
+            ptt_key_held: Arc::new(AtomicBool::new(false)),
+            ptt_shortcut: Arc::new(Mutex::new(None)),
             should_cancel_recording: Arc::new(AtomicBool::new(false)),
             esc_pressed_once: Arc::new(AtomicBool::new(false)),
             esc_timeout_handle: Arc::new(Mutex::new(None)),
@@ -562,12 +577,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let app_handle = app.app_handle();
                     let app_state = app_handle.state::<AppState>();
 
-                    // Only handle press events for toggle recording
-                    if event.state() != ShortcutState::Pressed {
-                        return;
-                    }
+                    // Get current recording mode
+                    let recording_mode = {
+                        if let Ok(mode_guard) = app_state.recording_mode.lock() {
+                            *mode_guard
+                        } else {
+                            RecordingMode::Toggle // Default to toggle if we can't get the mode
+                        }
+                    };
 
-                    // Check if this is the toggle recording shortcut
+                    // Check if this is the recording shortcut
                     let is_recording_shortcut = {
                         if let Ok(shortcut_guard) = app_state.recording_shortcut.lock() {
                             if let Some(ref recording_shortcut) = *shortcut_guard {
@@ -580,58 +599,116 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     };
 
-                    if is_recording_shortcut {
-                        // Toggle recording based on current state
+                    // Check if this is the PTT shortcut (if configured differently)
+                    let is_ptt_shortcut = {
+                        if let Ok(ptt_guard) = app_state.ptt_shortcut.lock() {
+                            if let Some(ref ptt_shortcut) = *ptt_guard {
+                                shortcut == ptt_shortcut
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    };
+
+                    // Determine if we should handle this shortcut based on mode
+                    let should_handle = match recording_mode {
+                        RecordingMode::Toggle => is_recording_shortcut && event.state() == ShortcutState::Pressed,
+                        RecordingMode::PushToTalk => is_recording_shortcut || is_ptt_shortcut,
+                    };
+
+                    if should_handle {
                         let current_state = get_recording_state(&app_handle);
-                        match current_state {
-                            RecordingState::Idle | RecordingState::Error => {
-                                log::info!("Toggle: Starting recording via hotkey");
 
-                                // Use Tauri's command system to start recording
-                                let app_handle = app.app_handle().clone();
-                                tauri::async_runtime::spawn(async move {
-                                    // Get the recorder state from app handle
-                                    let recorder_state = app_handle.state::<RecorderState>();
-                                    match start_recording(app_handle.clone(), recorder_state).await
-                                    {
-                                        Ok(_) => {
-                                            log::info!("Toggle: Recording started successfully")
+                        match recording_mode {
+                            RecordingMode::Toggle => {
+                                // Toggle mode - only handle press events
+                                if event.state() == ShortcutState::Pressed {
+                                    match current_state {
+                                        RecordingState::Idle | RecordingState::Error => {
+                                            log::info!("Toggle: Starting recording via hotkey");
+
+                                            let app_handle = app.app_handle().clone();
+                                            tauri::async_runtime::spawn(async move {
+                                                let recorder_state = app_handle.state::<RecorderState>();
+                                                match start_recording(app_handle.clone(), recorder_state).await {
+                                                    Ok(_) => log::info!("Toggle: Recording started successfully"),
+                                                    Err(e) => {
+                                                        log::error!("Toggle: Error starting recording: {}", e);
+                                                        update_recording_state(
+                                                            &app_handle,
+                                                            RecordingState::Error,
+                                                            Some(e),
+                                                        );
+                                                    }
+                                                }
+                                            });
                                         }
-                                        Err(e) => {
-                                            log::error!("Toggle: Error starting recording: {}", e);
-                                            update_recording_state(
-                                                &app_handle,
-                                                RecordingState::Error,
-                                                Some(e),
-                                            );
+                                        RecordingState::Recording | RecordingState::Starting => {
+                                            log::info!("Toggle: Stopping recording via hotkey");
+
+                                            let app_handle = app.app_handle().clone();
+                                            tauri::async_runtime::spawn(async move {
+                                                let recorder_state = app_handle.state::<RecorderState>();
+                                                match stop_recording(app_handle.clone(), recorder_state).await {
+                                                    Ok(_) => log::info!("Toggle: Recording stopped successfully"),
+                                                    Err(e) => log::error!("Toggle: Error stopping recording: {}", e)
+                                                }
+                                            });
+                                        }
+                                        _ => log::debug!("Toggle: Ignoring hotkey in state {:?}", current_state),
+                                    }
+                                }
+                            }
+                            RecordingMode::PushToTalk => {
+                                // Push-to-talk mode - handle both press and release
+                                match event.state() {
+                                    ShortcutState::Pressed => {
+                                        log::info!("PTT: Key pressed");
+                                        app_state.ptt_key_held.store(true, Ordering::Relaxed);
+
+                                        if matches!(current_state, RecordingState::Idle | RecordingState::Error) {
+                                            log::info!("PTT: Starting recording");
+
+                                            let app_handle = app.app_handle().clone();
+                                            tauri::async_runtime::spawn(async move {
+                                                let recorder_state = app_handle.state::<RecorderState>();
+                                                match start_recording(app_handle.clone(), recorder_state).await {
+                                                    Ok(_) => log::info!("PTT: Recording started successfully"),
+                                                    Err(e) => {
+                                                        log::error!("PTT: Error starting recording: {}", e);
+                                                        update_recording_state(
+                                                            &app_handle,
+                                                            RecordingState::Error,
+                                                            Some(e),
+                                                        );
+                                                    }
+                                                }
+                                            });
                                         }
                                     }
-                                });
-                            }
-                            RecordingState::Recording | RecordingState::Starting => {
-                                log::info!("Toggle: Stopping recording via hotkey");
+                                    ShortcutState::Released => {
+                                        log::info!("PTT: Key released");
+                                        app_state.ptt_key_held.store(false, Ordering::Relaxed);
 
-                                // Use Tauri's command system to stop recording
-                                let app_handle = app.app_handle().clone();
-                                tauri::async_runtime::spawn(async move {
-                                    // Get the recorder state from app handle
-                                    let recorder_state = app_handle.state::<RecorderState>();
-                                    match stop_recording(app_handle.clone(), recorder_state).await {
-                                        Ok(_) => {
-                                            log::info!("Toggle: Recording stopped successfully");
+                                        if matches!(current_state, RecordingState::Recording | RecordingState::Starting) {
+                                            log::info!("PTT: Stopping recording");
 
-                                        }
-                                        Err(e) => {
-                                            log::error!("Toggle: Error stopping recording: {}", e)
+                                            let app_handle = app.app_handle().clone();
+                                            tauri::async_runtime::spawn(async move {
+                                                let recorder_state = app_handle.state::<RecorderState>();
+                                                match stop_recording(app_handle.clone(), recorder_state).await {
+                                                    Ok(_) => log::info!("PTT: Recording stopped successfully"),
+                                                    Err(e) => log::error!("PTT: Error stopping recording: {}", e)
+                                                }
+                                            });
                                         }
                                     }
-                                });
-                            }
-                            _ => {
-                                log::debug!("Toggle: Ignoring hotkey in state {:?}", current_state);
+                                }
                             }
                         }
-                    } else {
+                    } else if !is_recording_shortcut && !is_ptt_shortcut {
                         // Debug log all shortcuts
                         log::debug!("Non-recording shortcut triggered: {:?}", shortcut);
 
@@ -1026,6 +1103,43 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             log::info!("🎯 Loading hotkey: {}", hotkey_str);
 
+            // Load recording mode and PTT settings
+            let (recording_mode_str, use_different_ptt_key, ptt_hotkey_str) = match app.store("settings") {
+                Ok(store) => {
+                    let mode = store
+                        .get("recording_mode")
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "toggle".to_string());
+
+                    let use_diff = store
+                        .get("use_different_ptt_key")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
+                    let ptt_key = store
+                        .get("ptt_hotkey")
+                        .and_then(|v| v.as_str().map(|s| s.to_string()));
+
+                    (mode, use_diff, ptt_key)
+                }
+                Err(_) => {
+                    log::info!("Using default recording mode settings");
+                    ("toggle".to_string(), false, None)
+                }
+            };
+
+            // Set recording mode in AppState
+            let app_state = app.state::<AppState>();
+            let recording_mode = match recording_mode_str.as_str() {
+                "push_to_talk" => RecordingMode::PushToTalk,
+                _ => RecordingMode::Toggle,
+            };
+
+            if let Ok(mut mode_guard) = app_state.recording_mode.lock() {
+                *mode_guard = recording_mode;
+                log::info!("Recording mode set to: {:?}", recording_mode);
+            }
+
             // Normalize the hotkey for Tauri
             let normalized_hotkey = crate::commands::key_normalizer::normalize_shortcut_keys(&hotkey_str);
 
@@ -1109,6 +1223,41 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             "error": format!("Critical error: {}", panic_msg),
                             "suggestion": "The hotkey system encountered an error. Please restart the app or try a different hotkey."
                         }));
+                    }
+                }
+            }
+
+            // Register PTT shortcut if configured differently
+            if recording_mode == RecordingMode::PushToTalk && use_different_ptt_key {
+                if let Some(ptt_key) = ptt_hotkey_str {
+                    log::info!("🎤 Registering separate PTT hotkey: {}", ptt_key);
+
+                    let normalized_ptt = crate::commands::key_normalizer::normalize_shortcut_keys(&ptt_key);
+
+                    if let Ok(ptt_shortcut) = normalized_ptt.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+                        // Store PTT shortcut in AppState
+                        let app_state = app.state::<AppState>();
+                        if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
+                            *ptt_guard = Some(ptt_shortcut.clone());
+                        }
+
+                        // Try to register PTT shortcut
+                        match app.global_shortcut().register(ptt_shortcut.clone()) {
+                            Ok(_) => {
+                                log::info!("✅ Successfully registered PTT hotkey: {}", ptt_key);
+                            }
+                            Err(e) => {
+                                log::error!("❌ Failed to register PTT hotkey '{}': {}", ptt_key, e);
+                                log::warn!("⚠️  PTT will use primary hotkey instead");
+
+                                // Clear the PTT shortcut so we fall back to primary
+                                if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
+                                    *ptt_guard = None;
+                                }
+                            }
+                        }
+                    } else {
+                        log::warn!("Invalid PTT hotkey format: {}", ptt_key);
                     }
                 }
             }
