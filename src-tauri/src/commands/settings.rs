@@ -176,6 +176,57 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
     store.save().map_err(|e| e.to_string())?;
 
+    // Update recording mode in AppState
+    let app_state = app.state::<crate::AppState>();
+    let recording_mode = match settings.recording_mode.as_str() {
+        "push_to_talk" => crate::RecordingMode::PushToTalk,
+        _ => crate::RecordingMode::Toggle,
+    };
+
+    if let Ok(mut mode_guard) = app_state.recording_mode.lock() {
+        *mode_guard = recording_mode;
+        log::info!("Recording mode updated to: {:?}", recording_mode);
+    }
+
+    // Handle PTT shortcut registration if needed
+    if recording_mode == crate::RecordingMode::PushToTalk && settings.use_different_ptt_key {
+        if let Some(ptt_hotkey) = settings.ptt_hotkey.clone() {
+            let normalized_ptt = crate::commands::key_normalizer::normalize_shortcut_keys(&ptt_hotkey);
+
+            if let Ok(ptt_shortcut) = normalized_ptt.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+                let shortcuts = app.global_shortcut();
+
+                // Unregister old PTT shortcut if exists
+                if let Ok(ptt_guard) = app_state.ptt_shortcut.lock() {
+                    if let Some(old_ptt) = ptt_guard.clone() {
+                        let _ = shortcuts.unregister(old_ptt);
+                    }
+                }
+
+                // Register new PTT shortcut
+                match shortcuts.register(ptt_shortcut.clone()) {
+                    Ok(_) => {
+                        if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
+                            *ptt_guard = Some(ptt_shortcut);
+                        }
+                        log::info!("PTT shortcut updated to: {}", ptt_hotkey);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to register PTT shortcut: {}", e);
+                    }
+                }
+            }
+        }
+    } else {
+        // Clear PTT shortcut if not using different key
+        if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
+            if let Some(old_ptt) = ptt_guard.clone() {
+                let _ = app.global_shortcut().unregister(old_ptt);
+            }
+            *ptt_guard = None;
+        }
+    }
+
     // Invalidate recording config cache when settings change
     crate::commands::audio::invalidate_recording_config_cache(&app).await;
 

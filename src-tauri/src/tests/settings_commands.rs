@@ -32,6 +32,9 @@ mod tests {
             translate_to_english: false,
             check_updates_automatically: true,
             selected_microphone: None,
+            recording_mode: "toggle".to_string(),
+            use_different_ptt_key: false,
+            ptt_hotkey: Some("Alt+Space".to_string()),
         };
 
         // Test serialization
@@ -85,6 +88,9 @@ mod tests {
             translate_to_english: true,
             check_updates_automatically: true,
             selected_microphone: Some("USB Microphone".to_string()),
+            recording_mode: "push_to_talk".to_string(),
+            use_different_ptt_key: true,
+            ptt_hotkey: Some("CommandOrControl+Space".to_string()),
         };
 
         let cloned = settings.clone();

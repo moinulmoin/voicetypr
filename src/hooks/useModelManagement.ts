@@ -148,6 +148,9 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     try {
       await invoke("cancel_download", { modelName });
 
+      // Immediately remove from active downloads to allow retry
+      activeDownloads.current.delete(modelName);
+
       // Remove from progress tracking
       setDownloadProgress((prev) => {
         const newProgress = { ...prev };
