@@ -1,5 +1,50 @@
 # Changelog
 
+# [1.8.0](https://github.com/moinulmoin/voicetypr/compare/v1.7.0...v1.8.0) (2025-09-20)
+
+
+### Bug Fixes
+
+* Add support for multi-channel audio recording (4+ channels) ([54e2a0e](https://github.com/moinulmoin/voicetypr/commit/54e2a0e61b53e61fd0699ab77573a7494928e187))
+* Enable macOS Cmd+Ctrl hotkey combinations ([e427cae](https://github.com/moinulmoin/voicetypr/commit/e427caed5432a4d31a12866d29dc665d13b83f3a))
+* Extend offline grace period to 90 days for Issue [#15](https://github.com/moinulmoin/voicetypr/issues/15) ([7f7bef8](https://github.com/moinulmoin/voicetypr/commit/7f7bef83a8b0ff35108aa0a7f446c553398c24bc))
+* Implement secure licensing with grace periods ([b123c36](https://github.com/moinulmoin/voicetypr/commit/b123c36e778b4010a20f29338a915a52edc68796))
+* Improve hotkey system and shorten feedback messages ([bc5ee35](https://github.com/moinulmoin/voicetypr/commit/bc5ee356fe3951d197f0c84e19afe2214f3834e9))
+* Improve language selection UX with alphabetical sorting and name-based search ([5f2d631](https://github.com/moinulmoin/voicetypr/commit/5f2d631d0a5562fb82c31db0c0a9a4c9a3137d35))
+* Reduce drag-and-drop area height for better UI balance ([5a3dd8c](https://github.com/moinulmoin/voicetypr/commit/5a3dd8c320c4bfb7d46b7be5b1a486e340ca6d0c))
+* Remove redundant audio validation to solve Issue [#16](https://github.com/moinulmoin/voicetypr/issues/16) "Audio too quiet" ([b977f7b](https://github.com/moinulmoin/voicetypr/commit/b977f7bde0182cad6d262ec4fb53c16083ca22a6))
+* resolve UnwindSafe trait issues in panic prevention tests ([f431ee1](https://github.com/moinulmoin/voicetypr/commit/f431ee1a1024cf349daf8aa552021e0da7104e4a))
+* Restore download progress updates for model downloads ([e3c13b8](https://github.com/moinulmoin/voicetypr/commit/e3c13b8e54ac34453bdc43d267535f449997f923))
+
+
+### Features
+
+* Add audio file upload and transcription support ([beed3d0](https://github.com/moinulmoin/voicetypr/commit/beed3d0d8435ba2c1cb8c3bf50ddde7459ec8009))
+* Add audio file upload for transcription with multi-format support ([38f0c58](https://github.com/moinulmoin/voicetypr/commit/38f0c583b20ce090a5ce5ff40ba6579171d419a0))
+* add export to JSON functionality with backend implementation ([7a18ce1](https://github.com/moinulmoin/voicetypr/commit/7a18ce140f2f42d9fa59498ed21bcc34d1a196bf))
+* add Help section and share stats functionality ([e67dc68](https://github.com/moinulmoin/voicetypr/commit/e67dc683e3d8dfc67bde3ad5dc8a7af4f662b137))
+* add microphone selection with bidirectional sync ([1791519](https://github.com/moinulmoin/voicetypr/commit/179151968315c9bb5bd322026f43a0a4fd0e11df))
+* Add push-to-talk recording mode ([#13](https://github.com/moinulmoin/voicetypr/issues/13)) ([a6ef9ae](https://github.com/moinulmoin/voicetypr/commit/a6ef9aeaedd27ebbe02a9619a14da99e1170c967))
+* Comprehensive hotkey system improvements with physical key support ([6938472](https://github.com/moinulmoin/voicetypr/commit/693847238c7dc8cfc4c471653a904791cf746e62))
+* enhance history page with search and improved UI ([8bd2135](https://github.com/moinulmoin/voicetypr/commit/8bd2135dc727847254557ca1d1c499b8168fffde))
+* Enhance HotkeyInput with editing state notification and update onboarding hotkey initialization ([43dca35](https://github.com/moinulmoin/voicetypr/commit/43dca35176afcd99592b4323a0e267c0b8971964))
+* Enhanced license activation with OS metadata for better device identification ([c7b52da](https://github.com/moinulmoin/voicetypr/commit/c7b52da74e73582f45924474996dcb0b155ffba9))
+* Improve history card display ([d1a0e67](https://github.com/moinulmoin/voicetypr/commit/d1a0e67983b88a404a9dacf16bb6b46343cb039b))
+* improve UI/UX for support links and Quick Tips section ([c3f818f](https://github.com/moinulmoin/voicetypr/commit/c3f818f8b910f51e38075b8bf64d144c7be8a804))
+* optimize transcription updates with append-only system ([5852078](https://github.com/moinulmoin/voicetypr/commit/5852078621ef67687a6b5b9f4c993760f34e5c4a))
+* redesign Advanced section UI/UX ([ae5f1ca](https://github.com/moinulmoin/voicetypr/commit/ae5f1ca8a141fbcb81a047db42adfcdf3765351c))
+* redesign Formatting page (formerly Enhancements) with improved UI/UX ([e006317](https://github.com/moinulmoin/voicetypr/commit/e006317a25a6f055a1949e82cbbea4ff0f1c857d))
+* redesign Models page with improved UI/UX ([53f8837](https://github.com/moinulmoin/voicetypr/commit/53f88379a82ec790b1af0968f0c620d2bc601317))
+* redesign overview dashboard with streak tracking and interactive stats ([415d730](https://github.com/moinulmoin/voicetypr/commit/415d730ca388219cef9bb5746aebd8da2054131f))
+* redesign Settings page with modern UI ([2d77331](https://github.com/moinulmoin/voicetypr/commit/2d773311e9289e9a11c17f14836006c3fbbac40e))
+* split Account section into License and About sections ([4a06489](https://github.com/moinulmoin/voicetypr/commit/4a06489a1873761f03515f7ee37d9aa3fcfd3b6e))
+
+
+### Performance Improvements
+
+* implement caching layer for settings and license to reduce I/O overhead ([391d752](https://github.com/moinulmoin/voicetypr/commit/391d752185f67eeb2f976011a7f6e3ffaee4f1a6))
+* optimize transcription flow by reducing delays and improving UX ([22e303a](https://github.com/moinulmoin/voicetypr/commit/22e303aca2e98b3053f6b295c02de1bb5c50cccf))
+
 # [1.7.0](https://github.com/moinulmoin/voicetypr/compare/v1.6.2...v1.7.0) (2025-08-20)
 
 
