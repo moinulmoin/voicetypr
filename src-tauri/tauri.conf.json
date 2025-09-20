@@ -20,7 +20,7 @@
         "center": true,
         "visible": true,
         "skipTaskbar": true,
-        "alwaysOnTop": true,
+        "alwaysOnTop": false,
         "minimizable": false,
         "maximizable": false
       }
