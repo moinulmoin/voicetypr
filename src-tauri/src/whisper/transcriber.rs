@@ -461,7 +461,7 @@ impl Transcriber {
 
         // Check minimum duration (0.5 seconds)
         if duration_seconds < 0.5 {
-            let error = format!("Recording too short ({:.1}s). Minimum duration is 0.5 seconds", duration_seconds);
+            let error = format!("Recording too short");
             log::warn!("[TRANSCRIPTION_DEBUG] {}", error);
             return Err(error);
         }

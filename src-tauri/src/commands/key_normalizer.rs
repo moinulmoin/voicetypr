@@ -28,36 +28,9 @@ fn normalize_single_key(key: &str) -> String {
         _ => {}
     }
 
-    // Handle shifted characters - convert them back to their base keys
-    // This is needed because frontend might capture shifted characters
-    // Complete mapping for US/UK keyboard shifted characters
+    // Normalize common punctuation to their Code enum names
+    // This handles cases where the frontend sends the actual character instead of the Code name
     match key {
-        // Shifted punctuation
-        "<" => return "Comma".to_string(),
-        ">" => return "Period".to_string(),
-        "?" => return "Slash".to_string(),
-        ":" => return "Semicolon".to_string(),
-        "\"" => return "Quote".to_string(),
-        "{" => return "BracketLeft".to_string(),
-        "}" => return "BracketRight".to_string(),
-        "|" => return "Backslash".to_string(),
-        "+" => return "Equal".to_string(),
-        "_" => return "Minus".to_string(),
-        "~" => return "Backquote".to_string(),
-
-        // Shifted numbers (top row)
-        "!" => return "Digit1".to_string(),
-        "@" => return "Digit2".to_string(),
-        "#" => return "Digit3".to_string(),
-        "$" => return "Digit4".to_string(),
-        "%" => return "Digit5".to_string(),
-        "^" => return "Digit6".to_string(),
-        "&" => return "Digit7".to_string(),
-        "*" => return "Digit8".to_string(),
-        "(" => return "Digit9".to_string(),
-        ")" => return "Digit0".to_string(),
-
-        // Common punctuation (unshifted) - normalize these too
         "," => return "Comma".to_string(),
         "." => return "Period".to_string(),
         "/" => return "Slash".to_string(),
@@ -69,7 +42,6 @@ fn normalize_single_key(key: &str) -> String {
         "=" => return "Equal".to_string(),
         "-" => return "Minus".to_string(),
         "`" => return "Backquote".to_string(),
-
         _ => {}
     }
 

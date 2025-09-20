@@ -11,6 +11,7 @@ import {
   ValidationPresets
 } from "@/lib/keyboard-normalizer";
 import { mapCodeToKey } from "@/lib/keyboard-mapper";
+import { checkForSystemConflict, formatConflictMessage } from "@/lib/hotkey-conflicts";
 
 interface HotkeyInputProps {
   value: string;
@@ -147,8 +148,20 @@ export const HotkeyInput = React.memo(function HotkeyInput({
           setValidationError(validation.error || "Invalid key combination");
           setPendingHotkey("");
         } else {
-          setPendingHotkey(shortcut);
-          setValidationError("");
+          // Check for system conflicts
+          const conflict = checkForSystemConflict(shortcut);
+          if (conflict) {
+            setValidationError(formatConflictMessage(conflict));
+            // Still show the hotkey but with warning for 'warning' severity
+            if (conflict.severity === 'warning') {
+              setPendingHotkey(shortcut);
+            } else {
+              setPendingHotkey("");
+            }
+          } else {
+            setPendingHotkey(shortcut);
+            setValidationError("");
+          }
         }
       }
     };
@@ -178,9 +191,22 @@ export const HotkeyInput = React.memo(function HotkeyInput({
 
         const validation = validateKeyCombinationWithRules(shortcut, validationRules);
         if (validation.valid) {
-          setPendingHotkey(shortcut);
-          setKeys(new Set());
-          setCurrentKeysDisplay("");
+          // Check for system conflicts
+          const conflict = checkForSystemConflict(shortcut);
+          if (conflict) {
+            setValidationError(formatConflictMessage(conflict));
+            // Still allow setting it, but with warning
+            if (conflict.severity === 'warning') {
+              setPendingHotkey(shortcut);
+              setKeys(new Set());
+              setCurrentKeysDisplay("");
+            }
+          } else {
+            setPendingHotkey(shortcut);
+            setKeys(new Set());
+            setCurrentKeysDisplay("");
+            setValidationError("");
+          }
         } else {
           setValidationError(validation.error || "Invalid key combination");
         }

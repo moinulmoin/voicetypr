@@ -168,6 +168,11 @@ impl LicenseApiClient {
             body["osVersion"] = json!(os_version);
         }
 
+        // Add device name (hostname)
+        if let Some(device_name) = System::host_name() {
+            body["deviceName"] = json!(device_name);
+        }
+
         let response = self
             .client
             .post(&url)

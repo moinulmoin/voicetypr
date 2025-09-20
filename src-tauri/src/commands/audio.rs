@@ -268,7 +268,7 @@ pub async fn start_recording(
 
                     // Emit user-friendly error
                     let _ = emit_to_window(&app, "pill", "recording-error",
-                        "Could not access microphone. Please check your audio settings and permissions.");
+                        "Microphone access failed");
 
                     return Err("Failed to start recording".to_string());
                 } else {
@@ -295,13 +295,13 @@ pub async fn start_recording(
 
                 // Provide specific error messages for common issues
                 let user_message = if e.contains("permission") || e.contains("access") {
-                    "Microphone access denied. Please grant permission in System Preferences."
+                    "Microphone permission denied"
                 } else if e.contains("device") || e.contains("not found") {
-                    "No microphone found. Please connect a microphone and try again."
+                    "No microphone found"
                 } else if e.contains("in use") || e.contains("busy") {
-                    "Microphone is being used by another application. Please close other recording apps."
+                    "Microphone busy"
                 } else {
-                    "Could not start recording. Please check your audio settings."
+                    "Recording failed"
                 };
 
                 let _ = emit_to_window(&app, "pill", "recording-error", user_message);
@@ -990,7 +990,7 @@ pub async fn stop_recording(
                                     &app_for_process,
                                     "pill",
                                     "paste-error",
-                                    "Text copied to clipboard. Grant accessibility permission to auto-paste."
+                                    "Text copied - grant permission to auto-paste"
                                 );
 
                                 // Keep pill visible for 3 seconds with error
@@ -1006,7 +1006,7 @@ pub async fn stop_recording(
                                     &app_for_process,
                                     "main",
                                     "paste-error",
-                                    format!("Failed to paste text: {}. Text is in clipboard.", e),
+                                    format!("Paste failed - text in clipboard"),
                                 );
                             }
                         }

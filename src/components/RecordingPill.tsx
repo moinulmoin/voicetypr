@@ -109,7 +109,7 @@ export function RecordingPill() {
     unlisteners.push(
       listen("recording-stopped-silence", () => {
         console.log("RecordingPill: Received recording-stopped-silence event");
-        setFeedbackWithTimeout("Recording stopped - no sound detected", 2000);
+        setFeedbackWithTimeout("No sound detected", 2000);
       })
     );
 
