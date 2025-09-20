@@ -70,6 +70,8 @@ export function RecordingPill() {
 
   // Use settings from context
   const compactRecordingStatus = useSetting('compact_recording_status');
+  const recordingMode = useSetting('recording_mode');
+  const isPushToTalk = recordingMode === 'push_to_talk';
 
   useEffect(() => {
     setIsCompact(compactRecordingStatus !== false);
@@ -107,7 +109,7 @@ export function RecordingPill() {
     unlisteners.push(
       listen("recording-stopped-silence", () => {
         console.log("RecordingPill: Received recording-stopped-silence event");
-        setFeedbackWithTimeout("Recording stopped - no sound detected", 2000);
+        setFeedbackWithTimeout("No sound detected", 2000);
       })
     );
 
@@ -229,7 +231,7 @@ export function RecordingPill() {
             ) : (
               <>
                 <AudioWaveAnimation audioLevel={audioLevel} className={isCompact ? "scale-80" : ""} />
-                {!isCompact && "Listening"}
+                {!isCompact && (isPushToTalk ? "Release to stop" : "Listening")}
               </>
             )}
           </Button>

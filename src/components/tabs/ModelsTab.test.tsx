@@ -6,7 +6,9 @@ import { ModelsTab } from './ModelsTab';
 vi.mock('sonner', () => ({
   toast: {
     info: vi.fn(),
-    warning: vi.fn()
+    warning: vi.fn(),
+    error: vi.fn(),
+    success: vi.fn()
   }
 }));
 
@@ -25,16 +27,20 @@ let mockModels = {
   'small.en': { id: 'small.en', name: 'Small English', size: 244, downloaded: false }
 };
 
-vi.mock('@/hooks/useModelManagement', () => ({
-  useModelManagement: () => ({
+// Mock the ModelManagementContext that ModelsTab actually imports
+vi.mock('@/contexts/ModelManagementContext', () => ({
+  useModelManagementContext: () => ({
     models: mockModels,
     downloadProgress: {},
     verifyingModels: new Set(),
-    sortedModels: Object.values(mockModels),
+    sortedModels: Object.entries(mockModels),
     downloadModel: vi.fn(),
     deleteModel: vi.fn(),
-    selectModel: vi.fn(),
-    retryDownload: vi.fn()
+    cancelDownload: vi.fn(),
+    retryDownload: vi.fn(),
+    refreshModels: vi.fn(),
+    preloadModel: vi.fn(),
+    verifyModel: vi.fn()
   })
 }));
 
@@ -70,15 +76,15 @@ describe('ModelsTab', () => {
     expect(screen.getByText('Models Count: 2')).toBeInTheDocument();
   });
 
-  it('shows toast on download retry', async () => {
+  it('shows error toast on download failure', async () => {
     const { toast } = await import('sonner');
     render(<ModelsTab />);
-    
-    const callback = (window as any).__testEventCallbacks['download-retry'];
-    callback({ model: 'small.en', attempt: 1, max_attempts: 3 });
 
-    expect(toast.warning).toHaveBeenCalledWith(
-      'Download Retry',
+    const callback = (window as any).__testEventCallbacks['download-error'];
+    callback({ model: 'small.en', error: 'Network error' });
+
+    expect(toast.error).toHaveBeenCalledWith(
+      'Download Failed',
       expect.objectContaining({
         description: expect.stringContaining('small.en')
       })

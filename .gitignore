@@ -41,4 +41,6 @@ agent-reports
 
 notarized-build-*
 
-.claudedocs/
+claudedocs/
+
+agent-docs/

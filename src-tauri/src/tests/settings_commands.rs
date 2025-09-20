@@ -31,6 +31,7 @@ mod tests {
             compact_recording_status: true,
             translate_to_english: false,
             check_updates_automatically: true,
+            selected_microphone: None,
         };
 
         // Test serialization
@@ -83,6 +84,7 @@ mod tests {
             compact_recording_status: false,
             translate_to_english: true,
             check_updates_automatically: true,
+            selected_microphone: Some("USB Microphone".to_string()),
         };
 
         let cloned = settings.clone();

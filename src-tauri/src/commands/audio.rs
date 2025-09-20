@@ -1,8 +1,8 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
-use crate::audio::validator::{AudioValidator, AudioValidationResult};
 use crate::commands::license::check_license_status_internal;
+use crate::commands::settings::get_settings;
 use crate::license::LicenseState;
 use crate::utils::logger::*;
 #[cfg(debug_assertions)]
@@ -175,6 +175,23 @@ pub async fn start_recording(
         .map_err(|e| format!("Failed to acquire path lock: {}", e))?
         .replace(audio_path.clone());
 
+    // Get selected microphone from settings (before acquiring recorder lock)
+    let selected_microphone = match get_settings(app.clone()).await {
+        Ok(settings) => {
+            if let Some(mic) = settings.selected_microphone {
+                log::info!("Using selected microphone: {}", mic);
+                Some(mic)
+            } else {
+                log::info!("Using default microphone");
+                None
+            }
+        },
+        Err(e) => {
+            log::warn!("Failed to get settings for microphone selection: {}. Using default.", e);
+            None
+        }
+    };
+
     // Start recording (scoped to release mutex before async operations)
     {
         let mut recorder = state
@@ -226,10 +243,17 @@ pub async fn start_recording(
             
         log_file_operation("RECORDING_START", audio_path_str, false, None, None);
         
-        match recorder.start_recording(audio_path_str) {
+        // Start recording and get audio level receiver
+        let audio_level_rx = match recorder.start_recording(audio_path_str, selected_microphone.clone()) {
             Ok(_) => {
                 // Verify recording actually started
-                if !recorder.is_recording() {
+                let is_recording = recorder.is_recording();
+                
+                // Get the audio level receiver before potentially dropping recorder
+                let rx = recorder.take_audio_level_receiver();
+                
+                if !is_recording {
+                    drop(recorder); // Release the lock if we're erroring out
                     log_failed("RECORDER_INIT", "Recording failed to start after initialization");
                     log_with_context(log::Level::Debug, "Recorder initialization failed", &[
                         ("audio_path", audio_path_str),
@@ -244,7 +268,7 @@ pub async fn start_recording(
 
                     // Emit user-friendly error
                     let _ = emit_to_window(&app, "pill", "recording-error",
-                        "Could not access microphone. Please check your audio settings and permissions.");
+                        "Microphone access failed");
 
                     return Err("Failed to start recording".to_string());
                 } else {
@@ -257,6 +281,8 @@ pub async fn start_recording(
                     #[cfg(debug_assertions)]
                     system_monitor::log_resources_before_operation("RECORDING_START");
                 }
+                
+                rx // Return the audio level receiver
             }
             Err(e) => {
                 log_failed("RECORDER_START", &e);
@@ -269,23 +295,26 @@ pub async fn start_recording(
 
                 // Provide specific error messages for common issues
                 let user_message = if e.contains("permission") || e.contains("access") {
-                    "Microphone access denied. Please grant permission in System Preferences."
+                    "Microphone permission denied"
                 } else if e.contains("device") || e.contains("not found") {
-                    "No microphone found. Please connect a microphone and try again."
+                    "No microphone found"
                 } else if e.contains("in use") || e.contains("busy") {
-                    "Microphone is being used by another application. Please close other recording apps."
+                    "Microphone busy"
                 } else {
-                    "Could not start recording. Please check your audio settings."
+                    "Recording failed"
                 };
 
                 let _ = emit_to_window(&app, "pill", "recording-error", user_message);
 
                 return Err(e);
             }
-        }
+        };
 
-        // Start audio level monitoring before releasing the lock
-        if let Some(audio_level_rx) = recorder.take_audio_level_receiver() {
+        // Release the recorder lock after successful start
+        drop(recorder);
+
+        // Start audio level monitoring 
+        if let Some(audio_level_rx) = audio_level_rx {
             let app_for_levels = app.clone();
             // Use a thread instead of tokio spawn for std::sync::mpsc
             std::thread::spawn(move || {
@@ -532,182 +561,12 @@ pub async fn stop_recording(
         }
     };
 
-    // === AUDIO VALIDATION - Check quality before transcription ===
-    // Important: Keep pill window visible during validation for feedback
-    let validation_start = Instant::now();
-    log_start("AUDIO_VALIDATION");
-    log_with_context(log::Level::Debug, "Validating audio", &[
+    // === Audio validation now handled by transcriber ===
+    // Transcriber will check duration and format during processing
+    log_with_context(log::Level::Debug, "Proceeding directly to transcription", &[
         ("audio_path", &format!("{:?}", audio_path).as_str()),
         ("stage", "pre_transcription")
     ]);
-    
-    let validator = AudioValidator::new();
-    
-    match validator.validate_audio_file(&audio_path) {
-        Ok(AudioValidationResult::Valid { energy, duration, peak, .. }) => {
-            log_audio_metrics("VALIDATION_PASSED", energy as f64, peak as f64, duration, 
-                Some(&{
-                    let mut ctx = std::collections::HashMap::new();
-                    ctx.insert("validation_time_ms".to_string(), validation_start.elapsed().as_millis().to_string());
-                    ctx
-                }));
-            log_with_context(log::Level::Info, "Audio validation passed", &[
-                ("operation", "AUDIO_VALIDATION"),
-                ("result", "valid"),
-                ("energy", &energy.to_string().as_str()),
-                ("duration", &format!("{:.2}", duration).as_str()),
-                ("peak", &peak.to_string().as_str())
-            ]);
-            // Continue with transcription
-        }
-        Ok(AudioValidationResult::Silent) => {
-            log::warn!("Audio validation FAILED: No speech detected (silent audio)");
-            
-            // Clean up audio file
-            if let Err(e) = std::fs::remove_file(&audio_path) {
-                log::warn!("Failed to remove silent audio file: {}", e);
-            }
-            
-            // Emit to pill window for immediate user feedback
-            let _ = emit_to_window(
-                &app,
-                "pill",
-                "transcription-empty",
-                "No speech detected"
-            );
-            
-            // Wait for feedback to show before hiding pill
-            let app_for_hide = app.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-                
-                // Hide pill window
-                if let Err(e) = crate::commands::window::hide_pill_widget(app_for_hide.clone()).await {
-                    log::error!("Failed to hide pill window: {}", e);
-                }
-                
-                // Transition back to Idle
-                update_recording_state(&app_for_hide, RecordingState::Idle, None);
-            });
-            
-            return Ok("".to_string()); // Don't proceed to transcription
-        }
-        Ok(AudioValidationResult::TooQuiet { energy, suggestion }) => {
-            log::warn!("Audio validation FAILED: Audio too quiet (RMS={:.6})", energy);
-            
-            // Clean up audio file
-            if let Err(e) = std::fs::remove_file(&audio_path) {
-                log::warn!("Failed to remove quiet audio file: {}", e);
-            }
-            
-            // Emit to pill window for immediate user feedback  
-            let _ = emit_to_window(
-                &app,
-                "pill",
-                "transcription-empty",
-                "Audio too quiet - please speak louder"
-            );
-            
-            // Wait for feedback to show before hiding pill
-            let app_for_hide = app.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-                
-                // Hide pill window
-                if let Err(e) = crate::commands::window::hide_pill_widget(app_for_hide.clone()).await {
-                    log::error!("Failed to hide pill window: {}", e);
-                }
-                
-                // Transition back to Idle
-                update_recording_state(&app_for_hide, RecordingState::Idle, None);
-            });
-            
-            return Ok("".to_string()); // Don't proceed to transcription
-        }
-        Ok(AudioValidationResult::TooShort { duration }) => {
-            log::warn!("Audio validation FAILED: Recording too short ({:.2}s)", duration);
-            
-            // Clean up audio file
-            if let Err(e) = std::fs::remove_file(&audio_path) {
-                log::warn!("Failed to remove short audio file: {}", e);
-            }
-            
-            // Emit to pill window for immediate user feedback
-            let _ = emit_to_window(
-                &app,
-                "pill",
-                "transcription-empty",
-                format!("Recording too short ({:.1}s)", duration)
-            );
-            
-            // Wait for feedback to show before hiding pill
-            let app_for_hide = app.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-                
-                // Hide pill window
-                if let Err(e) = crate::commands::window::hide_pill_widget(app_for_hide.clone()).await {
-                    log::error!("Failed to hide pill window: {}", e);
-                }
-                
-                // Transition back to Idle
-                update_recording_state(&app_for_hide, RecordingState::Idle, None);
-            });
-            
-            return Ok("".to_string()); // Don't proceed to transcription
-        }
-        Ok(AudioValidationResult::InvalidFormat(error)) => {
-            log::error!("Audio validation FAILED: Invalid format - {}", error);
-            
-            // Clean up audio file
-            if let Err(e) = std::fs::remove_file(&audio_path) {
-                log::warn!("Failed to remove invalid audio file: {}", e);
-            }
-            
-            // Emit error event
-            let _ = emit_to_window(
-                &app,
-                "main",
-                "no-speech-detected",
-                serde_json::json!({
-                    "title": "Audio Format Error", 
-                    "message": "There was a problem with the audio recording. Please try again.",
-                    "severity": "error",
-                    "actions": ["retry"]
-                }),
-            );
-            
-            // Hide pill window
-            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-                log::error!("Failed to hide pill window: {}", e);
-            }
-            
-            // Transition to error state
-            update_recording_state(&app, RecordingState::Error, Some(error));
-            
-            return Err("Audio format error".to_string());
-        }
-        Err(validation_error) => {
-            log::error!("Audio validation ERROR: {}", validation_error);
-            
-            // Don't clean up audio file - let transcription proceed in degraded mode
-            log::warn!("Proceeding with transcription despite validation error (degraded mode)");
-            
-            // Emit warning but don't stop transcription
-            let _ = emit_to_window(
-                &app,
-                "main",
-                "audio-validation-warning",
-                serde_json::json!({
-                    "title": "Audio Validation Warning",
-                    "message": "Unable to validate audio quality, but proceeding with transcription.",
-                    "severity": "info"
-                }),
-            );
-            
-            // Continue with transcription...
-        }
-    }
 
     // Get current model from settings
     let store = app.store("settings").map_err(|e| e.to_string())?;
@@ -967,6 +826,35 @@ pub async fn stop_recording(
 
                 log::debug!("Transcription successful, {} chars", text.len());
 
+                // Check if transcription is empty or just noise
+                if text.is_empty() || text.trim().is_empty() || text == "[BLANK_AUDIO]" {
+                    log::info!("Whisper returned empty transcription - no speech detected");
+
+                    // Emit graceful feedback to user
+                    let _ = emit_to_window(
+                        &app_for_task,
+                        "pill",
+                        "transcription-empty",
+                        "No speech detected - try speaking closer to the microphone"
+                    );
+
+                    // Wait for feedback to show before hiding pill
+                    let app_for_hide = app_for_task.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+
+                        // Hide pill window
+                        if let Err(e) = crate::commands::window::hide_pill_widget(app_for_hide.clone()).await {
+                            log::error!("Failed to hide pill window: {}", e);
+                        }
+
+                        // Transition back to Idle
+                        update_recording_state(&app_for_hide, RecordingState::Idle, None);
+                    });
+
+                    return;
+                }
+
                 // Check if AI enhancement is enabled BEFORE spawning task
                 let ai_enabled = match app_for_task.store("settings") {
                     Ok(store) => store
@@ -1102,7 +990,7 @@ pub async fn stop_recording(
                                     &app_for_process,
                                     "pill",
                                     "paste-error",
-                                    "Text copied to clipboard. Grant accessibility permission to auto-paste."
+                                    "Text copied - grant permission to auto-paste"
                                 );
 
                                 // Keep pill visible for 3 seconds with error
@@ -1118,7 +1006,7 @@ pub async fn stop_recording(
                                     &app_for_process,
                                     "main",
                                     "paste-error",
-                                    format!("Failed to paste text: {}. Text is in clipboard.", e),
+                                    format!("Paste failed - text in clipboard"),
                                 );
                             }
                         }
@@ -1129,8 +1017,8 @@ pub async fn stop_recording(
                         .await
                     {
                         Ok(_) => {
-                            // Emit history-updated event to refresh UI
-                            let _ = emit_to_window(&app_for_process, "main", "history-updated", ());
+                            // Event is emitted inside save_transcription now
+                            log::debug!("Transcription saved successfully");
                         }
                         Err(e) => log::error!("Failed to save transcription: {}", e),
                     }
@@ -1150,6 +1038,31 @@ pub async fn stop_recording(
                         log::error!("Failed to hide pill window on cancellation: {}", hide_err);
                     }
                     update_recording_state(&app_for_task, RecordingState::Idle, None);
+                } else if e.contains("too short") {
+                    // Handle "too short" errors with specific user feedback
+                    log::info!("Recording was too short: {}", e);
+
+                    // Clean up the audio file
+                    if let Err(cleanup_err) = std::fs::remove_file(&audio_path_clone) {
+                        log::warn!("Failed to remove short audio file: {}", cleanup_err);
+                    }
+
+                    // Emit specific feedback to pill window
+                    let _ = emit_to_window(&app_for_task, "pill", "transcription-empty", &e);
+
+                    // Hide pill after showing feedback
+                    let app_for_reset = app_for_task.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+
+                        if let Err(e) =
+                            crate::commands::window::hide_pill_widget(app_for_reset.clone()).await
+                        {
+                            log::error!("Failed to hide pill window: {}", e);
+                        }
+
+                        update_recording_state(&app_for_reset, RecordingState::Idle, None);
+                    });
                 } else {
                     // For other errors, show error state briefly
                     update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
@@ -1243,21 +1156,20 @@ pub async fn save_transcription(app: AppHandle, text: String, model: String) -> 
         .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
 
     let timestamp = chrono::Utc::now().to_rfc3339();
-    store.set(
-        &timestamp,
-        serde_json::json!({
-            "text": text,
-            "model": model,
-            "timestamp": timestamp
-        }),
-    );
+    let transcription_data = serde_json::json!({
+        "text": text.clone(),
+        "model": model,
+        "timestamp": timestamp.clone()
+    });
+    
+    store.set(&timestamp, transcription_data.clone());
 
     store
         .save()
         .map_err(|e| format!("Failed to save transcription: {}", e))?;
 
-    // Emit event to main window to notify that history was updated
-    let _ = emit_to_window(&app, "main", "history-updated", ());
+    // Emit the new transcription data to frontend for append-only update
+    let _ = emit_to_window(&app, "main", "transcription-added", transcription_data);
 
     log::info!("Saved transcription with {} characters", text.len());
     Ok(())
@@ -1288,6 +1200,92 @@ pub async fn get_transcription_history(
 
     // Return just the values
     Ok(entries.into_iter().map(|(_, v)| v).collect())
+}
+
+#[tauri::command]
+pub async fn transcribe_audio_file(
+    app: AppHandle,
+    file_path: String,
+    model_name: String,
+) -> Result<String, String> {
+    // Validate requirements (includes license check)
+    validate_recording_requirements(&app).await?;
+
+    // Use the provided file path directly
+    let audio_path = std::path::Path::new(&file_path);
+
+    // Validate file exists
+    if !audio_path.exists() {
+        return Err(format!("Audio file not found: {}", file_path));
+    }
+
+    // Convert to WAV if needed
+    let recordings_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recordings");
+
+    std::fs::create_dir_all(&recordings_dir)
+        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+
+    let wav_path = crate::audio::converter::convert_to_wav(audio_path, &recordings_dir)?;
+    let is_converted = wav_path != audio_path;
+
+    // Get model path
+    let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
+    let model_path = whisper_manager
+        .read()
+        .await
+        .get_model_path(&model_name)
+        .ok_or("Model not found")?;
+
+    // Get language and translation settings
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    let language = {
+        let lang = store
+            .get("language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "en".to_string());
+
+        // Validate using centralized function
+        validate_language(Some(&lang))
+    };
+
+    let translate_to_english = store
+        .get("translate_to_english")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    log::info!(
+        "[LANGUAGE] transcribe_audio_file using language: {}, translate: {}",
+        language,
+        translate_to_english
+    );
+
+    // Transcribe from the (possibly converted) WAV file
+    let transcriber = {
+        let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
+        let mut cache = cache_state.lock().await;
+        cache.get_or_create(&model_path)?
+    };
+
+    let text = transcriber.transcribe_with_translation(
+        &wav_path,
+        Some(&language),
+        translate_to_english,
+    )?;
+
+    // Clean up temporary WAV file if we created one
+    if is_converted {
+        if let Err(e) = std::fs::remove_file(&wav_path) {
+            log::warn!("Failed to remove temporary WAV file: {}", e);
+        } else {
+            log::debug!("Cleaned up temporary converted WAV file");
+        }
+    }
+
+    Ok(text)
 }
 
 #[tauri::command]
@@ -1482,6 +1480,7 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     log::info!("=== CANCEL RECORDING COMPLETED ===");
     Ok(())
 }
+
 
 #[tauri::command]
 pub async fn delete_transcription_entry(app: AppHandle, timestamp: String) -> Result<(), String> {

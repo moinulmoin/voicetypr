@@ -1,51 +1,51 @@
-import { XformerlyTwitter } from "@/assets/icon";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useSettings } from '@/contexts/SettingsContext';
-import { getVersion } from '@tauri-apps/api/app';
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { check } from '@tauri-apps/plugin-updater';
 import { open } from '@tauri-apps/plugin-shell';
-import { Mail } from "lucide-react";
+import { getVersion } from '@tauri-apps/api/app';
+import { 
+  ExternalLink,
+  Globe,
+  Info,
+  RefreshCw
+} from "lucide-react";
+import XIcon from "@/components/icons/XIcon";
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { updateService } from '@/services/updateService';
 
 export function AboutSection() {
-  const { updateSettings } = useSettings();
-  const [checking, setChecking] = useState(false);
-  const [resetting, setResetting] = useState(false);
-  const [appVersion, setAppVersion] = useState<string>('Loading...');
+  const [appVersion, setAppVersion] = useState<string>('');
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
 
   useEffect(() => {
-    getVersion().then(setAppVersion).catch(() => setAppVersion('Unknown'));
+    const fetchVersion = async () => {
+      try {
+        const version = await getVersion();
+        setAppVersion(version);
+      } catch (error) {
+        console.error('Failed to get app version:', error);
+        setAppVersion('Unknown');
+      }
+    };
+
+    fetchVersion();
   }, []);
 
-  const handleResetOnboarding = async () => {
-    setResetting(true);
+  const handleCheckUpdate = async () => {
+    setIsCheckingUpdate(true);
     try {
-      // Update settings to set onboarding_completed to false
-      await updateSettings({
-        onboarding_completed: false,
-      });
-
-      toast.success("Onboarding reset! Restarting the app.");
-
-      // Reload the window to trigger onboarding
-      setTimeout(() => {
-        window.location.reload();
-      }, 1000);
+      const update = await check();
+      if (update?.available) {
+        toast.info(`Update available: v${update.version}`);
+      } else {
+        toast.success('You are on the latest version');
+      }
     } catch (error) {
-      console.error('Failed to reset onboarding:', error);
-      toast.error("Failed to reset onboarding");
+      console.error('Failed to check for updates:', error);
+      toast.error('Failed to check for updates');
     } finally {
-      setResetting(false);
-    }
-  };
-
-  const handleCheckForUpdates = async () => {
-    setChecking(true);
-    try {
-      await updateService.checkForUpdatesManually();
-    } finally {
-      setChecking(false);
+      setIsCheckingUpdate(false);
     }
   };
 
@@ -59,63 +59,90 @@ export function AboutSection() {
   };
 
   return (
-    <div className="p-6 h-full flex flex-col">
-      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-6">About VoiceTypr</h2>
-
-      <div className="flex-1 space-y-6">
-        {/* App Info Section */}
-        <div className="space-y-4">
-          {/* Version */}
-          <div className="flex items-center gap-3">
-            <p className="text-sm text-gray-600 dark:text-gray-400">Version</p>
-            <p className="text-base font-medium">{appVersion}</p>
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="px-6 py-4 border-b border-border/40">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold">About</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              App information and resources
+            </p>
           </div>
         </div>
-
-        {/* Links Section */}
-        <div className="flex items-center gap-6 mt-8">
-            <button
-              onClick={() => openExternalLink("mailto:support@voicetypr.com")}
-              className="flex items-center gap-2 text-sm text-gray-900 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-400 hover:underline underline-offset-4"
-            >
-              <Mail className="w-4 h-4" />
-              support@voicetypr.com
-            </button>
-            <button
-              onClick={() => openExternalLink("https://twitter.com/voicetypr")}
-              className="flex items-center gap-2 text-sm text-gray-900 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-400 hover:underline underline-offset-4"
-            >
-              <XformerlyTwitter className="w-4 h-4" />
-              @voicetypr
-            </button>
-        </div>
-
-        {/* Check for Updates Button */}
-        <div className="mt-12 flex justify-center">
-          <Button
-            size="sm"
-            variant="default"
-            onClick={handleCheckForUpdates}
-            className="h-8"
-            disabled={checking}
-          >
-            {checking ? "Checking..." : "Check for Updates"}
-          </Button>
-        </div>
       </div>
 
-      {/* Reset Onboarding at the absolute bottom */}
-      <div className="flex justify-center mt-auto pt-6">
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={handleResetOnboarding}
-          className="h-8 text-muted-foreground hover:text-foreground"
-          disabled={resetting}
-        >
-          {resetting ? "Resetting..." : "Reset Onboarding"}
-        </Button>
-      </div>
+      <ScrollArea className="flex-1">
+        <div className="p-6 space-y-6">
+          {/* App Information Section */}
+          <div className="space-y-4">
+            <h2 className="text-base font-semibold">App Information</h2>
+            
+            <div className="rounded-lg border border-border/50 bg-card p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Info className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">Version</span>
+                </div>
+                <Badge variant="secondary" className="font-mono">
+                  v{appVersion || 'Loading...'}
+                </Badge>
+              </div>
+
+              <div className="flex justify-center">
+                <Button
+                  onClick={handleCheckUpdate}
+                  disabled={isCheckingUpdate}
+                  variant="ghost"
+                  size="sm"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
+                  {isCheckingUpdate ? 'Checking...' : 'Check for Updates'}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Resources Section */}
+          <div className="space-y-4">
+            <h2 className="text-base font-semibold">Resources</h2>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => openExternalLink("https://voicetypr.com")}
+                className="flex-1 rounded-lg border border-border/50 bg-card p-4 flex items-center justify-between hover:bg-accent/50 transition-colors group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-1.5 rounded-md bg-primary/10">
+                    <Globe className="h-4 w-4 text-primary" />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-sm font-medium">Website</p>
+                    <p className="text-xs text-muted-foreground">Official site</p>
+                  </div>
+                </div>
+                <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
+              </button>
+
+              <button
+                onClick={() => openExternalLink("https://x.com/voicetypr")}
+                className="flex-1 rounded-lg border border-border/50 bg-card p-4 flex items-center justify-between hover:bg-accent/50 transition-colors group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-1.5 rounded-md bg-accent">
+                    <XIcon className="h-4 w-4 text-foreground" />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-sm font-medium">X</p>
+                    <p className="text-xs text-muted-foreground">Follow for updates</p>
+                  </div>
+                </div>
+                <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </ScrollArea>
     </div>
   );
 }

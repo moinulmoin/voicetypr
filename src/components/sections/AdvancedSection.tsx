@@ -15,9 +15,6 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   CheckCircle,
-  FileText,
-  HelpCircle,
-  Key,
   Keyboard,
   Loader2,
   Mic,
@@ -108,24 +105,26 @@ export function AdvancedSection() {
 
   return (
     <PermissionErrorBoundary>
-      <div className="h-full flex flex-col p-6">
-        <div className="flex-shrink-0 mb-4 space-y-3">
-          <h2 className="text-lg font-semibold">Advanced Settings</h2>
-          <p className="text-sm text-muted-foreground">
-            System permissions and app management
-          </p>
+      <div className="h-full flex flex-col">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-border/40">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-semibold">Advanced</h1>
+              <p className="text-sm text-muted-foreground mt-1">
+                System permissions and app management
+              </p>
+            </div>
+          </div>
         </div>
 
-        <ScrollArea className="flex-1 min-h-0">
-          <div className="space-y-6">
+        <ScrollArea className="flex-1">
+          <div className="p-6 space-y-6">
             {/* Permissions Section - Only show on macOS */}
             {showAccessibility && (
-              <div className="rounded-lg border bg-card p-4 space-y-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <Key className="h-4 w-4 text-muted-foreground" />
-                    <h3 className="text-sm font-medium">Permissions</h3>
-                  </div>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-base font-semibold">Permissions</h2>
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -150,8 +149,7 @@ export function AdvancedSection() {
                   </TooltipProvider>
                 </div>
 
-
-                <div className="space-y-3">
+                <div className="rounded-lg border border-border/50 bg-card p-4 space-y-3">
                   {permissionData.map((perm) => (
                     <div
                       key={perm.type}
@@ -207,26 +205,24 @@ export function AdvancedSection() {
             )}
 
             {/* Reset Options Section */}
-            <div className="rounded-lg border bg-card p-4 space-y-4">
-              <div className="flex items-center gap-2 mb-2">
-                <RefreshCw className="h-4 w-4 text-muted-foreground" />
-                <h3 className="text-sm font-medium">Reset Options</h3>
-              </div>
+            <div className="space-y-4">
+              <h2 className="text-base font-semibold">Reset Options</h2>
 
-              <div className="space-y-4">
-                <div>
-                  <p className="text-sm font-medium mb-1">Reset Onboarding</p>
-                  <p className="text-xs text-muted-foreground mb-3">
-                    Re-run the initial setup wizard
-                  </p>
+              <div className="rounded-lg border border-border/50 bg-card p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <p className="text-sm font-medium">Reset Onboarding</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Re-run the initial setup wizard
+                    </p>
+                  </div>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={handleResetOnboarding}
-                    className="w-full"
                   >
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Reset Onboarding
+                    <RefreshCw className="h-3 w-3" />
+                    Reset
                   </Button>
                 </div>
 
@@ -289,38 +285,6 @@ export function AdvancedSection() {
               </div>
             </div>
 
-            {/* Diagnostics Section */}
-            <div className="rounded-lg border bg-card p-4 space-y-4">
-              <div className="flex items-center gap-2 mb-2">
-                <HelpCircle className="h-4 w-4 text-muted-foreground" />
-                <h3 className="text-sm font-medium">Diagnostics</h3>
-              </div>
-
-              <div className="space-y-3">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={async () => {
-                    try {
-                      await invoke("open_logs_folder");
-                    } catch (error) {
-                      console.error("Failed to open logs folder:", error);
-                      toast.error("Failed to open logs folder");
-                    }
-                  }}
-                  className="w-full justify-start"
-                >
-                  <FileText className="mr-2 h-4 w-4" />
-                  Open Logs Folder
-                </Button>
-
-                <div className="text-xs text-muted-foreground space-y-1">
-                  <p>• Debug logs are saved automatically with daily rotation</p>
-                  <p>• Logs older than 30 days are automatically deleted</p>
-                  <p>• Share logs when reporting issues</p>
-                </div>
-              </div>
-            </div>
           </div>
         </ScrollArea>
       </div>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HotkeyInput } from './HotkeyInput';
 
@@ -17,7 +17,7 @@ describe('HotkeyInput', () => {
     vi.clearAllMocks();
   });
 
-  it('should render with initial value showing kbd elements', () => {
+  it('displays the current hotkey value', () => {
     render(
       <HotkeyInput 
         value="CommandOrControl+Shift+Space" 
@@ -26,16 +26,13 @@ describe('HotkeyInput', () => {
       />
     );
 
-    // Check for the kbd elements displaying the hotkey
+    // User should see the hotkey displayed with platform-specific symbols
     expect(screen.getByText('⌘')).toBeInTheDocument();
     expect(screen.getByText('⇧')).toBeInTheDocument();
     expect(screen.getByText('Space')).toBeInTheDocument();
-    
-    // Check for the edit button
-    expect(screen.getByTitle('Change hotkey')).toBeInTheDocument();
   });
 
-  it('should display placeholder when no value', () => {
+  it('shows placeholder when no hotkey is set', () => {
     render(
       <HotkeyInput 
         value="" 
@@ -44,12 +41,10 @@ describe('HotkeyInput', () => {
       />
     );
 
-    // Check for placeholder text
     expect(screen.getByText('Click to set hotkey')).toBeInTheDocument();
-    expect(screen.getByTitle('Change hotkey')).toBeInTheDocument();
   });
 
-  it('should enter recording mode on Edit click', async () => {
+  it('allows user to edit the hotkey', async () => {
     const user = userEvent.setup();
     
     render(
@@ -60,19 +55,44 @@ describe('HotkeyInput', () => {
       />
     );
 
-    // Find the edit button by its title
+    // User clicks the edit button
     const editButton = screen.getByTitle('Change hotkey');
     await user.click(editButton);
 
-    // Check if we're in edit mode by looking for the save and cancel buttons
+    // User should see they can now set a new hotkey
+    expect(screen.getByText('Press keys to set hotkey')).toBeInTheDocument();
     expect(screen.getByTitle('Save hotkey')).toBeInTheDocument();
     expect(screen.getByTitle('Cancel')).toBeInTheDocument();
-    
-    // Should show instruction text
-    expect(screen.getByText('Press keys to set hotkey')).toBeInTheDocument();
   });
 
-  it('should save valid hotkey on Save click', async () => {
+  it('allows user to cancel editing', async () => {
+    const user = userEvent.setup();
+    
+    render(
+      <HotkeyInput 
+        value="CommandOrControl+Space" 
+        onChange={mockOnChange}
+        placeholder="Click to set hotkey"
+      />
+    );
+
+    // User starts editing
+    const editButton = screen.getByTitle('Change hotkey');
+    await user.click(editButton);
+
+    // User decides to cancel
+    const cancelButton = screen.getByTitle('Cancel');
+    await user.click(cancelButton);
+
+    // Should return to showing the original hotkey
+    expect(screen.getByText('⌘')).toBeInTheDocument();
+    expect(screen.getByText('Space')).toBeInTheDocument();
+    
+    // Should not have changed the value
+    expect(mockOnChange).not.toHaveBeenCalled();
+  });
+
+  it('prevents saving invalid hotkey combinations', async () => {
     const user = userEvent.setup();
     
     render(
@@ -83,20 +103,40 @@ describe('HotkeyInput', () => {
       />
     );
 
-    // Click the edit button to enter edit mode
+    // User starts editing
     const editButton = screen.getByTitle('Change hotkey');
     await user.click(editButton);
 
-    // Now we should be in edit mode
-    expect(screen.getByText('Press keys to set hotkey')).toBeInTheDocument();
+    // User presses just one key (invalid combination)
+    await user.keyboard('a');
 
-    // Simulate recording a valid combination
-    fireEvent.keyDown(document, { key: 'Meta', metaKey: true });
-    fireEvent.keyDown(document, { key: 'a', metaKey: true });
-    fireEvent.keyUp(document, { key: 'a', metaKey: true });
-    fireEvent.keyUp(document, { key: 'Meta' });
+    // Save button should be disabled and error shown
+    await waitFor(() => {
+      const saveButton = screen.getByTitle('Save hotkey');
+      expect(saveButton).toBeDisabled();
+      expect(screen.getByText(/Minimum 2 key\(s\) required/)).toBeInTheDocument();
+    });
+  });
 
-    // Wait for the keys to be processed
+  it('saves valid hotkey combinations', async () => {
+    const user = userEvent.setup();
+    
+    render(
+      <HotkeyInput 
+        value="" 
+        onChange={mockOnChange}
+        placeholder="Click to set hotkey"
+      />
+    );
+
+    // User starts editing
+    const editButton = screen.getByTitle('Change hotkey');
+    await user.click(editButton);
+
+    // User presses a valid combination (Cmd+A on Mac)
+    await user.keyboard('{Meta>}a{/Meta}');
+
+    // User can save the hotkey
     await waitFor(() => {
       const saveButton = screen.getByTitle('Save hotkey');
       expect(saveButton).not.toBeDisabled();
@@ -105,125 +145,13 @@ describe('HotkeyInput', () => {
     const saveButton = screen.getByTitle('Save hotkey');
     await user.click(saveButton);
 
-    // Should call onChange with the normalized shortcut
+    // Should have called onChange with a normalized value
     await waitFor(() => {
       expect(mockOnChange).toHaveBeenCalled();
     });
   });
 
-  it('should cancel recording on Cancel click', async () => {
-    const user = userEvent.setup();
-    
-    render(
-      <HotkeyInput 
-        value="CommandOrControl+Space" 
-        onChange={mockOnChange}
-        placeholder="Click to set hotkey"
-      />
-    );
-
-    const editButton = screen.getByTitle('Change hotkey');
-    await user.click(editButton);
-
-    const cancelButton = screen.getByTitle('Cancel');
-    await user.click(cancelButton);
-
-    // Should be back in display mode
-    expect(screen.getByTitle('Change hotkey')).toBeInTheDocument();
-    expect(mockOnChange).not.toHaveBeenCalled();
-    
-    // Should still show the original value
-    expect(screen.getByText('⌘')).toBeInTheDocument();
-    expect(screen.getByText('Space')).toBeInTheDocument();
-  });
-
-  it('should validate key combinations', async () => {
-    const user = userEvent.setup();
-    
-    render(
-      <HotkeyInput 
-        value="" 
-        onChange={mockOnChange}
-        placeholder="Click to set hotkey"
-      />
-    );
-
-    // Click the edit button to enter edit mode
-    const editButton = screen.getByTitle('Change hotkey');
-    await user.click(editButton);
-
-    // Try with only one key
-    fireEvent.keyDown(document, { key: 'a' });
-    fireEvent.keyUp(document, { key: 'a' });
-
-    // Should show validation error
-    await waitFor(() => {
-      expect(screen.getByText(/Minimum 2 key\(s\) required/)).toBeInTheDocument();
-    });
-    
-    // Save button should be disabled
-    const saveButton = screen.getByTitle('Save hotkey');
-    expect(saveButton).toBeDisabled();
-  });
-
-  it('should handle Escape key to cancel', async () => {
-    const user = userEvent.setup();
-    
-    render(
-      <HotkeyInput 
-        value="CommandOrControl+Space" 
-        onChange={mockOnChange}
-        placeholder="Click to set hotkey"
-      />
-    );
-
-    // Enter edit mode
-    const editButton = screen.getByTitle('Change hotkey');
-    await user.click(editButton);
-
-    // Should now be in edit mode with Cancel button
-    expect(screen.getByTitle('Cancel')).toBeInTheDocument();
-
-    // Start recording by pressing some keys
-    fireEvent.keyDown(document, { key: 'Meta', metaKey: true });
-    
-    // Press Escape to cancel recording
-    fireEvent.keyDown(document, { key: 'Escape' });
-
-    // Should return to display mode
-    await waitFor(() => {
-      expect(screen.getByTitle('Change hotkey')).toBeInTheDocument();
-    });
-    
-    expect(mockOnChange).not.toHaveBeenCalled();
-  });
-
-  it('should disable save button for invalid combinations', async () => {
-    const user = userEvent.setup();
-    
-    render(
-      <HotkeyInput 
-        value="" 
-        onChange={mockOnChange}
-        placeholder="Click to set hotkey"
-      />
-    );
-
-    // Enter edit mode
-    const editButton = screen.getByTitle('Change hotkey');
-    await user.click(editButton);
-
-    // Record only one key
-    fireEvent.keyDown(document, { key: 'a' });
-    fireEvent.keyUp(document, { key: 'a' });
-
-    await waitFor(() => {
-      const saveButton = screen.getByTitle('Save hotkey');
-      expect(saveButton).toBeDisabled();
-    });
-  });
-
-  it('should display correctly formatted shortcuts', () => {
+  it('displays platform-specific symbols correctly', () => {
     render(
       <HotkeyInput 
         value="CommandOrControl+Alt+Delete" 
@@ -233,39 +161,35 @@ describe('HotkeyInput', () => {
     );
 
     // On Mac, should show Mac symbols
-    expect(screen.getByText('⌘')).toBeInTheDocument();
-    expect(screen.getByText('⌥')).toBeInTheDocument();
-    expect(screen.getByText('⌦')).toBeInTheDocument();
+    expect(screen.getByText('⌘')).toBeInTheDocument();  // Command
+    expect(screen.getByText('⌥')).toBeInTheDocument();  // Option/Alt
+    expect(screen.getByText('⌦')).toBeInTheDocument();  // Delete
   });
 
-  it('should handle multi-modifier combinations', async () => {
+  it('allows Escape key to exit edit mode', async () => {
     const user = userEvent.setup();
     
     render(
       <HotkeyInput 
-        value="" 
+        value="CommandOrControl+Space" 
         onChange={mockOnChange}
         placeholder="Click to set hotkey"
       />
     );
 
-    // Enter edit mode
+    // User starts editing
     const editButton = screen.getByTitle('Change hotkey');
     await user.click(editButton);
 
-    // Simulate Cmd+Shift+A
-    fireEvent.keyDown(document, { key: 'Meta', metaKey: true });
-    fireEvent.keyDown(document, { key: 'Shift', metaKey: true, shiftKey: true });
-    fireEvent.keyDown(document, { key: 'a', metaKey: true, shiftKey: true });
-    fireEvent.keyUp(document, { key: 'a' });
-    fireEvent.keyUp(document, { key: 'Shift' });
-    fireEvent.keyUp(document, { key: 'Meta' });
+    // User presses Escape to cancel
+    await user.keyboard('{Escape}');
 
-    // Save button should be enabled for valid combination
+    // Should return to display mode
     await waitFor(() => {
-      const saveButton = screen.getByTitle('Save hotkey');
-      expect(saveButton).not.toBeDisabled();
+      expect(screen.getByTitle('Change hotkey')).toBeInTheDocument();
+      expect(screen.getByText('⌘')).toBeInTheDocument();
     });
+    
+    expect(mockOnChange).not.toHaveBeenCalled();
   });
-
 });

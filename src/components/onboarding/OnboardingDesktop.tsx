@@ -33,7 +33,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   onComplete,
   modelManagement
 }: OnboardingDesktopProps) {
-  const { updateSettings } = useSettings();
+  const { settings, updateSettings } = useSettings();
   const {
     hasPermission: hasMicPermission,
     checkPermission: checkMicPermission,
@@ -46,9 +46,10 @@ export const OnboardingDesktop = function OnboardingDesktop({
   } = useAccessibilityPermission();
 
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
-  const [hotkey, setHotkey] = useState("CommandOrControl+Shift+Space");
+  const [hotkey, setHotkey] = useState(settings?.hotkey || "CommandOrControl+Shift+Space");
   const [isRequesting, setIsRequesting] = useState<string | null>(null);
   const [checkingPermissions, setCheckingPermissions] = useState<Set<string>>(new Set());
+  const [isEditingHotkey, setIsEditingHotkey] = useState(false);
 
   // Convert hook states to onboarding format
   const permissions = {
@@ -180,6 +181,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const saveSettings = async () => {
     try {
       await invoke("set_global_shortcut", { shortcut: hotkey });
+
       await updateSettings({
         hotkey: hotkey,
         current_model: selectedModel || "",
@@ -187,7 +189,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
       });
     } catch (error) {
       console.error("Failed to save settings:", error);
-      toast.error("Failed to save settings. Please try again.");
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      toast.error(errorMessage || "Failed to save settings. Please try again.");
       throw error; // Re-throw to prevent navigation
     }
   };
@@ -499,7 +502,11 @@ export const OnboardingDesktop = function OnboardingDesktop({
                       <Keyboard className="h-4 w-4 text-primary" />
                       Recording Hotkey
                     </label>
-                    <HotkeyInput value={hotkey} onChange={setHotkey} />
+                    <HotkeyInput 
+                      value={hotkey} 
+                      onChange={setHotkey} 
+                      onEditingChange={setIsEditingHotkey}
+                    />
                   </div>
 
                   {/* <Card className="p-4 bg-border-primary/20"> */}
@@ -517,7 +524,11 @@ export const OnboardingDesktop = function OnboardingDesktop({
                     <ChevronLeft className="mr-1 h-4 w-4" />
                     Back
                   </Button>
-                  <Button onClick={handleNext} size="sm">
+                  <Button 
+                    onClick={handleNext} 
+                    size="sm" 
+                    disabled={isEditingHotkey}
+                  >
                     Continue
                     <ChevronRight className="ml-1 h-4 w-4" />
                   </Button>

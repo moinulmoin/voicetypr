@@ -1,4 +1,4 @@
-import { CheckCircle, Download, HardDrive, Loader2, Star, X, Zap } from 'lucide-react';
+import { CheckCircle, Download, HardDrive, Loader2, Star, X, Zap, Trash2 } from 'lucide-react';
 import { ModelInfo } from '../types';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
@@ -42,34 +42,34 @@ export const ModelCard = function ModelCard({
 
   return (
     <Card
-      className={`px-4 py-2 transition-all ${
-        isUsable ? 'cursor-pointer' : ''
+      className={`px-4 py-3 transition-all hover:shadow-sm ${
+        isUsable ? 'cursor-pointer hover:border-border' : ''
       } ${
-        isSelected ? 'border-primary bg-primary/5' : ''
+        isSelected ? 'bg-primary/5 border-border/50' : 'border-border/50'
       }`}
       onClick={() => isUsable && showSelectButton && onSelect(name)}
     >
       <div className="flex items-center justify-between gap-3">
         {/* Model Name */}
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          <h3 className="font-medium">{model.display_name || name}</h3>
+        <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
+          <h3 className="font-medium text-sm">{model.display_name || name}</h3>
           {model.recommended && (
-            <Star className="w-4 h-4 fill-yellow-500 text-yellow-500" aria-label="Recommended model" />
+            <Star className="w-3.5 h-3.5 fill-yellow-500 text-yellow-500" aria-label="Recommended model" />
           )}
         </div>
 
         {/* Centered Stats */}
         <div className="flex items-center justify-center gap-6 flex-1">
           <div className="flex items-center gap-1.5">
-            <Zap className="w-4 h-4 text-muted-foreground" />
+            <Zap className="w-3.5 h-3.5 text-green-500/70" />
             <span className="text-sm font-medium">{model.speed_score}</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <CheckCircle className="w-4 h-4 text-muted-foreground" />
+            <CheckCircle className="w-3.5 h-3.5 text-blue-500/70" />
             <span className="text-sm font-medium">{model.accuracy_score}</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <HardDrive className="w-4 h-4 text-muted-foreground" />
+            <HardDrive className="w-3.5 h-3.5 text-purple-500/70" />
             <span className="text-sm font-medium">{formatSize()}</span>
           </div>
         </div>
@@ -86,22 +86,23 @@ export const ModelCard = function ModelCard({
                     onDelete(name);
                   }}
                   variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                  size="sm"
+                  className="text-muted-foreground hover:text-destructive"
                 >
-                  <X className="w-4 h-4" />
+                  <Trash2 className="w-3.5 h-3.5 mr-1" />
+                  Remove
                 </Button>
               )}
             </>
           ) : isVerifying ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Verifying...
+            <div className="flex items-center gap-2 px-2 py-1 rounded bg-yellow-500/10">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-yellow-600" />
+              <span className="text-xs font-medium text-yellow-600">Verifying</span>
             </div>
           ) : downloadProgress !== undefined ? (
             <>
-              <Progress value={downloadProgress} className="w-24 h-2" />
-              <span className="text-sm font-medium w-10 text-right">{Math.round(downloadProgress)}%</span>
+              <Progress value={downloadProgress} className="w-20 h-1.5" />
+              <span className="text-xs font-medium text-blue-600 w-10 text-right">{Math.round(downloadProgress)}%</span>
               {onCancelDownload && (
                 <Button
                   onClick={(e) => {

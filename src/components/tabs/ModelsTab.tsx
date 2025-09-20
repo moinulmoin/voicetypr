@@ -3,18 +3,14 @@ import { toast } from "sonner";
 import { ModelsSection } from "../sections/ModelsSection";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
-import { useModelManagement } from "@/hooks/useModelManagement";
+import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { AppSettings } from "@/types";
 
 export function ModelsTab() {
   const { registerEvent } = useEventCoordinator("main");
   const { settings, updateSettings } = useSettings();
 
-  // Use the model management hook
-  const modelManagement = useModelManagement({
-    windowId: "main",
-    showToasts: true
-  });
+  // Use the model management context
   const {
     downloadProgress,
     verifyingModels,
@@ -22,7 +18,7 @@ export function ModelsTab() {
     cancelDownload,
     deleteModel,
     sortedModels
-  } = modelManagement;
+  } = useModelManagementContext();
 
   // Handle deleting a model with settings update
   const handleDeleteModel = useCallback(
@@ -53,18 +49,19 @@ export function ModelsTab() {
   useEffect(() => {
     const init = async () => {
       try {
-        // Listen for download retry events (when download fails and retries)
-        registerEvent<{ model: string; attempt: number; max_attempts: number; error: string }>(
-          "download-retry", 
-          (retryData) => {
-            const { model, attempt, max_attempts } = retryData;
-            console.warn("Download retry:", retryData);
-            
-            // Only show toast for the first retry to avoid spam
-            if (attempt === 1) {
-              toast.warning(`Download Retry`, {
-                description: `Download of ${model} failed, retrying... (Attempt ${attempt}/${max_attempts})`,
-                duration: 4000
+        // Listen for download error events (when download fails)
+        registerEvent<{ model: string; error: string }>(
+          "download-error",
+          (errorData) => {
+            const { model, error } = errorData;
+            console.error("Download error:", errorData);
+
+            // Don't show error toast if it was cancelled - cancellation has its own toast
+            if (!error.toLowerCase().includes('cancel')) {
+              // Show user-friendly error message
+              toast.error(`Download Failed`, {
+                description: `Failed to download ${model}. Please try again.`,
+                duration: 5000
               });
             }
           }

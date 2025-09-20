@@ -26,13 +26,14 @@ function normalizeSingleKey(key: string): string {
     'arrowright': 'Right',
     'cmd': 'CommandOrControl',
     'ctrl': 'CommandOrControl',
-    'control': 'CommandOrControl',
+    'control': 'Control',  // Keep Control as Control for macOS Cmd+Ctrl support
     'command': 'CommandOrControl',
     'option': 'Alt',
     'meta': 'CommandOrControl',
     'alt': 'Alt',
     'shift': 'Shift',
     'space': 'Space',
+    'super': 'Super',  // Keep Super as Super for macOS Command key
   };
 
   // Check lowercase version first for common keys
@@ -50,8 +51,9 @@ function normalizeSingleKey(key: string): string {
     'ArrowRight': 'Right',
     'Cmd': 'CommandOrControl',
     'Ctrl': 'CommandOrControl',
-    'Control': 'CommandOrControl',
+    'Control': 'Control',  // Keep Control as Control for macOS Cmd+Ctrl support
     'Command': 'CommandOrControl',
+    'Super': 'Super',  // Keep Super as Super for macOS Command key
     'Option': 'Alt',
     'Meta': 'CommandOrControl',
   };
@@ -102,46 +104,52 @@ export function validateKeyCombination(shortcut: string): { valid: boolean; erro
  * Validate that a key combination is allowed with custom rules
  */
 export function validateKeyCombinationWithRules(
-  shortcut: string, 
+  shortcut: string,
   rules: KeyValidationRules
 ): { valid: boolean; error?: string } {
   const parts = shortcut.split('+').filter(Boolean);
-  
+
   // Check minimum keys
   if (parts.length < rules.minKeys) {
     return { valid: false, error: `Minimum ${rules.minKeys} key(s) required` };
   }
-  
+
   // Check maximum keys
   if (parts.length > rules.maxKeys) {
     return { valid: false, error: `Maximum ${rules.maxKeys} keys allowed in combination` };
   }
-  
+
   // Check modifier requirements
-  const modifierKeys = ['CommandOrControl', 'Shift', 'Alt', 'Control', 'Command', 'Cmd', 'Ctrl', 'Option', 'Meta'];
+  const modifierKeys = ['CommandOrControl', 'Super', 'Shift', 'Alt', 'Control', 'Command', 'Cmd', 'Ctrl', 'Option', 'Meta'];
   const hasModifier = parts.some(key => modifierKeys.includes(key));
   const isModifier = (key: string) => modifierKeys.includes(key);
-  
+
   if (rules.requireModifier && !hasModifier) {
     return { valid: false, error: 'At least one modifier key is required' };
   }
-  
+
   // Check that the shortcut starts with a modifier
   if (rules.requireModifier && parts.length > 0 && !isModifier(parts[0])) {
     return { valid: false, error: 'Keyboard shortcuts must start with a modifier key (Cmd/Ctrl, Alt, or Shift)' };
   }
-  
+
   if (rules.requireModifierForMultiKey && !hasModifier && parts.length > 1) {
     return { valid: false, error: 'Multi-key shortcuts must include at least one modifier key' };
   }
-  
+
+  // Check that at least one key is NOT a modifier (library requirement)
+  const hasNonModifier = parts.some(key => !isModifier(key));
+  if (!hasNonModifier) {
+    return { valid: false, error: 'Hotkey must include at least one non-modifier key (e.g., a letter, number, or function key)' };
+  }
+
   // Validate each key
   for (const key of parts) {
     if (!isValidKey(key)) {
       return { valid: false, error: `Invalid key: ${key}` };
     }
   }
-  
+
   return { valid: true };
 }
 
@@ -172,11 +180,11 @@ function isValidKey(key: string): boolean {
  */
 export function isSingleModifierKey(key: string): boolean {
   const singleModifiers = [
-    'Alt', 'Shift', 'Control', 'Ctrl', 'Command', 'Cmd', 'Option', 'Meta',
-    'LeftAlt', 'RightAlt', 'LeftShift', 'RightShift', 
+    'Alt', 'Shift', 'Control', 'Ctrl', 'Command', 'Cmd', 'Option', 'Meta', 'Super',
+    'LeftAlt', 'RightAlt', 'LeftShift', 'RightShift',
     'LeftControl', 'RightControl', 'LeftMeta', 'RightMeta'
   ];
-  
+
   return singleModifiers.some(m => m.toLowerCase() === key.toLowerCase());
 }
 
@@ -185,12 +193,13 @@ export function isSingleModifierKey(key: string): boolean {
  * Note: This function now accepts platform as parameter for consistent behavior
  */
 export function formatKeyForDisplay(key: string, isMac: boolean = false): string {
-  
+
   const displayMap: Record<string, string> = {
     'CommandOrControl': isMac ? '⌘' : 'Ctrl',
+    'Super': isMac ? '⌘' : 'Win',  // Super is Command on Mac, Windows key on PC
     'Cmd': isMac ? '⌘' : 'Ctrl',
-    'Ctrl': 'Ctrl',
-    'Control': 'Ctrl',
+    'Ctrl': isMac ? '⌃' : 'Ctrl',  // Use proper Control symbol on Mac
+    'Control': isMac ? '⌃' : 'Ctrl',
     'Command': isMac ? '⌘' : 'Ctrl',
     'Shift': isMac ? '⇧' : 'Shift',
     'Alt': isMac ? '⌥' : 'Alt',

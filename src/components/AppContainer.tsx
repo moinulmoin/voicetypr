@@ -9,7 +9,7 @@ import { TabContainer } from "./tabs/TabContainer";
 import { useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
-import { useModelManagement } from "@/hooks/useModelManagement";
+import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { updateService } from "@/services/updateService";
 import { loadApiKeysToCache } from "@/utils/keyring";
 
@@ -27,16 +27,13 @@ interface ErrorEventPayload {
 
 export function AppContainer() {
   const { registerEvent } = useEventCoordinator("main");
-  const [activeSection, setActiveSection] = useState<string>("recordings");
+  const [activeSection, setActiveSection] = useState<string>("overview");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const { settings, refreshSettings } = useSettings();
   const { checkAccessibilityPermission, checkMicrophonePermission } = useReadiness();
 
-  // Use the new model management hook for onboarding
-  const modelManagement = useModelManagement({
-    windowId: "main",
-    showToasts: true
-  });
+  // Use the model management context for onboarding
+  const modelManagement = useModelManagementContext();
 
   // Use a ref to track if we've just completed onboarding
   const hasJustCompletedOnboarding = useRef(false);
@@ -80,7 +77,7 @@ export function AppContainer() {
         // Listen for navigate-to-settings event from tray menu
         registerEvent("navigate-to-settings", () => {
           console.log("Navigate to settings requested from tray menu");
-          setActiveSection("recordings");
+          setActiveSection("overview");
         });
 
         // Listen for tray action errors
@@ -89,13 +86,13 @@ export function AppContainer() {
           toast.error(event.payload as string);
         });
 
-        // Listen for license-required event and navigate to Account section
+        // Listen for license-required event and navigate to License section
         registerEvent<{ title: string; message: string; action?: string }>(
           "license-required", 
           (data) => {
             console.log("License required event received in AppContainer:", data);
-            // Navigate to Account section to show license management
-            setActiveSection("account");
+            // Navigate to License section to show license management
+            setActiveSection("license");
             // Show a toast to inform the user
             toast.error(data.title || "License Required", {
               description: data.message || "Please purchase or restore a license to continue",

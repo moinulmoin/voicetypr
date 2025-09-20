@@ -4,8 +4,6 @@
       "Bash(grep:*)",
       "Bash(cargo test)",
       "Bash(pnpm test:*)",
-      "mcp__deepwiki__read_wiki_contents",
-      "mcp__deepwiki__ask_question",
       "Bash(cargo check:*)",
       "Bash(find:*)",
       "Bash(diff:*)",
@@ -14,10 +12,11 @@
       "Bash(pnpm typecheck:*)",
       "Bash(rg:*)",
       "WebSearch",
-      "Bash(gh pr diff:*)"
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(pnpm audit:*)"
     ],
     "deny": [],
-    "defaultMode": "acceptEdits"
+    "additionalDirectories": ["/Users/moinulmoin/Developer/oss/voicetypr-web"]
   },
   "hooks": {
     "PreToolUse": [

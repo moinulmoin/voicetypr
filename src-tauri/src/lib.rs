@@ -36,10 +36,11 @@ use commands::{
         update_enhancement_options, validate_and_cache_api_key,
     },
     audio::*,
+    clipboard::{copy_image_to_clipboard, save_image_to_file},
     debug::{debug_transcription_flow, test_transcription_event},
     keyring::{keyring_delete, keyring_get, keyring_has, keyring_set},
     license::*,
-    logs::{get_log_directory, open_logs_folder},
+    logs::{clear_old_logs, get_log_directory, open_logs_folder},
     model::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model, verify_model,
@@ -52,6 +53,7 @@ use commands::{
     reset::reset_app_data,
     settings::*,
     text::*,
+    utils::export_transcriptions,
     window::*,
 };
 use state::unified_state::UnifiedRecordingState;
@@ -64,13 +66,19 @@ async fn build_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<tauri::menu::Menu<R>, Box<dyn std::error::Error>> {
     // Get current settings for menu state
-    let current_model = {
+    let (current_model, selected_microphone) = {
         match app.store("settings") {
-            Ok(store) => store
-                .get("current_model")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_default(),
-            Err(_) => "".to_string(),
+            Ok(store) => {
+                let model = store
+                    .get("current_model")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                let microphone = store
+                    .get("selected_microphone")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()));
+                (model, microphone)
+            }
+            Err(_) => ("".to_string(), None),
         }
     };
 
@@ -131,6 +139,61 @@ async fn build_tray_menu<R: tauri::Runtime>(
         None
     };
 
+    // Get available audio devices
+    let available_devices = audio::recorder::AudioRecorder::get_devices();
+    
+    // Create microphone submenu
+    let microphone_submenu = if !available_devices.is_empty() {
+        let mut mic_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
+        let mut mic_check_items = Vec::new();
+
+        // Add "Default" option first
+        let default_item = CheckMenuItem::with_id(
+            app,
+            "microphone_default",
+            "System Default",
+            true,
+            selected_microphone.is_none(), // Selected if no specific microphone is set
+            None::<&str>,
+        )?;
+        mic_check_items.push(default_item);
+
+        // Add available devices
+        for device_name in &available_devices {
+            let is_selected = selected_microphone.as_ref() == Some(device_name);
+            let mic_item = CheckMenuItem::with_id(
+                app,
+                &format!("microphone_{}", device_name),
+                device_name,
+                true,
+                is_selected,
+                None::<&str>,
+            )?;
+            mic_check_items.push(mic_item);
+        }
+
+        // Convert to trait objects
+        for item in &mic_check_items {
+            mic_items.push(item);
+        }
+
+        let current_mic_display = if let Some(ref mic_name) = selected_microphone {
+            format!("Microphone: {}", mic_name)
+        } else {
+            "Microphone: Default".to_string()
+        };
+
+        Some(Submenu::with_id_and_items(
+            app,
+            "microphones",
+            &current_mic_display,
+            true,
+            &mic_items,
+        )?)
+    } else {
+        None
+    };
+
     // Create menu items
     let separator1 = PredefinedMenuItem::separator(app)?;
     let settings_i = MenuItem::with_id(app, "settings", "Dashboard", true, None::<&str>)?;
@@ -141,6 +204,10 @@ async fn build_tray_menu<R: tauri::Runtime>(
 
     if let Some(model_submenu) = model_submenu {
         menu_builder = menu_builder.item(&model_submenu);
+    }
+    
+    if let Some(microphone_submenu) = microphone_submenu {
+        menu_builder = menu_builder.item(&microphone_submenu);
     }
 
     let menu = menu_builder
@@ -170,6 +237,13 @@ impl Default for RecordingState {
     }
 }
 
+// Recording mode enum to distinguish between toggle and push-to-talk
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingMode {
+    Toggle,      // Click to start/stop recording
+    PushToTalk,  // Hold to record, release to stop
+}
+
 // Application state - managed by Tauri (runtime state only)
 pub struct AppState {
     // Recording-related runtime state
@@ -177,6 +251,11 @@ pub struct AppState {
     pub recording_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
     pub current_recording_path: Arc<Mutex<Option<PathBuf>>>,
     pub transcription_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+
+    // Push-to-talk support
+    pub recording_mode: Arc<Mutex<RecordingMode>>,
+    pub ptt_key_held: Arc<AtomicBool>,
+    pub ptt_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
 
     // Cancellation flag for graceful shutdown
     pub should_cancel_recording: Arc<AtomicBool>,
@@ -196,6 +275,9 @@ impl AppState {
             recording_shortcut: Arc::new(Mutex::new(None)),
             current_recording_path: Arc::new(Mutex::new(None)),
             transcription_task: Arc::new(Mutex::new(None)),
+            recording_mode: Arc::new(Mutex::new(RecordingMode::Toggle)), // Default to toggle mode
+            ptt_key_held: Arc::new(AtomicBool::new(false)),
+            ptt_shortcut: Arc::new(Mutex::new(None)),
             should_cancel_recording: Arc::new(AtomicBool::new(false)),
             esc_pressed_once: Arc::new(AtomicBool::new(false)),
             esc_timeout_handle: Arc::new(Mutex::new(None)),
@@ -495,12 +577,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let app_handle = app.app_handle();
                     let app_state = app_handle.state::<AppState>();
 
-                    // Only handle press events for toggle recording
-                    if event.state() != ShortcutState::Pressed {
-                        return;
-                    }
+                    // Get current recording mode
+                    let recording_mode = {
+                        if let Ok(mode_guard) = app_state.recording_mode.lock() {
+                            *mode_guard
+                        } else {
+                            RecordingMode::Toggle // Default to toggle if we can't get the mode
+                        }
+                    };
 
-                    // Check if this is the toggle recording shortcut
+                    // Check if this is the recording shortcut
                     let is_recording_shortcut = {
                         if let Ok(shortcut_guard) = app_state.recording_shortcut.lock() {
                             if let Some(ref recording_shortcut) = *shortcut_guard {
@@ -513,58 +599,116 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     };
 
-                    if is_recording_shortcut {
-                        // Toggle recording based on current state
+                    // Check if this is the PTT shortcut (if configured differently)
+                    let is_ptt_shortcut = {
+                        if let Ok(ptt_guard) = app_state.ptt_shortcut.lock() {
+                            if let Some(ref ptt_shortcut) = *ptt_guard {
+                                shortcut == ptt_shortcut
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    };
+
+                    // Determine if we should handle this shortcut based on mode
+                    let should_handle = match recording_mode {
+                        RecordingMode::Toggle => is_recording_shortcut && event.state() == ShortcutState::Pressed,
+                        RecordingMode::PushToTalk => is_recording_shortcut || is_ptt_shortcut,
+                    };
+
+                    if should_handle {
                         let current_state = get_recording_state(&app_handle);
-                        match current_state {
-                            RecordingState::Idle | RecordingState::Error => {
-                                log::info!("Toggle: Starting recording via hotkey");
 
-                                // Use Tauri's command system to start recording
-                                let app_handle = app.app_handle().clone();
-                                tauri::async_runtime::spawn(async move {
-                                    // Get the recorder state from app handle
-                                    let recorder_state = app_handle.state::<RecorderState>();
-                                    match start_recording(app_handle.clone(), recorder_state).await
-                                    {
-                                        Ok(_) => {
-                                            log::info!("Toggle: Recording started successfully")
+                        match recording_mode {
+                            RecordingMode::Toggle => {
+                                // Toggle mode - only handle press events
+                                if event.state() == ShortcutState::Pressed {
+                                    match current_state {
+                                        RecordingState::Idle | RecordingState::Error => {
+                                            log::info!("Toggle: Starting recording via hotkey");
+
+                                            let app_handle = app.app_handle().clone();
+                                            tauri::async_runtime::spawn(async move {
+                                                let recorder_state = app_handle.state::<RecorderState>();
+                                                match start_recording(app_handle.clone(), recorder_state).await {
+                                                    Ok(_) => log::info!("Toggle: Recording started successfully"),
+                                                    Err(e) => {
+                                                        log::error!("Toggle: Error starting recording: {}", e);
+                                                        update_recording_state(
+                                                            &app_handle,
+                                                            RecordingState::Error,
+                                                            Some(e),
+                                                        );
+                                                    }
+                                                }
+                                            });
                                         }
-                                        Err(e) => {
-                                            log::error!("Toggle: Error starting recording: {}", e);
-                                            update_recording_state(
-                                                &app_handle,
-                                                RecordingState::Error,
-                                                Some(e),
-                                            );
+                                        RecordingState::Recording | RecordingState::Starting => {
+                                            log::info!("Toggle: Stopping recording via hotkey");
+
+                                            let app_handle = app.app_handle().clone();
+                                            tauri::async_runtime::spawn(async move {
+                                                let recorder_state = app_handle.state::<RecorderState>();
+                                                match stop_recording(app_handle.clone(), recorder_state).await {
+                                                    Ok(_) => log::info!("Toggle: Recording stopped successfully"),
+                                                    Err(e) => log::error!("Toggle: Error stopping recording: {}", e)
+                                                }
+                                            });
+                                        }
+                                        _ => log::debug!("Toggle: Ignoring hotkey in state {:?}", current_state),
+                                    }
+                                }
+                            }
+                            RecordingMode::PushToTalk => {
+                                // Push-to-talk mode - handle both press and release
+                                match event.state() {
+                                    ShortcutState::Pressed => {
+                                        log::info!("PTT: Key pressed");
+                                        app_state.ptt_key_held.store(true, Ordering::Relaxed);
+
+                                        if matches!(current_state, RecordingState::Idle | RecordingState::Error) {
+                                            log::info!("PTT: Starting recording");
+
+                                            let app_handle = app.app_handle().clone();
+                                            tauri::async_runtime::spawn(async move {
+                                                let recorder_state = app_handle.state::<RecorderState>();
+                                                match start_recording(app_handle.clone(), recorder_state).await {
+                                                    Ok(_) => log::info!("PTT: Recording started successfully"),
+                                                    Err(e) => {
+                                                        log::error!("PTT: Error starting recording: {}", e);
+                                                        update_recording_state(
+                                                            &app_handle,
+                                                            RecordingState::Error,
+                                                            Some(e),
+                                                        );
+                                                    }
+                                                }
+                                            });
                                         }
                                     }
-                                });
-                            }
-                            RecordingState::Recording | RecordingState::Starting => {
-                                log::info!("Toggle: Stopping recording via hotkey");
+                                    ShortcutState::Released => {
+                                        log::info!("PTT: Key released");
+                                        app_state.ptt_key_held.store(false, Ordering::Relaxed);
 
-                                // Use Tauri's command system to stop recording
-                                let app_handle = app.app_handle().clone();
-                                tauri::async_runtime::spawn(async move {
-                                    // Get the recorder state from app handle
-                                    let recorder_state = app_handle.state::<RecorderState>();
-                                    match stop_recording(app_handle.clone(), recorder_state).await {
-                                        Ok(_) => {
-                                            log::info!("Toggle: Recording stopped successfully");
+                                        if matches!(current_state, RecordingState::Recording | RecordingState::Starting) {
+                                            log::info!("PTT: Stopping recording");
 
-                                        }
-                                        Err(e) => {
-                                            log::error!("Toggle: Error stopping recording: {}", e)
+                                            let app_handle = app.app_handle().clone();
+                                            tauri::async_runtime::spawn(async move {
+                                                let recorder_state = app_handle.state::<RecorderState>();
+                                                match stop_recording(app_handle.clone(), recorder_state).await {
+                                                    Ok(_) => log::info!("PTT: Recording stopped successfully"),
+                                                    Err(e) => log::error!("PTT: Error stopping recording: {}", e)
+                                                }
+                                            });
                                         }
                                     }
-                                });
-                            }
-                            _ => {
-                                log::debug!("Toggle: Ignoring hotkey in state {:?}", current_state);
+                                }
                             }
                         }
-                    } else {
+                    } else if !is_recording_shortcut && !is_ptt_shortcut {
                         // Debug log all shortcuts
                         log::debug!("Non-recording shortcut triggered: {:?}", shortcut);
 
@@ -796,6 +940,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let window_manager = WindowManager::new(app.app_handle().clone());
             app_state.set_window_manager(window_manager);
 
+            // Clean up old logs on startup (keep only today's log)
+            let app_handle_for_logs = app.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match clear_old_logs(app_handle_for_logs, 1).await {
+                    Ok(deleted_count) => {
+                        if deleted_count > 0 {
+                            log::info!("Cleaned up {} old log files (keeping only today)", deleted_count);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to clean up old logs: {}. App will continue normally.", e);
+                    }
+                }
+            });
+
             // Pill position is loaded from settings when needed, no duplicate state
 
             // Initialize recorder state (kept separate for backwards compatibility)
@@ -861,6 +1020,43 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         });
+                    } else if event_id == "microphone_default" {
+                        // Handle default microphone selection
+                        let app_handle = app.app_handle().clone();
+                        
+                        tauri::async_runtime::spawn(async move {
+                            match crate::commands::settings::set_audio_device(app_handle.clone(), None).await {
+                                Ok(_) => {
+                                    log::info!("Microphone changed from tray to: System Default");
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to set default microphone from tray: {}", e);
+                                    let _ = app_handle.emit("tray-action-error", &format!("Failed to change microphone: {}", e));
+                                }
+                            }
+                        });
+                    } else if event_id.starts_with("microphone_") {
+                        // Handle specific microphone selection
+                        let device_name = match event_id.strip_prefix("microphone_") {
+                            Some(name) if name != "default" => Some(name.to_string()),
+                            _ => {
+                                // Already handled by microphone_default case above
+                                return;
+                            }
+                        };
+                        let app_handle = app.app_handle().clone();
+
+                        tauri::async_runtime::spawn(async move {
+                            match crate::commands::settings::set_audio_device(app_handle.clone(), device_name.clone()).await {
+                                Ok(_) => {
+                                    log::info!("Microphone changed from tray to: {:?}", device_name);
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to set microphone from tray: {}", e);
+                                    let _ = app_handle.emit("tray-action-error", &format!("Failed to change microphone: {}", e));
+                                }
+                            }
+                        });
                     }
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -906,6 +1102,43 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             log::info!("🎯 Loading hotkey: {}", hotkey_str);
+
+            // Load recording mode and PTT settings
+            let (recording_mode_str, use_different_ptt_key, ptt_hotkey_str) = match app.store("settings") {
+                Ok(store) => {
+                    let mode = store
+                        .get("recording_mode")
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "toggle".to_string());
+
+                    let use_diff = store
+                        .get("use_different_ptt_key")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
+                    let ptt_key = store
+                        .get("ptt_hotkey")
+                        .and_then(|v| v.as_str().map(|s| s.to_string()));
+
+                    (mode, use_diff, ptt_key)
+                }
+                Err(_) => {
+                    log::info!("Using default recording mode settings");
+                    ("toggle".to_string(), false, None)
+                }
+            };
+
+            // Set recording mode in AppState
+            let app_state = app.state::<AppState>();
+            let recording_mode = match recording_mode_str.as_str() {
+                "push_to_talk" => RecordingMode::PushToTalk,
+                _ => RecordingMode::Toggle,
+            };
+
+            if let Ok(mut mode_guard) = app_state.recording_mode.lock() {
+                *mode_guard = recording_mode;
+                log::info!("Recording mode set to: {:?}", recording_mode);
+            }
 
             // Normalize the hotkey for Tauri
             let normalized_hotkey = crate::commands::key_normalizer::normalize_shortcut_keys(&hotkey_str);
@@ -990,6 +1223,41 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             "error": format!("Critical error: {}", panic_msg),
                             "suggestion": "The hotkey system encountered an error. Please restart the app or try a different hotkey."
                         }));
+                    }
+                }
+            }
+
+            // Register PTT shortcut if configured differently
+            if recording_mode == RecordingMode::PushToTalk && use_different_ptt_key {
+                if let Some(ptt_key) = ptt_hotkey_str {
+                    log::info!("🎤 Registering separate PTT hotkey: {}", ptt_key);
+
+                    let normalized_ptt = crate::commands::key_normalizer::normalize_shortcut_keys(&ptt_key);
+
+                    if let Ok(ptt_shortcut) = normalized_ptt.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+                        // Store PTT shortcut in AppState
+                        let app_state = app.state::<AppState>();
+                        if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
+                            *ptt_guard = Some(ptt_shortcut.clone());
+                        }
+
+                        // Try to register PTT shortcut
+                        match app.global_shortcut().register(ptt_shortcut.clone()) {
+                            Ok(_) => {
+                                log::info!("✅ Successfully registered PTT hotkey: {}", ptt_key);
+                            }
+                            Err(e) => {
+                                log::error!("❌ Failed to register PTT hotkey '{}': {}", ptt_key, e);
+                                log::warn!("⚠️  PTT will use primary hotkey instead");
+
+                                // Clear the PTT shortcut so we fall back to primary
+                                if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
+                                    *ptt_guard = None;
+                                }
+                            }
+                        }
+                    } else {
+                        log::warn!("Invalid PTT hotkey format: {}", ptt_key);
                     }
                 }
             }
@@ -1149,8 +1417,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             preload_model,
             verify_model,
             transcribe_audio,
+            transcribe_audio_file,
             get_settings,
             save_settings,
+            set_audio_device,
             set_global_shortcut,
             get_supported_languages,
             set_model_from_tray,
@@ -1163,6 +1433,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_transcription_history,
             delete_transcription_entry,
             clear_all_transcriptions,
+            export_transcriptions,
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,
@@ -1178,6 +1449,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             deactivate_license,
             open_purchase_page,
             reset_app_data,
+            copy_image_to_clipboard,
+            save_image_to_file,
             get_ai_settings,
             get_ai_settings_for_provider,
             cache_ai_api_key,

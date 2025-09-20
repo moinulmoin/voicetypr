@@ -1,5 +1,5 @@
 import { ask } from '@tauri-apps/plugin-dialog';
-import { Key, X } from 'lucide-react';
+import { Key, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 
@@ -37,9 +37,9 @@ export function EnhancementModelCard({
   return (
     <Card
       className={`py-2 px-4 transition-all ${
-        hasApiKey ? 'cursor-pointer' : 'opacity-60'
+        hasApiKey ? 'cursor-pointer hover:border-border' : 'opacity-60'
       } ${
-        isSelected ? 'border-primary bg-primary/5' : ''
+        isSelected ? 'bg-primary/5' : ''
       }`}
       onClick={() => hasApiKey && onSelect()}
     >
@@ -66,10 +66,11 @@ export function EnhancementModelCard({
               }
             }}
             variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+            size="sm"
+            className="text-muted-foreground hover:text-destructive"
           >
-            <X className="w-4 h-4" />
+            <Trash2 className="w-3.5 h-3.5" />
+            Remove Key
           </Button>
         ) : (
           <Button

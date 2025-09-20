@@ -122,30 +122,16 @@ pub async fn download_model(
         }
     });
 
-    // Execute download with retry logic
-    const MAX_RETRIES: u32 = 3;
-    const RETRY_DELAY_MS: u64 = 2000;
-
-    let mut download_result = Err("No attempt made".to_string());
-
-    for attempt in 1..=MAX_RETRIES {
-        // Check if download was cancelled
-        if cancel_flag.load(Ordering::Relaxed) {
-            log::info!("Download cancelled for model: {}", model_name);
-            download_result = Err("Download cancelled by user".to_string());
-            break;
-        }
-
-        log::info!(
-            "Download attempt {} of {} for model: {}",
-            attempt,
-            MAX_RETRIES,
-            model_name
-        );
+    // Execute download (no retry - user can click download again if it fails)
+    let download_result = if cancel_flag.load(Ordering::Relaxed) {
+        log::info!("Download cancelled for model: {}", model_name);
+        Err("Download cancelled by user".to_string())
+    } else {
+        log::info!("Starting download for model: {}", model_name);
 
         let manager = state.read().await;
         let progress_tx_clone = progress_tx.clone();
-        download_result = manager
+        let result = manager
             .download_model(
                 &model_name,
                 Some(cancel_flag.clone()),
@@ -155,43 +141,19 @@ pub async fn download_model(
             )
             .await;
 
-        drop(manager); // Release lock before sleep
+        drop(manager); // Release lock
 
-        match &download_result {
+        match &result {
             Ok(_) => {
-                log::info!("Download succeeded on attempt {}", attempt);
-                break;
+                log::info!("Download succeeded for model: {}", model_name);
             }
             Err(e) => {
-                if attempt < MAX_RETRIES {
-                    log::warn!(
-                        "Download attempt {} failed: {}. Retrying in {}ms...",
-                        attempt,
-                        e,
-                        RETRY_DELAY_MS
-                    );
-
-                    // Notify UI about retry
-                    if let Err(e) = emit_to_all(
-                        &app,
-                        "download-retry",
-                        serde_json::json!({
-                            "model": &model_name,
-                            "attempt": attempt,
-                            "max_attempts": MAX_RETRIES,
-                            "error": e.to_string()
-                        }),
-                    ) {
-                        log::warn!("Failed to emit download-retry event: {}", e);
-                    }
-
-                    tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
-                } else {
-                    log::error!("Download failed after {} attempts: {}", MAX_RETRIES, e);
-                }
+                log::error!("Download failed for model {}: {}", model_name, e);
             }
         }
-    }
+
+        result
+    };
 
     // Close the progress channel to signal completion
     drop(progress_tx);
@@ -257,11 +219,23 @@ pub async fn download_model(
         }
         Err(e) => {
             log::error!("Download failed for model {}: {}", model_name, e);
-            
+
             // Log to onboarding if active
             onboarding_logger::with_onboarding_logger(|logger| {
                 logger.log_model_download_failed(&model_name, &e);
             });
+
+            // Emit download-error event
+            if let Err(emit_err) = emit_to_all(
+                &app,
+                "download-error",
+                serde_json::json!({
+                    "model": model_name,
+                    "error": e.to_string()
+                }),
+            ) {
+                log::warn!("Failed to emit download-error event: {}", emit_err);
+            }
 
             // Progress tracking is event-based, no state cleanup needed
 

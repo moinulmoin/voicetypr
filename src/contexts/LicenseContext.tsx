@@ -79,7 +79,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       await invoke('deactivate_license');
       // Re-check status after deactivation
       await checkStatus();
-      toast.success('License deactivated. You can now use it on another device.');
+      toast.success('License deactivated successfully');
     } catch (error: any) {
       console.error('Failed to deactivate license:', error);
       toast.error(error || 'Failed to deactivate license');
