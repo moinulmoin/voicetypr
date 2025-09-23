@@ -74,7 +74,8 @@ export function AudioUploadSection() {
       // Call the new transcribe_audio_file command directly with the file path
       const result = await invoke<string>("transcribe_audio_file", {
         filePath: selectedFile,
-        modelName: settings.current_model
+        modelName: settings.current_model,
+        modelEngine: settings.current_model_engine || 'whisper'
       });
 
       if (!result || result.trim() === "" || result === "[BLANK_AUDIO]") {

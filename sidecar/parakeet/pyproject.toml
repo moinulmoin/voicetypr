@@ -1,0 +1,30 @@
+[project]
+name = "parakeet-sidecar"
+version = "0.1.0"
+description = "VoiceTypr Parakeet MLX transcription sidecar"
+authors = [{name = "VoiceTypr"}]
+requires-python = ">=3.11"
+dependencies = [
+  "parakeet-mlx>=0.3.0",
+  "mlx>=0.25.3",
+  "huggingface-hub>=0.23",
+  "soundfile>=0.12",
+  "numpy>=1.26",
+  "pydantic>=2.8",
+  "uvloop>=0.19; platform_system == 'Linux'",
+  "orjson>=3.10"
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.11"]
+build = ["pyinstaller>=6.8"]
+
+[project.scripts]
+parakeet-sidecar = "parakeet_sidecar.main:run"
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"

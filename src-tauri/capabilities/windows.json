@@ -28,7 +28,14 @@
     "dialog:default",
     "fs:scope-appdata",
     "shell:allow-open",
-    "shell:allow-execute",
+    { "identifier": "shell:allow-spawn", "allow": [
+      { "name": "parakeet-sidecar", "sidecar": true },
+      { "name": "parakeet-sidecar-x86_64-pc-windows-msvc", "sidecar": true }
+    ] },
+    { "identifier": "shell:allow-stdin-write", "allow": [
+      { "name": "parakeet-sidecar", "sidecar": true },
+      { "name": "parakeet-sidecar-x86_64-pc-windows-msvc", "sidecar": true }
+    ] },
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",

@@ -27,7 +27,20 @@
     "dialog:default",
     "fs:scope-appdata",
     "shell:allow-open",
-    "shell:allow-execute",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        { "name": "parakeet-sidecar", "sidecar": true },
+        { "name": "parakeet-sidecar-aarch64-apple-darwin", "sidecar": true }
+      ]
+    },
+    {
+      "identifier": "shell:allow-stdin-write",
+      "allow": [
+        { "name": "parakeet-sidecar", "sidecar": true },
+        { "name": "parakeet-sidecar-aarch64-apple-darwin", "sidecar": true }
+      ]
+    },
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",

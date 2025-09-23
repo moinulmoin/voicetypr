@@ -4,6 +4,8 @@ use crate::audio::recorder::AudioRecorder;
 use crate::commands::license::check_license_status_internal;
 use crate::commands::settings::get_settings;
 use crate::license::LicenseState;
+use crate::parakeet::messages::ParakeetResponse;
+use crate::parakeet::ParakeetManager;
 use crate::utils::logger::*;
 #[cfg(debug_assertions)]
 use crate::utils::system_monitor;
@@ -13,6 +15,7 @@ use crate::whisper::manager::WhisperManager;
 use crate::{emit_to_window, update_recording_state, AppState, RecordingState};
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde_json;
+use std::path::{Path, PathBuf};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -29,6 +32,7 @@ pub struct RecordingConfig {
     pub ai_provider: String,
     pub ai_model: String,
     pub current_model: String,
+    pub current_engine: String,
     pub language: String,
     pub translate_to_english: bool,
     pub show_recording_status: bool,
@@ -65,6 +69,10 @@ impl RecordingConfig {
                 .get("current_model")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| "".to_string()),
+            current_engine: store
+                .get("current_model_engine")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "whisper".to_string()),
             language: store
                 .get("language")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -90,6 +98,134 @@ impl RecordingConfig {
 // Implement UnwindSafe traits for panic testing compatibility
 impl UnwindSafe for RecordingConfig {}
 impl RefUnwindSafe for RecordingConfig {}
+
+#[derive(Clone)]
+enum ActiveEngineSelection {
+    Whisper { model_name: String, model_path: PathBuf },
+    Parakeet { model_name: String },
+}
+
+impl ActiveEngineSelection {
+    fn engine_name(&self) -> &'static str {
+        match self {
+            ActiveEngineSelection::Whisper { .. } => "whisper",
+            ActiveEngineSelection::Parakeet { .. } => "parakeet",
+        }
+    }
+
+    fn model_name(&self) -> &str {
+        match self {
+            ActiveEngineSelection::Whisper { model_name, .. } => model_name,
+            ActiveEngineSelection::Parakeet { model_name } => model_name,
+        }
+    }
+}
+
+async fn abort_due_to_missing_model(
+    app: &AppHandle,
+    audio_path: &Path,
+    log_message: &str,
+    user_message: &str,
+) -> Result<String, String> {
+    log::error!("{}", log_message);
+    update_recording_state(app, RecordingState::Error, Some(user_message.to_string()));
+
+    if let Err(e) = std::fs::remove_file(audio_path) {
+        log::warn!("Failed to remove audio file: {}", e);
+    }
+
+    let _ = emit_to_window(
+        app,
+        "pill",
+        "no-models-error",
+        serde_json::json!({
+            "title": "No Models Installed",
+            "message": user_message,
+            "action": "open-settings"
+        }),
+    );
+
+    if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+        log::error!("Failed to hide pill window: {}", e);
+    }
+
+    update_recording_state(app, RecordingState::Idle, None);
+
+    Err(log_message.to_string())
+}
+
+async fn resolve_engine_for_model(
+    app: &AppHandle,
+    model_name: &str,
+    engine_hint: Option<&str>,
+) -> Result<ActiveEngineSelection, String> {
+    let whisper_state = app.state::<AsyncRwLock<WhisperManager>>();
+    let parakeet_manager = app.state::<ParakeetManager>();
+
+    match engine_hint.map(|e| e.to_lowercase()) {
+        Some(ref engine) if engine == "parakeet" => {
+            let status = parakeet_manager
+                .list_models()
+                .into_iter()
+                .find(|m| m.name == model_name);
+
+            match status {
+                Some(info) if info.downloaded => Ok(ActiveEngineSelection::Parakeet {
+                    model_name: model_name.to_string(),
+                }),
+                Some(_) => Err(format!(
+                    "Parakeet model '{}' is not downloaded. Please download it first.",
+                    model_name
+                )),
+                None => Err(format!(
+                    "Parakeet model '{}' not found in registry.",
+                    model_name
+                )),
+            }
+        }
+        Some(ref engine) if engine == "whisper" || engine == "whisper.cpp" => {
+            let path = whisper_state
+                .read()
+                .await
+                .get_model_path(model_name)
+                .ok_or_else(|| format!("Whisper model '{}' not found", model_name))?;
+
+            Ok(ActiveEngineSelection::Whisper {
+                model_name: model_name.to_string(),
+                model_path: path,
+            })
+        }
+        Some(engine) => Err(format!("Unknown model engine '{}'.", engine)),
+        None => {
+            if let Some(path) = whisper_state.read().await.get_model_path(model_name) {
+                return Ok(ActiveEngineSelection::Whisper {
+                    model_name: model_name.to_string(),
+                    model_path: path,
+                });
+            }
+
+            let status = parakeet_manager
+                .list_models()
+                .into_iter()
+                .find(|m| m.name == model_name);
+
+            if let Some(info) = status {
+                if info.downloaded {
+                    return Ok(ActiveEngineSelection::Parakeet {
+                        model_name: model_name.to_string(),
+                    });
+                } else {
+                    return Err(format!(
+                        "Model '{}' is a Parakeet model but not downloaded. Please download it first.",
+                        model_name
+                    ));
+                }
+            }
+
+            Err(format!("Model '{}' not found in Whisper or Parakeet registries", model_name))
+        }
+    }
+}
 
 /// Helper function to invalidate recording config cache when settings change
 pub async fn invalidate_recording_config_cache(app: &AppHandle) {
@@ -172,7 +308,14 @@ fn select_best_fallback_model(
 async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> {
     // Check if any models are downloaded
     let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
-    let has_models = whisper_manager.read().await.has_downloaded_models();
+    let has_whisper_models = whisper_manager.read().await.has_downloaded_models();
+    let parakeet_manager = app.state::<ParakeetManager>();
+    let has_parakeet_models = parakeet_manager
+        .list_models()
+        .into_iter()
+        .any(|m| m.downloaded);
+
+    let has_models = has_whisper_models || has_parakeet_models;
 
     if !has_models {
         log::error!("No models downloaded");
@@ -234,11 +377,13 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
 
     if matches!(status.status, LicenseState::Expired | LicenseState::None) {
         log::error!("Invalid license: {:?}", status.status);
-        
-        // Show and focus the main window
+
+        // Show the main window but DON'T steal focus
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.show();
-            let _ = window.set_focus();
+            // Don't focus - let user switch to it manually
+            // This was causing unwanted focus stealing
+            // let _ = window.set_focus();
         }
         
         // Emit error event with guidance
@@ -709,144 +854,154 @@ pub async fn stop_recording(
     log::debug!("Using cached config: model={}, language={}, translate={}, ai_enabled={}", 
         config.current_model, config.language, config.translate_to_english, config.ai_enabled);
 
-    // Get available models
     let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
-    let downloaded_models = whisper_manager.read().await.get_downloaded_model_names();
 
-    log::debug!("Downloaded models: {:?}", downloaded_models);
+    let engine_selection = match config.current_engine.as_str() {
+        "parakeet" => {
+            if config.current_model.is_empty() {
+                return abort_due_to_missing_model(
+                    &app,
+                    &audio_path,
+                    "No Parakeet model selected",
+                    "Please select a Parakeet model before recording.",
+                )
+                .await;
+            }
 
-    // STOP HERE if no models are downloaded - can't transcribe without models!
-    if downloaded_models.is_empty() {
-        log::error!("No models downloaded - cannot transcribe");
-        update_recording_state(
-            &app,
-            RecordingState::Error,
-            Some("No speech recognition models installed".to_string()),
-        );
+            let parakeet_manager = app.state::<ParakeetManager>();
+            let models = parakeet_manager.list_models();
+            if let Some(status) = models.into_iter().find(|m| m.name == config.current_model) {
+                if !status.downloaded {
+                    return abort_due_to_missing_model(
+                        &app,
+                        &audio_path,
+                        "Selected Parakeet model is not downloaded",
+                        "Please download the selected Parakeet model before recording.",
+                    )
+                    .await;
+                }
+            } else {
+                return abort_due_to_missing_model(
+                    &app,
+                    &audio_path,
+                    "Selected Parakeet model is not available",
+                    "The selected Parakeet model is unavailable. Please download it again.",
+                )
+                .await;
+            }
 
-        // Clean up the recording
-        if let Err(e) = std::fs::remove_file(&audio_path) {
-            log::warn!("Failed to remove audio file: {}", e);
+            ActiveEngineSelection::Parakeet {
+                model_name: config.current_model.clone(),
+            }
         }
+        _ => {
+            let downloaded_models = whisper_manager.read().await.get_downloaded_model_names();
+            log::debug!("Downloaded Whisper models: {:?}", downloaded_models);
 
-        // Tell user they MUST download a model
-        let _ = emit_to_window(
-            &app,
-            "pill",
-            "no-models-error",
-            serde_json::json!({
-                "title": "No Models Installed",
-                "message": "Please download at least one speech recognition model from Settings to use VoiceTypr.",
-                "action": "open-settings"
-            }),
-        );
+            if downloaded_models.is_empty() {
+                return abort_due_to_missing_model(
+                    &app,
+                    &audio_path,
+                    "No speech recognition models installed",
+                    "Please download at least one speech recognition model from Settings to use VoiceTypr.",
+                )
+                .await;
+            }
 
-        // Hide pill window since we can't proceed
-        if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-            log::error!("Failed to hide pill window: {}", e);
-        }
-
-        // Transition back to Idle state
-        update_recording_state(&app, RecordingState::Idle, None);
-
-        return Err(
-            "No speech recognition models installed. Please download a model from Settings."
-                .to_string(),
-        );
-    }
-
-    // Smart model selection with graceful degradation
-    log_start("MODEL_SELECTION");
-    log_with_context(log::Level::Debug, "Selecting model", &[
-        ("available_count", &downloaded_models.len().to_string().as_str())
-    ]);
-    
-    let configured_model = if !config.current_model.is_empty() {
-        Some(config.current_model.clone())
-    } else {
-        None
-    }; // Treat empty string as no configured model
-
-    let model_name = if let Some(configured_model) = configured_model {
-        // Use configured model if it exists and is downloaded
-        if downloaded_models.contains(&configured_model) {
-            log_model_operation("SELECTION", &configured_model, "CONFIGURED_AVAILABLE", None);
-            configured_model
-        } else if downloaded_models.is_empty() {
-            // This should never happen since we check earlier, but just in case
-            log_failed("MODEL_SELECTION", "No models available for fallback");
-            log_with_context(log::Level::Debug, "Model fallback failed", &[
-                ("configured_model", &configured_model),
-                ("downloaded_count", "0")
+            log_start("MODEL_SELECTION");
+            log_with_context(log::Level::Debug, "Selecting model", &[
+                ("available_count", &downloaded_models.len().to_string().as_str())
             ]);
-            return Err("No models available".to_string());
-        } else {
-            // Fallback to best available model
-            let models_by_size = whisper_manager.read().await.get_models_by_size();
-            let fallback_model =
-                select_best_fallback_model(&downloaded_models, &configured_model, &models_by_size);
-                
-            log_model_operation("FALLBACK", &fallback_model, "SELECTED", Some(&{
-                let mut ctx = std::collections::HashMap::new();
-                ctx.insert("requested".to_string(), configured_model.clone());
-                ctx.insert("reason".to_string(), "configured_not_available".to_string());
-                ctx
-            }));
 
-            // Notify user about fallback
-            let _ = emit_to_window(
-                &app,
-                "pill",
-                "model-fallback",
-                serde_json::json!({
-                    "requested": configured_model,
-                    "fallback": fallback_model
-                }),
-            );
+            let configured_model = if !config.current_model.is_empty() {
+                Some(config.current_model.clone())
+            } else {
+                None
+            };
 
-            fallback_model
+            let chosen_model = if let Some(configured_model) = configured_model {
+                if downloaded_models.contains(&configured_model) {
+                    log_model_operation("SELECTION", &configured_model, "CONFIGURED_AVAILABLE", None);
+                    configured_model
+                } else {
+                    let models_by_size = whisper_manager.read().await.get_models_by_size();
+                    let fallback_model = select_best_fallback_model(
+                        &downloaded_models,
+                        &configured_model,
+                        &models_by_size,
+                    );
+
+                    log_model_operation("FALLBACK", &fallback_model, "SELECTED", Some(&{
+                        let mut ctx = std::collections::HashMap::new();
+                        ctx.insert("requested".to_string(), configured_model.clone());
+                        ctx.insert("reason".to_string(), "configured_not_available".to_string());
+                        ctx
+                    }));
+
+                    let _ = emit_to_window(
+                        &app,
+                        "pill",
+                        "model-fallback",
+                        serde_json::json!({
+                            "requested": configured_model,
+                            "fallback": fallback_model
+                        }),
+                    );
+
+                    fallback_model
+                }
+            } else {
+                let models_by_size = whisper_manager.read().await.get_models_by_size();
+                let best_model = select_best_fallback_model(&downloaded_models, "", &models_by_size);
+
+                log_model_operation("AUTO_SELECTION", &best_model, "SELECTED", Some(&{
+                    let mut ctx = std::collections::HashMap::new();
+                    ctx.insert("reason".to_string(), "no_model_configured".to_string());
+                    ctx.insert("strategy".to_string(), "best_available".to_string());
+                    ctx
+                }));
+
+                best_model
+            };
+
+            let model_path = whisper_manager
+                .read()
+                .await
+                .get_model_path(&chosen_model)
+                .ok_or_else(|| format!("Model '{}' path not found", chosen_model))?;
+
+            ActiveEngineSelection::Whisper {
+                model_name: chosen_model,
+                model_path,
+            }
         }
-    } else {
-        // No configured model - auto-select the best available
-        // We already checked that downloaded_models is not empty above
-        let models_by_size = whisper_manager.read().await.get_models_by_size();
-        let best_model = select_best_fallback_model(&downloaded_models, "", &models_by_size);
-        
-        log_model_operation("AUTO_SELECTION", &best_model, "SELECTED", Some(&{
-            let mut ctx = std::collections::HashMap::new();
-            ctx.insert("reason".to_string(), "no_model_configured".to_string());
-            ctx.insert("strategy".to_string(), "best_available".to_string());
-            ctx
-        }));
-        
-        best_model
     };
 
-    log::info!("🤖 Using model for transcription: {}", model_name);
-
-    let model_path = whisper_manager
-        .read()
-        .await
-        .get_model_path(&model_name)
-        .ok_or(format!("Model '{}' path not found", model_name))?;
-
-    let model_name_clone = model_name.clone();
-
-    let language = Some(config.language.clone());
-
+    let language = if config.language.is_empty() {
+        None
+    } else {
+        Some(config.language.clone())
+    };
     let translate_to_english = config.translate_to_english;
 
+    let engine_label = engine_selection.engine_name().to_string();
+    let selected_model_name = engine_selection.model_name().to_string();
+
+    log::info!(
+        "🤖 Using {} model for transcription: {}",
+        engine_label,
+        selected_model_name
+    );
     log::info!(
         "[LANGUAGE] stop_recording: language={:?}, translate={}",
-        language,
+        language.as_deref(),
         translate_to_english
     );
 
-    // clone for move into task
     let audio_path_clone = audio_path.clone();
-    let model_path_clone = model_path.clone();
-
-    log::debug!("Spawning transcription task with model: {}", model_name);
+    let engine_selection_for_task = engine_selection;
+    let language_for_task = language.clone();
+    let selected_model_name_for_task = selected_model_name.clone();
 
     // Spawn and track the transcription task
     let app_for_task = app.clone();
@@ -872,76 +1027,117 @@ pub async fn stop_recording(
             return;
         }
 
-        // Get (or load) transcriber
-        let transcriber = {
-            let cache_state = app_for_task.state::<AsyncMutex<TranscriberCache>>();
-            let mut cache = cache_state.lock().await;
-            match cache.get_or_create(&model_path_clone) {
-                Ok(t) => t,
-                Err(e) => {
-                    // Update state to error
-                    update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
+        let transcription_result: Result<String, String> = match &engine_selection_for_task {
+            ActiveEngineSelection::Whisper { model_path, .. } => {
+                let transcriber = {
+                    let cache_state = app_for_task.state::<AsyncMutex<TranscriberCache>>();
+                    let mut cache = cache_state.lock().await;
+                    match cache.get_or_create(model_path) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            update_recording_state(
+                                &app_for_task,
+                                RecordingState::Error,
+                                Some(e.clone()),
+                            );
+                            let _ =
+                                crate::commands::window::hide_pill_widget(app_for_task.clone()).await;
+                            let _ = emit_to_window(&app_for_task, "pill", "transcription-error", e);
+                            return;
+                        }
+                    }
+                };
 
-                    // Hide pill widget
-                    let _ = crate::commands::window::hide_pill_widget(app_for_task.clone()).await;
+                const MAX_RETRIES: u32 = 3;
+                const RETRY_DELAY_MS: u64 = 500;
 
-                    // Also emit legacy event to pill window
-                    let _ = emit_to_window(&app_for_task, "pill", "transcription-error", e);
+                let mut result = Err("No attempt made".to_string());
+
+                for attempt in 1..=MAX_RETRIES {
+                    if app_state.is_cancellation_requested() {
+                        log::info!("Transcription cancelled at attempt {}", attempt);
+                        result = Err("Transcription cancelled".to_string());
+                        break;
+                    }
+
+                    result = transcriber.transcribe_with_cancellation(
+                        &audio_path_clone,
+                        language_for_task.as_deref(),
+                        translate_to_english,
+                        || app_state.is_cancellation_requested(),
+                    );
+
+                    match &result {
+                        Ok(_) => {
+                            if attempt > 1 {
+                                log::info!("Transcription succeeded on attempt {}", attempt);
+                            }
+                            break;
+                        }
+                        Err(e) => {
+                            if attempt < MAX_RETRIES {
+                                log::warn!(
+                                    "Transcription attempt {} failed: {}. Retrying in {}ms...",
+                                    attempt,
+                                    e,
+                                    RETRY_DELAY_MS
+                                );
+                                std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
+                            } else {
+                                log::error!(
+                                    "Transcription failed after {} attempts: {}",
+                                    MAX_RETRIES,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+
+                result
+            }
+            ActiveEngineSelection::Parakeet { model_name } => {
+                let parakeet_manager = app_for_task.state::<ParakeetManager>();
+                if let Err(e) = parakeet_manager
+                    .load_model(&app_for_task, model_name)
+                    .await
+                {
+                    let message = format!("Parakeet model load failed: {e}");
+                    update_recording_state(
+                        &app_for_task,
+                        RecordingState::Error,
+                        Some(message.clone()),
+                    );
+                    let _ = emit_to_window(&app_for_task, "pill", "transcription-error", message);
                     return;
+                }
+
+                match parakeet_manager
+                    .transcribe(
+                        &app_for_task,
+                        model_name,
+                        audio_path_clone.clone(),
+                        language_for_task.clone(),
+                        translate_to_english,
+                    )
+                    .await
+                {
+                    Ok(ParakeetResponse::Transcription { text, .. }) => Ok(text),
+                    Ok(other) => {
+                        let message = format!("Unexpected Parakeet response: {:?}", other);
+                        Err(message)
+                    }
+                    Err(e) => Err(e.to_string()),
                 }
             }
         };
-
-        // Retry logic for transcription
-        const MAX_RETRIES: u32 = 3;
-        const RETRY_DELAY_MS: u64 = 500;
-
-        let mut result = Err("No attempt made".to_string());
-
-        for attempt in 1..=MAX_RETRIES {
-            // Check for cancellation before each attempt
-            if app_state.is_cancellation_requested() {
-                log::info!("Transcription cancelled at attempt {}", attempt);
-                result = Err("Transcription cancelled".to_string());
-                break;
-            }
-
-            result = transcriber.transcribe_with_cancellation(
-                &audio_path_clone,
-                language.as_deref(),
-                translate_to_english,
-                || app_state.is_cancellation_requested(),
-            );
-
-            match &result {
-                Ok(_) => {
-                    if attempt > 1 {
-                        log::info!("Transcription succeeded on attempt {}", attempt);
-                    }
-                    break;
-                }
-                Err(e) => {
-                    if attempt < MAX_RETRIES {
-                        log::warn!(
-                            "Transcription attempt {} failed: {}. Retrying in {}ms...",
-                            attempt,
-                            e,
-                            RETRY_DELAY_MS
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
-                    } else {
-                        log::error!("Transcription failed after {} attempts: {}", MAX_RETRIES, e);
-                    }
-                }
-            }
-        }
 
         // Clean up temp file regardless of outcome
         if let Err(e) = std::fs::remove_file(&audio_path_clone) {
             log::warn!("Failed to remove temporary audio file: {}", e);
         }
 
-        match result {
+        match transcription_result {
             Ok(text) => {
                 // Final cancellation check before processing result
                 if app_state.is_cancellation_requested() {
@@ -1000,7 +1196,7 @@ pub async fn stop_recording(
                 // Backend handles the complete flow
                 let app_for_process = app_for_task.clone();
                 let text_for_process = text.clone();
-                let model_for_process = model_name_clone.clone();
+                let model_for_process = selected_model_name_for_task.clone();
                 let ai_enabled_for_task = ai_enabled; // Capture from cached config
 
                 tokio::spawn(async move {
@@ -1331,6 +1527,7 @@ pub async fn transcribe_audio_file(
     app: AppHandle,
     file_path: String,
     model_name: String,
+    model_engine: Option<String>,
 ) -> Result<String, String> {
     // Validate requirements (includes license check)
     validate_recording_requirements(&app).await?;
@@ -1356,13 +1553,12 @@ pub async fn transcribe_audio_file(
     let wav_path = crate::audio::converter::convert_to_wav(audio_path, &recordings_dir)?;
     let is_converted = wav_path != audio_path;
 
-    // Get model path
-    let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
-    let model_path = whisper_manager
-        .read()
-        .await
-        .get_model_path(&model_name)
-        .ok_or("Model not found")?;
+    let engine_selection = resolve_engine_for_model(
+        &app,
+        &model_name,
+        model_engine.as_deref(),
+    )
+    .await?;
 
     // Get language and translation settings
     let store = app.store("settings").map_err(|e| e.to_string())?;
@@ -1372,8 +1568,7 @@ pub async fn transcribe_audio_file(
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| "en".to_string());
 
-        // Validate using centralized function
-        validate_language(Some(&lang))
+        validate_language(Some(&lang)).to_string()
     };
 
     let translate_to_english = store
@@ -1387,18 +1582,48 @@ pub async fn transcribe_audio_file(
         translate_to_english
     );
 
-    // Transcribe from the (possibly converted) WAV file
-    let transcriber = {
-        let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
-        let mut cache = cache_state.lock().await;
-        cache.get_or_create(&model_path)?
-    };
+    let text = match engine_selection {
+        ActiveEngineSelection::Whisper { model_path, .. } => {
+            let transcriber = {
+                let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
+                let mut cache = cache_state.lock().await;
+                cache.get_or_create(&model_path)?
+            };
 
-    let text = transcriber.transcribe_with_translation(
-        &wav_path,
-        Some(&language),
-        translate_to_english,
-    )?;
+           transcriber.transcribe_with_translation(
+               &wav_path,
+                Some(language.as_str()),
+                translate_to_english,
+            )?
+        }
+        ActiveEngineSelection::Parakeet { model_name } => {
+            let parakeet_manager = app.state::<ParakeetManager>();
+
+            parakeet_manager
+                .load_model(&app, &model_name)
+                .await
+                .map_err(|e| format!("Failed to load Parakeet model: {}", e))?;
+
+            match parakeet_manager
+                .transcribe(
+                    &app,
+                    &model_name,
+                    wav_path.clone(),
+                    Some(language.clone()),
+                    translate_to_english,
+                )
+                .await
+            {
+                Ok(ParakeetResponse::Transcription { text, .. }) => text,
+                Ok(other) => {
+                    return Err(format!("Unexpected Parakeet response: {:?}", other));
+                }
+                Err(err) => {
+                    return Err(format!("Parakeet transcription failed: {}", err));
+                }
+            }
+        }
+    };
 
     // Clean up temporary WAV file if we created one
     if is_converted {
@@ -1417,6 +1642,7 @@ pub async fn transcribe_audio(
     app: AppHandle,
     audio_data: Vec<u8>,
     model_name: String,
+    model_engine: Option<String>,
 ) -> Result<String, String> {
     // Validate requirements (includes license check)
     validate_recording_requirements(&app).await?;
@@ -1436,13 +1662,12 @@ pub async fn transcribe_audio(
 
     std::fs::write(&temp_path, audio_data).map_err(|e| e.to_string())?;
 
-    // Get model path
-    let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
-    let model_path = whisper_manager
-        .read()
-        .await
-        .get_model_path(&model_name)
-        .ok_or("Model not found")?;
+    let engine_selection = resolve_engine_for_model(
+        &app,
+        &model_name,
+        model_engine.as_deref(),
+    )
+    .await?;
 
     // Get language and translation settings
     let store = app.store("settings").map_err(|e| e.to_string())?;
@@ -1452,8 +1677,7 @@ pub async fn transcribe_audio(
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| "en".to_string());
 
-        // Validate using centralized function
-        validate_language(Some(&lang))
+        validate_language(Some(&lang)).to_string()
     };
 
     let translate_to_english = store
@@ -1467,18 +1691,44 @@ pub async fn transcribe_audio(
         translate_to_english
     );
 
-    // Transcribe (cached)
-    let transcriber = {
-        let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
-        let mut cache = cache_state.lock().await;
-        cache.get_or_create(&model_path)?
-    };
+    let text = match engine_selection {
+        ActiveEngineSelection::Whisper { model_path, .. } => {
+            let transcriber = {
+                let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
+                let mut cache = cache_state.lock().await;
+                cache.get_or_create(&model_path)?
+            };
 
-    let text = transcriber.transcribe_with_translation(
-        &temp_path,
-        Some(&language),
-        translate_to_english,
-    )?;
+           transcriber.transcribe_with_translation(
+                &temp_path,
+                Some(language.as_str()),
+                translate_to_english,
+            )?
+        }
+        ActiveEngineSelection::Parakeet { model_name } => {
+            let parakeet_manager = app.state::<ParakeetManager>();
+
+            parakeet_manager
+                .load_model(&app, &model_name)
+                .await
+                .map_err(|e| format!("Failed to load Parakeet model: {}", e))?;
+
+            match parakeet_manager
+                .transcribe(
+                    &app,
+                    &model_name,
+                    temp_path.clone(),
+                    Some(language.clone()),
+                    translate_to_english,
+                )
+                .await
+            {
+                Ok(ParakeetResponse::Transcription { text, .. }) => text,
+                Ok(other) => return Err(format!("Unexpected Parakeet response: {:?}", other)),
+                Err(err) => return Err(format!("Parakeet transcription failed: {}", err)),
+            }
+        }
+    };
 
     // Clean up
     if let Err(e) = std::fs::remove_file(&temp_path) {

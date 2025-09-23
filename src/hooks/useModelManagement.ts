@@ -56,37 +56,19 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     try {
       setIsLoading(true);
       console.log("[useModelManagement] Calling get_model_status...");
-      const response = await invoke("get_model_status");
-      console.log("[useModelManagement] Raw response:", response);
-      console.log("[useModelManagement] Response type:", typeof response);
-      console.log("[useModelManagement] Response is array:", Array.isArray(response));
-      console.log("[useModelManagement] Response stringified:", JSON.stringify(response, null, 2));
+      const response = await invoke<{ models: ModelInfo[] }>("get_model_status");
+      console.log("[useModelManagement] Response:", response);
 
-      // Check if response is an array (original format) or object with models property
-      let modelArray: [string, ModelInfo][] = [];
-      
-      if (Array.isArray(response)) {
-        console.log("[useModelManagement] Response is array format");
-        modelArray = response as [string, ModelInfo][];
-      } else if (response && typeof response === 'object' && 'models' in response) {
-        console.log("[useModelManagement] Response is object format with models property");
-        const resp = response as { models: { name: string; info: ModelInfo }[] };
-        modelArray = resp.models.map(entry => [entry.name, entry.info]);
-      } else {
-        console.error("[useModelManagement] Unknown response format:", response);
+      if (!response || !Array.isArray(response.models)) {
         throw new Error("Invalid response format from get_model_status");
       }
-      
-      console.log("[useModelManagement] Model array:", modelArray);
-      console.log("[useModelManagement] Model array length:", modelArray.length);
-      
-      // Convert array to object for compatibility
-      const modelStatus = Object.fromEntries(modelArray);
-      console.log("[useModelManagement] Converted to object:", modelStatus);
-      console.log("[useModelManagement] Object keys:", Object.keys(modelStatus));
+
+      const modelStatus = Object.fromEntries(
+        response.models.map((model) => [model.name, model])
+      );
       setModels(modelStatus);
 
-      return modelArray;
+      return response.models;
     } catch (error) {
       console.error("[useModelManagement.loadModels] Failed to load models:", error);
       if (showToasts) {
@@ -220,12 +202,12 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         (window as any).__debugUnlisten = originalCleanup;
       }
       // Progress updates
-      unregisterProgress = await registerEvent<{ model: string; downloaded: number; total: number; progress: number }>(
+      unregisterProgress = await registerEvent<{ model: string; engine?: string; downloaded: number; total: number; progress: number }>(
         "download-progress",
         (payload) => {
-          const { model, progress, downloaded, total } = payload;
+          const { model, progress, downloaded, total, engine } = payload;
 
-          console.log(`[useModelManagement] Download progress for ${model}: ${progress.toFixed(1)}% (${downloaded}/${total} bytes)`);
+          console.log(`[useModelManagement] Download progress for ${model} (${engine ?? 'whisper'}): ${progress.toFixed(1)}% (${downloaded}/${total} bytes)`);
 
           // Keep updating progress until we receive the verifying event
           setDownloadProgress((prev) => ({
@@ -236,7 +218,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       );
 
       // Model verifying (after download, before verification)
-      unregisterVerifying = await registerEvent<{ model: string }>("model-verifying", (event) => {
+      unregisterVerifying = await registerEvent<{ model: string; engine?: string }>("model-verifying", (event) => {
         const modelName = event.model;
 
         // First ensure the progress shows 100% before transitioning to verification
@@ -259,7 +241,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       });
 
       // Download complete
-      unregisterComplete = await registerEvent<{ model: string }>("model-downloaded", async (event) => {
+      unregisterComplete = await registerEvent<{ model: string; engine?: string }>("model-downloaded", async (event) => {
         const modelName = event.model;
 
         // Remove from active downloads
@@ -288,7 +270,8 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       });
 
       // Download cancelled
-      unregisterCancelled = await registerEvent<string>("download-cancelled", (modelName) => {
+      unregisterCancelled = await registerEvent<{ model: string; engine?: string }>("download-cancelled", (payload) => {
+        const modelName = typeof payload === 'string' ? payload : payload.model;
         // Remove from active downloads
         activeDownloads.current.delete(modelName);
 

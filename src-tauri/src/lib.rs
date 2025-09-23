@@ -22,6 +22,7 @@ mod secure_store;
 mod state;
 mod state_machine;
 mod utils;
+mod parakeet;
 mod whisper;
 mod window_manager;
 
@@ -927,10 +928,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            let whisper_manager = whisper::manager::WhisperManager::new(models_dir);
+            let whisper_manager = whisper::manager::WhisperManager::new(models_dir.clone());
             app.manage(AsyncRwLock::new(whisper_manager));
             
             log::info!("✅ Whisper manager initialized and managed");
+
+            // Initialize Parakeet manager and cache directory
+            let parakeet_dir = models_dir.join("parakeet");
+            if let Err(e) = std::fs::create_dir_all(&parakeet_dir) {
+                let error_msg = format!("Failed to create parakeet models directory: {}", e);
+                log_file_operation("CREATE_DIR", &format!("{:?}", parakeet_dir), false, None, Some(&e.to_string()));
+                return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, error_msg)));
+            }
+
+            log_file_operation("CREATE_DIR", &format!("{:?}", parakeet_dir), true, None, None);
+            let parakeet_manager = parakeet::ParakeetManager::new(parakeet_dir);
+            app.manage(parakeet_manager);
+            log::info!("🦜 Parakeet manager initialized");
 
             // Manage active downloads for cancellation
             app.manage(Arc::new(Mutex::new(HashMap::<String, Arc<AtomicBool>>::new())));

@@ -55,6 +55,7 @@ mockIPC((cmd) => {
         language: 'en',
         theme: 'system',
         current_model: 'base.en',
+        current_model_engine: 'whisper',
         transcription_cleanup_days: 30,
         onboarding_completed: true,
         auto_launch: true,
@@ -68,32 +69,46 @@ mockIPC((cmd) => {
       return true;
     
     case 'get_model_status':
-      return [
-        {
-          id: 'tiny.en',
-          name: 'Tiny English',
-          size: 39,
-          downloaded: false,
-          speed_score: 10,
-          accuracy_score: 3,
-        },
-        {
-          id: 'base.en',
-          name: 'Base English',
-          size: 74,
-          downloaded: true,
-          speed_score: 7,
-          accuracy_score: 5,
-        },
-        {
-          id: 'small.en',
-          name: 'Small English',
-          size: 244,
-          downloaded: true,
-          speed_score: 5,
-          accuracy_score: 7,
-        }
-      ];
+      return {
+        models: [
+          {
+            name: 'tiny.en',
+            display_name: 'Tiny English',
+            size: 39,
+            url: '',
+            sha256: '',
+            downloaded: false,
+            speed_score: 10,
+            accuracy_score: 3,
+            recommended: false,
+            engine: 'whisper'
+          },
+          {
+            name: 'base.en',
+            display_name: 'Base English',
+            size: 74,
+            url: '',
+            sha256: '',
+            downloaded: true,
+            speed_score: 7,
+            accuracy_score: 5,
+            recommended: false,
+            engine: 'whisper'
+          },
+          {
+            name: 'small.en',
+            display_name: 'Small English',
+            size: 244,
+            url: '',
+            sha256: '',
+            downloaded: true,
+            speed_score: 5,
+            accuracy_score: 7,
+            recommended: false,
+            engine: 'whisper'
+          }
+        ]
+      };
     
     case 'download_model':
       return true;

@@ -27,7 +27,7 @@ export function ModelsTab() {
 
       // If deleted model was the current one, clear selection in settings
       if (settings?.current_model === modelName) {
-        await saveSettings({ current_model: "" });
+        await saveSettings({ current_model: "", current_model_engine: 'whisper' });
       }
     },
     [deleteModel, settings]
@@ -50,7 +50,7 @@ export function ModelsTab() {
     const init = async () => {
       try {
         // Listen for download error events (when download fails)
-        registerEvent<{ model: string; error: string }>(
+        registerEvent<{ model: string; engine?: string; error: string }>(
           "download-error",
           (errorData) => {
             const { model, error } = errorData;
@@ -85,7 +85,9 @@ export function ModelsTab() {
       onCancelDownload={cancelDownload}
       onSelect={async (modelName) => {
         if (settings) {
-          await saveSettings({ current_model: modelName });
+          const selected = sortedModels.find(([name]) => name === modelName)?.[1];
+          const engine = selected?.engine ?? 'whisper';
+          await saveSettings({ current_model: modelName, current_model_engine: engine });
         }
       }}
     />

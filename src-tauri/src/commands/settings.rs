@@ -11,6 +11,7 @@ use tauri_plugin_store::StoreExt;
 pub struct Settings {
     pub hotkey: String,
     pub current_model: String,
+    pub current_model_engine: String,
     pub language: String,
     pub translate_to_english: bool,
     pub theme: String,
@@ -32,6 +33,7 @@ impl Default for Settings {
         Self {
             hotkey: "CommandOrControl+Shift+Space".to_string(),
             current_model: "".to_string(), // Empty means auto-select
+            current_model_engine: "whisper".to_string(),
             language: "en".to_string(),
             translate_to_english: false, // Default to transcribe mode
             theme: "system".to_string(),
@@ -62,6 +64,10 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("current_model")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().current_model),
+        current_model_engine: store
+            .get("current_model_engine")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| Settings::default().current_model_engine.clone()),
         language: store
             .get("language")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -139,6 +145,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
+    store.set("current_model_engine", json!(settings.current_model_engine));
 
     // Validate language before saving
     let validated_language = validate_language(Some(&settings.language));
@@ -231,6 +238,8 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     crate::commands::audio::invalidate_recording_config_cache(&app).await;
 
     // Preload new model and update tray menu if model changed
+    let is_parakeet_engine = settings.current_model_engine == "parakeet";
+
     if !settings.current_model.is_empty() && old_model != settings.current_model {
         use crate::commands::model::preload_model;
         use tauri::async_runtime::RwLock as AsyncRwLock;
@@ -241,17 +250,21 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             settings.current_model
         );
 
-        // Preload the new model
-        let app_clone = app.clone();
-        let model_name = settings.current_model.clone();
-        tokio::spawn(async move {
-            let whisper_state =
-                app_clone.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
-            match preload_model(app_clone.clone(), model_name.clone(), whisper_state).await {
-                Ok(_) => log::info!("Successfully preloaded new model: {}", model_name),
-                Err(e) => log::warn!("Failed to preload new model: {}", e),
-            }
-        });
+        if !is_parakeet_engine {
+            // Preload the new Whisper model
+            let app_clone = app.clone();
+            let model_name = settings.current_model.clone();
+            tokio::spawn(async move {
+                let whisper_state =
+                    app_clone.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
+                match preload_model(app_clone.clone(), model_name.clone(), whisper_state).await {
+                    Ok(_) => log::info!("Successfully preloaded new model: {}", model_name),
+                    Err(e) => log::warn!("Failed to preload new model: {}", e),
+                }
+            });
+        } else {
+            log::info!("Skipping Whisper preload for Parakeet engine selection");
+        }
         
         // Update the tray menu to reflect the new selection
         if let Err(e) = update_tray_menu(app.clone()).await {
@@ -405,6 +418,7 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
 
     // Update the model
     settings.current_model = model_name.clone();
+    settings.current_model_engine = "whisper".to_string();
 
     // Save settings (this will also preload the model)
     save_settings(app.clone(), settings).await?;
@@ -413,7 +427,13 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     update_tray_menu(app.clone()).await?;
 
     // Emit event to update UI only after successful tray menu update
-    if let Err(e) = app.emit("model-changed", &model_name) {
+    if let Err(e) = app.emit(
+        "model-changed",
+        json!({
+            "model": model_name,
+            "engine": "whisper"
+        }),
+    ) {
         log::warn!("Failed to emit model-changed event: {}", e);
         // Return error to caller so they know the UI might be out of sync
         return Err(format!("Failed to emit model-changed event: {}", e));

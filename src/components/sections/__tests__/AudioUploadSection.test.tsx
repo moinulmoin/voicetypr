@@ -10,7 +10,7 @@ vi.mock('@tauri-apps/plugin-dialog');
 vi.mock('@tauri-apps/api/event');
 vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
-    settings: { current_model: 'base.en', hotkey: 'Cmd+Shift+Space', language: 'en', theme: 'system' },
+    settings: { current_model: 'base.en', current_model_engine: 'whisper', hotkey: 'Cmd+Shift+Space', language: 'en', theme: 'system' },
     isLoading: false,
     error: null,
     refreshSettings: vi.fn(),
@@ -65,6 +65,12 @@ describe('AudioUploadSection - Essential User Flows', () => {
       await waitFor(() => {
         expect(screen.getByText(/This is the meeting transcript/)).toBeInTheDocument();
       }, { timeout: 3000 });
+
+      expect(invoke).toHaveBeenCalledWith('transcribe_audio_file', {
+        filePath: '/audio/meeting.mp3',
+        modelName: 'base.en',
+        modelEngine: 'whisper'
+      });
 
       // Success notification
       expect(toast.success).toHaveBeenCalled();

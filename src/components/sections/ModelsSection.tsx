@@ -63,9 +63,21 @@ export function ModelsSection({
               </div>
             )}
             {currentModel ? (
-              <span className="text-sm text-muted-foreground">
-                Active: <span className="text-amber-600 dark:text-amber-500">{installedModels.find(([name]) => name === currentModel)?.[1].display_name || currentModel}</span>
-              </span>
+              (() => {
+                const active = installedModels.find(([name]) => name === currentModel)?.[1];
+                if (!active) {
+                  return (
+                    <span className="text-sm text-muted-foreground">
+                      Active: <span className="text-amber-600 dark:text-amber-500">{currentModel}</span>
+                    </span>
+                  );
+                }
+                return (
+                  <span className="text-sm text-muted-foreground">
+                    Active: <span className="text-amber-600 dark:text-amber-500">{active.display_name}</span>
+                  </span>
+                );
+              })()
             ) : installedModels.length > 0 && (
               <span className="text-sm text-amber-600 dark:text-amber-500">
                 No model selected

@@ -185,6 +185,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
       await updateSettings({
         hotkey: hotkey,
         current_model: selectedModel || "",
+        current_model_engine: 'whisper',
         onboarding_completed: true
       });
     } catch (error) {
