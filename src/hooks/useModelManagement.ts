@@ -48,7 +48,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
   const [verifyingModels, setVerifyingModels] = useState<Set<string>>(new Set());
 
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  // Removed selectedModel state - now using settings.current_model directly
   const [isLoading, setIsLoading] = useState(false);
 
   // Load models from backend
@@ -164,17 +164,14 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       // Refresh model status
       await loadModels();
 
-      // If deleted model was the current one, clear selection
-      if (selectedModel === modelName) {
-        setSelectedModel(null);
-      }
+      // Model selection clearing is handled by the component via settings
     } catch (error) {
       console.error("Failed to delete model:", error);
       if (showToasts) {
         toast.error(`Failed to delete model: ${error}`);
       }
     }
-  }, [selectedModel, loadModels, showToasts]);
+  }, [loadModels, showToasts]);
 
   // Setup event listeners BEFORE any other effects
   useEffect(() => {
@@ -319,11 +316,9 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     modelOrder,
     downloadProgress,
     verifyingModels,
-    selectedModel,
     isLoading,
 
     // Actions
-    setSelectedModel,
     loadModels,
     downloadModel,
     cancelDownload,

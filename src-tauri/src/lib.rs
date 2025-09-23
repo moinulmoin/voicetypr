@@ -1628,23 +1628,45 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
             }
         }
 
-        // Check current model is still available
+        // Check current model is still available based on engine type
         let mut _model_available = false;
         if let Some(current_model) = store
             .get("current_model")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
         {
             if !current_model.is_empty() {
-                if let Some(whisper_manager) =
-                    app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
-                {
-                    let downloaded = whisper_manager.read().await.get_downloaded_model_names();
-                    _model_available = downloaded.contains(&current_model);
-                    if !_model_available {
-                        log::warn!("Current model '{}' no longer available", current_model);
-                        // Clear the selection
-                        store.set("current_model", serde_json::Value::String(String::new()));
-                        let _ = store.save();
+                // Get the engine type to determine which manager to check
+                let engine = store
+                    .get("current_model_engine")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "whisper".to_string());
+
+                if engine == "parakeet" {
+                    // Check ParakeetManager for Parakeet models
+                    if let Some(parakeet_manager) = app.try_state::<parakeet::ParakeetManager>() {
+                        let models = parakeet_manager.list_models();
+                        _model_available = models.iter().any(|m| m.name == current_model && m.downloaded);
+                        if !_model_available {
+                            log::warn!("Current Parakeet model '{}' no longer available", current_model);
+                            // Clear the selection
+                            store.set("current_model", serde_json::Value::String(String::new()));
+                            store.set("current_model_engine", serde_json::Value::String("whisper".to_string()));
+                            let _ = store.save();
+                        }
+                    }
+                } else {
+                    // Check WhisperManager for Whisper models (default)
+                    if let Some(whisper_manager) =
+                        app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
+                    {
+                        let downloaded = whisper_manager.read().await.get_downloaded_model_names();
+                        _model_available = downloaded.contains(&current_model);
+                        if !_model_available {
+                            log::warn!("Current Whisper model '{}' no longer available", current_model);
+                            // Clear the selection
+                            store.set("current_model", serde_json::Value::String(String::new()));
+                            let _ = store.save();
+                        }
                     }
                 }
             }

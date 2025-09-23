@@ -67,8 +67,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
     modelOrder,
     downloadProgress,
     verifyingModels,
-    selectedModel,
-    setSelectedModel,
     loadModels,
     downloadModel,
     cancelDownload,
@@ -114,14 +112,14 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
   useEffect(() => {
     // Only auto-select if no model is selected yet
-    if (!selectedModel) {
+    if (!settings?.current_model) {
       // Find a downloaded model
       const downloadedModel = Object.entries(models).find(([_, m]) => m.downloaded);
       if (downloadedModel) {
-        setSelectedModel(downloadedModel[0]);
+        updateSettings({ current_model: downloadedModel[0] });
       }
     }
-  }, [models]); // Only depend on models, not selectedModel to avoid loops
+  }, [models, settings?.current_model]); // Depend on both to react to changes
 
   const checkPermissions = async () => {
     // Use the hook methods to check permissions
@@ -184,7 +182,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
       await updateSettings({
         hotkey: hotkey,
-        current_model: selectedModel || "",
+        current_model: settings?.current_model || "",
         current_model_engine: 'whisper',
         onboarding_completed: true
       });
@@ -242,7 +240,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
       // automation check removed for now
       case "models":
         // User can proceed if they have selected a model that is downloaded
-        return selectedModel !== null && models[selectedModel]?.downloaded === true;
+        return settings?.current_model !== null && settings?.current_model !== "" && models[settings.current_model]?.downloaded === true;
       default:
         return true;
     }
@@ -448,9 +446,9 @@ export const OnboardingDesktop = function OnboardingDesktop({
                               model={model}
                               downloadProgress={progress}
                               isVerifying={verifyingModels.has(name)}
-                              isSelected={selectedModel === name}
+                              isSelected={settings?.current_model === name}
                               onDownload={downloadModel}
-                              onSelect={setSelectedModel}
+                              onSelect={(modelName) => updateSettings({ current_model: modelName })}
                               onCancelDownload={cancelDownload}
                               showSelectButton={model.downloaded}
                             />
