@@ -15,8 +15,8 @@ use crate::whisper::manager::WhisperManager;
 use crate::{emit_to_window, update_recording_state, AppState, RecordingState};
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde_json;
-use std::path::{Path, PathBuf};
 use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
@@ -43,11 +43,11 @@ pub struct RecordingConfig {
 impl RecordingConfig {
     /// Maximum age of cache before considering it stale (5 minutes)
     const MAX_CACHE_AGE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
-    
+
     /// Load all recording-relevant settings from store in one operation
     pub async fn load_from_store(app: &AppHandle) -> Result<Self, String> {
         let store = app.store("settings").map_err(|e| e.to_string())?;
-        
+
         Ok(Self {
             show_pill_widget: store
                 .get("show_pill_widget")
@@ -88,7 +88,7 @@ impl RecordingConfig {
             loaded_at: Instant::now(),
         })
     }
-    
+
     /// Check if this cache entry is still fresh
     pub fn is_fresh(&self) -> bool {
         self.loaded_at.elapsed() < Self::MAX_CACHE_AGE
@@ -101,8 +101,13 @@ impl RefUnwindSafe for RecordingConfig {}
 
 #[derive(Clone)]
 enum ActiveEngineSelection {
-    Whisper { model_name: String, model_path: PathBuf },
-    Parakeet { model_name: String },
+    Whisper {
+        model_name: String,
+        model_path: PathBuf,
+    },
+    Parakeet {
+        model_name: String,
+    },
 }
 
 impl ActiveEngineSelection {
@@ -222,7 +227,10 @@ async fn resolve_engine_for_model(
                 }
             }
 
-            Err(format!("Model '{}' not found in Whisper or Parakeet registries", model_name))
+            Err(format!(
+                "Model '{}' not found in Whisper or Parakeet registries",
+                model_name
+            ))
         }
     }
 }
@@ -238,30 +246,33 @@ pub async fn invalidate_recording_config_cache(app: &AppHandle) {
 /// Helper function to get cached recording config or load from store
 pub async fn get_recording_config(app: &AppHandle) -> Result<RecordingConfig, String> {
     let app_state = app.state::<AppState>();
-    
+
     // Try to get from cache first
     {
         let cache = app_state.recording_config_cache.read().await;
         if let Some(config) = cache.as_ref() {
             if config.is_fresh() {
-                log::debug!("Using cached recording config (age: {:?})", config.loaded_at.elapsed());
+                log::debug!(
+                    "Using cached recording config (age: {:?})",
+                    config.loaded_at.elapsed()
+                );
                 return Ok(config.clone());
             } else {
                 log::debug!("Recording config cache is stale, will reload");
             }
         }
     }
-    
+
     // Cache miss or stale - load from store
     let config = RecordingConfig::load_from_store(app).await?;
-    
+
     // Update cache
     {
         let mut cache = app_state.recording_config_cache.write().await;
         *cache = Some(config.clone());
         log::debug!("Recording config cached successfully");
     }
-    
+
     Ok(config)
 }
 
@@ -339,13 +350,16 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
     let license_status = {
         let app_state = app.state::<AppState>();
         let cache = app_state.license_cache.read().await;
-        
+
         if let Some(cached) = cache.as_ref() {
             if cached.is_valid() {
                 log::debug!("Using cached license status (age: {:?})", cached.age());
                 Some(cached.status.clone())
             } else {
-                log::debug!("License cache is stale (age: {:?}), will refresh", cached.age());
+                log::debug!(
+                    "License cache is stale (age: {:?}), will refresh",
+                    cached.age()
+                );
                 None
             }
         } else {
@@ -353,7 +367,7 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
             None
         }
     };
-    
+
     let status = if let Some(cached_status) = license_status {
         cached_status
     } else {
@@ -363,7 +377,9 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
                 // Update cache
                 let app_state = app.state::<AppState>();
                 let mut cache = app_state.license_cache.write().await;
-                *cache = Some(crate::commands::license::CachedLicense::new(fresh_status.clone()));
+                *cache = Some(crate::commands::license::CachedLicense::new(
+                    fresh_status.clone(),
+                ));
                 log::debug!("License status cached for 6 hours");
                 fresh_status
             }
@@ -378,14 +394,12 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
     if matches!(status.status, LicenseState::Expired | LicenseState::None) {
         log::error!("Invalid license: {:?}", status.status);
 
-        // Show the main window but DON'T steal focus
+        // Show and focus the main window
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.show();
-            // Don't focus - let user switch to it manually
-            // This was causing unwanted focus stealing
-            // let _ = window.set_focus();
+            let _ = window.set_focus();
         }
-        
+
         // Emit error event with guidance
         let _ = emit_to_window(
             app,
@@ -409,26 +423,40 @@ pub async fn start_recording(
     state: State<'_, RecorderState>,
 ) -> Result<(), String> {
     let recording_start = Instant::now();
-    
+
     log_start("RECORDING_START");
-    log_with_context(log::Level::Debug, "Recording command started", &[
-        ("command", "start_recording"),
-        ("timestamp", &chrono::Utc::now().to_rfc3339())
-    ]);
+    log_with_context(
+        log::Level::Debug,
+        "Recording command started",
+        &[
+            ("command", "start_recording"),
+            ("timestamp", &chrono::Utc::now().to_rfc3339()),
+        ],
+    );
 
     // Validate all requirements upfront
     let validation_start = Instant::now();
     match validate_recording_requirements(&app).await {
         Ok(_) => {
-            log_performance("RECORDING_VALIDATION", validation_start.elapsed().as_millis() as u64, 
-                Some("validation_passed"));
+            log_performance(
+                "RECORDING_VALIDATION",
+                validation_start.elapsed().as_millis() as u64,
+                Some("validation_passed"),
+            );
         }
         Err(e) => {
             log_failed("RECORDING_START", &e);
-            log_with_context(log::Level::Debug, "Validation failed", &[
-                ("stage", "validation"),
-                ("validation_time_ms", &validation_start.elapsed().as_millis().to_string().as_str())
-            ]);
+            log_with_context(
+                log::Level::Debug,
+                "Validation failed",
+                &[
+                    ("stage", "validation"),
+                    (
+                        "validation_time_ms",
+                        &validation_start.elapsed().as_millis().to_string().as_str(),
+                    ),
+                ],
+            );
             return Err(e);
         }
     }
@@ -442,8 +470,12 @@ pub async fn start_recording(
         log::error!("Failed to load recording config: {}", e);
         format!("Configuration error: {}", e)
     })?;
-    log::debug!("Using recording config: show_pill={}, ai_enabled={}, model={}", 
-        config.show_pill_widget, config.ai_enabled, config.current_model);
+    log::debug!(
+        "Using recording config: show_pill={}, ai_enabled={}, model={}",
+        config.show_pill_widget,
+        config.ai_enabled,
+        config.current_model
+    );
     // Get app data directory for recordings
     let recordings_dir = app
         .path()
@@ -479,9 +511,12 @@ pub async fn start_recording(
                 log::info!("Using default microphone");
                 None
             }
-        },
+        }
         Err(e) => {
-            log::warn!("Failed to get settings for microphone selection: {}. Using default.", e);
+            log::warn!(
+                "Failed to get settings for microphone selection: {}. Using default.",
+                e
+            );
             None
         }
     };
@@ -502,30 +537,36 @@ pub async fn start_recording(
 
         // Log the current audio device before starting
         log_start("AUDIO_DEVICE_CHECK");
-        log_with_context(log::Level::Debug, "Checking audio device", &[
-            ("stage", "pre_recording")
-        ]);
-        
+        log_with_context(
+            log::Level::Debug,
+            "Checking audio device",
+            &[("stage", "pre_recording")],
+        );
+
         if let Ok(host) = std::panic::catch_unwind(|| cpal::default_host()) {
             if let Some(device) = host.default_input_device() {
                 if let Ok(name) = device.name() {
                     log::info!("🎙️ Audio device available: {}", name);
-                    log_with_context(log::Level::Info, "🎮 MICROPHONE", &[
-                        ("device_name", &name),
-                        ("status", "available")
-                    ]);
+                    log_with_context(
+                        log::Level::Info,
+                        "🎮 MICROPHONE",
+                        &[("device_name", &name), ("status", "available")],
+                    );
                 } else {
                     log::warn!("⚠️  Could not get device name, but device is available");
-                    log_with_context(log::Level::Info, "🎮 MICROPHONE", &[
-                        ("status", "available_unnamed")
-                    ]);
+                    log_with_context(
+                        log::Level::Info,
+                        "🎮 MICROPHONE",
+                        &[("status", "available_unnamed")],
+                    );
                 }
             } else {
                 log_failed("AUDIO_DEVICE", "No default input device found");
-                log_with_context(log::Level::Debug, "Device detection failed", &[
-                    ("component", "audio_device"),
-                    ("stage", "device_detection")
-                ]);
+                log_with_context(
+                    log::Level::Debug,
+                    "Device detection failed",
+                    &[("component", "audio_device"), ("stage", "device_detection")],
+                );
             }
         }
 
@@ -534,25 +575,41 @@ pub async fn start_recording(
         let audio_path_str = audio_path
             .to_str()
             .ok_or_else(|| "Invalid path encoding".to_string())?;
-            
+
         log_file_operation("RECORDING_START", audio_path_str, false, None, None);
-        
+
         // Start recording and get audio level receiver
-        let audio_level_rx = match recorder.start_recording(audio_path_str, selected_microphone.clone()) {
+        let audio_level_rx = match recorder
+            .start_recording(audio_path_str, selected_microphone.clone())
+        {
             Ok(_) => {
                 // Verify recording actually started
                 let is_recording = recorder.is_recording();
-                
+
                 // Get the audio level receiver before potentially dropping recorder
                 let rx = recorder.take_audio_level_receiver();
-                
+
                 if !is_recording {
                     drop(recorder); // Release the lock if we're erroring out
-                    log_failed("RECORDER_INIT", "Recording failed to start after initialization");
-                    log_with_context(log::Level::Debug, "Recorder initialization failed", &[
-                        ("audio_path", audio_path_str),
-                        ("init_time_ms", &recorder_init_start.elapsed().as_millis().to_string().as_str())
-                    ]);
+                    log_failed(
+                        "RECORDER_INIT",
+                        "Recording failed to start after initialization",
+                    );
+                    log_with_context(
+                        log::Level::Debug,
+                        "Recorder initialization failed",
+                        &[
+                            ("audio_path", audio_path_str),
+                            (
+                                "init_time_ms",
+                                &recorder_init_start
+                                    .elapsed()
+                                    .as_millis()
+                                    .to_string()
+                                    .as_str(),
+                            ),
+                        ],
+                    );
 
                     update_recording_state(
                         &app,
@@ -561,29 +618,42 @@ pub async fn start_recording(
                     );
 
                     // Emit user-friendly error
-                    let _ = emit_to_window(&app, "pill", "recording-error",
-                        "Microphone access failed");
+                    let _ =
+                        emit_to_window(&app, "pill", "recording-error", "Microphone access failed");
 
                     return Err("Failed to start recording".to_string());
                 } else {
-                    log_performance("RECORDER_INIT", 
-                        recorder_init_start.elapsed().as_millis() as u64, 
-                        Some(&format!("file={}", audio_path_str)));
+                    log_performance(
+                        "RECORDER_INIT",
+                        recorder_init_start.elapsed().as_millis() as u64,
+                        Some(&format!("file={}", audio_path_str)),
+                    );
                     log::info!("✅ Recording started successfully");
-                    
+
                     // Monitor system resources at recording start
                     #[cfg(debug_assertions)]
                     system_monitor::log_resources_before_operation("RECORDING_START");
                 }
-                
+
                 rx // Return the audio level receiver
             }
             Err(e) => {
                 log_failed("RECORDER_START", &e);
-                log_with_context(log::Level::Debug, "Recorder start failed", &[
-                    ("audio_path", audio_path_str),
-                    ("init_time_ms", &recorder_init_start.elapsed().as_millis().to_string().as_str())
-                ]);
+                log_with_context(
+                    log::Level::Debug,
+                    "Recorder start failed",
+                    &[
+                        ("audio_path", audio_path_str),
+                        (
+                            "init_time_ms",
+                            &recorder_init_start
+                                .elapsed()
+                                .as_millis()
+                                .to_string()
+                                .as_str(),
+                        ),
+                    ],
+                );
 
                 update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
 
@@ -607,7 +677,7 @@ pub async fn start_recording(
         // Release the recorder lock after successful start
         drop(recorder);
 
-        // Start audio level monitoring 
+        // Start audio level monitoring
         if let Some(audio_level_rx) = audio_level_rx {
             let app_for_levels = app.clone();
             // Use a thread instead of tokio spawn for std::sync::mpsc
@@ -661,13 +731,20 @@ pub async fn start_recording(
 
     // Also emit legacy event for compatibility
     let _ = emit_to_window(&app, "pill", "recording-started", ());
-    
+
     // Log successful recording start
-    log_complete("RECORDING_START", recording_start.elapsed().as_millis() as u64);
-    log_with_context(log::Level::Debug, "Recording started successfully", &[
-        ("audio_path", &format!("{:?}", audio_path).as_str()),
-        ("state", "recording")
-    ]);
+    log_complete(
+        "RECORDING_START",
+        recording_start.elapsed().as_millis() as u64,
+    );
+    log_with_context(
+        log::Level::Debug,
+        "Recording started successfully",
+        &[
+            ("audio_path", &format!("{:?}", audio_path).as_str()),
+            ("state", "recording"),
+        ],
+    );
 
     // Register global ESC key for cancellation
     let app_state = app.state::<AppState>();
@@ -710,12 +787,16 @@ pub async fn stop_recording(
     state: State<'_, RecorderState>,
 ) -> Result<String, String> {
     let stop_start = Instant::now();
-    
+
     log_start("RECORDING_STOP");
-    log_with_context(log::Level::Debug, "Stop recording command", &[
-        ("command", "stop_recording"),
-        ("timestamp", &chrono::Utc::now().to_rfc3339().as_str())
-    ]);
+    log_with_context(
+        log::Level::Debug,
+        "Stop recording command",
+        &[
+            ("command", "stop_recording"),
+            ("timestamp", &chrono::Utc::now().to_rfc3339().as_str()),
+        ],
+    );
 
     // Update state to stopping
     log_state_transition("RECORDING", "recording", "stopping", true, None);
@@ -745,10 +826,13 @@ pub async fn stop_recording(
             .stop_recording()
             .map_err(|e| format!("Failed to stop recording: {}", e))?;
         log::info!("{}", stop_message);
-        
+
         // Monitor system resources after recording stop
         #[cfg(debug_assertions)]
-        system_monitor::log_resources_after_operation("RECORDING_STOP", stop_start.elapsed().as_millis() as u64);
+        system_monitor::log_resources_after_operation(
+            "RECORDING_STOP",
+            stop_start.elapsed().as_millis() as u64,
+        );
 
         // Emit event if recording was stopped due to silence
         if stop_message.contains("silence") {
@@ -841,18 +925,27 @@ pub async fn stop_recording(
 
     // === Audio validation now handled by transcriber ===
     // Transcriber will check duration and format during processing
-    log_with_context(log::Level::Debug, "Proceeding directly to transcription", &[
-        ("audio_path", &format!("{:?}", audio_path).as_str()),
-        ("stage", "pre_transcription")
-    ]);
+    log_with_context(
+        log::Level::Debug,
+        "Proceeding directly to transcription",
+        &[
+            ("audio_path", &format!("{:?}", audio_path).as_str()),
+            ("stage", "pre_transcription"),
+        ],
+    );
 
     // Get cached recording config to avoid repeated store access
     let config = get_recording_config(&app).await.map_err(|e| {
         log::error!("Failed to load recording config: {}", e);
         format!("Configuration error: {}", e)
     })?;
-    log::debug!("Using cached config: model={}, language={}, translate={}, ai_enabled={}", 
-        config.current_model, config.language, config.translate_to_english, config.ai_enabled);
+    log::debug!(
+        "Using cached config: model={}, language={}, translate={}, ai_enabled={}",
+        config.current_model,
+        config.language,
+        config.translate_to_english,
+        config.ai_enabled
+    );
 
     let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
 
@@ -909,9 +1002,14 @@ pub async fn stop_recording(
             }
 
             log_start("MODEL_SELECTION");
-            log_with_context(log::Level::Debug, "Selecting model", &[
-                ("available_count", &downloaded_models.len().to_string().as_str())
-            ]);
+            log_with_context(
+                log::Level::Debug,
+                "Selecting model",
+                &[(
+                    "available_count",
+                    &downloaded_models.len().to_string().as_str(),
+                )],
+            );
 
             let configured_model = if !config.current_model.is_empty() {
                 Some(config.current_model.clone())
@@ -921,7 +1019,12 @@ pub async fn stop_recording(
 
             let chosen_model = if let Some(configured_model) = configured_model {
                 if downloaded_models.contains(&configured_model) {
-                    log_model_operation("SELECTION", &configured_model, "CONFIGURED_AVAILABLE", None);
+                    log_model_operation(
+                        "SELECTION",
+                        &configured_model,
+                        "CONFIGURED_AVAILABLE",
+                        None,
+                    );
                     configured_model
                 } else {
                     let models_by_size = whisper_manager.read().await.get_models_by_size();
@@ -931,12 +1034,20 @@ pub async fn stop_recording(
                         &models_by_size,
                     );
 
-                    log_model_operation("FALLBACK", &fallback_model, "SELECTED", Some(&{
-                        let mut ctx = std::collections::HashMap::new();
-                        ctx.insert("requested".to_string(), configured_model.clone());
-                        ctx.insert("reason".to_string(), "configured_not_available".to_string());
-                        ctx
-                    }));
+                    log_model_operation(
+                        "FALLBACK",
+                        &fallback_model,
+                        "SELECTED",
+                        Some(&{
+                            let mut ctx = std::collections::HashMap::new();
+                            ctx.insert("requested".to_string(), configured_model.clone());
+                            ctx.insert(
+                                "reason".to_string(),
+                                "configured_not_available".to_string(),
+                            );
+                            ctx
+                        }),
+                    );
 
                     let _ = emit_to_window(
                         &app,
@@ -952,14 +1063,20 @@ pub async fn stop_recording(
                 }
             } else {
                 let models_by_size = whisper_manager.read().await.get_models_by_size();
-                let best_model = select_best_fallback_model(&downloaded_models, "", &models_by_size);
+                let best_model =
+                    select_best_fallback_model(&downloaded_models, "", &models_by_size);
 
-                log_model_operation("AUTO_SELECTION", &best_model, "SELECTED", Some(&{
-                    let mut ctx = std::collections::HashMap::new();
-                    ctx.insert("reason".to_string(), "no_model_configured".to_string());
-                    ctx.insert("strategy".to_string(), "best_available".to_string());
-                    ctx
-                }));
+                log_model_operation(
+                    "AUTO_SELECTION",
+                    &best_model,
+                    "SELECTED",
+                    Some(&{
+                        let mut ctx = std::collections::HashMap::new();
+                        ctx.insert("reason".to_string(), "no_model_configured".to_string());
+                        ctx.insert("strategy".to_string(), "best_available".to_string());
+                        ctx
+                    }),
+                );
 
                 best_model
             };
@@ -1040,8 +1157,8 @@ pub async fn stop_recording(
                                 RecordingState::Error,
                                 Some(e.clone()),
                             );
-                            let _ =
-                                crate::commands::window::hide_pill_widget(app_for_task.clone()).await;
+                            let _ = crate::commands::window::hide_pill_widget(app_for_task.clone())
+                                .await;
                             let _ = emit_to_window(&app_for_task, "pill", "transcription-error", e);
                             return;
                         }
@@ -1082,7 +1199,9 @@ pub async fn stop_recording(
                                     e,
                                     RETRY_DELAY_MS
                                 );
-                                std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
+                                std::thread::sleep(std::time::Duration::from_millis(
+                                    RETRY_DELAY_MS,
+                                ));
                             } else {
                                 log::error!(
                                     "Transcription failed after {} attempts: {}",
@@ -1098,10 +1217,7 @@ pub async fn stop_recording(
             }
             ActiveEngineSelection::Parakeet { model_name } => {
                 let parakeet_manager = app_for_task.state::<ParakeetManager>();
-                if let Err(e) = parakeet_manager
-                    .load_model(&app_for_task, model_name)
-                    .await
-                {
+                if let Err(e) = parakeet_manager.load_model(&app_for_task, model_name).await {
                     let message = format!("Parakeet model load failed: {e}");
                     update_recording_state(
                         &app_for_task,
@@ -1165,7 +1281,7 @@ pub async fn stop_recording(
                         &app_for_task,
                         "pill",
                         "transcription-empty",
-                        "No speech detected - try speaking closer to the microphone"
+                        "No speech detected - try speaking closer to the microphone",
                     );
 
                     // Wait for feedback to show before hiding pill
@@ -1174,7 +1290,9 @@ pub async fn stop_recording(
                         tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
 
                         // Hide pill window
-                        if let Err(e) = crate::commands::window::hide_pill_widget(app_for_hide.clone()).await {
+                        if let Err(e) =
+                            crate::commands::window::hide_pill_widget(app_for_hide.clone()).await
+                        {
                             log::error!("Failed to hide pill window: {}", e);
                         }
 
@@ -1229,13 +1347,19 @@ pub async fn stop_recording(
 
                                     // Check error type and create appropriate message
                                     let error_message = e.to_string();
-                                    let user_message = if error_message.contains("400") || error_message.contains("Bad Request") {
+                                    let user_message = if error_message.contains("400")
+                                        || error_message.contains("Bad Request")
+                                    {
                                         "Enhancement failed: Missing or invalid API key"
-                                    } else if error_message.contains("401") || error_message.contains("Unauthorized") {
+                                    } else if error_message.contains("401")
+                                        || error_message.contains("Unauthorized")
+                                    {
                                         "Enhancement failed: Invalid API key"
                                     } else if error_message.contains("429") {
                                         "Enhancement failed: Rate limit exceeded"
-                                    } else if error_message.contains("network") || error_message.contains("connection") {
+                                    } else if error_message.contains("network")
+                                        || error_message.contains("connection")
+                                    {
                                         "Enhancement failed: Network error"
                                     } else {
                                         "Enhancement failed: Using original text"
@@ -1250,7 +1374,11 @@ pub async fn stop_recording(
                                     );
 
                                     // Also notify main window for settings update if needed
-                                    if error_message.contains("400") || error_message.contains("401") || error_message.contains("Bad Request") || error_message.contains("Unauthorized") {
+                                    if error_message.contains("400")
+                                        || error_message.contains("401")
+                                        || error_message.contains("Bad Request")
+                                        || error_message.contains("Unauthorized")
+                                    {
                                         let _ = emit_to_window(
                                             &app_for_process,
                                             "main",
@@ -1270,7 +1398,7 @@ pub async fn stop_recording(
 
                     // 2. Hide pill window first, then insert text with reduced delay
                     let app_state = app_for_process.state::<AppState>();
-                    
+
                     // Hide pill window first to avoid UI race conditions
                     if let Some(window_manager) = app_state.get_window_manager() {
                         if let Err(e) = window_manager.hide_pill_window().await {
@@ -1306,7 +1434,7 @@ pub async fn stop_recording(
                                     &app_for_process,
                                     "pill",
                                     "paste-error",
-                                    "Text copied - grant permission to auto-paste"
+                                    "Text copied - grant permission to auto-paste",
                                 );
 
                                 // Keep pill visible for 3 seconds with error
@@ -1333,10 +1461,17 @@ pub async fn stop_recording(
                     let history_text = final_text.clone();
                     let history_model = model_for_process.clone();
                     tokio::spawn(async move {
-                        match save_transcription(app_for_history.clone(), history_text, history_model).await {
+                        match save_transcription(
+                            app_for_history.clone(),
+                            history_text,
+                            history_model,
+                        )
+                        .await
+                        {
                             Ok(_) => {
                                 // Emit history-updated event to refresh UI
-                                let _ = emit_to_window(&app_for_history, "main", "history-updated", ());
+                                let _ =
+                                    emit_to_window(&app_for_history, "main", "history-updated", ());
                                 log::debug!("Transcription saved to history successfully");
                             }
                             Err(e) => log::error!("Failed to save transcription to history: {}", e),
@@ -1481,7 +1616,7 @@ pub async fn save_transcription(app: AppHandle, text: String, model: String) -> 
         "model": model,
         "timestamp": timestamp.clone()
     });
-    
+
     store.set(&timestamp, transcription_data.clone());
 
     store
@@ -1553,12 +1688,8 @@ pub async fn transcribe_audio_file(
     let wav_path = crate::audio::converter::convert_to_wav(audio_path, &recordings_dir)?;
     let is_converted = wav_path != audio_path;
 
-    let engine_selection = resolve_engine_for_model(
-        &app,
-        &model_name,
-        model_engine.as_deref(),
-    )
-    .await?;
+    let engine_selection =
+        resolve_engine_for_model(&app, &model_name, model_engine.as_deref()).await?;
 
     // Get language and translation settings
     let store = app.store("settings").map_err(|e| e.to_string())?;
@@ -1590,8 +1721,8 @@ pub async fn transcribe_audio_file(
                 cache.get_or_create(&model_path)?
             };
 
-           transcriber.transcribe_with_translation(
-               &wav_path,
+            transcriber.transcribe_with_translation(
+                &wav_path,
                 Some(language.as_str()),
                 translate_to_english,
             )?
@@ -1662,12 +1793,8 @@ pub async fn transcribe_audio(
 
     std::fs::write(&temp_path, audio_data).map_err(|e| e.to_string())?;
 
-    let engine_selection = resolve_engine_for_model(
-        &app,
-        &model_name,
-        model_engine.as_deref(),
-    )
-    .await?;
+    let engine_selection =
+        resolve_engine_for_model(&app, &model_name, model_engine.as_deref()).await?;
 
     // Get language and translation settings
     let store = app.store("settings").map_err(|e| e.to_string())?;
@@ -1699,7 +1826,7 @@ pub async fn transcribe_audio(
                 cache.get_or_create(&model_path)?
             };
 
-           transcriber.transcribe_with_translation(
+            transcriber.transcribe_with_translation(
                 &temp_path,
                 Some(language.as_str()),
                 translate_to_english,
@@ -1854,7 +1981,6 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     log::info!("=== CANCEL RECORDING COMPLETED ===");
     Ok(())
 }
-
 
 #[tauri::command]
 pub async fn delete_transcription_entry(app: AppHandle, timestamp: String) -> Result<(), String> {

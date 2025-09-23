@@ -18,7 +18,7 @@
         "height": 600,
         "resizable": false,
         "center": true,
-        "visible": true,
+        "visible": false,
         "skipTaskbar": true,
         "alwaysOnTop": false,
         "minimizable": false,
