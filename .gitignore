@@ -44,3 +44,6 @@ notarized-build-*
 claudedocs/
 
 agent-docs/
+
+# Swift build artifacts
+.build/
