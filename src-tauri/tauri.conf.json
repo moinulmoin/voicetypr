@@ -46,7 +46,7 @@
       "dmg"
     ],
     "externalBin": [
-      "../sidecar/parakeet/dist/parakeet-sidecar"
+      "../sidecar/parakeet-swift/dist/parakeet-sidecar"
     ],
     "icon": [
       "icons/32x32.png",

@@ -101,8 +101,18 @@ export const ModelCard = function ModelCard({
             </div>
           ) : downloadProgress !== undefined ? (
             <>
-              <Progress value={downloadProgress} className="w-20 h-1.5" />
-              <span className="text-xs font-medium text-blue-600 w-10 text-right">{Math.round(downloadProgress)}%</span>
+              {/* For Parakeet models, show indeterminate progress (FluidAudio doesn't report progress) */}
+              {model.engine === 'parakeet' && downloadProgress === 0 ? (
+                <div className="flex items-center gap-2 px-2 py-1 rounded bg-blue-500/10">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                  <span className="text-xs font-medium text-blue-600">Downloading...</span>
+                </div>
+              ) : (
+                <>
+                  <Progress value={downloadProgress} className="w-20 h-1.5" />
+                  <span className="text-xs font-medium text-blue-600 w-10 text-right">{Math.round(downloadProgress)}%</span>
+                </>
+              )}
               {onCancelDownload && (
                 <Button
                   onClick={(e) => {

@@ -19,19 +19,21 @@ pub struct ParakeetModelDefinition {
     pub estimated_size: u64,
 }
 
+// Parakeet models using Swift/FluidAudio sidecar
+// These models are macOS-only and use Apple Neural Engine for acceleration
 pub static AVAILABLE_MODELS: Lazy<Vec<ParakeetModelDefinition>> = Lazy::new(|| {
     vec![
         ParakeetModelDefinition {
             id: "parakeet-tdt-0.6b-v3",
-            display_name: "Parakeet V3",
+            display_name: "Parakeet V3 (Native)",
             repo_id: "mlx-community/parakeet-tdt-0.6b-v3",
-            description: "Parakeet TDT model converted for MLX",
+            description: "Native Swift transcription using Apple Neural Engine",
             languages: &[
                 "en", "es", "fr", "de", "bg", "hr", "cs", "da", "nl", "et", "fi", "el",
                 "hu", "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "sv", "ru", "uk",
             ],
             recommended: true,
-            speed_score: 8,
+            speed_score: 9,
             accuracy_score: 9,
             files: &[
                 ParakeetModelFile { filename: "config.json" },
@@ -40,25 +42,7 @@ pub static AVAILABLE_MODELS: Lazy<Vec<ParakeetModelDefinition>> = Lazy::new(|| {
                 ParakeetModelFile { filename: "tokenizer.vocab" },
                 ParakeetModelFile { filename: "vocab.txt" },
             ],
-            estimated_size: 2_800_000_000,
-        },
-        ParakeetModelDefinition {
-            id: "parakeet-tdt-0.6b-v2",
-            display_name: "Parakeet V2",
-            repo_id: "mlx-community/parakeet-tdt-0.6b-v2",
-            description: "Parakeet TDT model converted for MLX (English)",
-            languages: &["en"],
-            recommended: false,
-            speed_score: 9,
-            accuracy_score: 8,
-            files: &[
-                ParakeetModelFile { filename: "config.json" },
-                ParakeetModelFile { filename: "model.safetensors" },
-                ParakeetModelFile { filename: "tokenizer.model" },
-                ParakeetModelFile { filename: "tokenizer.vocab" },
-                ParakeetModelFile { filename: "vocab.txt" },
-            ],
-            estimated_size: 2_500_000_000,
+            estimated_size: 500_000_000, // FluidAudio CoreML model is ~500MB
         },
     ]
 });

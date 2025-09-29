@@ -159,6 +159,7 @@ pub async fn download_model(
             ModelEngine::Parakeet => {
                 parakeet_manager
                     .download_model(
+                        &app,
                         &model_name,
                         Some(cancel_flag.clone()),
                         move |downloaded, total| {
@@ -357,7 +358,7 @@ pub async fn delete_model(
             manager.delete_model_file(&model_name)?;
         }
         ModelEngine::Parakeet => {
-            parakeet_manager.delete_model(&model_name)?;
+            parakeet_manager.delete_model(&app, &model_name).await?;
         }
     }
 

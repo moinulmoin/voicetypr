@@ -180,10 +180,15 @@ export const OnboardingDesktop = function OnboardingDesktop({
     try {
       await invoke("set_global_shortcut", { shortcut: hotkey });
 
+      // Dynamically detect engine from selected model
+      const selectedModelName = settings?.current_model || "";
+      const selectedModel = selectedModelName ? models[selectedModelName] : null;
+      const engine = selectedModel?.engine || 'whisper';
+
       await updateSettings({
         hotkey: hotkey,
-        current_model: settings?.current_model || "",
-        current_model_engine: 'whisper',
+        current_model: selectedModelName,
+        current_model_engine: engine,
         onboarding_completed: true
       });
     } catch (error) {

@@ -95,11 +95,19 @@ pnpm typecheck    # Run TypeScript compiler
 
 ✅ **Completed**:
 - Core recording and transcription functionality
-- Model download and management
+- Model download and management (Whisper + Parakeet)
+- **NEW**: Swift/FluidAudio Parakeet sidecar (1.2MB vs 123MB Python)
 - Settings persistence
 - Comprehensive test suite (110+ tests)
 - Error boundaries and recovery
 - Global hotkey support
+
+📝 **Recent Updates**:
+- Parakeet Swift integration complete (see `PARAKEET_SWIFT_INTEGRATION.md`)
+- Native Apple Neural Engine support for **macOS only** (see `PARAKEET_MACOS_ONLY_FIX.md`)
+- Automated sidecar build via `build.rs`
+- Parakeet V2 removed, only V3 available
+- Dynamic engine detection (whisper/parakeet)
 
 ### Common Patterns
 

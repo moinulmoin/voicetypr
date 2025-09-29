@@ -45,6 +45,7 @@ pub enum ParakeetCommand {
         local_attention_context: Option<i32>,
     },
     Status {},
+    DeleteModel {},
     Shutdown {},
 }
 

@@ -43,21 +43,30 @@ impl ParakeetManager {
     }
 
     pub fn list_models(&self) -> Vec<ParakeetModelStatus> {
-        AVAILABLE_MODELS
-            .iter()
-            .map(|definition| ParakeetModelStatus {
-                name: definition.id.to_string(),
-                display_name: definition.display_name.to_string(),
-                size: definition.estimated_size,
-                url: format!("https://huggingface.co/{}", definition.repo_id),
-                sha256: String::new(),
-                downloaded: self.is_model_downloaded(definition),
-                speed_score: definition.speed_score,
-                accuracy_score: definition.accuracy_score,
-                recommended: definition.recommended,
-                engine: "parakeet".to_string(),
-            })
-            .collect()
+        // Parakeet Swift/FluidAudio integration is macOS-only
+        #[cfg(not(target_os = "macos"))]
+        {
+            return vec![];
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            AVAILABLE_MODELS
+                .iter()
+                .map(|definition| ParakeetModelStatus {
+                    name: definition.id.to_string(),
+                    display_name: definition.display_name.to_string(),
+                    size: definition.estimated_size,
+                    url: format!("https://huggingface.co/{}", definition.repo_id),
+                    sha256: String::new(),
+                    downloaded: self.is_model_downloaded(definition),
+                    speed_score: definition.speed_score,
+                    accuracy_score: definition.accuracy_score,
+                    recommended: definition.recommended,
+                    engine: "parakeet".to_string(),
+                })
+                .collect()
+        }
     }
 
     pub fn get_model_definition(&self, model_name: &str) -> Option<&'static ParakeetModelDefinition> {
@@ -68,16 +77,39 @@ impl ParakeetManager {
         self.root_dir.join(model_name)
     }
 
+    /// Check if a Parakeet model is available.
+    /// FluidAudio stores models in ~/Library/Application Support/FluidAudio/Models/
     pub fn is_model_downloaded(&self, definition: &ParakeetModelDefinition) -> bool {
+        if let Some(home) = dirs::home_dir() {
+            // FluidAudio's actual model storage path
+            // IMPORTANT: "Application Support" has a SPACE (macOS standard path)
+            let fluid_audio_models_path = home
+                .join("Library/Application Support/FluidAudio/Models")
+                .join(format!("{}-coreml", definition.id));
+            
+            if fluid_audio_models_path.exists() {
+                // Check if directory contains model files
+                if let Ok(entries) = std::fs::read_dir(&fluid_audio_models_path) {
+                    if entries.count() > 0 {
+                        info!("Found FluidAudio model at: {:?}", fluid_audio_models_path);
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Fallback: check if old MLX model directory exists (for backward compatibility)
         let model_dir = self.model_dir(definition.id);
-        definition
-            .files
-            .iter()
-            .all(|file| model_dir.join(&file.filename).exists())
+        if model_dir.exists() && model_dir.read_dir().map(|mut d| d.next().is_some()).unwrap_or(false) {
+            return true;
+        }
+
+        false
     }
 
     pub async fn download_model(
         &self,
+        app: &AppHandle,
         model_name: &str,
         cancel_flag: Option<Arc<AtomicBool>>,
         progress_callback: impl Fn(u64, u64) + Send + 'static,
@@ -86,97 +118,62 @@ impl ParakeetManager {
             return Err(format!("Unknown Parakeet model: {model_name}"));
         };
 
-        let model_dir = self.model_dir(definition.id);
-        std::fs::create_dir_all(&model_dir)
-            .map_err(|e| format!("Failed to create model directory: {e}"))?;
+        // For Swift sidecar, delegate download to FluidAudio
+        // Send load_model command which triggers download in Swift
+        let command = ParakeetCommand::LoadModel {
+            model_id: definition.id.to_string(),
+            local_path: None,
+            cache_dir: None,
+            precision: "bf16".to_string(),
+            attention: "full".to_string(),
+            local_attention_context: 256,
+            chunk_duration: Some(120.0),
+            overlap_duration: Some(15.0),
+            eager_unload: Some(false),
+        };
 
-        let mut total_bytes: u64 = 0;
-        let mut sizes = Vec::new();
-
-        for file in definition.files {
-            let url = self.file_url(definition, file.filename);
-            match self.http.head(&url).send().await {
-                Ok(resp) => {
-                    let size = resp.content_length().unwrap_or(0);
-                    sizes.push(size);
-                    total_bytes += size;
-                }
-                Err(err) => {
-                    warn!("HEAD request failed for {}: {}", file.filename, err);
-                    sizes.push(0);
-                }
+        // Send to sidecar and let it handle the download
+        match self.client.send(app, &command).await {
+            Ok(ParakeetResponse::Ok { .. }) | Ok(ParakeetResponse::Status { loaded_model: Some(_), .. }) => {
+                // Swift sidecar returns StatusResponse with loaded_model when download completes
+                // Mark as downloaded since Swift handles it
+                progress_callback(definition.estimated_size, definition.estimated_size);
+                Ok(())
             }
-        }
-
-        if total_bytes == 0 {
-            // Fallback to estimated size if HEAD failed
-            total_bytes = definition.estimated_size;
-        }
-
-        progress_callback(0, total_bytes);
-
-        let mut downloaded = 0u64;
-        for (idx, file) in definition.files.iter().enumerate() {
-            let file_size_hint = sizes.get(idx).copied().unwrap_or(0);
-            let url = self.file_url(definition, file.filename);
-            let destination = model_dir.join(file.filename);
-            let temp_path = destination.with_extension(".download");
-
-            let mut response = self
-                .http
-                .get(&url)
-                .send()
-                .await
-                .map_err(|e| format!("Failed to download {}: {}", file.filename, e))?;
-
-            let mut file = tokio::fs::File::create(&temp_path)
-                .await
-                .map_err(|e| format!("Failed to create {}: {}", temp_path.display(), e))?;
-
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|e| format!("Failed to read response: {}", e))?
-            {
-                if let Some(flag) = cancel_flag.as_ref() {
-                    if flag.load(Ordering::Relaxed) {
-                        let _ = tokio::fs::remove_file(&temp_path).await;
-                        return Err("Download cancelled by user".to_string());
-                    }
-                }
-
-                file.write_all(&chunk)
-                    .await
-                    .map_err(|e| format!("Failed to write chunk: {}", e))?;
-                downloaded += chunk.len() as u64;
-                progress_callback(downloaded, total_bytes.max(downloaded + file_size_hint));
+            Ok(ParakeetResponse::Error { code, message, .. }) => {
+                Err(format!("Failed to download model: {}: {}", code, message))
             }
-
-            file.flush()
-                .await
-                .map_err(|e| format!("Failed to flush {}: {}", temp_path.display(), e))?;
-            drop(file);
-
-            tokio::fs::rename(&temp_path, &destination)
-                .await
-                .map_err(|e| format!("Failed to finalise file {}: {}", destination.display(), e))?;
+            Err(e) => Err(format!("Failed to communicate with sidecar: {}", e)),
+            _ => Err("Unexpected response from sidecar".to_string()),
         }
-
-        let final_total = if downloaded == 0 { total_bytes } else { downloaded };
-        progress_callback(final_total, final_total);
-
-        Ok(())
     }
 
-    pub fn delete_model(&self, model_name: &str) -> Result<(), String> {
+    pub async fn delete_model(&self, app: &AppHandle, model_name: &str) -> Result<(), String> {
         let Some(definition) = self.get_model_definition(model_name) else {
             return Err(format!("Unknown Parakeet model: {model_name}"));
         };
 
+        // Send delete_model command to Swift sidecar to remove FluidAudio cached files
+        match self.client.send(app, &ParakeetCommand::DeleteModel {}).await {
+            Ok(ParakeetResponse::Ok { .. }) | Ok(ParakeetResponse::Status { .. }) => {
+                // Successfully deleted
+            }
+            Ok(ParakeetResponse::Error { code, message, .. }) => {
+                return Err(format!("Failed to delete model: {}: {}", code, message));
+            }
+            Err(e) => {
+                return Err(format!("Failed to communicate with sidecar: {}", e));
+            }
+            _ => {
+                // Unexpected response but continue
+            }
+        }
+
+        // Remove our tracking directory if it exists (from old Python implementation)
         let model_dir = self.model_dir(definition.id);
         if model_dir.exists() {
             std::fs::remove_dir_all(&model_dir)
-                .map_err(|e| format!("Failed to delete Parakeet model directory {}: {}", model_dir.display(), e))?;
+                .map_err(|e| format!("Failed to delete old model directory {}: {}", model_dir.display(), e))?;
         }
 
         Ok(())
@@ -246,6 +243,18 @@ impl ParakeetManager {
             "https://huggingface.co/{}/resolve/main/{}",
             definition.repo_id, filename
         )
+    }
+
+    /// Check if the Parakeet sidecar is healthy and can respond to commands
+    pub async fn health_check(&self, app: &AppHandle) -> Result<bool, ParakeetError> {
+        match self.client.send(app, &ParakeetCommand::Status {}).await {
+            Ok(ParakeetResponse::Status { .. }) => Ok(true),
+            Ok(_) => Ok(true), // Any successful response is good
+            Err(e) => {
+                warn!("Parakeet sidecar health check failed: {:?}", e);
+                Err(e)
+            }
+        }
     }
 
     pub async fn shutdown(&self) {
