@@ -11,12 +11,16 @@ fn main() {
         
         let sidecar_dir = std::path::Path::new("../sidecar/parakeet-swift");
         let build_script = sidecar_dir.join("build.sh");
+        let dist_dir = sidecar_dir.join("dist");
         
         if build_script.exists() {
+            // Ensure dist directory exists
+            std::fs::create_dir_all(&dist_dir).ok();
+            
             let output = Command::new("bash")
-                .arg(build_script)
+                .arg(&build_script)
                 .arg("release")
-                .current_dir(sidecar_dir)
+                .current_dir(&sidecar_dir)
                 .output();
             
             match output {
@@ -27,6 +31,17 @@ fn main() {
                         println!("cargo:warning=Continuing build without Parakeet sidecar...");
                     } else {
                         println!("cargo:warning=Swift sidecar built successfully");
+                        
+                        // Verify the binary exists
+                        let target_triple = std::env::var("TARGET").unwrap_or_else(|_| "aarch64-apple-darwin".to_string());
+                        let binary_name = format!("parakeet-sidecar-{}", target_triple);
+                        let binary_path = dist_dir.join(&binary_name);
+                        
+                        if binary_path.exists() {
+                            println!("cargo:warning=Parakeet sidecar binary verified at: {}", binary_path.display());
+                        } else {
+                            println!("cargo:warning=Warning: Expected binary not found at {}", binary_path.display());
+                        }
                     }
                 }
                 Err(e) => {
@@ -41,6 +56,7 @@ fn main() {
         // Tell Cargo to re-run if Swift sources change
         println!("cargo:rerun-if-changed=../sidecar/parakeet-swift/Sources");
         println!("cargo:rerun-if-changed=../sidecar/parakeet-swift/Package.swift");
+        println!("cargo:rerun-if-changed=../sidecar/parakeet-swift/build.sh");
     }
 
     tauri_build::build()

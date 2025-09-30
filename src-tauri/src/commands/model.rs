@@ -308,6 +308,14 @@ pub struct UnifiedModelInfo {
     pub engine: String,
 }
 
+/// Returns status of all available speech recognition models (Whisper + Parakeet).
+///
+/// **Platform Behavior**:
+/// - **macOS**: Returns both Whisper and Parakeet models
+/// - **Windows/Linux**: Returns only Whisper models (Parakeet filtered at compile time)
+///
+/// Parakeet models are automatically excluded on non-macOS platforms since they
+/// require Apple Neural Engine via FluidAudio SDK.
 #[tauri::command]
 pub async fn get_model_status(
     whisper_state: State<'_, RwLock<WhisperManager>>,

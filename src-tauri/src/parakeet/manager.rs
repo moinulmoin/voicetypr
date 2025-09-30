@@ -42,8 +42,17 @@ impl ParakeetManager {
         }
     }
 
+    /// Returns available Parakeet models.
+    ///
+    /// **Platform Support**: This returns an empty list on non-macOS platforms.
+    /// Parakeet uses Apple's Neural Engine via FluidAudio, which is macOS-only.
+    ///
+    /// # Platform Behavior
+    /// - **macOS**: Returns all Parakeet models with download status
+    /// - **Windows/Linux**: Returns empty vector (compile-time exclusion)
     pub fn list_models(&self) -> Vec<ParakeetModelStatus> {
         // Parakeet Swift/FluidAudio integration is macOS-only
+        // On non-macOS platforms, this returns empty at compile time
         #[cfg(not(target_os = "macos"))]
         {
             return vec![];

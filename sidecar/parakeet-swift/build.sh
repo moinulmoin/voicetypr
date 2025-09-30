@@ -70,6 +70,13 @@ echo "✅ Binary copied to: $OUTPUT_PATH"
 # Make executable
 chmod +x "$OUTPUT_PATH"
 
+# Create symlink for Tauri's externalBin configuration
+# Tauri expects to find "parakeet-sidecar" during bundling, but at runtime
+# it will automatically append the target triple and look for the full name
+SYMLINK_PATH="$DIST_DIR/parakeet-sidecar"
+ln -sf "$(basename "$OUTPUT_PATH")" "$SYMLINK_PATH"
+echo "🔗 Symlink created: parakeet-sidecar -> $(basename "$OUTPUT_PATH")"
+
 # Verify binary
 echo "🔍 Verifying binary..."
 if echo '{"type":"status"}' | "$OUTPUT_PATH" 2>/dev/null | grep -q '"type"'; then
