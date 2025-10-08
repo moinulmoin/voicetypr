@@ -112,15 +112,10 @@ impl ParakeetClient {
 
     pub async fn send(&self, app: &AppHandle, command: &ParakeetCommand) -> Result<ParakeetResponse, ParakeetError> {
         let mut guard = self.ensure(app).await?;
-        if guard.is_none() {
-            return Err(ParakeetError::Terminated);
-        }
-
-        let response = guard
-            .as_mut()
-            .expect("guard checked above")
-            .request(command)
-            .await;
+        let response = match guard.as_mut() {
+            Some(sidecar) => sidecar.request(command).await,
+            None => return Err(ParakeetError::Terminated),
+        };
 
         match response {
             Err(ParakeetError::Terminated) => {
