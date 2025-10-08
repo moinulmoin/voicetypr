@@ -21,15 +21,25 @@ impl Transcriber {
             .ok_or_else(|| format!("Model path contains invalid UTF-8: {:?}", model_path))?;
 
         log_start("TRANSCRIBER_INIT");
-        log_with_context(log::Level::Debug, "Initializing transcriber", &[
-            ("model_path", model_path_str),
-            ("platform", std::env::consts::OS)
-        ]);
+        log_with_context(
+            log::Level::Debug,
+            "Initializing transcriber",
+            &[
+                ("model_path", model_path_str),
+                ("platform", std::env::consts::OS),
+            ],
+        );
 
         // Log model file info
         if let Ok(metadata) = std::fs::metadata(model_path) {
             let size_mb = metadata.len() / 1024 / 1024;
-            log_file_operation("MODEL_LOAD", model_path_str, true, Some(metadata.len()), None);
+            log_file_operation(
+                "MODEL_LOAD",
+                model_path_str,
+                true,
+                Some(metadata.len()),
+                None,
+            );
             log::info!("🤖 Model file size: {}MB", size_mb);
         }
 
@@ -37,101 +47,146 @@ impl Transcriber {
         let mut ctx_params = WhisperContextParameters::default();
         #[allow(unused_assignments)] // gpu_used is assigned in multiple conditional blocks
         let mut gpu_used = false;
-        
+
         // macOS: Try Metal first, fallback to CPU if it fails
         #[cfg(target_os = "macos")]
         {
             ctx_params.use_gpu(true);
             let metal_start = Instant::now();
-            
-            log_with_context(log::Level::Info, "🎮 METAL_INIT", &[
-                ("backend", "Metal"),
-                ("platform", "macOS"),
-                ("attempt", "gpu_first")
-            ]);
-            
+
+            log_with_context(
+                log::Level::Info,
+                "🎮 METAL_INIT",
+                &[
+                    ("backend", "Metal"),
+                    ("platform", "macOS"),
+                    ("attempt", "gpu_first"),
+                ],
+            );
+
             match WhisperContext::new_with_params(model_path_str, ctx_params) {
                 Ok(ctx) => {
-                    #[allow(unused_assignments)] // This assignment is used later but flagged due to multiple conditional paths
+                    #[allow(unused_assignments)]
+                    // This assignment is used later but flagged due to multiple conditional paths
                     {
                         gpu_used = true; // Metal GPU acceleration succeeded
                     }
                     let init_time = metal_start.elapsed().as_millis();
-                    
-                    log_performance("METAL_INIT", init_time as u64, Some("gpu_acceleration_enabled"));
-                    log_with_context(log::Level::Info, "🎮 METAL_SUCCESS", &[
-                        ("init_time_ms", &init_time.to_string().as_str()),
-                        ("acceleration", "enabled")
-                    ]);
-                    
+
+                    log_performance(
+                        "METAL_INIT",
+                        init_time as u64,
+                        Some("gpu_acceleration_enabled"),
+                    );
+                    log_with_context(
+                        log::Level::Info,
+                        "🎮 METAL_SUCCESS",
+                        &[
+                            ("init_time_ms", &init_time.to_string().as_str()),
+                            ("acceleration", "enabled"),
+                        ],
+                    );
+
                     log_complete("TRANSCRIBER_INIT", init_start.elapsed().as_millis() as u64);
-                    log_with_context(log::Level::Debug, "Transcriber initialized", &[
-                        ("backend", "Metal"),
-                        ("model_path", model_path_str)
-                    ]);
-                    
+                    log_with_context(
+                        log::Level::Debug,
+                        "Transcriber initialized",
+                        &[("backend", "Metal"), ("model_path", model_path_str)],
+                    );
+
                     return Ok(Self { context: ctx });
                 }
                 Err(gpu_err) => {
-                    log_with_context(log::Level::Info, "🎮 METAL_FALLBACK", &[
-                        ("error", &gpu_err.to_string().as_str()),
-                        ("fallback_to", "CPU"),
-                        ("attempt_time_ms", &metal_start.elapsed().as_millis().to_string().as_str())
-                    ]);
-                    
+                    log_with_context(
+                        log::Level::Info,
+                        "🎮 METAL_FALLBACK",
+                        &[
+                            ("error", &gpu_err.to_string().as_str()),
+                            ("fallback_to", "CPU"),
+                            (
+                                "attempt_time_ms",
+                                &metal_start.elapsed().as_millis().to_string().as_str(),
+                            ),
+                        ],
+                    );
+
                     ctx_params = WhisperContextParameters::default();
                     ctx_params.use_gpu(false);
                     log::info!("🔄 Attempting CPU-only initialization...");
                 }
             }
         }
-        
+
         // Windows: Try Vulkan GPU first, fallback to CPU if it fails (just like macOS!)
         #[cfg(target_os = "windows")]
         {
             ctx_params.use_gpu(true);
             let vulkan_start = Instant::now();
-            
+
             // Check if Vulkan runtime is available
-            let vulkan_available = std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
-            
-            log_with_context(log::Level::Info, "🎮 VULKAN_INIT", &[
-                ("backend", "Vulkan"),
-                ("platform", "Windows"),
-                ("vulkan_dll_available", &vulkan_available.to_string().as_str()),
-                ("attempt", "gpu_first")
-            ]);
-            
+            let vulkan_available =
+                std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
+
+            log_with_context(
+                log::Level::Info,
+                "🎮 VULKAN_INIT",
+                &[
+                    ("backend", "Vulkan"),
+                    ("platform", "Windows"),
+                    (
+                        "vulkan_dll_available",
+                        &vulkan_available.to_string().as_str(),
+                    ),
+                    ("attempt", "gpu_first"),
+                ],
+            );
+
             if !vulkan_available {
                 log::warn!("⚠️  Vulkan runtime not found. GPU acceleration unavailable.");
             }
-            
+
             match WhisperContext::new_with_params(model_path_str, ctx_params) {
                 Ok(ctx) => {
                     gpu_used = true;
                     let init_time = vulkan_start.elapsed().as_millis();
-                    
-                    log_performance("VULKAN_INIT", init_time as u64, Some("gpu_acceleration_enabled"));
-                    log_with_context(log::Level::Info, "🎮 VULKAN_SUCCESS", &[
-                        ("init_time_ms", &init_time.to_string().as_str()),
-                        ("acceleration", "enabled")
-                    ]);
-                    
+
+                    log_performance(
+                        "VULKAN_INIT",
+                        init_time as u64,
+                        Some("gpu_acceleration_enabled"),
+                    );
+                    log_with_context(
+                        log::Level::Info,
+                        "🎮 VULKAN_SUCCESS",
+                        &[
+                            ("init_time_ms", &init_time.to_string().as_str()),
+                            ("acceleration", "enabled"),
+                        ],
+                    );
+
                     log_complete("TRANSCRIBER_INIT", init_start.elapsed().as_millis() as u64);
-                    log_with_context(log::Level::Debug, "Transcriber initialized", &[
-                        ("backend", "Vulkan"),
-                        ("model_path", model_path_str)
-                    ]);
-                    
+                    log_with_context(
+                        log::Level::Debug,
+                        "Transcriber initialized",
+                        &[("backend", "Vulkan"), ("model_path", model_path_str)],
+                    );
+
                     return Ok(Self { context: ctx });
                 }
                 Err(gpu_err) => {
-                    log_with_context(log::Level::Info, "🎮 VULKAN_FALLBACK", &[
-                        ("error", &gpu_err.to_string().as_str()),
-                        ("fallback_to", "CPU"),
-                        ("attempt_time_ms", &vulkan_start.elapsed().as_millis().to_string().as_str())
-                    ]);
-                    
+                    log_with_context(
+                        log::Level::Info,
+                        "🎮 VULKAN_FALLBACK",
+                        &[
+                            ("error", &gpu_err.to_string().as_str()),
+                            ("fallback_to", "CPU"),
+                            (
+                                "attempt_time_ms",
+                                &vulkan_start.elapsed().as_millis().to_string().as_str(),
+                            ),
+                        ],
+                    );
+
                     ctx_params = WhisperContextParameters::default();
                     ctx_params.use_gpu(false);
                     gpu_used = false;
@@ -142,15 +197,15 @@ impl Transcriber {
 
         // Create context (for Windows CPU fallback or other platforms)
         let cpu_start = Instant::now();
-        let ctx = WhisperContext::new_with_params(model_path_str, ctx_params)
-            .map_err(|e| {
-                log_failed("TRANSCRIBER_INIT", &e.to_string());
-                log_with_context(log::Level::Debug, "CPU fallback failed", &[
-                    ("model_path", model_path_str),
-                    ("backend", "CPU_FALLBACK")
-                ]);
-                format!("Failed to load model: {}", e)
-            })?;
+        let ctx = WhisperContext::new_with_params(model_path_str, ctx_params).map_err(|e| {
+            log_failed("TRANSCRIBER_INIT", &e.to_string());
+            log_with_context(
+                log::Level::Debug,
+                "CPU fallback failed",
+                &[("model_path", model_path_str), ("backend", "CPU_FALLBACK")],
+            );
+            format!("Failed to load model: {}", e)
+        })?;
 
         // Determine backend type for logging
         let backend_type = if gpu_used {
@@ -164,31 +219,53 @@ impl Transcriber {
         } else {
             "CPU"
         };
-        
+
         let cpu_time = cpu_start.elapsed().as_millis();
-        
-        log_with_context(log::Level::Info, "🎮 WHISPER_BACKEND", &[
-            ("backend", backend_type),
-            ("gpu_used", &gpu_used.to_string().as_str()),
-            ("init_time_ms", &cpu_time.to_string().as_str())
-        ]);
-        
+
+        log_with_context(
+            log::Level::Info,
+            "🎮 WHISPER_BACKEND",
+            &[
+                ("backend", backend_type),
+                ("gpu_used", &gpu_used.to_string().as_str()),
+                ("init_time_ms", &cpu_time.to_string().as_str()),
+            ],
+        );
+
         log_complete("TRANSCRIBER_INIT", init_start.elapsed().as_millis() as u64);
-        log_with_context(log::Level::Debug, "Transcriber initialization complete", &[
-            ("backend", backend_type),
-            ("model_path", model_path_str),
-            ("gpu_acceleration", &gpu_used.to_string().as_str())
-        ]);
-        
-        log::info!("✅ Whisper initialized successfully using {} backend", backend_type);
-        
+        log_with_context(
+            log::Level::Debug,
+            "Transcriber initialization complete",
+            &[
+                ("backend", backend_type),
+                ("model_path", model_path_str),
+                ("gpu_acceleration", &gpu_used.to_string().as_str()),
+            ],
+        );
+
+        log::info!(
+            "✅ Whisper initialized successfully using {} backend",
+            backend_type
+        );
+
         // Log model capabilities and validation
-        log_with_context(log::Level::Debug, "Model initialization validation", &[
-            ("model_loaded", "true"),
-            ("backend", backend_type),
-            ("supports_multilingual", "true"), // Whisper models are multilingual
-            ("model_size_mb", &(std::fs::metadata(model_path).map(|m| m.len() / 1024 / 1024).unwrap_or(0).to_string()).as_str())
-        ]);
+        log_with_context(
+            log::Level::Debug,
+            "Model initialization validation",
+            &[
+                ("model_loaded", "true"),
+                ("backend", backend_type),
+                ("supports_multilingual", "true"), // Whisper models are multilingual
+                (
+                    "model_size_mb",
+                    &(std::fs::metadata(model_path)
+                        .map(|m| m.len() / 1024 / 1024)
+                        .unwrap_or(0)
+                        .to_string())
+                    .as_str(),
+                ),
+            ],
+        );
 
         Ok(Self { context: ctx })
     }
@@ -214,27 +291,35 @@ impl Transcriber {
     {
         let transcription_start = Instant::now();
         let audio_path_str = format!("{:?}", audio_path);
-        
+
         // Monitor system resources before transcription (only in debug builds)
         #[cfg(debug_assertions)]
         system_monitor::log_resources_before_operation("TRANSCRIPTION");
-        
+
         log_start("TRANSCRIPTION");
-        log_with_context(log::Level::Debug, "Starting transcription", &[
-            ("audio_path", &audio_path_str),
-            ("language", language.unwrap_or("auto")),
-            ("translate", &translate.to_string().as_str()),
-            ("timestamp", &chrono::Utc::now().to_rfc3339().as_str())
-        ]);
+        log_with_context(
+            log::Level::Debug,
+            "Starting transcription",
+            &[
+                ("audio_path", &audio_path_str),
+                ("language", language.unwrap_or("auto")),
+                ("translate", &translate.to_string().as_str()),
+                ("timestamp", &chrono::Utc::now().to_rfc3339().as_str()),
+            ],
+        );
 
         // Check if file exists and is readable
         if !audio_path.exists() {
             let error = format!("Audio file does not exist: {:?}", audio_path);
             log_failed("TRANSCRIPTION", &error);
-            log_with_context(log::Level::Debug, "File validation failed", &[
-                ("stage", "file_validation"),
-                ("audio_path", &audio_path_str)
-            ]);
+            log_with_context(
+                log::Level::Debug,
+                "File validation failed",
+                &[
+                    ("stage", "file_validation"),
+                    ("audio_path", &audio_path_str),
+                ],
+            );
             return Err(error);
         }
 
@@ -248,23 +333,31 @@ impl Transcriber {
             .map_err(|e| {
                 let error = format!("Cannot read file metadata: {}", e);
                 log_failed("TRANSCRIPTION", &error);
-                log_with_context(log::Level::Debug, "Metadata read failed", &[
-                    ("stage", "metadata_read"),
-                    ("audio_path", &audio_path_str)
-                ]);
+                log_with_context(
+                    log::Level::Debug,
+                    "Metadata read failed",
+                    &[("stage", "metadata_read"), ("audio_path", &audio_path_str)],
+                );
                 error
             })?
             .len();
-            
-        log_file_operation("TRANSCRIPTION_INPUT", &audio_path_str, true, Some(file_size), None);
+
+        log_file_operation(
+            "TRANSCRIPTION_INPUT",
+            &audio_path_str,
+            true,
+            Some(file_size),
+            None,
+        );
 
         if file_size == 0 {
             let error = "Audio file is empty (0 bytes)";
             log_failed("TRANSCRIPTION", error);
-            log_with_context(log::Level::Debug, "File size check failed", &[
-                ("stage", "file_size_check"),
-                ("file_size", "0")
-            ]);
+            log_with_context(
+                log::Level::Debug,
+                "File size check failed",
+                &[("stage", "file_size_check"), ("file_size", "0")],
+            );
             return Err(error.to_string());
         }
 
@@ -319,7 +412,10 @@ impl Transcriber {
             audio = convert_stereo_to_mono_audio(&audio).map_err(|e| e.to_string())?;
         } else if spec.channels > 2 {
             // Handle multi-channel audio (3, 4, 5.1, 7.1, etc.)
-            log::info!("[TRANSCRIPTION_DEBUG] Converting {}-channel audio to mono", spec.channels);
+            log::info!(
+                "[TRANSCRIPTION_DEBUG] Converting {}-channel audio to mono",
+                spec.channels
+            );
             audio = convert_multichannel_to_mono(&audio, spec.channels as usize)?;
         } else if spec.channels != 1 {
             return Err(format!("Invalid channel count: {}", spec.channels));
@@ -345,16 +441,27 @@ impl Transcriber {
             log::info!("[TRANSCRIPTION_DEBUG] Audio already at 16kHz, no resampling needed");
             audio
         };
-        
+
         // Log audio preprocessing performance
         let preprocessing_time = audio_read_start.elapsed().as_millis() as u64;
-        log_performance("AUDIO_PREPROCESSING", preprocessing_time, Some(&format!("samples={}", resampled_audio.len())));
-        log_with_context(log::Level::Debug, "Audio preprocessing complete", &[
-            ("preprocessing_time_ms", &preprocessing_time.to_string().as_str()),
-            ("sample_rate", "16000"),
-            ("channels", "1"),
-            ("samples", &resampled_audio.len().to_string().as_str())
-        ]);
+        log_performance(
+            "AUDIO_PREPROCESSING",
+            preprocessing_time,
+            Some(&format!("samples={}", resampled_audio.len())),
+        );
+        log_with_context(
+            log::Level::Debug,
+            "Audio preprocessing complete",
+            &[
+                (
+                    "preprocessing_time_ms",
+                    &preprocessing_time.to_string().as_str(),
+                ),
+                ("sample_rate", "16000"),
+                ("channels", "1"),
+                ("samples", &resampled_audio.len().to_string().as_str()),
+            ],
+        );
 
         // Check cancellation after resampling
         if should_cancel() {
@@ -470,31 +577,57 @@ impl Transcriber {
 
         let inference_start = Instant::now();
         log_start("WHISPER_INFERENCE");
-        log_with_context(log::Level::Debug, "Starting Whisper inference", &[
-            ("samples", &samples_count.to_string().as_str()),
-            ("duration_seconds", &format!("{:.2}", duration_seconds).as_str()),
-            ("language", language.unwrap_or("auto")),
-            ("translate", &translate.to_string().as_str())
-        ]);
+        log_with_context(
+            log::Level::Debug,
+            "Starting Whisper inference",
+            &[
+                ("samples", &samples_count.to_string().as_str()),
+                (
+                    "duration_seconds",
+                    &format!("{:.2}", duration_seconds).as_str(),
+                ),
+                ("language", language.unwrap_or("auto")),
+                ("translate", &translate.to_string().as_str()),
+            ],
+        );
 
         match state.full(params, &resampled_audio) {
             Ok(_) => {
                 let inference_time = inference_start.elapsed();
                 let inference_ms = inference_time.as_millis();
-                
-                log_performance("WHISPER_INFERENCE", inference_ms as u64, 
-                    Some(&format!("audio_duration={:.2}s, samples={}", duration_seconds, samples_count)));
-                    
-                log::info!("✅ Whisper inference completed in {:.2}s", inference_time.as_secs_f32());
+
+                log_performance(
+                    "WHISPER_INFERENCE",
+                    inference_ms as u64,
+                    Some(&format!(
+                        "audio_duration={:.2}s, samples={}",
+                        duration_seconds, samples_count
+                    )),
+                );
+
+                log::info!(
+                    "✅ Whisper inference completed in {:.2}s",
+                    inference_time.as_secs_f32()
+                );
             }
             Err(e) => {
                 let error = format!("Whisper inference failed: {}", e);
                 log_failed("WHISPER_INFERENCE", &error);
-                log_with_context(log::Level::Debug, "Inference failed", &[
-                    ("samples", &samples_count.to_string().as_str()),
-                    ("duration_seconds", &format!("{:.2}", duration_seconds).as_str()),
-                    ("inference_time_ms", &inference_start.elapsed().as_millis().to_string().as_str())
-                ]);
+                log_with_context(
+                    log::Level::Debug,
+                    "Inference failed",
+                    &[
+                        ("samples", &samples_count.to_string().as_str()),
+                        (
+                            "duration_seconds",
+                            &format!("{:.2}", duration_seconds).as_str(),
+                        ),
+                        (
+                            "inference_time_ms",
+                            &inference_start.elapsed().as_millis().to_string().as_str(),
+                        ),
+                    ],
+                );
                 return Err(error);
             }
         }
@@ -526,39 +659,75 @@ impl Transcriber {
         }
 
         let result = text.trim().to_string();
-        
+
         // Log text extraction performance
         let extraction_time = text_extraction_start.elapsed().as_millis() as u64;
-        log_performance("TEXT_EXTRACTION", extraction_time, Some(&format!("segments={}, chars={}", num_segments, result.len())));
-        
+        log_performance(
+            "TEXT_EXTRACTION",
+            extraction_time,
+            Some(&format!(
+                "segments={}, chars={}",
+                num_segments,
+                result.len()
+            )),
+        );
+
         let total_time = transcription_start.elapsed();
-        
+
         // Log system resources after transcription (only in debug builds)
         #[cfg(debug_assertions)]
-        system_monitor::log_resources_after_operation("TRANSCRIPTION", total_time.as_millis() as u64);
-        
+        system_monitor::log_resources_after_operation(
+            "TRANSCRIPTION",
+            total_time.as_millis() as u64,
+        );
+
         if result.is_empty() {
             log_failed("TRANSCRIPTION", "Empty transcription result");
-            log_with_context(log::Level::Debug, "Empty result", &[
-                ("segments", &num_segments.to_string().as_str()),
-                ("total_time_ms", &total_time.as_millis().to_string().as_str())
-            ]);
+            log_with_context(
+                log::Level::Debug,
+                "Empty result",
+                &[
+                    ("segments", &num_segments.to_string().as_str()),
+                    (
+                        "total_time_ms",
+                        &total_time.as_millis().to_string().as_str(),
+                    ),
+                ],
+            );
         } else if result == "[SOUND]" {
             log_failed("TRANSCRIPTION", "No speech detected");
-            log_with_context(log::Level::Debug, "No speech", &[
-                ("result", "[SOUND]"),
-                ("segments", &num_segments.to_string().as_str()),
-                ("total_time_ms", &total_time.as_millis().to_string().as_str())
-            ]);
+            log_with_context(
+                log::Level::Debug,
+                "No speech",
+                &[
+                    ("result", "[SOUND]"),
+                    ("segments", &num_segments.to_string().as_str()),
+                    (
+                        "total_time_ms",
+                        &total_time.as_millis().to_string().as_str(),
+                    ),
+                ],
+            );
         } else {
             log_complete("TRANSCRIPTION", total_time.as_millis() as u64);
-            log_with_context(log::Level::Debug, "Transcription complete", &[
-                ("result_length", &result.len().to_string().as_str()),
-                ("segments", &num_segments.to_string().as_str()),
-                ("audio_duration_seconds", &format!("{:.2}", duration_seconds).as_str())
-            ]);
-            
-            log::info!("📝 Transcription success: {} chars in {:.2}s", result.len(), total_time.as_secs_f32());
+            log_with_context(
+                log::Level::Debug,
+                "Transcription complete",
+                &[
+                    ("result_length", &result.len().to_string().as_str()),
+                    ("segments", &num_segments.to_string().as_str()),
+                    (
+                        "audio_duration_seconds",
+                        &format!("{:.2}", duration_seconds).as_str(),
+                    ),
+                ],
+            );
+
+            log::info!(
+                "📝 Transcription success: {} chars in {:.2}s",
+                result.len(),
+                total_time.as_secs_f32()
+            );
         }
 
         Ok(result)
@@ -621,9 +790,9 @@ mod tests {
         // Test 4-channel audio downmixing
         // Simulating interleaved 4-channel audio: [ch1, ch2, ch3, ch4, ch1, ch2, ...]
         let four_channel_audio = vec![
-            1.0, 2.0, 3.0, 4.0,  // Frame 1: channels 1-4
-            5.0, 6.0, 7.0, 8.0,  // Frame 2: channels 1-4
-            -1.0, -2.0, -3.0, -4.0,  // Frame 3: channels 1-4
+            1.0, 2.0, 3.0, 4.0, // Frame 1: channels 1-4
+            5.0, 6.0, 7.0, 8.0, // Frame 2: channels 1-4
+            -1.0, -2.0, -3.0, -4.0, // Frame 3: channels 1-4
         ];
 
         let result = convert_multichannel_to_mono(&four_channel_audio, 4).unwrap();

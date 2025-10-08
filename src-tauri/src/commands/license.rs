@@ -20,19 +20,19 @@ pub struct CachedLicense {
 impl CachedLicense {
     /// Cache duration of 6 hours as requested by user
     const CACHE_DURATION: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
-    
+
     pub fn new(status: LicenseStatus) -> Self {
         Self {
             status,
             cached_at: Instant::now(),
         }
     }
-    
+
     /// Check if this cache entry is still valid
     pub fn is_valid(&self) -> bool {
         self.cached_at.elapsed() < Self::CACHE_DURATION
     }
-    
+
     /// Get age of this cache entry for logging
     pub fn age(&self) -> std::time::Duration {
         self.cached_at.elapsed()
@@ -58,7 +58,6 @@ const LICENSE_CACHE_KEY: &str = "license_status";
 const LAST_VALIDATION_KEY: &str = "last_license_validation";
 const LAST_TRIAL_VALIDATION_KEY: &str = "last_trial_validation"; // Tracks when trial was last validated online
 const TRIAL_EXPIRES_KEY: &str = "trial_expires_at"; // Cache key for trial expiry date
-
 
 // Error message constants for consistency
 const ERR_INVALID_LICENSE: &str = "Invalid license key format";
@@ -104,10 +103,7 @@ fn is_within_grace_period(app: &AppHandle) -> Option<i64> {
 // Check if grace period timestamp exists (regardless of whether it's valid)
 fn has_grace_period_timestamp(app: &AppHandle) -> bool {
     let cache = app.cache();
-    cache.get(LAST_VALIDATION_KEY)
-        .ok()
-        .flatten()
-        .is_some()
+    cache.get(LAST_VALIDATION_KEY).ok().flatten().is_some()
 }
 
 // Check if we're within the trial grace period
@@ -134,10 +130,10 @@ fn should_delete_invalid_license(error_msg: &str) -> bool {
 
     // ONLY delete if the error explicitly says the license is invalid
     // Be extremely conservative - when in doubt, keep the license
-    msg_lower.contains("invalid license") ||
-    msg_lower.contains("license not found") ||
-    msg_lower.contains("license expired") ||
-    msg_lower.contains("license revoked")
+    msg_lower.contains("invalid license")
+        || msg_lower.contains("license not found")
+        || msg_lower.contains("license expired")
+        || msg_lower.contains("license revoked")
 }
 
 /// Check the current license status
@@ -289,7 +285,10 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                         serde_json::to_value(&wrapped_status).unwrap_or_default(),
                         cache_options,
                     ) {
-                        Ok(_) => log::info!("Cached licensed status for {} hours with metadata", CACHE_TTL_HOURS),
+                        Ok(_) => log::info!(
+                            "Cached licensed status for {} hours with metadata",
+                            CACHE_TTL_HOURS
+                        ),
                         Err(e) => log::error!("Failed to cache licensed status: {}", e),
                     }
 
@@ -312,8 +311,11 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
 
                 // Check if we're within the offline grace period
                 if let Some(days_remaining) = is_within_grace_period(&app) {
-                    log::info!("API unavailable but within {}-day grace period. {} days remaining",
-                             OFFLINE_GRACE_PERIOD_DAYS, days_remaining);
+                    log::info!(
+                        "API unavailable but within {}-day grace period. {} days remaining",
+                        OFFLINE_GRACE_PERIOD_DAYS,
+                        days_remaining
+                    );
 
                     // Warn if approaching limit
                     if days_remaining <= 7 {
@@ -361,7 +363,10 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                         // No timestamp exists - this is the first offline attempt
                         log::warn!("No previous online validation found. Initial online validation required.");
                         // DON'T delete the license - it may still be valid
-                        return Err("Initial online validation required. Please connect to internet.".to_string());
+                        return Err(
+                            "Initial online validation required. Please connect to internet."
+                                .to_string(),
+                        );
                     }
                 }
             }
@@ -454,7 +459,8 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                     ) {
                         Ok(_) => log::info!(
                             "Cached trial status for {} hours - {} days remaining",
-                            CACHE_TTL_HOURS, trial_days_left
+                            CACHE_TTL_HOURS,
+                            trial_days_left
                         ),
                         Err(e) => log::error!("Failed to cache trial status: {}", e),
                     }
@@ -503,15 +509,25 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                             let hours_left = (expires_utc - now).num_hours();
                             let days_left = hours_to_days(hours_left).max(0);
 
-                            log::info!("Offline trial access: {} trial days left (expires: {})",
-                                     days_left, expires_at_str);
+                            log::info!(
+                                "Offline trial access: {} trial days left (expires: {})",
+                                days_left,
+                                expires_at_str
+                            );
 
                             let status = LicenseStatus {
-                                status: if days_left > 0 { LicenseState::Trial } else { LicenseState::Expired },
+                                status: if days_left > 0 {
+                                    LicenseState::Trial
+                                } else {
+                                    LicenseState::Expired
+                                },
                                 trial_days_left: Some(days_left.max(0)),
                                 license_type: None,
                                 license_key: None,
-                                expires_at: Some(format!("Offline grace: {} day remaining", grace_days_remaining)),
+                                expires_at: Some(format!(
+                                    "Offline grace: {} day remaining",
+                                    grace_days_remaining
+                                )),
                             };
 
                             return Ok(status);
@@ -521,7 +537,10 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                             return Err("Trial grace period expired. Please connect to internet to continue trial.".to_string());
                         }
                     } else {
-                        log::warn!("Failed to parse cached trial expiry date: {}", expires_at_str);
+                        log::warn!(
+                            "Failed to parse cached trial expiry date: {}",
+                            expires_at_str
+                        );
                     }
                 }
             } else {
@@ -530,7 +549,9 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
 
             // No cached expiry or couldn't parse it - check grace period anyway (backward compatibility)
             if let Some(_grace_days_remaining) = is_within_trial_grace_period(&app) {
-                log::warn!("No cached expiry but within grace period. This shouldn't happen normally.");
+                log::warn!(
+                    "No cached expiry but within grace period. This shouldn't happen normally."
+                );
                 return Err("Trial validation failed but grace period active. Please reconnect to internet.".to_string());
             }
 
@@ -541,8 +562,10 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
 
                     // Use cached status if it's less than cache TTL
                     if age < Duration::hours(CACHE_TTL_HOURS as i64) {
-                        log::info!("API unavailable, using cached license status from {} ago",
-                                 format_duration(&age));
+                        log::info!(
+                            "API unavailable, using cached license status from {} ago",
+                            format_duration(&age)
+                        );
 
                         // For trial users, adjust days remaining based on cache age
                         let mut status = cached.status.clone();
@@ -609,7 +632,10 @@ pub async fn restore_license(app: AppHandle) -> Result<LicenseStatus, String> {
                     serde_json::to_value(&validation_time).unwrap_or_default(),
                     None, // No TTL for validation timestamp
                 ) {
-                    log::warn!("Failed to set last validation timestamp during restore: {}", e);
+                    log::warn!(
+                        "Failed to set last validation timestamp during restore: {}",
+                        e
+                    );
                 }
 
                 // Reset recording state when license is restored
@@ -823,7 +849,9 @@ pub async fn deactivate_license(app: AppHandle) -> Result<(), String> {
             // NEVER delete license on deactivation failure!
             // If deactivation fails, the server still thinks the license is active
             // User should be able to retry deactivation when they have proper connectivity
-            log::warn!("Deactivation failed. License remains in keychain. Please retry when connected.");
+            log::warn!(
+                "Deactivation failed. License remains in keychain. Please retry when connected."
+            );
 
             // Clear cache even on failure
             let cache = app.cache();
@@ -867,7 +895,7 @@ pub async fn open_purchase_page() -> Result<(), String> {
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        
+
         std::process::Command::new("cmd")
             .args(&["/C", "start", "https://voicetypr.com/#pricing"])
             .creation_flags(CREATE_NO_WINDOW)

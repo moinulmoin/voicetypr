@@ -23,7 +23,7 @@ pub struct Settings {
     pub check_updates_automatically: bool,
     pub selected_microphone: Option<String>,
     // Push-to-talk support
-    pub recording_mode: String,  // "toggle" or "push_to_talk"
+    pub recording_mode: String, // "toggle" or "push_to_talk"
     pub use_different_ptt_key: bool,
     pub ptt_hotkey: Option<String>,
 }
@@ -45,7 +45,7 @@ impl Default for Settings {
             check_updates_automatically: true, // Default to automatic updates enabled
             selected_microphone: None,        // Default to system default microphone
             recording_mode: "toggle".to_string(), // Default to toggle mode for backward compatibility
-            use_different_ptt_key: false,    // Default to using same key
+            use_different_ptt_key: false,         // Default to using same key
             ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
         }
     }
@@ -171,7 +171,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
     // Save push-to-talk settings
     store.set("recording_mode", json!(settings.recording_mode.clone()));
-    store.set("use_different_ptt_key", json!(settings.use_different_ptt_key));
+    store.set(
+        "use_different_ptt_key",
+        json!(settings.use_different_ptt_key),
+    );
     if let Some(ref ptt_hotkey) = settings.ptt_hotkey {
         store.set("ptt_hotkey", json!(ptt_hotkey));
     }
@@ -198,9 +201,12 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     // Handle PTT shortcut registration if needed
     if recording_mode == crate::RecordingMode::PushToTalk && settings.use_different_ptt_key {
         if let Some(ptt_hotkey) = settings.ptt_hotkey.clone() {
-            let normalized_ptt = crate::commands::key_normalizer::normalize_shortcut_keys(&ptt_hotkey);
+            let normalized_ptt =
+                crate::commands::key_normalizer::normalize_shortcut_keys(&ptt_hotkey);
 
-            if let Ok(ptt_shortcut) = normalized_ptt.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+            if let Ok(ptt_shortcut) =
+                normalized_ptt.parse::<tauri_plugin_global_shortcut::Shortcut>()
+            {
                 let shortcuts = app.global_shortcut();
 
                 // Unregister old PTT shortcut if exists
@@ -265,7 +271,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         } else {
             log::info!("Skipping Whisper preload for Parakeet engine selection");
         }
-        
+
         // Update the tray menu to reflect the new selection
         if let Err(e) = update_tray_menu(app.clone()).await {
             log::warn!("Failed to update tray menu after model change: {}", e);
@@ -279,7 +285,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 #[tauri::command]
 pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(), String> {
     log::info!("Updating global shortcut to: {}", shortcut);
-    
+
     // Validate shortcut format
     if shortcut.is_empty() || shortcut.len() > 100 {
         log::error!("Invalid shortcut format: empty or too long");
@@ -294,15 +300,21 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
 
     // Normalize the shortcut keys
     let normalized_shortcut = normalize_shortcut_keys(&shortcut);
-    log::debug!("Normalized shortcut: {} -> {}", shortcut, normalized_shortcut);
+    log::debug!(
+        "Normalized shortcut: {} -> {}",
+        shortcut,
+        normalized_shortcut
+    );
 
     // Validate that shortcut can be parsed
-    let new_shortcut: Shortcut = normalized_shortcut
-        .parse()
-        .map_err(|e| {
-            log::error!("Failed to parse normalized shortcut '{}': {}", normalized_shortcut, e);
-            "Invalid shortcut format".to_string()
-        })?;
+    let new_shortcut: Shortcut = normalized_shortcut.parse().map_err(|e| {
+        log::error!(
+            "Failed to parse normalized shortcut '{}': {}",
+            normalized_shortcut,
+            e
+        );
+        "Invalid shortcut format".to_string()
+    })?;
 
     // Get global shortcut manager and app state
     let shortcuts = app.global_shortcut();
@@ -310,14 +322,19 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
 
     // Unregister only the current recording shortcut (not ESC or others)
     log::debug!("Unregistering current recording shortcut if exists");
-    let old_shortcut = app_state.recording_shortcut.lock()
+    let old_shortcut = app_state
+        .recording_shortcut
+        .lock()
         .ok()
         .and_then(|guard| guard.clone());
-    
+
     if let Some(old) = old_shortcut {
         log::debug!("Unregistering old shortcut: {:?}", old);
         if let Err(e) = shortcuts.unregister(old) {
-            log::warn!("Failed to unregister old shortcut: {}. Continuing anyway.", e);
+            log::warn!(
+                "Failed to unregister old shortcut: {}. Continuing anyway.",
+                e
+            );
             // Don't fail - the old shortcut might already be unregistered
         }
     }
@@ -343,9 +360,10 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
             log::error!("Failed to register hotkey '{}': {}", normalized_shortcut, e);
 
             // Provide helpful error message based on error type
-            let detailed_error = if error_lower.contains("already registered") ||
-                                   error_lower.contains("conflict") ||
-                                   error_lower.contains("in use") {
+            let detailed_error = if error_lower.contains("already registered")
+                || error_lower.contains("conflict")
+                || error_lower.contains("in use")
+            {
                 format!("Hotkey is already in use by another application. Please choose a different combination.")
             } else if error_lower.contains("parse") || error_lower.contains("invalid") {
                 format!("Invalid hotkey combination. Please use a valid key combination.")
@@ -375,7 +393,7 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
         log::error!("Failed to get settings store: {}", e);
         "Failed to access settings store".to_string()
     })?;
-    
+
     store.set("hotkey", json!(shortcut));
     if let Err(e) = store.save() {
         log::error!("Failed to save settings: {}", e);
@@ -387,7 +405,6 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
 
     Ok(())
 }
-
 
 #[derive(Serialize)]
 pub struct LanguageInfo {
@@ -442,7 +459,6 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     Ok(())
 }
 
-
 #[tauri::command]
 pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
     // Build the new menu
@@ -466,28 +482,31 @@ pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn set_audio_device(app: AppHandle, device_name: Option<String>) -> Result<(), String> {
     log::info!("Setting audio device to: {:?}", device_name);
-    
+
     // Get current settings
     let mut settings = get_settings(app.clone()).await?;
-    
+
     // Check if recording is in progress and stop it
     let recorder_state = app.state::<crate::commands::audio::RecorderState>();
     {
-        let mut recorder = recorder_state.inner().0.lock()
+        let mut recorder = recorder_state
+            .inner()
+            .0
+            .lock()
             .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
-        
+
         if recorder.is_recording() {
             log::info!("Recording in progress, stopping it before changing microphone");
-            
+
             // Update state to notify UI
             crate::update_recording_state(&app, crate::RecordingState::Stopping, None);
-            
+
             match recorder.stop_recording() {
                 Ok(msg) => {
                     log::info!("Recording stopped: {}", msg);
                     // Update state to idle after successful stop
                     crate::update_recording_state(&app, crate::RecordingState::Idle, None);
-                },
+                }
                 Err(e) => {
                     log::warn!("Failed to stop recording: {}", e);
                     // Update state to error if stop failed
@@ -496,21 +515,21 @@ pub async fn set_audio_device(app: AppHandle, device_name: Option<String>) -> Re
             }
         }
     } // Lock released here
-    
+
     // Update the selected microphone
     settings.selected_microphone = device_name.clone();
-    
+
     // Save the updated settings
     save_settings(app.clone(), settings).await?;
-    
+
     // Update tray menu to reflect the change
     update_tray_menu(app.clone()).await?;
-    
+
     // Emit event to notify frontend - just emit a signal, frontend will reload settings
     if let Err(e) = app.emit("audio-device-changed", ()) {
         log::warn!("Failed to emit audio-device-changed event: {}", e);
     }
-    
+
     log::info!("Audio device successfully set to: {:?}", device_name);
     Ok(())
 }

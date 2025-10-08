@@ -1,10 +1,13 @@
+use super::error::ParakeetError;
+use super::messages::{ParakeetCommand, ParakeetResponse};
 use log::{error, warn};
 use tauri::async_runtime::{Receiver, RwLock};
 use tauri::AppHandle;
-use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
+use tauri_plugin_shell::{
+    process::{CommandChild, CommandEvent},
+    ShellExt,
+};
 use tokio::sync::RwLockWriteGuard;
-use super::error::ParakeetError;
-use super::messages::{ParakeetCommand, ParakeetResponse};
 
 pub struct ParakeetSidecar {
     rx: Receiver<CommandEvent>,
@@ -22,11 +25,18 @@ impl ParakeetSidecar {
             .spawn()
             .map_err(|e| ParakeetError::SpawnError(e.to_string()))?;
 
-        log::info!("Spawned Parakeet sidecar pid={} name={}", child.pid(), binary_name);
+        log::info!(
+            "Spawned Parakeet sidecar pid={} name={}",
+            child.pid(),
+            binary_name
+        );
         Ok(Self { rx, child })
     }
 
-    pub async fn request(&mut self, command: &ParakeetCommand) -> Result<ParakeetResponse, ParakeetError> {
+    pub async fn request(
+        &mut self,
+        command: &ParakeetCommand,
+    ) -> Result<ParakeetResponse, ParakeetError> {
         let mut payload = serde_json::to_string(command)?;
         payload.push('\n');
         self.child
@@ -58,7 +68,10 @@ impl ParakeetSidecar {
                     }
                 }
                 CommandEvent::Stderr(line) => {
-                    warn!("Parakeet sidecar stderr: {}", String::from_utf8_lossy(&line));
+                    warn!(
+                        "Parakeet sidecar stderr: {}",
+                        String::from_utf8_lossy(&line)
+                    );
                 }
                 CommandEvent::Terminated(payload) => {
                     error!(
@@ -110,7 +123,11 @@ impl ParakeetClient {
         Ok(guard)
     }
 
-    pub async fn send(&self, app: &AppHandle, command: &ParakeetCommand) -> Result<ParakeetResponse, ParakeetError> {
+    pub async fn send(
+        &self,
+        app: &AppHandle,
+        command: &ParakeetCommand,
+    ) -> Result<ParakeetResponse, ParakeetError> {
         let mut guard = self.ensure(app).await?;
         let response = match guard.as_mut() {
             Some(sidecar) => sidecar.request(command).await,

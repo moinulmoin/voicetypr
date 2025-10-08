@@ -17,10 +17,10 @@ fn normalize_single_key(key: &str) -> String {
     match key.to_lowercase().as_str() {
         "cmd" => return "CommandOrControl".to_string(),
         "ctrl" => return "CommandOrControl".to_string(),
-        "control" => return "Control".to_string(),  // Keep Control separate for macOS Cmd+Ctrl support
+        "control" => return "Control".to_string(), // Keep Control separate for macOS Cmd+Ctrl support
         "command" => return "CommandOrControl".to_string(),
         "meta" => return "CommandOrControl".to_string(),
-        "super" => return "CommandOrControl".to_string(),  // Super maps to CommandOrControl for Tauri
+        "super" => return "CommandOrControl".to_string(), // Super maps to CommandOrControl for Tauri
         "option" => return "Alt".to_string(),
         "alt" => return "Alt".to_string(),
         "shift" => return "Shift".to_string(),
@@ -91,9 +91,9 @@ fn normalize_single_key(key: &str) -> String {
             "CommandOrControl" => "CommandOrControl".to_string(), // Keep as-is for Tauri
             "Cmd" => "CommandOrControl".to_string(),
             "Ctrl" => "CommandOrControl".to_string(),
-            "Control" => "Control".to_string(),  // Keep Control separate
+            "Control" => "Control".to_string(), // Keep Control separate
             "Command" => "CommandOrControl".to_string(),
-            "Super" => "CommandOrControl".to_string(),  // Super maps to CommandOrControl for Tauri
+            "Super" => "CommandOrControl".to_string(), // Super maps to CommandOrControl for Tauri
             "Option" => "Alt".to_string(),
             "Meta" => "CommandOrControl".to_string(),
 
@@ -126,9 +126,7 @@ fn normalize_single_key(key: &str) -> String {
             "MediaTrackPrevious" => "MediaTrackPrevious".to_string(),
 
             // Letter keys - ensure uppercase
-            k if k.len() == 1 && k.chars().all(|c| c.is_alphabetic()) => {
-                k.to_uppercase()
-            }
+            k if k.len() == 1 && k.chars().all(|c| c.is_alphabetic()) => k.to_uppercase(),
 
             // Number keys (already handled above for shifted versions)
             "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => key.to_string(),
@@ -197,7 +195,7 @@ pub fn validate_key_combination_with_rules(
                 | "Ctrl"
                 | "Option"
                 | "Meta"
-                | "Super"  // Super will be normalized to CommandOrControl
+                | "Super" // Super will be normalized to CommandOrControl
         )
     };
 
@@ -303,9 +301,18 @@ mod tests {
 
         // Test Super modifier (maps to CommandOrControl for Tauri)
         assert_eq!(normalize_shortcut_keys("Super+A"), "CommandOrControl+A");
-        assert_eq!(normalize_shortcut_keys("Super+Control+A"), "CommandOrControl+Control+A");
-        assert_eq!(normalize_shortcut_keys("Super+Control+Alt+A"), "CommandOrControl+Control+Alt+A");
-        assert_eq!(normalize_shortcut_keys("Super+Control+Alt+Shift+A"), "CommandOrControl+Control+Alt+Shift+A");
+        assert_eq!(
+            normalize_shortcut_keys("Super+Control+A"),
+            "CommandOrControl+Control+A"
+        );
+        assert_eq!(
+            normalize_shortcut_keys("Super+Control+Alt+A"),
+            "CommandOrControl+Control+Alt+A"
+        );
+        assert_eq!(
+            normalize_shortcut_keys("Super+Control+Alt+Shift+A"),
+            "CommandOrControl+Control+Alt+Shift+A"
+        );
     }
 
     #[test]

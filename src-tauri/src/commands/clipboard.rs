@@ -1,6 +1,6 @@
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use clipboard_rs::{Clipboard, ClipboardContext, common::RustImage};
 use arboard;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use clipboard_rs::{common::RustImage, Clipboard, ClipboardContext};
 use image;
 use std::path::PathBuf;
 use tokio::fs;
@@ -58,9 +58,9 @@ fn try_clipboard_rs(png_bytes: &[u8]) -> Result<(), String> {
 
 fn try_arboard(png_bytes: &[u8]) -> Result<(), String> {
     // Load image from PNG bytes
-    let img = image::load_from_memory(png_bytes)
-        .map_err(|e| format!("Failed to load image: {}", e))?;
-    
+    let img =
+        image::load_from_memory(png_bytes).map_err(|e| format!("Failed to load image: {}", e))?;
+
     let rgba_image = img.to_rgba8();
     let (width, height) = (rgba_image.width() as usize, rgba_image.height() as usize);
     let raw_bytes = rgba_image.into_raw();
@@ -81,7 +81,7 @@ fn try_arboard(png_bytes: &[u8]) -> Result<(), String> {
         use arboard::SetExtLinux;
         clipboard
             .set_image(image_data)
-            .wait()  // On Linux, wait to ensure clipboard persists
+            .wait() // On Linux, wait to ensure clipboard persists
             .map_err(|e| format!("Failed to set image with arboard: {}", e))?;
     }
 
@@ -112,7 +112,7 @@ pub async fn save_image_to_file(image_data_url: String, file_path: String) -> Re
 
     // Convert string path to PathBuf
     let path = PathBuf::from(file_path);
-    
+
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)

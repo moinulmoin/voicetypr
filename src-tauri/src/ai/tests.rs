@@ -146,9 +146,7 @@ mod tests {
         let mut email_options = EnhancementOptions::default();
         email_options.preset = EnhancementPreset::Email;
         let email_prompt = build_enhancement_prompt(text, None, &email_options);
-        assert!(
-            email_prompt.contains("format the cleaned text as an email")
-        );
+        assert!(email_prompt.contains("format the cleaned text as an email"));
 
         // Test Commit preset
         let mut commit_options = EnhancementOptions::default();
@@ -175,7 +173,7 @@ mod tests {
             let mut options = EnhancementOptions::default();
             options.preset = preset.clone();
             let prompt = build_enhancement_prompt(test_text, None, &options);
-            
+
             // All prompts should include self-correction rules
             assert!(
                 prompt.contains("handle self-corrections"),
@@ -190,7 +188,7 @@ mod tests {
         use crate::ai::prompts::{build_enhancement_prompt, EnhancementOptions, EnhancementPreset};
 
         let test_text = "test";
-        
+
         // Test that all presets include base processing
         let presets = vec![
             EnhancementPreset::Default,
@@ -203,21 +201,21 @@ mod tests {
             let mut options = EnhancementOptions::default();
             options.preset = preset.clone();
             let prompt = build_enhancement_prompt(test_text, None, &options);
-            
+
             // All should include self-correction rules
             assert!(
                 prompt.contains("handle self-corrections"),
                 "Preset {:?} should include self-correction rules",
                 preset
             );
-            
+
             // All should include default processing
             assert!(
                 prompt.contains("THEN clean up this voice transcription"),
                 "Preset {:?} should include default processing",
                 preset
             );
-            
+
             // Non-default presets should have FINALLY instruction
             if !matches!(preset, EnhancementPreset::Default) {
                 assert!(
@@ -238,20 +236,32 @@ mod tests {
         let prompt = build_enhancement_prompt(test_text, None, &options);
 
         // Test that Default prompt includes all comprehensive features
-        
+
         // 1. Speech artifacts removal
-        assert!(prompt.contains("Remove filler words"), "Should include filler word removal");
+        assert!(
+            prompt.contains("Remove filler words"),
+            "Should include filler word removal"
+        );
         assert!(prompt.contains("stutters"), "Should handle stutters");
-        
+
         // 2. Error correction
         assert!(prompt.contains("Fix all errors"), "Should fix errors");
-        assert!(prompt.contains("grammar, spelling, punctuation"), "Should handle grammar and spelling");
-        
+        assert!(
+            prompt.contains("grammar, spelling, punctuation"),
+            "Should handle grammar and spelling"
+        );
+
         // 3. Number and time formatting
-        assert!(prompt.contains("Format numbers, dates, times"), "Should format numbers and dates");
-        
+        assert!(
+            prompt.contains("Format numbers, dates, times"),
+            "Should format numbers and dates"
+        );
+
         // 4. Technical terms
-        assert!(prompt.contains("Correct technical terms"), "Should preserve technical terms");
+        assert!(
+            prompt.contains("Correct technical terms"),
+            "Should preserve technical terms"
+        );
     }
 
     #[test]

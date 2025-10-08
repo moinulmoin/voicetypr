@@ -20,7 +20,7 @@ pub fn initialize_encryption_key() -> Result<(), String> {
         .get_or_try_init(|| {
             // Get the same device hash used for API authentication
             let device_hash = device::get_device_hash()?;
-            
+
             // Validate device hash has sufficient entropy
             // SHA256 produces 64 hex chars, we need at least that
             if device_hash.len() < 64 {
@@ -29,7 +29,7 @@ pub fn initialize_encryption_key() -> Result<(), String> {
                     device_hash.len()
                 ));
             }
-            
+
             // Verify it's a valid hex string (additional validation)
             if !device_hash.chars().all(|c| c.is_ascii_hexdigit()) {
                 return Err("Device hash contains invalid characters".to_string());
@@ -43,7 +43,7 @@ pub fn initialize_encryption_key() -> Result<(), String> {
 
             // 100,000 iterations for good security/performance balance
             pbkdf2_hmac::<Sha256>(device_hash.as_bytes(), salt, 100_000, &mut key);
-            
+
             // Verify key was properly generated (not all zeros)
             if key.iter().all(|&b| b == 0) {
                 return Err("Failed to generate encryption key".to_string());

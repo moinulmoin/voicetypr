@@ -1,6 +1,6 @@
+use crate::utils::logger::*;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use crate::utils::logger::*;
 
 #[derive(Debug, Clone)]
 pub struct WindowManager {
@@ -11,19 +11,27 @@ pub struct WindowManager {
 
 impl WindowManager {
     pub fn new(app_handle: AppHandle) -> Self {
-        log_with_context(log::Level::Info, "Window manager initialization", &[
-            ("operation", "WINDOW_MANAGER_INIT"),
-            ("stage", "startup")
-        ]);
+        log_with_context(
+            log::Level::Info,
+            "Window manager initialization",
+            &[("operation", "WINDOW_MANAGER_INIT"), ("stage", "startup")],
+        );
 
         // Get reference to main window on creation
         let main_window = app_handle.get_webview_window("main");
-        
+
         let main_available = main_window.is_some();
-        log_with_context(log::Level::Debug, "Window manager setup", &[
-            ("main_window_available", &main_available.to_string().as_str()),
-            ("pill_window_created", "false")
-        ]);
+        log_with_context(
+            log::Level::Debug,
+            "Window manager setup",
+            &[
+                (
+                    "main_window_available",
+                    &main_available.to_string().as_str(),
+                ),
+                ("pill_window_created", "false"),
+            ],
+        );
 
         let window_manager = Self {
             app_handle,
@@ -31,10 +39,11 @@ impl WindowManager {
             pill_window: Arc::new(Mutex::new(None)),
         };
 
-        log_with_context(log::Level::Info, "Window manager ready", &[
-            ("operation", "WINDOW_MANAGER_INIT"),
-            ("result", "success")
-        ]);
+        log_with_context(
+            log::Level::Info,
+            "Window manager ready",
+            &[("operation", "WINDOW_MANAGER_INIT"), ("result", "success")],
+        );
 
         window_manager
     }
@@ -243,10 +252,11 @@ impl WindowManager {
                     if IsWindow(hwnd).as_bool() {
                         // Get current window style
                         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-                        
+
                         // Add tool window and no-activate flags, remove from Alt-Tab
-                        let new_style = (style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize)
-                                        & !(WS_EX_APPWINDOW.0 as isize);
+                        let new_style =
+                            (style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize)
+                                & !(WS_EX_APPWINDOW.0 as isize);
 
                         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
 
@@ -260,7 +270,7 @@ impl WindowManager {
                             0,
                             SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
                         );
-                        
+
                         log::info!("Applied Windows-specific window flags for pill");
                     } else {
                         log::warn!("Invalid HWND received from Tauri window");
@@ -494,7 +504,10 @@ impl WindowManager {
         let pill_guard = match self.pill_window.lock() {
             Ok(guard) => guard,
             Err(e) => {
-                log::error!("Pill window mutex is poisoned during visibility check: {}", e);
+                log::error!(
+                    "Pill window mutex is poisoned during visibility check: {}",
+                    e
+                );
                 return false;
             }
         };

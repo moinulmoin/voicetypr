@@ -265,7 +265,7 @@ pub async fn clear_ai_api_key_cache(
     let mut cache = API_KEY_CACHE
         .lock()
         .map_err(|_| "Failed to access cache".to_string())?;
-    
+
     if !provider.is_empty() {
         cache.remove(&format!("ai_api_key_{}", provider));
         log::info!("API key cache cleared for provider: {}", provider);

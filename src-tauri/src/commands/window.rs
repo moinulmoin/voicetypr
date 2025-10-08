@@ -1,49 +1,60 @@
-use crate::AppState;
 use crate::utils::logger::*;
+use crate::AppState;
 use tauri::{AppHandle, Manager};
 
 #[tauri::command]
 pub async fn show_pill_widget(app: AppHandle) -> Result<(), String> {
     log_start("WINDOW_LIFECYCLE");
-    log_with_context(log::Level::Debug, "Window lifecycle operation", &[
-        ("operation", "show_pill_widget"),
-        ("window_type", "pill"),
-        ("action", "show")
-    ]);
+    log_with_context(
+        log::Level::Debug,
+        "Window lifecycle operation",
+        &[
+            ("operation", "show_pill_widget"),
+            ("window_type", "pill"),
+            ("action", "show"),
+        ],
+    );
 
     // Get the window manager from app state
     let app_state = app.state::<AppState>();
-    let window_manager = app_state
-        .get_window_manager()
-        .ok_or_else(|| {
-            let error = "Window manager not initialized";
-            log_failed("WINDOW_LIFECYCLE", error);
-            log_with_context(log::Level::Error, "Window manager error", &[
-                ("operation", "show_pill_widget"),
-                ("error", error)
-            ]);
-            error.to_string()
-        })?;
+    let window_manager = app_state.get_window_manager().ok_or_else(|| {
+        let error = "Window manager not initialized";
+        log_failed("WINDOW_LIFECYCLE", error);
+        log_with_context(
+            log::Level::Error,
+            "Window manager error",
+            &[("operation", "show_pill_widget"), ("error", error)],
+        );
+        error.to_string()
+    })?;
 
     // Use window manager to show pill window
     match window_manager.show_pill_window().await {
         Ok(_) => {
             log_complete("WINDOW_LIFECYCLE", 0); // No timing needed for this operation
-            log_with_context(log::Level::Info, "Window shown successfully", &[
-                ("operation", "show_pill_widget"),
-                ("window_type", "pill"),
-                ("result", "success")
-            ]);
+            log_with_context(
+                log::Level::Info,
+                "Window shown successfully",
+                &[
+                    ("operation", "show_pill_widget"),
+                    ("window_type", "pill"),
+                    ("result", "success"),
+                ],
+            );
             log::info!("Pill widget shown via WindowManager");
             Ok(())
         }
         Err(e) => {
             log_failed("WINDOW_LIFECYCLE", &e);
-            log_with_context(log::Level::Error, "Window show failed", &[
-                ("operation", "show_pill_widget"),
-                ("window_type", "pill"),
-                ("error", &e)
-            ]);
+            log_with_context(
+                log::Level::Error,
+                "Window show failed",
+                &[
+                    ("operation", "show_pill_widget"),
+                    ("window_type", "pill"),
+                    ("error", &e),
+                ],
+            );
             Err(e)
         }
     }
@@ -52,45 +63,56 @@ pub async fn show_pill_widget(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn hide_pill_widget(app: AppHandle) -> Result<(), String> {
     log_start("WINDOW_LIFECYCLE");
-    log_with_context(log::Level::Debug, "Window lifecycle operation", &[
-        ("operation", "hide_pill_widget"),
-        ("window_type", "pill"),
-        ("action", "hide")
-    ]);
+    log_with_context(
+        log::Level::Debug,
+        "Window lifecycle operation",
+        &[
+            ("operation", "hide_pill_widget"),
+            ("window_type", "pill"),
+            ("action", "hide"),
+        ],
+    );
 
     // Get the window manager from app state
     let app_state = app.state::<AppState>();
-    let window_manager = app_state
-        .get_window_manager()
-        .ok_or_else(|| {
-            let error = "Window manager not initialized";
-            log_failed("WINDOW_LIFECYCLE", error);
-            log_with_context(log::Level::Error, "Window manager error", &[
-                ("operation", "hide_pill_widget"),
-                ("error", error)
-            ]);
-            error.to_string()
-        })?;
+    let window_manager = app_state.get_window_manager().ok_or_else(|| {
+        let error = "Window manager not initialized";
+        log_failed("WINDOW_LIFECYCLE", error);
+        log_with_context(
+            log::Level::Error,
+            "Window manager error",
+            &[("operation", "hide_pill_widget"), ("error", error)],
+        );
+        error.to_string()
+    })?;
 
     // Use window manager to hide pill window
     match window_manager.hide_pill_window().await {
         Ok(_) => {
             log_complete("WINDOW_LIFECYCLE", 0);
-            log_with_context(log::Level::Info, "Window hidden successfully", &[
-                ("operation", "hide_pill_widget"),
-                ("window_type", "pill"),
-                ("result", "success")
-            ]);
+            log_with_context(
+                log::Level::Info,
+                "Window hidden successfully",
+                &[
+                    ("operation", "hide_pill_widget"),
+                    ("window_type", "pill"),
+                    ("result", "success"),
+                ],
+            );
             log::info!("Pill widget hidden via WindowManager");
             Ok(())
         }
         Err(e) => {
             log_failed("WINDOW_LIFECYCLE", &e);
-            log_with_context(log::Level::Error, "Window hide failed", &[
-                ("operation", "hide_pill_widget"),
-                ("window_type", "pill"),
-                ("error", &e)
-            ]);
+            log_with_context(
+                log::Level::Error,
+                "Window hide failed",
+                &[
+                    ("operation", "hide_pill_widget"),
+                    ("window_type", "pill"),
+                    ("error", &e),
+                ],
+            );
             Err(e)
         }
     }

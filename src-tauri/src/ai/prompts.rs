@@ -34,7 +34,7 @@ pub fn build_enhancement_prompt(
 ) -> String {
     // Base processing applies to ALL presets
     let base_processing = format!("{}\n\n{}", SELF_CORRECTION_RULES, DEFAULT_PROMPT);
-    
+
     // Add mode-specific transformation if not Default
     let mode_transform = match options.preset {
         EnhancementPreset::Default => "",
@@ -164,4 +164,3 @@ Examples:
 "updated readme" → "docs: update installation instructions"
 
 Return ONLY the commit message."#;
-
