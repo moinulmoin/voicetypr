@@ -238,7 +238,7 @@ echo -e "${GREEN}🔨 Building x86_64 binary with notarization...${NC}"
 echo -e "${BLUE}This will take some time as it includes notarization...${NC}"
 
 cd src-tauri
-cargo tauri build --target x86_64-apple-darwin --bundles app,dmg
+cargo tauri build --target x86_64-apple-darwin --bundles app,dmg --config tauri.macos.conf.json
 cd ..
 
 # Find x86_64 build artifacts
@@ -277,7 +277,7 @@ echo -e "${GREEN}🔨 Building aarch64 binary with notarization...${NC}"
 echo -e "${BLUE}This will take some time as it includes notarization...${NC}"
 
 cd src-tauri
-cargo tauri build --target aarch64-apple-darwin --bundles app,dmg
+cargo tauri build --target aarch64-apple-darwin --bundles app,dmg --config tauri.macos.conf.json
 cd ..
 
 # Find aarch64 build artifacts

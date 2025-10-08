@@ -1,12 +1,11 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use log::{info, warn};
 use reqwest::Client;
 use serde::Serialize;
-use tauri::AppHandle;
-use tokio::io::AsyncWriteExt;
+use tauri::{AppHandle, Emitter};
 
 use super::error::ParakeetError;
 use super::messages::{ParakeetCommand, ParakeetResponse};
@@ -32,6 +31,8 @@ pub struct ParakeetManager {
     root_dir: PathBuf,
     http: Client,
 }
+
+const PARAKEET_UNAVAILABLE_EVENT: &str = "parakeet-unavailable";
 
 impl ParakeetManager {
     pub fn new(root_dir: PathBuf) -> Self {
@@ -142,7 +143,7 @@ impl ParakeetManager {
         };
 
         // Send to sidecar and let it handle the download
-        match self.client.send(app, &command).await {
+        match self.send_command(app, &command).await {
             Ok(ParakeetResponse::Ok { .. }) | Ok(ParakeetResponse::Status { loaded_model: Some(_), .. }) => {
                 // Swift sidecar returns StatusResponse with loaded_model when download completes
                 // Mark as downloaded since Swift handles it
@@ -163,7 +164,7 @@ impl ParakeetManager {
         };
 
         // Send delete_model command to Swift sidecar to remove FluidAudio cached files
-        match self.client.send(app, &ParakeetCommand::DeleteModel {}).await {
+        match self.send_command(app, &ParakeetCommand::DeleteModel {}).await {
             Ok(ParakeetResponse::Ok { .. }) | Ok(ParakeetResponse::Status { .. }) => {
                 // Successfully deleted
             }
@@ -212,7 +213,7 @@ impl ParakeetManager {
             eager_unload: Some(false),
         };
 
-        match self.client.send(app, &command).await? {
+        match self.send_command(app, &command).await? {
             ParakeetResponse::Ok { .. } => Ok(()),
             ParakeetResponse::Error { code, message, .. } => {
                 Err(ParakeetError::SidecarError { code, message })
@@ -244,7 +245,7 @@ impl ParakeetManager {
             local_attention_context: None,
         };
 
-        self.client.send(app, &command).await
+        self.send_command(app, &command).await
     }
 
     fn file_url(&self, definition: &ParakeetModelDefinition, filename: &str) -> String {
@@ -256,7 +257,7 @@ impl ParakeetManager {
 
     /// Check if the Parakeet sidecar is healthy and can respond to commands
     pub async fn health_check(&self, app: &AppHandle) -> Result<bool, ParakeetError> {
-        match self.client.send(app, &ParakeetCommand::Status {}).await {
+        match self.send_command(app, &ParakeetCommand::Status {}).await {
             Ok(ParakeetResponse::Status { .. }) => Ok(true),
             Ok(_) => Ok(true), // Any successful response is good
             Err(e) => {
@@ -268,5 +269,34 @@ impl ParakeetManager {
 
     pub async fn shutdown(&self) {
         self.client.shutdown().await;
+    }
+
+    fn friendly_spawn_message(details: &str) -> String {
+        format!(
+            "Parakeet is unavailable. Please reinstall VoiceTypr or remove the quarantine flag by running `xattr -dr com.apple.quarantine /Applications/VoiceTypr.app`. Details: {}",
+            details
+        )
+    }
+
+    fn emit_unavailable(app: &AppHandle, message: &str) {
+        if let Err(err) = app.emit(PARAKEET_UNAVAILABLE_EVENT, message.to_string()) {
+            warn!("Failed to emit Parakeet unavailable event: {err:?}");
+        }
+    }
+
+    async fn send_command(
+        &self,
+        app: &AppHandle,
+        command: &ParakeetCommand,
+    ) -> Result<ParakeetResponse, ParakeetError> {
+        match self.client.send(app, command).await {
+            Ok(response) => Ok(response),
+            Err(ParakeetError::SpawnError(details)) => {
+                let message = Self::friendly_spawn_message(&details);
+                Self::emit_unavailable(app, &message);
+                Err(ParakeetError::Unavailable(message))
+            }
+            Err(err) => Err(err),
+        }
     }
 }

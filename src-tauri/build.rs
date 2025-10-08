@@ -18,7 +18,7 @@ fn main() {
             std::fs::create_dir_all(&dist_dir).ok();
             
             let output = Command::new("bash")
-                .arg(&build_script)
+                .arg("build.sh")
                 .arg("release")
                 .current_dir(&sidecar_dir)
                 .output();

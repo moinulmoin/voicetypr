@@ -1,0 +1,8 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": [
+      "../sidecar/parakeet-swift/dist/parakeet-sidecar"
+    ]
+  }
+}

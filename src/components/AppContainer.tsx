@@ -86,6 +86,17 @@ export function AppContainer() {
           toast.error(event.payload as string);
         });
 
+        registerEvent<string>("parakeet-unavailable", (message) => {
+          const description = typeof message === "string" && message.trim().length > 0
+            ? message
+            : "Parakeet is unavailable on this Mac. Please reinstall VoiceTypr or remove the quarantine flag.";
+          console.error("Parakeet unavailable:", description);
+          toast.error("Parakeet Unavailable", {
+            description,
+            duration: 8000
+          });
+        });
+
         // Listen for license-required event and navigate to License section
         registerEvent<{ title: string; message: string; action?: string }>(
           "license-required", 

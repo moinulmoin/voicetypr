@@ -167,7 +167,7 @@ echo -e "${BLUE}This will take some time as it includes notarization...${NC}"
 cd src-tauri
 
 # Build universal binary - Tauri will automatically sign and notarize
-cargo tauri build --target universal-apple-darwin --bundles app,dmg
+cargo tauri build --target universal-apple-darwin --bundles app,dmg --config tauri.macos.conf.json
 
 cd ..
 

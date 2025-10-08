@@ -245,7 +245,13 @@ export const OnboardingDesktop = function OnboardingDesktop({
       // automation check removed for now
       case "models":
         // User can proceed if they have selected a model that is downloaded
-        return settings?.current_model !== null && settings?.current_model !== "" && models[settings.current_model]?.downloaded === true;
+        {
+          const currentModel = settings?.current_model;
+          if (!currentModel) {
+            return false;
+          }
+          return models[currentModel]?.downloaded === true;
+        }
       default:
         return true;
     }

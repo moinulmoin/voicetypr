@@ -14,4 +14,6 @@ pub enum ParakeetError {
     Terminated,
     #[error("invalid transcription response payload")]
     InvalidResponse,
+    #[error("{0}")]
+    Unavailable(String),
 }

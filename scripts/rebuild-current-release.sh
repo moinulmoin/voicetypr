@@ -22,12 +22,12 @@ export COPYFILE_DISABLE=1
 echo -e "${GREEN}🔨 Building for both architectures...${NC}"
 echo -e "${YELLOW}Building for Intel (x86_64)...${NC}"
 cd src-tauri
-cargo tauri build --target x86_64-apple-darwin --bundles app
+cargo tauri build --target x86_64-apple-darwin --bundles app --config tauri.macos.conf.json
 cd ..
 
 echo -e "${YELLOW}Building for Apple Silicon (aarch64)...${NC}"
 cd src-tauri
-cargo tauri build --target aarch64-apple-darwin --bundles app
+cargo tauri build --target aarch64-apple-darwin --bundles app --config tauri.macos.conf.json
 cd ..
 
 # Create output directory

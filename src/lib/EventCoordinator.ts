@@ -154,6 +154,7 @@ export class EventCoordinator {
       // Error events go to pill window (where recording UI is shown)
       "transcription-error": "pill",
       "recording-error": "pill",
+      "parakeet-unavailable": "main",
       
       // Debug events
       "test-event": "pill",

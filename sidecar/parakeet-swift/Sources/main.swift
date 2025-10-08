@@ -79,8 +79,15 @@ struct ParakeetSidecar {
             guard !trimmed.isEmpty else { continue }
 
             do {
-                let data = trimmed.data(using: .utf8)!
-                let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+                guard let data = trimmed.data(using: .utf8) else {
+                    sendError("invalid_encoding", message: "Failed to parse command payload", encoder: encoder)
+                    continue
+                }
+
+                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    sendError("invalid_payload", message: "Command payload must be a JSON object", encoder: encoder)
+                    continue
+                }
 
                 switch json["type"] as? String {
                 case "load_model", "download_model":
@@ -153,8 +160,9 @@ struct ParakeetSidecar {
             isModelDownloaded = true
 
             // Initialize ASR manager with downloaded models
-            asrManager = AsrManager(config: .default)
-            try await asrManager!.initialize(models: models)
+            let manager = AsrManager(config: .default)
+            try await manager.initialize(models: models)
+            asrManager = manager
 
             log("✅ ASR manager initialized, model ready for use!")
             isModelLoaded = true
@@ -216,9 +224,14 @@ struct ParakeetSidecar {
             return
         }
 
+        guard let manager = asrManager else {
+            sendError("model_not_loaded", message: "Parakeet engine is not initialized", encoder: encoder)
+            return
+        }
+
         do {
             // Transcribe the audio file (returns ASRResult)
-            let result = try await asrManager!.transcribe(fileURL)
+            let result = try await manager.transcribe(fileURL)
 
             // Send transcription response
             let response = TranscriptionResponse(
