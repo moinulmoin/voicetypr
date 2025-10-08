@@ -8,6 +8,10 @@ pub enum ParakeetCommand {
     LoadModel {
         model_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        model_version: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        force_download: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         local_path: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_dir: Option<String>,
@@ -45,7 +49,12 @@ pub enum ParakeetCommand {
         local_attention_context: Option<i32>,
     },
     Status {},
-    DeleteModel {},
+    DeleteModel {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_version: Option<String>,
+    },
     Shutdown {},
 }
 
@@ -80,6 +89,8 @@ pub enum ParakeetResponse {
     #[serde(rename_all = "camelCase")]
     Status {
         loaded_model: Option<String>,
+        #[serde(default)]
+        model_version: Option<String>,
         model_path: Option<String>,
         precision: Option<String>,
         attention: Option<String>,

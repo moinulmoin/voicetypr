@@ -8,11 +8,6 @@ func log(_ message: String) {
 }
 
 // JSON message structures for communication with Tauri
-struct TranscribeRequest: Codable {
-    let type: String
-    let audio_path: String
-}
-
 struct TranscriptionResponse: Codable {
     let type: String = "transcription"
     let text: String
@@ -34,12 +29,11 @@ struct Segment: Codable {
 
 struct StatusResponse: Codable {
     let type: String = "status"
-    let loadedModel: String? // camelCase to match Rust's expectation
+    let loadedModel: String?
+    let modelVersion: String?
     let modelPath: String? = nil
     let precision: String? = nil
     let attention: String? = nil
-    
-    // No CodingKeys needed - Swift's camelCase matches Rust's camelCase
 }
 
 struct ErrorResponse: Codable {
@@ -49,10 +43,34 @@ struct ErrorResponse: Codable {
     let details: [String: String]? = nil  // Optional details field to match Rust
 }
 
-// Global ASR manager
+enum SupportedModelVersion: String, CaseIterable {
+    case v2
+    case v3
+
+    var asrVersion: AsrModelVersion {
+        switch self {
+        case .v2: return .v2
+        case .v3: return .v3
+        }
+    }
+
+    var modelIdentifier: String {
+        switch self {
+        case .v2: return "parakeet-tdt-0.6b-v2"
+        case .v3: return "parakeet-tdt-0.6b-v3"
+        }
+    }
+
+    var repoFolderName: String {
+        "\(modelIdentifier)-coreml"
+    }
+}
+
+// Global ASR manager state
 var asrManager: AsrManager?
 var isModelLoaded = false
-var isModelDownloaded = false
+var loadedModelVersion: SupportedModelVersion?
+var downloadedVersions = Set<SupportedModelVersion>()
 
 @main
 struct ParakeetSidecar {
@@ -66,6 +84,7 @@ struct ParakeetSidecar {
         if CommandLine.arguments.count > 1 {
             // Direct file mode for testing
             let audioPath = CommandLine.arguments[1]
+            await loadModel(version: .v3, forceDownload: true, emitStatus: false, encoder: encoder)
             await transcribeFile(audioPath, language: nil, translateToEnglish: false, encoder: encoder)
         } else {
             // JSON communication mode for Tauri
@@ -91,20 +110,26 @@ struct ParakeetSidecar {
 
                 switch json["type"] as? String {
                 case "load_model", "download_model":
-                    // Handle both load_model and download_model commands
-                    // This allows the UI's Download button to trigger model download
-                    let modelId = json["model_id"] as? String
-                    await loadModel(modelId: modelId, encoder: encoder)
+                    let version = parseModelVersion(json["model_version"], fallbackModelId: json["model_id"] as? String)
+                    let forceDownload: Bool
+                    if let explicit = json["force_download"] as? Bool {
+                        forceDownload = explicit
+                    } else {
+                        forceDownload = (json["type"] as? String) == "download_model"
+                    }
+                    await loadModel(version: version, forceDownload: forceDownload, encoder: encoder)
 
                 case "unload_model":
                     unloadModel()
-                    sendResponse(StatusResponse(loadedModel: nil), encoder: encoder)
+                    sendResponse(StatusResponse(loadedModel: nil, modelVersion: nil), encoder: encoder)
 
                 case "delete_model":
-                    // Delete the actual model files from FluidAudio cache
-                    deleteModelFiles()
-                    unloadModel()  // Also unload from memory
-                    sendResponse(StatusResponse(loadedModel: nil), encoder: encoder)
+                    let version = parseModelVersion(json["model_version"], fallbackModelId: json["model_id"] as? String)
+                    deleteModelFiles(for: version)
+                    if loadedModelVersion == version {
+                        unloadModel()
+                    }
+                    sendResponse(StatusResponse(loadedModel: loadedModelVersion?.modelIdentifier, modelVersion: loadedModelVersion?.rawValue), encoder: encoder)
 
                 case "transcribe":
                     if let audioPath = json["audio_path"] as? String {
@@ -117,9 +142,13 @@ struct ParakeetSidecar {
                     }
 
                 case "status":
-                    sendResponse(StatusResponse(
-                        loadedModel: isModelLoaded ? "parakeet-tdt-0.6b-v3" : nil
-                    ), encoder: encoder)
+                    sendResponse(
+                        StatusResponse(
+                            loadedModel: loadedModelVersion?.modelIdentifier,
+                            modelVersion: loadedModelVersion?.rawValue
+                        ),
+                        encoder: encoder
+                    )
 
                 case "shutdown":
                     unloadModel()
@@ -134,39 +163,45 @@ struct ParakeetSidecar {
         }
     }
 
-    static func loadModel(modelId: String? = nil, encoder: JSONEncoder) async {
-        // Use provided model_id or default to parakeet-tdt-0.6b-v3
-        let actualModelId = modelId ?? "parakeet-tdt-0.6b-v3"
-
-        // If already loaded with same model, just return success
-        if isModelLoaded {
-            log("⚡ Model already loaded: \(actualModelId)")
-            sendResponse(StatusResponse(loadedModel: actualModelId), encoder: encoder)
+    static func loadModel(version: SupportedModelVersion = .v3, forceDownload: Bool = false, emitStatus: Bool = true, encoder: JSONEncoder) async {
+        if isModelLoaded, let loadedVersion = loadedModelVersion, loadedVersion == version {
+            log("⚡ Model already loaded: \(loadedVersion.modelIdentifier)")
+            if emitStatus {
+                sendResponse(StatusResponse(loadedModel: loadedVersion.modelIdentifier, modelVersion: loadedVersion.rawValue), encoder: encoder)
+            }
             return
         }
 
         do {
-            // Download models NOW when user clicks Download button
-            // This ensures user has control over when download happens
-            log("📥 Starting Parakeet model download via FluidAudio...")
-            log("📦 Model: \(actualModelId)")
-            log("🌐 This will download ~500MB from FluidAudio servers...")
-            log("⏳ Please wait, this may take 2-5 minutes depending on your connection...")
-            
-            let models = try await AsrModels.downloadAndLoad()
-            
-            log("✅ Model downloaded successfully!")
-            log("🔧 Initializing ASR manager...")
-            isModelDownloaded = true
+            let models: AsrModels
 
-            // Initialize ASR manager with downloaded models
+            if forceDownload {
+                log("📥 Force-downloading Parakeet \(version.rawValue.uppercased()) via FluidAudio...")
+                log("🌐 This will download ~500MB. Please wait...")
+                models = try await AsrModels.downloadAndLoad(version: version.asrVersion)
+                downloadedVersions.insert(version)
+            } else {
+                log("🔍 Attempting to load Parakeet \(version.rawValue.uppercased()) from cache...")
+                do {
+                    models = try await AsrModels.loadFromCache(version: version.asrVersion)
+                    downloadedVersions.insert(version)
+                    log("✅ Loaded Parakeet \(version.rawValue.uppercased()) from cache")
+                } catch {
+                    log("❌ Failed to load from cache: \(error)")
+                    sendError("model_not_downloaded", message: "Parakeet \(version.rawValue.uppercased()) is not downloaded. Please download it first.", encoder: encoder)
+                    return
+                }
+            }
+
             let manager = AsrManager(config: .default)
             try await manager.initialize(models: models)
             asrManager = manager
 
-            log("✅ ASR manager initialized, model ready for use!")
             isModelLoaded = true
-            sendResponse(StatusResponse(loadedModel: actualModelId), encoder: encoder)
+            loadedModelVersion = version
+            if emitStatus {
+                sendResponse(StatusResponse(loadedModel: version.modelIdentifier, modelVersion: version.rawValue), encoder: encoder)
+            }
         } catch {
             log("❌ Failed to load model: \(error)")
             sendError("model_load_error", message: "Failed to load model: \(error)", encoder: encoder)
@@ -177,24 +212,28 @@ struct ParakeetSidecar {
         asrManager?.cleanup()
         asrManager = nil
         isModelLoaded = false
+        loadedModelVersion = nil
     }
 
-    static func deleteModelFiles() {
-        // FluidAudio stores models in ~/Library/Application Support/
-        // We need to delete the actual model files
+    static func deleteModelFiles(for version: SupportedModelVersion) {
         let fileManager = FileManager.default
 
-        // Possible locations where FluidAudio might store models
-        let appSupportPaths = [
-            fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/FluidAudio"),
-            fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/parakeet-tdt-0.6b-v3-coreml"),
-            fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Caches/FluidAudio")
+        let home = fileManager.homeDirectoryForCurrentUser
+        let repoFolder = version.repoFolderName
+
+        let targets: [URL] = [
+            home
+                .appendingPathComponent("Library/Application Support/FluidAudio/Models", isDirectory: true)
+                .appendingPathComponent(repoFolder, isDirectory: true),
+            home
+                .appendingPathComponent("Library/Application Support", isDirectory: true)
+                .appendingPathComponent(repoFolder, isDirectory: true),
+            home
+                .appendingPathComponent("Library/Caches/FluidAudio", isDirectory: true)
+                .appendingPathComponent(repoFolder, isDirectory: true)
         ]
 
-        for path in appSupportPaths {
+        for path in targets {
             if fileManager.fileExists(atPath: path.path) {
                 do {
                     try fileManager.removeItem(at: path)
@@ -205,8 +244,7 @@ struct ParakeetSidecar {
             }
         }
 
-        // Mark as not downloaded after deletion
-        isModelDownloaded = false
+        downloadedVersions.remove(version)
     }
 
     static func transcribeFile(_ audioPath: String, language: String? = nil, translateToEnglish: Bool = false, encoder: JSONEncoder) async {
@@ -236,8 +274,8 @@ struct ParakeetSidecar {
             // Send transcription response
             let response = TranscriptionResponse(
                 text: result.text,
-                segments: [],  // FluidAudio doesn't provide segments
-                language: language,  // Pass through the language if provided
+                segments: [],
+                language: language,
                 duration: Float(result.duration)
             )
             sendResponse(response, encoder: encoder)
@@ -262,6 +300,25 @@ struct ParakeetSidecar {
 
     static func sendError(_ code: String, message: String, encoder: JSONEncoder) {
         sendResponse(ErrorResponse(code: code, message: message), encoder: encoder)
+    }
+
+    static func parseModelVersion(_ value: Any?) -> SupportedModelVersion {
+        if let str = (value as? String)?.lowercased(), str == "v2" {
+            return .v2
+        }
+        return .v3
+    }
+
+    static func parseModelVersion(_ value: Any?, fallbackModelId: String?) -> SupportedModelVersion {
+        if let value = value {
+            return parseModelVersion(value)
+        }
+
+        if let modelId = fallbackModelId?.lowercased(), modelId.contains("-v2") {
+            return .v2
+        }
+
+        return .v3
     }
 }
 

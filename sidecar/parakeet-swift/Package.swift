@@ -9,7 +9,7 @@ let package = Package(
         .macOS(.v13)  // FluidAudio requires macOS 13.0+
     ],
     dependencies: [
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.5.2")
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.6.1")
     ],
     targets: [
         .executableTarget(

@@ -132,6 +132,7 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
             let fluid_audio_paths = vec![
                 home_dir.join("Library/Application Support/FluidAudio"),
                 home_dir.join("Library/Application Support/parakeet-tdt-0.6b-v3-coreml"),
+                home_dir.join("Library/Application Support/parakeet-tdt-0.6b-v2-coreml"),
                 home_dir.join("Library/Caches/FluidAudio"),
             ];
 

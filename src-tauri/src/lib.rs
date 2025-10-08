@@ -18,11 +18,11 @@ mod ai;
 mod audio;
 mod commands;
 mod license;
+mod parakeet;
 mod secure_store;
 mod state;
 mod state_machine;
 mod utils;
-mod parakeet;
 mod whisper;
 mod window_manager;
 
@@ -142,7 +142,7 @@ async fn build_tray_menu<R: tauri::Runtime>(
 
     // Get available audio devices
     let available_devices = audio::recorder::AudioRecorder::get_devices();
-    
+
     // Create microphone submenu
     let microphone_submenu = if !available_devices.is_empty() {
         let mut mic_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
@@ -206,7 +206,7 @@ async fn build_tray_menu<R: tauri::Runtime>(
     if let Some(model_submenu) = model_submenu {
         menu_builder = menu_builder.item(&model_submenu);
     }
-    
+
     if let Some(microphone_submenu) = microphone_submenu {
         menu_builder = menu_builder.item(&microphone_submenu);
     }
@@ -241,8 +241,8 @@ impl Default for RecordingState {
 // Recording mode enum to distinguish between toggle and push-to-talk
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordingMode {
-    Toggle,      // Click to start/stop recording
-    PushToTalk,  // Hold to record, release to stop
+    Toggle,     // Click to start/stop recording
+    PushToTalk, // Hold to record, release to stop
 }
 
 // Application state - managed by Tauri (runtime state only)
@@ -269,7 +269,8 @@ pub struct AppState {
     pub window_manager: Arc<Mutex<Option<WindowManager>>>,
 
     // Performance optimization: Cache frequently accessed settings
-    pub recording_config_cache: Arc<tokio::sync::RwLock<Option<crate::commands::audio::RecordingConfig>>>,
+    pub recording_config_cache:
+        Arc<tokio::sync::RwLock<Option<crate::commands::audio::RecordingConfig>>>,
 
     // License cache with 6-hour expiration
     pub license_cache: Arc<tokio::sync::RwLock<Option<crate::commands::license::CachedLicense>>>,
@@ -508,7 +509,7 @@ fn setup_logging() -> tauri_plugin_log::Builder {
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app_start = Instant::now();
     let app_version = env!("CARGO_PKG_VERSION");
-    
+
     // Log application startup
     log_lifecycle_event("APPLICATION_START", Some(app_version), None);
 
@@ -527,12 +528,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize encryption key for secure storage
     log_start("ENCRYPTION_INIT");
-    log_with_context(log::Level::Debug, "Initializing encryption", &[
-        ("component", "secure_store")
-    ]);
-    
+    log_with_context(
+        log::Level::Debug,
+        "Initializing encryption",
+        &[("component", "secure_store")],
+    );
+
     if let Err(e) = secure_store::initialize_encryption_key() {
-        log_failed("ENCRYPTION_INIT", &format!("Failed to initialize encryption: {}", e));
+        log_failed(
+            "ENCRYPTION_INIT",
+            &format!("Failed to initialize encryption: {}", e),
+        );
         eprintln!("Failed to initialize encryption: {}", e);
     } else {
         log::info!("✅ Encryption initialized successfully");
@@ -1516,10 +1522,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("VoiceTypr failed to start: {}", e);
             Box::new(e)
         })?;
-        
+
     // Log successful application startup
     log_lifecycle_event("APPLICATION_READY", Some(app_version), None);
-    
+
     Ok(())
 }
 
@@ -1527,18 +1533,26 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 async fn perform_startup_checks(app: tauri::AppHandle) {
     let checks_start = Instant::now();
     log_start("STARTUP_CHECKS");
-    log_with_context(log::Level::Debug, "Running startup checks", &[
-        ("stage", "comprehensive_validation")
-    ]);
+    log_with_context(
+        log::Level::Debug,
+        "Running startup checks",
+        &[("stage", "comprehensive_validation")],
+    );
 
     // Check if any models are downloaded
     if let Some(whisper_manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
     {
         let has_models = whisper_manager.read().await.has_downloaded_models();
-        
-        log_model_operation("AVAILABILITY_CHECK", "all", 
-            if has_models { "AVAILABLE" } else { "NONE_FOUND" },
-            None
+
+        log_model_operation(
+            "AVAILABILITY_CHECK",
+            "all",
+            if has_models {
+                "AVAILABLE"
+            } else {
+                "NONE_FOUND"
+            },
+            None,
         );
 
         if !has_models {
@@ -1607,6 +1621,8 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         }
     }
 
+    let mut autoload_parakeet_model: Option<String> = None;
+
     // Pre-check recording settings
     if let Ok(store) = app.store("settings") {
         // Validate language setting
@@ -1645,12 +1661,23 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
                     // Check ParakeetManager for Parakeet models
                     if let Some(parakeet_manager) = app.try_state::<parakeet::ParakeetManager>() {
                         let models = parakeet_manager.list_models();
-                        _model_available = models.iter().any(|m| m.name == current_model && m.downloaded);
+                        if let Some(status) = models.iter().find(|m| m.name == current_model) {
+                            _model_available = status.downloaded;
+                            if status.downloaded {
+                                autoload_parakeet_model = Some(current_model.clone());
+                            }
+                        }
                         if !_model_available {
-                            log::warn!("Current Parakeet model '{}' no longer available", current_model);
+                            log::warn!(
+                                "Current Parakeet model '{}' no longer available",
+                                current_model
+                            );
                             // Clear the selection
                             store.set("current_model", serde_json::Value::String(String::new()));
-                            store.set("current_model_engine", serde_json::Value::String("whisper".to_string()));
+                            store.set(
+                                "current_model_engine",
+                                serde_json::Value::String("whisper".to_string()),
+                            );
                             let _ = store.save();
                         }
                     }
@@ -1662,7 +1689,10 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
                         let downloaded = whisper_manager.read().await.get_downloaded_model_names();
                         _model_available = downloaded.contains(&current_model);
                         if !_model_available {
-                            log::warn!("Current Whisper model '{}' no longer available", current_model);
+                            log::warn!(
+                                "Current Whisper model '{}' no longer available",
+                                current_model
+                            );
                             // Clear the selection
                             store.set("current_model", serde_json::Value::String(String::new()));
                             let _ = store.save();
@@ -1673,10 +1703,37 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         }
     }
 
+    if let Some(model_name) = autoload_parakeet_model {
+        if let Some(parakeet_manager) = app.try_state::<parakeet::ParakeetManager>() {
+            match parakeet_manager.load_model(&app, &model_name).await {
+                Ok(_) => {
+                    log::info!("✅ Parakeet model '{}' autoloaded from cache", model_name);
+                }
+                Err(err) => {
+                    log::warn!(
+                        "Failed to autoload Parakeet model '{}': {}",
+                        model_name,
+                        err
+                    );
+                    let message = format!(
+                        "Unable to load Parakeet model '{}'. Please re-download it.",
+                        model_name
+                    );
+                    let _ = app.emit("parakeet-unavailable", message.clone());
+                }
+            }
+        }
+    }
+
     // Log startup checks completion
     log_complete("STARTUP_CHECKS", checks_start.elapsed().as_millis() as u64);
-    log_with_context(log::Level::Debug, "Startup checks complete", &[
-        ("status", "all_checks_completed")
-    ]);
-    log::info!("✅ Startup checks COMPLETED in {}ms", checks_start.elapsed().as_millis());
+    log_with_context(
+        log::Level::Debug,
+        "Startup checks complete",
+        &[("status", "all_checks_completed")],
+    );
+    log::info!(
+        "✅ Startup checks COMPLETED in {}ms",
+        checks_start.elapsed().as_millis()
+    );
 }

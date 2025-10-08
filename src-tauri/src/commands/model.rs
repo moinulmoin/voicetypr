@@ -1,10 +1,10 @@
 use crate::commands::license::check_license_status_internal;
 use crate::emit_to_all;
-#[cfg(debug_assertions)]
-use crate::utils::system_monitor;
 use crate::license::LicenseState;
 use crate::parakeet::{ParakeetManager, ParakeetModelStatus};
 use crate::utils::onboarding_logger;
+#[cfg(debug_assertions)]
+use crate::utils::system_monitor;
 use crate::whisper::manager::{ModelInfo, WhisperManager};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,20 +44,21 @@ pub async fn download_model(
 ) -> Result<(), String> {
     let download_start = Instant::now();
 
-    let download_target = identify_download_target(&model_name, &whisper_state, &parakeet_manager).await?;
+    let download_target =
+        identify_download_target(&model_name, &whisper_state, &parakeet_manager).await?;
 
     log::info!("Starting download for model: {}", model_name);
-    
+
     // Monitor system resources at download start
     #[cfg(debug_assertions)]
     system_monitor::log_resources_before_operation("MODEL_DOWNLOAD");
-    
+
     // Log to onboarding if in onboarding context
     let model_size_mb = download_target.size_bytes / (1024 * 1024); // bytes → MB
     onboarding_logger::with_onboarding_logger(|logger| {
         logger.log_model_download_start(&model_name, model_size_mb);
     });
-    
+
     let app_handle = app.clone();
 
     // Create cancellation flag for this download
@@ -66,7 +67,7 @@ pub async fn download_model(
         match active_downloads.lock() {
             Ok(mut downloads) => {
                 downloads.insert(model_name.clone(), cancel_flag.clone());
-            },
+            }
             Err(e) => {
                 log::error!("Failed to lock active downloads for inserting: {}", e);
                 return Err("Failed to initialize download tracking".to_string());
@@ -90,7 +91,7 @@ pub async fn download_model(
                 &model_name_clone,
                 progress
             );
-            
+
             // Log to onboarding if active
             onboarding_logger::with_onboarding_logger(|logger| {
                 logger.log_model_download_progress(&model_name_clone, progress as u8);
@@ -202,7 +203,7 @@ pub async fn download_model(
         match active_downloads.lock() {
             Ok(mut downloads) => {
                 downloads.remove(&model_name);
-            },
+            }
             Err(e) => {
                 log::warn!("Failed to lock active downloads for cleanup: {}", e);
                 // Continue despite cleanup failure
@@ -229,24 +230,57 @@ pub async fn download_model(
         }
         Ok(_) => {
             log::info!("Download completed successfully for model: {}", model_name);
-            
+
             // Monitor system resources after download completion
             #[cfg(debug_assertions)]
-            system_monitor::log_resources_after_operation("MODEL_DOWNLOAD", download_start.elapsed().as_millis() as u64);
-            
+            system_monitor::log_resources_after_operation(
+                "MODEL_DOWNLOAD",
+                download_start.elapsed().as_millis() as u64,
+            );
+
             // Log to onboarding if active
             onboarding_logger::with_onboarding_logger(|logger| {
                 // Calculate duration if possible
                 logger.log_model_download_complete(&model_name, 0); // TODO: track actual duration
             });
 
-            // Refresh the manager's status to reflect the new download
-            if download_target.engine == ModelEngine::Whisper {
-                let mut manager = whisper_state.write().await;
-                manager.refresh_downloaded_status();
+            // Refresh/verify downloaded status
+            match download_target.engine {
+                ModelEngine::Whisper => {
+                    let mut manager = whisper_state.write().await;
+                    manager.refresh_downloaded_status();
+                }
+                ModelEngine::Parakeet => {
+                    // Verify Parakeet reports the requested model as downloaded
+                    let verified = parakeet_manager
+                        .list_models()
+                        .into_iter()
+                        .any(|m| m.name == model_name && m.downloaded);
+
+                    if !verified {
+                        let msg = format!(
+                            "Parakeet sidecar did not confirm '{}' as downloaded. Please try again.",
+                            model_name
+                        );
+                        log::warn!("{}", msg);
+                        // Emit download-error event and return Err
+                        if let Err(emit_err) = emit_to_all(
+                            &app,
+                            "download-error",
+                            serde_json::json!({
+                                "model": model_name,
+                                "engine": download_target.engine.as_str(),
+                                "error": msg
+                            }),
+                        ) {
+                            log::warn!("Failed to emit download-error event: {}", emit_err);
+                        }
+                        return Err("verification_failed".to_string());
+                    }
+                }
             }
 
-            // Emit the event - the download_model function already verified the file
+            // Emit success event after verification
             log::info!("Emitting model-downloaded event for {}", model_name);
             if let Err(e) = emit_to_all(
                 &app,
@@ -339,11 +373,9 @@ pub async fn get_model_status(
     models.extend(parakeet_models.into_iter().map(convert_parakeet_model));
 
     // Sort by engine first (whisper first), then by accuracy descending
-    models.sort_by(|a, b| {
-        match a.engine.cmp(&b.engine) {
-            std::cmp::Ordering::Equal => b.accuracy_score.cmp(&a.accuracy_score),
-            ordering => ordering,
-        }
+    models.sort_by(|a, b| match a.engine.cmp(&b.engine) {
+        std::cmp::Ordering::Equal => b.accuracy_score.cmp(&a.accuracy_score),
+        ordering => ordering,
     });
 
     log::info!("[GET_MODEL_STATUS] Returning {} models", models.len());
@@ -407,7 +439,10 @@ async fn identify_download_target(
                     size_bytes: info.size,
                 })
             } else {
-                Err(format!("Model '{}' not found in Whisper registry", model_name))
+                Err(format!(
+                    "Model '{}' not found in Whisper registry",
+                    model_name
+                ))
             }
         }
         ModelEngine::Parakeet => {
@@ -417,7 +452,10 @@ async fn identify_download_target(
                     size_bytes: definition.estimated_size,
                 })
             } else {
-                Err(format!("Model '{}' not found in Parakeet registry", model_name))
+                Err(format!(
+                    "Model '{}' not found in Parakeet registry",
+                    model_name
+                ))
             }
         }
     }
@@ -490,14 +528,14 @@ pub async fn cancel_download(
                     log::warn!("No active download found for model: {}", model_name);
                     return Ok(()); // Not an error if download doesn't exist
                 }
-            },
+            }
             Err(e) => {
                 log::error!("Failed to lock active downloads for cancellation: {}", e);
                 return Err("Failed to access download tracking".to_string());
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -508,55 +546,64 @@ pub async fn verify_model(
     state: State<'_, RwLock<WhisperManager>>,
 ) -> Result<(), String> {
     log::info!("Verifying model: {}", model_name);
-    
+
     // Get model info and check if it exists
     let (model_info, model_path) = {
         let manager = state.read().await;
-        let info = manager.get_models_status()
+        let info = manager
+            .get_models_status()
             .get(&model_name)
             .ok_or(format!("Model '{}' not found", model_name))?
             .clone();
-        let path = manager.get_model_path(&model_name)
+        let path = manager
+            .get_model_path(&model_name)
             .ok_or(format!("Model '{}' path not found", model_name))?;
         (info, path)
     };
-    
+
     // Check if file exists
     if !model_path.exists() {
         log::warn!("Model file does not exist: {:?}", model_path);
         return Err(format!("Model file not found: {}", model_name));
     }
-    
+
     // Check file size
     let metadata = tokio::fs::metadata(&model_path)
         .await
         .map_err(|e| format!("Cannot read model file metadata: {}", e))?;
-    
+
     let file_size = metadata.len();
     let expected_size = model_info.size;
-    
+
     // Allow 5% tolerance for size differences
     let size_tolerance = (expected_size as f64 * 0.05) as u64;
     let min_size = expected_size.saturating_sub(size_tolerance);
-    
+
     if file_size < min_size {
-        log::warn!("Model '{}' file size {} is less than expected minimum {}", 
-                   model_name, file_size, min_size);
-        
+        log::warn!(
+            "Model '{}' file size {} is less than expected minimum {}",
+            model_name,
+            file_size,
+            min_size
+        );
+
         // Delete the corrupted file
         if let Err(e) = tokio::fs::remove_file(&model_path).await {
             log::error!("Failed to delete corrupted model file: {}", e);
         }
-        
+
         // Update manager status
         {
             let mut manager = state.write().await;
             manager.refresh_downloaded_status();
         }
-        
-        return Err(format!("Model '{}' is corrupted and has been deleted. Please re-download.", model_name));
+
+        return Err(format!(
+            "Model '{}' is corrupted and has been deleted. Please re-download.",
+            model_name
+        ));
     }
-    
+
     // File looks good - mark as downloaded
     {
         let mut manager = state.write().await;
@@ -564,12 +611,12 @@ pub async fn verify_model(
             info.downloaded = true;
         }
     }
-    
+
     log::info!("Model '{}' verified successfully", model_name);
-    
+
     // Emit verification success event
     let _ = app.emit("model-verified", model_name.clone());
-    
+
     Ok(())
 }
 

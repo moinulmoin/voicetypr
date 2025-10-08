@@ -43,6 +43,14 @@ impl ParakeetManager {
         }
     }
 
+    fn model_version_for(definition: &ParakeetModelDefinition) -> &'static str {
+        if definition.id.ends_with("-v2") {
+            "v2"
+        } else {
+            "v3"
+        }
+    }
+
     /// Returns available Parakeet models.
     ///
     /// **Platform Support**: This returns an empty list on non-macOS platforms.
@@ -79,7 +87,10 @@ impl ParakeetManager {
         }
     }
 
-    pub fn get_model_definition(&self, model_name: &str) -> Option<&'static ParakeetModelDefinition> {
+    pub fn get_model_definition(
+        &self,
+        model_name: &str,
+    ) -> Option<&'static ParakeetModelDefinition> {
         AVAILABLE_MODELS.iter().find(|m| m.id == model_name)
     }
 
@@ -96,7 +107,7 @@ impl ParakeetManager {
             let fluid_audio_models_path = home
                 .join("Library/Application Support/FluidAudio/Models")
                 .join(format!("{}-coreml", definition.id));
-            
+
             if fluid_audio_models_path.exists() {
                 // Check if directory contains model files
                 if let Ok(entries) = std::fs::read_dir(&fluid_audio_models_path) {
@@ -110,7 +121,12 @@ impl ParakeetManager {
 
         // Fallback: check if old MLX model directory exists (for backward compatibility)
         let model_dir = self.model_dir(definition.id);
-        if model_dir.exists() && model_dir.read_dir().map(|mut d| d.next().is_some()).unwrap_or(false) {
+        if model_dir.exists()
+            && model_dir
+                .read_dir()
+                .map(|mut d| d.next().is_some())
+                .unwrap_or(false)
+        {
             return true;
         }
 
@@ -130,8 +146,12 @@ impl ParakeetManager {
 
         // For Swift sidecar, delegate download to FluidAudio
         // Send load_model command which triggers download in Swift
+        let version = Self::model_version_for(definition);
+
         let command = ParakeetCommand::LoadModel {
             model_id: definition.id.to_string(),
+            model_version: Some(version.to_string()),
+            force_download: Some(true),
             local_path: None,
             cache_dir: None,
             precision: "bf16".to_string(),
@@ -144,12 +164,22 @@ impl ParakeetManager {
 
         // Send to sidecar and let it handle the download
         match self.send_command(app, &command).await {
-            Ok(ParakeetResponse::Ok { .. }) | Ok(ParakeetResponse::Status { loaded_model: Some(_), .. }) => {
-                // Swift sidecar returns StatusResponse with loaded_model when download completes
-                // Mark as downloaded since Swift handles it
+            Ok(ParakeetResponse::Status {
+                loaded_model: Some(id),
+                ..
+            }) if id == definition.id => {
+                // Download/load completed for the requested version
                 progress_callback(definition.estimated_size, definition.estimated_size);
                 Ok(())
             }
+            Ok(ParakeetResponse::Status {
+                loaded_model: Some(other_id),
+                ..
+            }) => Err(format!(
+                "Sidecar loaded '{}' but '{}' was requested",
+                other_id, definition.id
+            )),
+            Ok(ParakeetResponse::Ok { .. }) => Err("Unexpected OK without status payload".to_string()),
             Ok(ParakeetResponse::Error { code, message, .. }) => {
                 Err(format!("Failed to download model: {}: {}", code, message))
             }
@@ -163,8 +193,15 @@ impl ParakeetManager {
             return Err(format!("Unknown Parakeet model: {model_name}"));
         };
 
+        let version = Self::model_version_for(definition);
+
         // Send delete_model command to Swift sidecar to remove FluidAudio cached files
-        match self.send_command(app, &ParakeetCommand::DeleteModel {}).await {
+        let command = ParakeetCommand::DeleteModel {
+            model_id: Some(definition.id.to_string()),
+            model_version: Some(version.to_string()),
+        };
+
+        match self.send_command(app, &command).await {
             Ok(ParakeetResponse::Ok { .. }) | Ok(ParakeetResponse::Status { .. }) => {
                 // Successfully deleted
             }
@@ -182,29 +219,32 @@ impl ParakeetManager {
         // Remove our tracking directory if it exists (from old Python implementation)
         let model_dir = self.model_dir(definition.id);
         if model_dir.exists() {
-            std::fs::remove_dir_all(&model_dir)
-                .map_err(|e| format!("Failed to delete old model directory {}: {}", model_dir.display(), e))?;
+            std::fs::remove_dir_all(&model_dir).map_err(|e| {
+                format!(
+                    "Failed to delete old model directory {}: {}",
+                    model_dir.display(),
+                    e
+                )
+            })?;
         }
 
         Ok(())
     }
 
-    pub async fn load_model(
-        &self,
-        app: &AppHandle,
-        model_name: &str,
-    ) -> Result<(), ParakeetError> {
+    pub async fn load_model(&self, app: &AppHandle, model_name: &str) -> Result<(), ParakeetError> {
         let Some(definition) = self.get_model_definition(model_name) else {
             return Err(ParakeetError::SpawnError(format!(
                 "Unknown Parakeet model: {model_name}"
             )));
         };
 
-        let model_dir = self.model_dir(definition.id);
+        let version = Self::model_version_for(definition);
         let command = ParakeetCommand::LoadModel {
-            model_id: definition.repo_id.to_string(),
-            local_path: Some(model_dir.to_string_lossy().to_string()),
-            cache_dir: Some(self.root_dir.to_string_lossy().to_string()),
+            model_id: definition.id.to_string(),
+            model_version: Some(version.to_string()),
+            force_download: Some(false),
+            local_path: None,
+            cache_dir: None,
             precision: "bf16".into(),
             attention: "local".into(),
             local_attention_context: 256,
@@ -246,13 +286,6 @@ impl ParakeetManager {
         };
 
         self.send_command(app, &command).await
-    }
-
-    fn file_url(&self, definition: &ParakeetModelDefinition, filename: &str) -> String {
-        format!(
-            "https://huggingface.co/{}/resolve/main/{}",
-            definition.repo_id, filename
-        )
     }
 
     /// Check if the Parakeet sidecar is healthy and can respond to commands
