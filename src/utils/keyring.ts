@@ -75,7 +75,7 @@ export const removeApiKey = async (provider: string): Promise<void> => {
 
 // Load all API keys to backend cache (for app startup)
 export const loadApiKeysToCache = async (): Promise<void> => {
-  const providers = ['groq', 'gemini']; // Add more providers as needed
+  const providers = ['groq', 'gemini', 'openai'];
   
   for (const provider of providers) {
     try {
@@ -88,4 +88,40 @@ export const loadApiKeysToCache = async (): Promise<void> => {
       console.error(`Failed to load API key for ${provider}:`, error);
     }
   }
+};
+
+// OpenAI-compatible configuration helpers
+export const setOpenAIConfig = async (baseUrl: string, noAuth: boolean): Promise<void> => {
+  await invoke('set_openai_config', { base_url: baseUrl, no_auth: noAuth });
+};
+
+export const saveOpenAIKeyWithConfig = async (
+  apiKey: string,
+  baseUrl: string,
+  model: string,
+  noAuth: boolean
+): Promise<void> => {
+  const provider = 'openai';
+  const key = `ai_api_key_${provider}`;
+  if (apiKey) {
+    await keyringSet(key, apiKey);
+  }
+
+  await invoke('validate_and_cache_api_key', {
+    provider,
+    // Send both camelCase and snake_case keys for compatibility
+    apiKey: apiKey || undefined,
+    api_key: apiKey || undefined,
+    base_url: baseUrl,
+    baseUrl: baseUrl,
+    model,
+    no_auth: noAuth || !apiKey?.trim(),
+    noAuth: noAuth || !apiKey?.trim(),
+  });
+
+  // Persist provider + model selection
+  await invoke('update_ai_settings', { enabled: false, provider, model });
+
+  console.log(`[Keyring] OpenAI-compatible config saved (noAuth=${noAuth})`);
+  await emit('api-key-saved', { provider });
 };

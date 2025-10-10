@@ -1098,13 +1098,15 @@ pub async fn stop_recording(
                                         "Enhancement failed: Using original text"
                                     };
 
-                                    // Emit enhancing failed event with error message to pill
-                                    let _ = emit_to_window(
+                                    // Show short error on pill for visibility, then continue
+                                    log::warn!("Enhancement failed; showing pill error for 2s before hide");
+                                    crate::show_pill_error_short(
                                         &app_for_process,
-                                        "pill",
                                         "enhancing-failed",
                                         user_message,
-                                    );
+                                        2000,
+                                    )
+                                    .await;
 
                                     // Also notify main window for settings update if needed
                                     if error_message.contains("400") || error_message.contains("401") || error_message.contains("Bad Request") || error_message.contains("Unauthorized") {

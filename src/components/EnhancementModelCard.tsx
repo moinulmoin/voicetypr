@@ -29,7 +29,8 @@ export function EnhancementModelCard({
 }: EnhancementModelCardProps) {
   const providers: Record<string, { name: string; color: string }> = {
     groq: { name: 'Groq', color: 'text-orange-600' },
-    gemini: { name: 'Gemini', color: 'text-blue-600' }
+    gemini: { name: 'Gemini', color: 'text-blue-600' },
+    openai: { name: 'OpenAI', color: 'text-green-600' }
   };
 
   const provider = providers[model.provider] || { name: model.provider, color: 'text-gray-600' };
@@ -82,7 +83,7 @@ export function EnhancementModelCard({
             size="sm"
           >
             <Key className="w-4 h-4 mr-1" />
-            Add Key
+            {model.provider === 'openai' ? 'Configure' : 'Add Key'}
           </Button>
         )}
       </div>

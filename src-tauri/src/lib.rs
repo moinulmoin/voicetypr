@@ -33,7 +33,7 @@ use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
         get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, update_ai_settings,
-        update_enhancement_options, validate_and_cache_api_key,
+        update_enhancement_options, validate_and_cache_api_key, set_openai_config, get_openai_config, test_openai_endpoint,
     },
     audio::*,
     clipboard::{copy_image_to_clipboard, save_image_to_file},
@@ -464,6 +464,25 @@ pub fn emit_to_all(
 ) -> Result<(), String> {
     app.emit(event, payload)
         .map_err(|e| format!("Failed to emit to all windows: {}", e))
+}
+
+// Show a short error message on the pill window for a brief duration
+pub async fn show_pill_error_short(
+    app: &tauri::AppHandle,
+    event: &str,
+    payload: &str,
+    millis: u64,
+) {
+    let app_state = app.state::<AppState>();
+    if let Some(window_manager) = app_state.get_window_manager() {
+        // Best-effort: show pill, emit event, keep visible briefly
+        let _ = window_manager.show_pill_window().await;
+        let _ = emit_to_window(app, "pill", event, payload);
+        tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
+    } else {
+        log::error!("WindowManager not initialized; unable to show pill error");
+        let _ = emit_to_window(app, "pill", event, payload);
+    }
 }
 
 // Setup logging with daily rotation
@@ -1463,6 +1482,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_ai_settings_for_provider,
             cache_ai_api_key,
             validate_and_cache_api_key,
+            set_openai_config,
+            get_openai_config,
+            test_openai_endpoint,
             clear_ai_api_key_cache,
             update_ai_settings,
             enhance_transcription,
