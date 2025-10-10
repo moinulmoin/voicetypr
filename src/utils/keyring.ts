@@ -41,8 +41,14 @@ export const saveApiKey = async (provider: string, apiKey: string): Promise<void
   const key = `ai_api_key_${provider}`;
   await keyringSet(key, apiKey);
   
-  // Validate and cache in backend for fast access during transcription
-  await invoke('validate_and_cache_api_key', { provider, apiKey });
+  // Cache or validate depending on provider
+  if (provider === 'openai') {
+    // OpenAI-compatible requires validation (may include no-auth path via separate modal)
+    await invoke('validate_and_cache_api_key', { provider, apiKey });
+  } else {
+    // For Groq/Gemini, just cache the key; validation happens during usage
+    await invoke('cache_ai_api_key', { provider, apiKey });
+  }
   
   console.log(`[Keyring] API key saved and validated for ${provider}`);
   

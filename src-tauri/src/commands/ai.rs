@@ -584,6 +584,25 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
         opts.insert("base_url".into(), serde_json::Value::String(base_url));
         opts.insert("no_auth".into(), serde_json::Value::Bool(no_auth));
         (api_key, opts)
+    } else if provider == "groq" || provider == "gemini" {
+        // Require API key from in-memory cache
+        let cache = API_KEY_CACHE
+            .lock()
+            .map_err(|_| "Failed to access cache".to_string())?;
+        let key_name = format!("ai_api_key_{}", provider);
+        let api_key = cache
+            .get(&key_name)
+            .cloned()
+            .ok_or_else(|| {
+                log::error!(
+                    "API key not found in cache for provider: {}. Cache keys: {:?}",
+                    provider,
+                    cache.keys().collect::<Vec<_>>()
+                );
+                "API key not found in cache".to_string()
+            })?;
+
+        (api_key, std::collections::HashMap::new())
     } else {
         return Err("Unsupported provider".to_string());
     };
