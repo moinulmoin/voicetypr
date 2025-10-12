@@ -7,3 +7,5 @@ pub mod normalizer;
 
 #[cfg(test)]
 mod converter_tests;
+#[cfg(test)]
+mod normalizer_tests;
