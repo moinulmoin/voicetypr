@@ -6,11 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-// Accept common OpenAI chat models. Keep minimal allowlist but include the requested one.
-const SUPPORTED_MODELS: &[&str] = &["gpt-5-nano", "gpt-5", "gpt-4.1-2025-04-14"];
-
 pub struct OpenAIProvider {
-    #[allow(dead_code)]
     api_key: String,
     model: String,
     client: Client,
@@ -24,11 +20,7 @@ impl OpenAIProvider {
         model: String,
         mut options: HashMap<String, serde_json::Value>,
     ) -> Result<Self, AIError> {
-        // Validate model (allow if in list; otherwise accept for forward compatibility)
-        if !SUPPORTED_MODELS.contains(&model.as_str()) {
-            // Don’t hard fail; just log a warning and continue
-            log::warn!("OpenAI model not in local allowlist: {}", model);
-        }
+        // Do not restrict model IDs; accept any OpenAI-compatible model string
 
         // Determine if auth is required
         let no_auth = options

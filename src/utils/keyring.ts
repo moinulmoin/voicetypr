@@ -115,14 +115,11 @@ export const saveOpenAIKeyWithConfig = async (
 
   await invoke('validate_and_cache_api_key', {
     provider,
-    // Send both camelCase and snake_case keys for compatibility
-    apiKey: apiKey || undefined,
+    // Standardize to snake_case for Tauri commands
     api_key: apiKey || undefined,
     base_url: baseUrl,
-    baseUrl: baseUrl,
     model,
     no_auth: noAuth || !apiKey?.trim(),
-    noAuth: noAuth || !apiKey?.trim(),
   });
 
   // Persist provider + model selection
