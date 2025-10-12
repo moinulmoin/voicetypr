@@ -12,6 +12,24 @@ use tauri_plugin_store::StoreExt;
 static API_KEY_CACHE: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+// Helper: determine if we should consider that the app "has an API key" for a provider
+// For OpenAI-compatible providers, a configured no_auth=true also counts as "has key"
+fn check_has_api_key<R: tauri::Runtime>(
+    provider: &str,
+    store: &tauri_plugin_store::Store<R>,
+    cache: &HashMap<String, String>,
+) -> bool {
+    if provider == "openai" {
+        let no_auth = store
+            .get("ai_openai_no_auth")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        no_auth || cache.contains_key(&format!("ai_api_key_{}", provider))
+    } else {
+        cache.contains_key(&format!("ai_api_key_{}", provider))
+    }
+}
+
 // Normalize base URL to a Chat Completions endpoint. Accepts base with or without /v1 or /openai/v1.
 fn normalize_chat_completions_url(base: &str) -> String {
     let b = base.trim_end_matches('/');
@@ -82,24 +100,11 @@ pub async fn get_ai_settings(app: tauri::AppHandle) -> Result<AISettings, String
         .unwrap_or_else(|| "".to_string()); // Empty by default
 
     // For OpenAI-compatible providers, treat no_auth as having a usable config
-    let has_api_key = if provider == "openai" {
-        let no_auth = store
-            .get("ai_openai_no_auth")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if no_auth {
-            true
-        } else {
-            let cache = API_KEY_CACHE
-                .lock()
-                .map_err(|_| "Failed to access cache".to_string())?;
-            cache.contains_key(&format!("ai_api_key_{}", provider))
-        }
-    } else {
+    let has_api_key = {
         let cache = API_KEY_CACHE
             .lock()
             .map_err(|_| "Failed to access cache".to_string())?;
-        cache.contains_key(&format!("ai_api_key_{}", provider))
+        check_has_api_key(&provider, &store, &cache)
     };
 
     Ok(AISettings {
@@ -130,24 +135,11 @@ pub async fn get_ai_settings_for_provider(
         .unwrap_or_else(|| "".to_string()); // Empty by default
 
     // For OpenAI-compatible providers, treat no_auth as having a usable config
-    let has_api_key = if provider == "openai" {
-        let no_auth = store
-            .get("ai_openai_no_auth")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if no_auth {
-            true
-        } else {
-            let cache = API_KEY_CACHE
-                .lock()
-                .map_err(|_| "Failed to access cache".to_string())?;
-            cache.contains_key(&format!("ai_api_key_{}", provider))
-        }
-    } else {
+    let has_api_key = {
         let cache = API_KEY_CACHE
             .lock()
             .map_err(|_| "Failed to access cache".to_string())?;
-        cache.contains_key(&format!("ai_api_key_{}", provider))
+        check_has_api_key(&provider, &store, &cache)
     };
 
     Ok(AISettings {
