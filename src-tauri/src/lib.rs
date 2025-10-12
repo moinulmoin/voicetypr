@@ -45,6 +45,7 @@ use commands::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model, verify_model,
     },
+    device::get_device_id,
     permissions::{
         check_accessibility_permission, check_microphone_permission,
         request_accessibility_permission, request_microphone_permission,
@@ -1497,6 +1498,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             keyring_has,
             get_log_directory,
             open_logs_folder,
+            get_device_id,
         ])
         .on_window_event(|window, event| {
             match event {
