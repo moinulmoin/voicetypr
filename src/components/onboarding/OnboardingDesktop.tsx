@@ -11,7 +11,7 @@ import { isMacOS } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
-import { CheckCircle, ChevronLeft, ChevronRight, Info, Keyboard, Loader2, Mic } from "lucide-react";
+import { CheckCircle, ChevronLeft, ChevronRight, Info, Keyboard, Loader2, Mic, Zap, HardDrive, Star } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -431,6 +431,26 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   <p className="text-muted-foreground">
                     Download and select a model for transcription
                   </p>
+                </div>
+
+                {/* Legend (centered, same as Models section) */}
+                <div className="flex items-center justify-center gap-6 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1.5">
+                    <Zap className="w-3.5 h-3.5 text-green-500" />
+                    Speed
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle className="w-3.5 h-3.5 text-blue-500" />
+                    Accuracy
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <HardDrive className="w-3.5 h-3.5 text-purple-500" />
+                    Size
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <Star className="w-3.5 h-3.5 fill-yellow-500 text-yellow-500" />
+                    Recommended
+                  </span>
                 </div>
 
                 <div className="bg-card rounded-lg border">

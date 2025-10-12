@@ -44,3 +44,4 @@ notarized-build-*
 claudedocs/
 
 agent-docs/
+.build

@@ -58,22 +58,33 @@ export function HelpSection() {
   useEffect(() => {
     const fetchSystemInfo = async () => {
       try {
-        const [appVer, os, osVer] = await Promise.all([
+        const [appVer, os, osVer, deviceId] = await Promise.all([
           getVersion(),
           platform(),
-          osVersion()
+          osVersion(),
+          // Best-effort: if backend not ready, ignore and continue
+          invoke<string>('get_device_id').catch(() => 'Unknown')
         ]);
         setAppVersion(appVer);
         setPlatformName(`${os} ${osVer}`);
         
         // Prepare diagnostics info
-        const diag = `
-App Version: ${appVer}
-OS: ${os} ${osVer}
-Model: ${settings?.current_model || 'None selected'}
-Microphone Permission: ${canRecord ? 'Granted' : 'Not granted'}
-Accessibility Permission: ${canAutoInsert ? 'Granted' : 'Not granted'}
-        `.trim();
+        const lines: string[] = [
+          `App Version: ${appVer}`,
+          `OS: ${os} ${osVer}`,
+          `Device ID: ${deviceId}`,
+          `Model: ${settings?.current_model || 'None selected'}`,
+        ];
+
+        // Hide permission lines on Windows (not required there)
+        if (os !== 'windows') {
+          lines.push(
+            `Microphone Permission: ${canRecord ? 'Granted' : 'Not granted'}`,
+            `Accessibility Permission: ${canAutoInsert ? 'Granted' : 'Not granted'}`
+          );
+        }
+
+        const diag = lines.join('\n');
         setDiagnostics(diag);
       } catch (error) {
         console.error('Failed to get system info:', error);

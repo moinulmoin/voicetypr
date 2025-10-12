@@ -33,7 +33,7 @@ use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
         get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, update_ai_settings,
-        update_enhancement_options, validate_and_cache_api_key,
+        update_enhancement_options, validate_and_cache_api_key, set_openai_config, get_openai_config, test_openai_endpoint,
     },
     audio::*,
     clipboard::{copy_image_to_clipboard, save_image_to_file},
@@ -45,6 +45,7 @@ use commands::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model, verify_model,
     },
+    device::get_device_id,
     permissions::{
         check_accessibility_permission, check_microphone_permission,
         request_accessibility_permission, request_microphone_permission,
@@ -194,9 +195,85 @@ async fn build_tray_menu<R: tauri::Runtime>(
         None
     };
 
+    // Recent transcriptions (last 5)
+    use tauri_plugin_store::StoreExt;
+    let mut recent_owned: Vec<tauri::menu::MenuItem<R>> = Vec::new();
+    {
+        if let Ok(store) = app.store("transcriptions") {
+            let mut entries: Vec<(String, serde_json::Value)> = Vec::new();
+            for key in store.keys() {
+                if let Some(value) = store.get(&key) {
+                    entries.push((key.to_string(), value));
+                }
+            }
+            entries.sort_by(|a, b| b.0.cmp(&a.0));
+            entries.truncate(5);
+
+            for (ts, entry) in entries {
+                let mut label = entry
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .map(|s| {
+                        let first_line = s.lines().next().unwrap_or("").trim();
+                        if first_line.len() > 40 {
+                            format!("{}…", &first_line[..40])
+                        } else if first_line.is_empty() {
+                            "(empty)".to_string()
+                        } else {
+                            first_line.to_string()
+                        }
+                    })
+                    .unwrap_or_else(|| "(unknown)".to_string());
+
+                if label.is_empty() { label = "(empty)".to_string(); }
+
+                let item = tauri::menu::MenuItem::with_id(
+                    app,
+                    &format!("recent_copy_{}", ts),
+                    label,
+                    true,
+                    None::<&str>,
+                )?;
+                recent_owned.push(item);
+            }
+        }
+    }
+    let mut recent_refs: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
+    for item in &recent_owned { recent_refs.push(item); }
+
+    // Recording mode submenu (Toggle / Push-to-Talk)
+    let (toggle_item, ptt_item) = {
+        let recording_mode = match app.store("settings") {
+            Ok(store) => store
+                .get("recording_mode")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "toggle".to_string()),
+            Err(_) => "toggle".to_string(),
+        };
+
+        let toggle = tauri::menu::CheckMenuItem::with_id(
+            app,
+            "recording_mode_toggle",
+            "Toggle",
+            true,
+            recording_mode == "toggle",
+            None::<&str>,
+        )?;
+        let ptt = tauri::menu::CheckMenuItem::with_id(
+            app,
+            "recording_mode_push_to_talk",
+            "Push-to-Talk",
+            true,
+            recording_mode == "push_to_talk",
+            None::<&str>,
+        )?;
+        (toggle, ptt)
+    };
+
     // Create menu items
     let separator1 = PredefinedMenuItem::separator(app)?;
     let settings_i = MenuItem::with_id(app, "settings", "Dashboard", true, None::<&str>)?;
+    let check_updates_i = MenuItem::with_id(app, "check_updates", "Check for Updates", true, None::<&str>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit_i = MenuItem::with_id(app, "quit", "Quit VoiceTypr", true, None::<&str>)?;
 
@@ -210,9 +287,27 @@ async fn build_tray_menu<R: tauri::Runtime>(
         menu_builder = menu_builder.item(&microphone_submenu);
     }
 
+    // Add Recent Transcriptions submenu if we have items
+    if !recent_refs.is_empty() {
+        let recent_submenu = Submenu::with_id_and_items(
+            app,
+            "recent",
+            "Recent Transcriptions",
+            true,
+            &recent_refs,
+        )?;
+        menu_builder = menu_builder.item(&recent_submenu);
+    }
+
+    // Recording mode submenu
+    let mode_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = vec![&toggle_item, &ptt_item];
+    let mode_submenu = Submenu::with_id_and_items(app, "recording_mode", "Recording Mode", true, &mode_items)?;
+    menu_builder = menu_builder.item(&mode_submenu);
+
     let menu = menu_builder
         .item(&separator1)
         .item(&settings_i)
+        .item(&check_updates_i)
         .item(&separator2)
         .item(&quit_i)
         .build()?;
@@ -464,6 +559,25 @@ pub fn emit_to_all(
 ) -> Result<(), String> {
     app.emit(event, payload)
         .map_err(|e| format!("Failed to emit to all windows: {}", e))
+}
+
+// Show a short error message on the pill window for a brief duration
+pub async fn show_pill_error_short(
+    app: &tauri::AppHandle,
+    event: &str,
+    payload: &str,
+    millis: u64,
+) {
+    let app_state = app.state::<AppState>();
+    if let Some(window_manager) = app_state.get_window_manager() {
+        // Best-effort: show pill, emit event, keep visible briefly
+        let _ = window_manager.show_pill_window().await;
+        let _ = emit_to_window(app, "pill", event, payload);
+        tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
+    } else {
+        log::error!("WindowManager not initialized; unable to show pill error");
+        let _ = emit_to_window(app, "pill", event, payload);
+    }
 }
 
 // Setup logging with daily rotation
@@ -994,7 +1108,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .menu(&menu)
                 .on_menu_event(move |app, event| {
                     log::info!("Tray menu event: {:?}", event.id);
-                    let event_id = event.id.as_ref();
+                    let event_id = event.id.as_ref().to_string();
 
                     if event_id == "settings" {
                         if let Some(window) = app.get_webview_window("main") {
@@ -1005,6 +1119,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     } else if event_id == "quit" {
                         app.exit(0);
+                    } else if event_id == "check_updates" {
+                        let _ = app.emit("tray-check-updates", ());
                     } else if event_id.starts_with("model_") {
                         // Handle model selection
                         let model_name = match event_id.strip_prefix("model_") {
@@ -1062,6 +1178,59 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 Err(e) => {
                                     log::error!("Failed to set microphone from tray: {}", e);
                                     let _ = app_handle.emit("tray-action-error", &format!("Failed to change microphone: {}", e));
+                                }
+                            }
+                        });
+                    }
+                    // Recent transcriptions copy handler
+                    else if let Some(ts) = event_id.strip_prefix("recent_copy_") {
+                        let ts_owned = ts.to_string();
+                        let app_handle = app.app_handle().clone();
+                        tauri::async_runtime::spawn(async move {
+                            // Read text by timestamp and copy
+                            match app_handle.store("transcriptions") {
+                                Ok(store) => {
+                                    if let Some(val) = store.get(&ts_owned) {
+                                        if let Some(text) = val.get("text").and_then(|v| v.as_str()) {
+                                            if let Err(e) = crate::commands::text::copy_text_to_clipboard(text.to_string()).await {
+                                                log::error!("Failed to copy recent transcription: {}", e);
+                                                let _ = app_handle.emit("tray-action-error", &format!("Failed to copy: {}", e));
+                                            } else {
+                                                log::info!("Copied recent transcription to clipboard");
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to open transcriptions store: {}", e);
+                                }
+                            }
+                        });
+                    }
+                    // Recording mode switchers
+                    else if event_id == "recording_mode_toggle" || event_id == "recording_mode_push_to_talk" {
+                        let app_handle = app.app_handle().clone();
+                        let mode = if event_id.ends_with("push_to_talk") { "push_to_talk" } else { "toggle" };
+                        tauri::async_runtime::spawn(async move {
+                            match crate::commands::settings::get_settings(app_handle.clone()).await {
+                                Ok(mut s) => {
+                                    s.recording_mode = mode.to_string();
+                                    match crate::commands::settings::save_settings(app_handle.clone(), s).await {
+                                        Err(e) => {
+                                            log::error!("Failed to save recording mode from tray: {}", e);
+                                            let _ = app_handle.emit("tray-action-error", &format!("Failed to change recording mode: {}", e));
+                                        }
+                                        Ok(()) => {
+                                            if let Err(e) = crate::commands::settings::update_tray_menu(app_handle.clone()).await {
+                                                log::warn!("Failed to refresh tray after mode change: {}", e);
+                                            }
+                                            // Notify frontend so SettingsContext refreshes
+                                            let _ = app_handle.emit("settings-changed", ());
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to get settings for mode change: {}", e);
                                 }
                             }
                         });
@@ -1459,10 +1628,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             reset_app_data,
             copy_image_to_clipboard,
             save_image_to_file,
+            copy_text_to_clipboard,
             get_ai_settings,
             get_ai_settings_for_provider,
             cache_ai_api_key,
             validate_and_cache_api_key,
+            set_openai_config,
+            get_openai_config,
+            test_openai_endpoint,
             clear_ai_api_key_cache,
             update_ai_settings,
             enhance_transcription,
@@ -1475,6 +1648,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             keyring_has,
             get_log_directory,
             open_logs_folder,
+            get_device_id,
         ])
         .on_window_event(|window, event| {
             match event {

@@ -180,7 +180,6 @@ git push origin "v${NEW_VERSION}"
 # Install required Rust targets if not already installed
 echo -e "${YELLOW}Checking Rust targets...${NC}"
 rustup target add aarch64-apple-darwin 2>/dev/null || true
-rustup target add x86_64-apple-darwin 2>/dev/null || true
 
 # Create output directory
 OUTPUT_DIR="release-${NEW_VERSION}"
@@ -233,44 +232,7 @@ sign_update_artifact() {
     fi
 }
 
-# Build x86_64 binary with automatic notarization
-echo -e "${GREEN}🔨 Building x86_64 binary with notarization...${NC}"
-echo -e "${BLUE}This will take some time as it includes notarization...${NC}"
-
-cd src-tauri
-cargo tauri build --target x86_64-apple-darwin --bundles app,dmg
-cd ..
-
-# Find x86_64 build artifacts
-X86_DMG=$(find "src-tauri/target/x86_64-apple-darwin/release/bundle/dmg" -name "*.dmg" | head -n 1)
-X86_APP_DIR="src-tauri/target/x86_64-apple-darwin/release/bundle/macos"
-
-# Create app.tar.gz for x86_64
-echo -e "${YELLOW}Creating x86_64 updater archive...${NC}"
-if [[ -d "$X86_APP_DIR/voicetypr.app" ]]; then
-    cd "$X86_APP_DIR"
-    COPYFILE_DISABLE=1 tar -czf "VoiceTypr_${NEW_VERSION}_x64.app.tar.gz" --exclude='._*' --exclude='.DS_Store' voicetypr.app
-    cd - > /dev/null
-    X86_APP_TAR="$X86_APP_DIR/VoiceTypr_${NEW_VERSION}_x64.app.tar.gz"
-else
-    echo -e "${RED}Error: x86_64 app bundle not found${NC}"
-    exit 1
-fi
-
-if [[ -z "$X86_DMG" ]]; then
-    echo -e "${RED}Error: x86_64 DMG not found${NC}"
-    exit 1
-fi
-
-# Copy x86_64 artifacts
-cp "$X86_DMG" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x64.dmg"
-cp "$X86_APP_TAR" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x64.app.tar.gz"
-
-# Sign x86_64 update artifact
-sign_update_artifact "$X86_APP_TAR"
-if [[ -f "${X86_APP_TAR}.sig" ]]; then
-    cp "${X86_APP_TAR}.sig" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x64.app.tar.gz.sig"
-fi
+# Intel (x86_64) build removed – Apple Silicon only
 
 # Build aarch64 binary with automatic notarization
 echo -e "${GREEN}🔨 Building aarch64 binary with notarization...${NC}"
@@ -311,17 +273,10 @@ if [[ -f "${AARCH64_APP_TAR}.sig" ]]; then
     cp "${AARCH64_APP_TAR}.sig" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig"
 fi
 
-# Create latest.json for updater with both architectures
+# Create latest.json for updater (Apple Silicon only)
 echo -e "${YELLOW}Creating latest.json...${NC}"
 
-# Get signatures from the sig files if they exist
-if [[ -f "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x64.app.tar.gz.sig" ]]; then
-    X86_SIGNATURE=$(cat "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x64.app.tar.gz.sig" | tr -d '\n')
-else
-    X86_SIGNATURE="SIGNATURE_PLACEHOLDER"
-    echo -e "${YELLOW}Warning: No x86_64 signature file found${NC}"
-fi
-
+# Get aarch64 signature from the sig file if it exists
 if [[ -f "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig" ]]; then
     AARCH64_SIGNATURE=$(cat "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig" | tr -d '\n')
 else
@@ -329,34 +284,21 @@ else
     echo -e "${YELLOW}Warning: No aarch64 signature file found${NC}"
 fi
 
-# Create latest.json with both platforms
+# Create latest.json with Apple Silicon only
 printf '{
   "version": "v%s",
   "notes": "See the release notes for v%s",
   "pub_date": "%s",
   "platforms": {
-    "darwin-x86_64": {
-      "signature": "%s",
-      "url": "https://github.com/moinulmoin/voicetypr/releases/download/v%s/VoiceTypr_%s_x64.app.tar.gz"
-    },
     "darwin-aarch64": {
       "signature": "%s",
       "url": "https://github.com/moinulmoin/voicetypr/releases/download/v%s/VoiceTypr_%s_aarch64.app.tar.gz"
     }
   }
-}\n' "$NEW_VERSION" "$NEW_VERSION" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$X86_SIGNATURE" "$NEW_VERSION" "$NEW_VERSION" "$AARCH64_SIGNATURE" "$NEW_VERSION" "$NEW_VERSION" > "$OUTPUT_DIR/latest.json"
+}\n' "$NEW_VERSION" "$NEW_VERSION" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$AARCH64_SIGNATURE" "$NEW_VERSION" "$NEW_VERSION" > "$OUTPUT_DIR/latest.json"
 
 # Verify notarization
 echo -e "${BLUE}✅ Verifying notarization...${NC}"
-
-# Check x86_64 app bundle
-if [[ -d "$X86_APP_DIR/voicetypr.app" ]]; then
-    spctl -a -t exec -vv "$X86_APP_DIR/voicetypr.app" 2>&1 | grep -q "accepted" && {
-        echo -e "${GREEN}✓ x86_64 app bundle is properly notarized${NC}"
-    } || {
-        echo -e "${YELLOW}Warning: x86_64 app bundle notarization check failed${NC}"
-    }
-fi
 
 # Check aarch64 app bundle
 if [[ -d "$AARCH64_APP_DIR/voicetypr.app" ]]; then
@@ -422,9 +364,9 @@ done
 echo ""
 echo -e "${YELLOW}📋 Next steps:${NC}"
 echo "1. Review the draft release on GitHub"
-echo "2. Test the notarized DMGs for both architectures"
+echo "2. Test the notarized DMG (Apple Silicon)"
 echo "3. Verify auto-updater works with the new signatures"
 echo "4. Publish the release when ready"
 echo ""
 echo -e "${GREEN}🔗 Release URL: https://github.com/moinulmoin/voicetypr/releases/tag/v${NEW_VERSION}${NC}"
-echo -e "${GREEN}🎉 Your separate architecture apps are now fully notarized and ready for distribution!${NC}"
+echo -e "${GREEN}🎉 Your Apple Silicon app is now fully notarized and ready for distribution!${NC}"

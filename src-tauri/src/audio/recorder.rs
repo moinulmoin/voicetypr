@@ -104,7 +104,7 @@ impl AudioRecorder {
         let (audio_level_tx, audio_level_rx) = mpsc::channel::<f64>();
 
         // Silence detection config for VAD
-        let silence_duration = Duration::from_secs(60); // 60 seconds of silence
+        let silence_duration = Duration::from_secs(10); // 10 seconds of continuous silence
 
         // Spawn recording thread
         let thread_handle = thread::spawn(move || -> Result<String, String> {

@@ -80,6 +80,16 @@ export function AppContainer() {
           setActiveSection("overview");
         });
 
+        // Listen for manual update checks triggered from tray
+        registerEvent("tray-check-updates", async () => {
+          try {
+            await updateService.checkForUpdatesManually();
+          } catch (e) {
+            console.error("Manual update check failed:", e);
+            toast.error("Failed to check for updates");
+          }
+        });
+
         // Listen for tray action errors
         registerEvent("tray-action-error", (event) => {
           console.error("Tray action error:", event.payload);

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 pub mod config;
 pub mod gemini;
 pub mod groq;
+pub mod openai;
 pub mod prompts;
 
 pub use config::{MAX_CUSTOM_VOCABULARY, MAX_TEXT_LENGTH, MAX_VOCABULARY_TERM_LENGTH};
@@ -115,11 +116,16 @@ impl AIProviderFactory {
                 config.model.clone(),
                 config.options.clone(),
             )?)),
+            "openai" => Ok(Box::new(openai::OpenAIProvider::new(
+                config.api_key.clone(),
+                config.model.clone(),
+                config.options.clone(),
+            )?)),
             provider => Err(AIError::ProviderNotFound(provider.to_string())),
         }
     }
 
     fn is_valid_provider(provider: &str) -> bool {
-        matches!(provider, "groq" | "gemini")
+        matches!(provider, "groq" | "gemini" | "openai")
     }
 }

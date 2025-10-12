@@ -52,6 +52,21 @@ pub async fn insert_text(app: tauri::AppHandle, text: String) -> Result<(), Stri
     .map_err(|e| format!("Task failed: {}", e))?
 }
 
+/// Copy plain text to the system clipboard without attempting to paste
+#[tauri::command]
+pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let mut clipboard =
+            Clipboard::new().map_err(|e| format!("Failed to initialize clipboard: {}", e))?;
+        clipboard
+            .set_text(&text)
+            .map_err(|e| format!("Failed to set clipboard: {}", e))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
 fn insert_via_clipboard(text: String, has_accessibility_permission: bool, app_handle: Option<tauri::AppHandle>) -> Result<(), String> {
     // This function handles both copying text to clipboard AND pasting it at cursor
     // Initialize clipboard
