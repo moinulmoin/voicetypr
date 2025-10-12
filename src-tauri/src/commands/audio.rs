@@ -1350,6 +1350,11 @@ pub async fn save_transcription(app: AppHandle, text: String, model: String) -> 
     // Emit the new transcription data to frontend for append-only update
     let _ = emit_to_window(&app, "main", "transcription-added", transcription_data);
 
+    // Refresh tray menu (best-effort) so Recent Transcriptions stays updated
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!("Failed to update tray menu after saving transcription: {}", e);
+    }
+
     log::info!("Saved transcription with {} characters", text.len());
     Ok(())
 }
@@ -1686,6 +1691,11 @@ pub async fn delete_transcription_entry(app: AppHandle, timestamp: String) -> Re
     // Emit event to update UI
     let _ = emit_to_window(&app, "main", "history-updated", ());
 
+    // Refresh tray menu to reflect removal
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!("Failed to update tray menu after deletion: {}", e);
+    }
+
     log::info!("Deleted transcription entry: {}", timestamp);
     Ok(())
 }
@@ -1713,6 +1723,11 @@ pub async fn clear_all_transcriptions(app: AppHandle) -> Result<(), String> {
 
     // Emit event to update UI
     let _ = emit_to_window(&app, "main", "history-updated", ());
+
+    // Refresh tray menu after clearing
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!("Failed to update tray menu after clearing history: {}", e);
+    }
 
     log::info!("Cleared all transcription entries: {} items", count);
     Ok(())
