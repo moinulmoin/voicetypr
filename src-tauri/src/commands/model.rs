@@ -372,11 +372,8 @@ pub async fn get_model_status(
     let parakeet_models = parakeet_manager.list_models();
     models.extend(parakeet_models.into_iter().map(convert_parakeet_model));
 
-    // Sort by engine first (whisper first), then by accuracy descending
-    models.sort_by(|a, b| match a.engine.cmp(&b.engine) {
-        std::cmp::Ordering::Equal => b.accuracy_score.cmp(&a.accuracy_score),
-        ordering => ordering,
-    });
+    // Sort strictly by size (smallest to largest)
+    models.sort_by(|a, b| a.size.cmp(&b.size));
 
     log::info!("[GET_MODEL_STATUS] Returning {} models", models.len());
 
