@@ -161,8 +161,17 @@ export function RecordingPill() {
       listen<string>("enhancing-failed", (event) => {
         console.log("RecordingPill: Received enhancing-failed event", event.payload);
         setIsEnhancing(false);
-        // Show error message for 4 seconds
-        setFeedbackWithTimeout(event.payload || "Enhancement failed", 4000);
+        // Show short message only
+        setFeedbackWithTimeout("Formatting failed", 2000);
+      })
+    );
+
+    // Listen for generic formatting error event and show short message
+    unlisteners.push(
+      listen<string>("formatting-error", (event) => {
+        console.log("RecordingPill: Received formatting-error event", event.payload);
+        setIsEnhancing(false);
+        setFeedbackWithTimeout("Formatting failed", 2000);
       })
     );
 

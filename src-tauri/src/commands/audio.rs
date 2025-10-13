@@ -923,16 +923,66 @@ pub async fn stop_recording(
         }
     };
 
-    // === Audio validation now handled by transcriber ===
-    // Transcriber will check duration and format during processing
-    log_with_context(
-        log::Level::Debug,
-        "Proceeding directly to transcription",
-        &[
-            ("audio_path", &format!("{:?}", audio_path).as_str()),
-            ("stage", "pre_transcription"),
-        ],
-    );
+    
+    // Normalize captured audio to Whisper contract (WAV PCM s16, mono, 16k)
+    let parent_dir = audio_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::Path::new(".").to_path_buf());
+
+    let normalized_path = match crate::audio::normalizer::normalize_to_whisper_wav(&audio_path, &parent_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("Audio normalization failed: {}", e);
+            update_recording_state(&app, RecordingState::Error, Some("Audio normalization failed".to_string()));
+            // Attempt cleanup
+            let _ = std::fs::remove_file(&audio_path);
+            return Err("Audio normalization failed".to_string());
+        }
+    };
+
+    // Remove raw capture after successful normalization
+    if let Err(e) = std::fs::remove_file(&audio_path) {
+        log::debug!("Failed to remove raw audio: {}", e);
+    }
+
+    // Duration gate (min 5s) using normalized file
+    let too_short = (|| -> Result<bool, String> {
+        let reader = hound::WavReader::open(&normalized_path)
+            .map_err(|e| format!("Failed to open normalized wav: {}", e))?;
+        let spec = reader.spec();
+        let frames = reader.duration() / spec.channels as u32; // mono expected
+        let duration = frames as f32 / spec.sample_rate as f32;
+        log_with_context(log::Level::Info, "NORMALIZED_AUDIO", &[
+            ("path", &format!("{:?}", normalized_path).as_str()),
+            ("sample_rate", &spec.sample_rate.to_string().as_str()),
+            ("channels", &spec.channels.to_string().as_str()),
+            ("bits", &spec.bits_per_sample.to_string().as_str()),
+            ("duration_s", &format!("{:.2}", duration).as_str()),
+        ]);
+        Ok(duration < 5.0)
+    })();
+
+    if let Ok(true) = too_short {
+        // Emit friendly feedback and stop here
+        let _ = emit_to_window(&app, "pill", "recording-too-short", "Recording shorter than 5 seconds");
+        if let Err(e) = std::fs::remove_file(&normalized_path) {
+            log::debug!("Failed to remove short normalized audio: {}", e);
+        }
+        // Hide pill and return to Idle
+        if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+            log::error!("Failed to hide pill window: {}", e);
+        }
+        update_recording_state(&app, RecordingState::Idle, None);
+        return Ok("".to_string());
+    }
+
+    // Proceed to transcription with normalized file
+    let audio_path = normalized_path;
+    log_with_context(log::Level::Debug, "Proceeding to transcription", &[
+        ("audio_path", &format!("{:?}", audio_path).as_str()),
+        ("stage", "pre_transcription")
+    ]);
 
     // Get cached recording config to avoid repeated store access
     let config = get_recording_config(&app).await.map_err(|e| {
@@ -1365,13 +1415,15 @@ pub async fn stop_recording(
                                         "Enhancement failed: Using original text"
                                     };
 
-                                    // Emit enhancing failed event with error message to pill
-                                    let _ = emit_to_window(
+                                    // Show short error on pill for visibility, then continue
+                                    log::warn!("Enhancement failed; showing pill error for 2s before hide");
+                                    crate::show_pill_error_short(
                                         &app_for_process,
-                                        "pill",
                                         "enhancing-failed",
                                         user_message,
-                                    );
+                                        2000,
+                                    )
+                                    .await;
 
                                     // Also notify main window for settings update if needed
                                     if error_message.contains("400")
@@ -1626,6 +1678,11 @@ pub async fn save_transcription(app: AppHandle, text: String, model: String) -> 
     // Emit the new transcription data to frontend for append-only update
     let _ = emit_to_window(&app, "main", "transcription-added", transcription_data);
 
+    // Refresh tray menu (best-effort) so Recent Transcriptions stays updated
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!("Failed to update tray menu after saving transcription: {}", e);
+    }
+
     log::info!("Saved transcription with {} characters", text.len());
     Ok(())
 }
@@ -1688,6 +1745,11 @@ pub async fn transcribe_audio_file(
     let wav_path = crate::audio::converter::convert_to_wav(audio_path, &recordings_dir)?;
     let is_converted = wav_path != audio_path;
 
+    // Normalize imported audio to Whisper contract (WAV PCM s16, mono, 16k)
+    let normalized_path = crate::audio::normalizer::normalize_to_whisper_wav(&wav_path, &recordings_dir)
+        .map_err(|e| format!("Audio normalization failed: {}", e))?;
+
+    // Resolve engine (whisper or parakeet) for the requested model
     let engine_selection =
         resolve_engine_for_model(&app, &model_name, model_engine.as_deref()).await?;
 
@@ -1722,8 +1784,8 @@ pub async fn transcribe_audio_file(
             };
 
             transcriber.transcribe_with_translation(
-                &wav_path,
-                Some(language.as_str()),
+                &normalized_path,
+                Some(&language),
                 translate_to_english,
             )?
         }
@@ -1739,7 +1801,7 @@ pub async fn transcribe_audio_file(
                 .transcribe(
                     &app,
                     &model_name,
-                    wav_path.clone(),
+                    normalized_path.clone(),
                     Some(language.clone()),
                     translate_to_english,
                 )
@@ -1763,6 +1825,10 @@ pub async fn transcribe_audio_file(
         } else {
             log::debug!("Cleaned up temporary converted WAV file");
         }
+    }
+    // Clean up normalized WAV
+    if let Err(e) = std::fs::remove_file(&normalized_path) {
+        log::warn!("Failed to remove normalized WAV file: {}", e);
     }
 
     Ok(text)
@@ -1999,6 +2065,11 @@ pub async fn delete_transcription_entry(app: AppHandle, timestamp: String) -> Re
     // Emit event to update UI
     let _ = emit_to_window(&app, "main", "history-updated", ());
 
+    // Refresh tray menu to reflect removal
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!("Failed to update tray menu after deletion: {}", e);
+    }
+
     log::info!("Deleted transcription entry: {}", timestamp);
     Ok(())
 }
@@ -2026,6 +2097,11 @@ pub async fn clear_all_transcriptions(app: AppHandle) -> Result<(), String> {
 
     // Emit event to update UI
     let _ = emit_to_window(&app, "main", "history-updated", ());
+
+    // Refresh tray menu after clearing
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!("Failed to update tray menu after clearing history: {}", e);
+    }
 
     log::info!("Cleared all transcription entries: {} items", count);
     Ok(())

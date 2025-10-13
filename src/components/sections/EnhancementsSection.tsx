@@ -1,12 +1,13 @@
 import { ApiKeyModal } from "@/components/ApiKeyModal";
 import { EnhancementModelCard } from "@/components/EnhancementModelCard";
 import { EnhancementSettings } from "@/components/EnhancementSettings";
+import { OpenAICompatConfigModal } from "@/components/OpenAICompatConfigModal";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { EnhancementOptions } from "@/types/ai";
 import { fromBackendOptions, toBackendOptions } from "@/types/ai";
-import { hasApiKey, removeApiKey, saveApiKey, getApiKey } from "@/utils/keyring";
+import { hasApiKey, removeApiKey, saveApiKey, getApiKey, saveOpenAIKeyWithConfig } from "@/utils/keyring";
 import { useReadinessState } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -39,6 +40,7 @@ export function EnhancementsSection() {
   });
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [showOpenAIConfig, setShowOpenAIConfig] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [providerApiKeys, setProviderApiKeys] = useState<Record<string, boolean>>({});
@@ -51,7 +53,7 @@ export function EnhancementsSection() {
   });
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 
-  // Available models - flat list
+  // Groq, Gemini, and OpenAI-compatible
   const models: AIModel[] = [
     {
       id: "llama-3.1-8b-instant",
@@ -64,6 +66,12 @@ export function EnhancementsSection() {
       name: "Gemini 2.5 Flash Lite",
       provider: "gemini",
       description: "Google's lightweight flash model for quick processing"
+    },
+    {
+      id: "openai-compatible",
+      name: "OpenAI Compatible",
+      provider: "openai",
+      description: "Configure any OpenAI-compatible endpoint"
     }
   ];
 
@@ -140,16 +148,16 @@ export function EnhancementsSection() {
           hasApiKey: true
         });
       } else {
-        // Update settings with correct hasApiKey status from Stronghold
-        // The enabled state is already persisted in the backend
-        const currentModelProvider = settings.model ? models.find(m => m.id === settings.model)?.provider : null;
+        // Respect backend hasApiKey for OpenAI (no-auth). For others, derive from keyring status.
+        const currentModelProvider = settings.provider === 'openai'
+          ? 'openai'
+          : (settings.model ? models.find(m => m.id === settings.model)?.provider || null : null);
         const currentModelHasKey = currentModelProvider ? currentKeyStatus[currentModelProvider] : false;
+        const derivedHasKey = settings.provider === 'openai' ? settings.hasApiKey : currentModelHasKey;
 
-        // Update the hasApiKey status based on current key status
-        // Don't clear the model or disable AI enhancement just because the key isn't cached yet
         setAISettings({
           ...settings,
-          hasApiKey: currentModelHasKey
+          hasApiKey: derivedHasKey,
         });
       }
     } catch (error) {
@@ -222,8 +230,14 @@ export function EnhancementsSection() {
       }
     });
 
+    // Listen for formatting failures from backend and show a toast
+    const unlistenFormattingError = listen<string>('formatting-error', async (event) => {
+      const msg = (event.payload as any) || 'Formatting failed';
+      toast.error(typeof msg === 'string' ? msg : 'Formatting failed');
+    });
+
     return () => {
-      Promise.all([unlistenReady, unlistenApiKey, unlistenApiKeyRemoved]).then(fns => {
+      Promise.all([unlistenReady, unlistenApiKey, unlistenApiKeyRemoved, unlistenFormattingError]).then(fns => {
         fns.forEach(fn => fn());
       });
     };
@@ -280,7 +294,11 @@ export function EnhancementsSection() {
 
   const handleSetupApiKey = (provider: string) => {
     setSelectedProvider(provider);
-    setShowApiKeyModal(true);
+    if (provider === 'openai') {
+      setShowOpenAIConfig(true);
+    } else {
+      setShowApiKeyModal(true);
+    }
   };
 
   const handleModelSelect = async (modelId: string, provider: string) => {
@@ -325,14 +343,18 @@ export function EnhancementsSection() {
   const getProviderDisplayName = (provider: string) => {
     const names: Record<string, string> = {
       groq: "Groq",
-      gemini: "Gemini"
+      gemini: "Gemini",
+      openai: "OpenAI Compatible"
     };
     return names[provider] || provider;
   };
 
-  const hasAnyApiKey = Object.values(providerApiKeys).some(v => v);
+  // Valid config is either a cached key in keyring OR backend-validated config (OpenAI no-auth)
+  const hasAnyValidConfig = aiSettings.hasApiKey || Object.values(providerApiKeys).some(v => v);
   const selectedModelProvider = models.find(m => m.id === aiSettings.model)?.provider;
-  const hasSelectedModel = Boolean(aiSettings.model && selectedModelProvider && providerApiKeys[selectedModelProvider]);
+  const hasSelectedModel = aiSettings.provider === 'openai'
+    ? Boolean(aiSettings.model)
+    : Boolean(aiSettings.model && selectedModelProvider && providerApiKeys[selectedModelProvider]);
   const selectedModelName = models.find(m => m.id === aiSettings.model)?.name;
 
   return (
@@ -354,7 +376,7 @@ export function EnhancementsSection() {
               id="ai-formatting"
               checked={aiSettings.enabled}
               onCheckedChange={handleToggleEnabled}
-              disabled={!hasAnyApiKey || !hasSelectedModel}
+              disabled={!hasAnyValidConfig || !hasSelectedModel}
             />
           </div>
         </div>
@@ -375,17 +397,25 @@ export function EnhancementsSection() {
             </div>
             
             <div className="grid gap-3">
-              {models.map((model) => (
-                <EnhancementModelCard
-                  key={model.id}
-                  model={model}
-                  hasApiKey={providerApiKeys[model.provider] || false}
-                  isSelected={aiSettings.model === model.id && providerApiKeys[model.provider]}
-                  onSetupApiKey={() => handleSetupApiKey(model.provider)}
-                  onSelect={() => handleModelSelect(model.id, model.provider)}
-                  onRemoveApiKey={() => handleRemoveApiKey(model.provider)}
-                />
-              ))}
+              {models.map((model) => {
+                const hasKey = model.provider === 'openai'
+                  ? (aiSettings.hasApiKey || providerApiKeys[model.provider] || false)
+                  : (providerApiKeys[model.provider] || false);
+                const isSelected = model.provider === 'openai'
+                  ? (aiSettings.provider === 'openai' && hasKey)
+                  : (aiSettings.model === model.id && providerApiKeys[model.provider]);
+                return (
+                  <EnhancementModelCard
+                    key={model.id}
+                    model={model}
+                    hasApiKey={hasKey}
+                    isSelected={isSelected}
+                    onSetupApiKey={() => handleSetupApiKey(model.provider)}
+                    onSelect={() => (model.provider === 'openai' ? handleModelSelect(aiSettings.model, model.provider) : handleModelSelect(model.id, model.provider))}
+                    onRemoveApiKey={() => handleRemoveApiKey(model.provider)}
+                  />
+                );
+              })}
             </div>
           </div>
 
@@ -436,6 +466,25 @@ export function EnhancementsSection() {
         onSubmit={handleApiKeySubmit}
         providerName={getProviderDisplayName(selectedProvider)}
         isLoading={isLoading}
+      />
+      <OpenAICompatConfigModal
+        isOpen={showOpenAIConfig}
+        defaultBaseUrl="https://api.openai.com"
+        defaultModel={aiSettings.model}
+        onClose={() => setShowOpenAIConfig(false)}
+        onSubmit={async ({ baseUrl, model, apiKey, noAuth }) => {
+          try {
+            setIsLoading(true);
+            await saveOpenAIKeyWithConfig(apiKey?.trim() || '', baseUrl.trim(), model.trim(), !!noAuth);
+            setAISettings(prev => ({ ...prev, provider: 'openai', model: model.trim(), hasApiKey: true }));
+            toast.success('Configuration saved');
+            setShowOpenAIConfig(false);
+          } catch (error) {
+            toast.error(`Failed to save configuration: ${error}`);
+          } finally {
+            setIsLoading(false);
+          }
+        }}
       />
     </div>
   );

@@ -137,11 +137,15 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
 pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
-    // Check if model changed
+    // Check if model and recording mode changed
     let old_model = store
         .get("current_model")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_default();
+    let old_mode = store
+        .get("recording_mode")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| Settings::default().recording_mode);
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
@@ -276,6 +280,13 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         if let Err(e) = update_tray_menu(app.clone()).await {
             log::warn!("Failed to update tray menu after model change: {}", e);
             // Don't fail the whole operation if tray update fails
+        }
+    }
+
+    // If recording mode changed, refresh tray to update checked state
+    if old_mode != settings.recording_mode {
+        if let Err(e) = update_tray_menu(app.clone()).await {
+            log::warn!("Failed to update tray menu after mode change: {}", e);
         }
     }
 

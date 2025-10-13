@@ -2,6 +2,7 @@ pub mod ai;
 pub mod audio;
 pub mod clipboard;
 pub mod debug;
+pub mod device;
 pub mod key_normalizer;
 pub mod keyring;
 pub mod license;

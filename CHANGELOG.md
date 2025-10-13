@@ -1,5 +1,22 @@
 # Changelog
 
+# [1.9.0](https://github.com/moinulmoin/voicetypr/compare/v1.8.0...v1.9.0) (2025-10-12)
+
+
+### Bug Fixes
+
+* **ai:** restore Groq/Gemini enhancement path and keep OpenAI-compatible config; cache non-openai keys in backend ([b2664f8](https://github.com/moinulmoin/voicetypr/commit/b2664f8c355f5de165afbb1cc855f44fef7143de))
+
+
+### Features
+
+* **ai/openai): accept any OpenAI-compatible model; remove dead_code attr. refactor(ui,keyring): standardize Tauri args to snake_case for OpenAI test/save. chore(audio:** keep mutable bindings in normalizer for future ops. ([5167f0c](https://github.com/moinulmoin/voicetypr/commit/5167f0c3f2f738f4689a30907b3dce053532bba3))
+* **ai:** add OpenAI-compatible provider and endpoint normalization; fix pill feedback timing; cleanups ([a28030b](https://github.com/moinulmoin/voicetypr/commit/a28030bcb4fb2ed7a3f5c48f7fd940cbd5edee13))
+* **audio:** normalize all inputs to 16k mono s16 + 5s gate & reduce ([937bbb3](https://github.com/moinulmoin/voicetypr/commit/937bbb3620ce218967ac63b64e456d683fcf4295))
+* **help:** include hashed Device ID in ‘Copy System Info’ via new get_device_id Tauri command; hide mic/accessibility permission lines on Windows to avoid confusion ([ac80b7b](https://github.com/moinulmoin/voicetypr/commit/ac80b7b686d4e8a0ed306a3f9c8ca408f9610d45))
+* **onboarding:** add centered model legend (Speed, Accuracy, Size, Recommended) before model list to match dashboard ([3257614](https://github.com/moinulmoin/voicetypr/commit/3257614f0a5beab163f9d39e8380b28dbde8d985))
+* **tray:** add Recent Transcriptions copy, Recording Mode submenu, and Check for Updates; sync Dashboard↔Tray mode changes; refresh tray on history changes ([7accfdb](https://github.com/moinulmoin/voicetypr/commit/7accfdbc2f205abca95677654239f5031d0d21b6))
+
 # [1.8.0](https://github.com/moinulmoin/voicetypr/compare/v1.7.0...v1.8.0) (2025-09-20)
 
 

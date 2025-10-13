@@ -41,8 +41,14 @@ export const saveApiKey = async (provider: string, apiKey: string): Promise<void
   const key = `ai_api_key_${provider}`;
   await keyringSet(key, apiKey);
   
-  // Validate and cache in backend for fast access during transcription
-  await invoke('validate_and_cache_api_key', { provider, apiKey });
+  // Cache or validate depending on provider
+  if (provider === 'openai') {
+    // OpenAI-compatible requires validation (may include no-auth path via separate modal)
+    await invoke('validate_and_cache_api_key', { provider, apiKey });
+  } else {
+    // For Groq/Gemini, just cache the key; validation happens during usage
+    await invoke('cache_ai_api_key', { provider, apiKey });
+  }
   
   console.log(`[Keyring] API key saved and validated for ${provider}`);
   
@@ -75,7 +81,7 @@ export const removeApiKey = async (provider: string): Promise<void> => {
 
 // Load all API keys to backend cache (for app startup)
 export const loadApiKeysToCache = async (): Promise<void> => {
-  const providers = ['groq', 'gemini']; // Add more providers as needed
+  const providers = ['groq', 'gemini', 'openai'];
   
   for (const provider of providers) {
     try {
@@ -88,4 +94,37 @@ export const loadApiKeysToCache = async (): Promise<void> => {
       console.error(`Failed to load API key for ${provider}:`, error);
     }
   }
+};
+
+// OpenAI-compatible configuration helpers
+export const setOpenAIConfig = async (baseUrl: string, noAuth: boolean): Promise<void> => {
+  await invoke('set_openai_config', { base_url: baseUrl, no_auth: noAuth });
+};
+
+export const saveOpenAIKeyWithConfig = async (
+  apiKey: string,
+  baseUrl: string,
+  model: string,
+  noAuth: boolean
+): Promise<void> => {
+  const provider = 'openai';
+  const key = `ai_api_key_${provider}`;
+  if (apiKey) {
+    await keyringSet(key, apiKey);
+  }
+
+  await invoke('validate_and_cache_api_key', {
+    provider,
+    // Standardize to snake_case for Tauri commands
+    api_key: apiKey || undefined,
+    base_url: baseUrl,
+    model,
+    no_auth: noAuth || !apiKey?.trim(),
+  });
+
+  // Persist provider + model selection
+  await invoke('update_ai_settings', { enabled: false, provider, model });
+
+  console.log(`[Keyring] OpenAI-compatible config saved (noAuth=${noAuth})`);
+  await emit('api-key-saved', { provider });
 };
