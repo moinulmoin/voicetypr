@@ -25,7 +25,7 @@ pub static AVAILABLE_MODELS: Lazy<Vec<ParakeetModelDefinition>> = Lazy::new(|| {
     vec![
         ParakeetModelDefinition {
             id: "parakeet-tdt-0.6b-v3",
-            display_name: "Parakeet V3 (Native)",
+            display_name: "Parakeet V3",
             repo_id: "FluidInference/parakeet-tdt-0.6b-v3-coreml",
             description: "Native Swift transcription using Apple Neural Engine",
             languages: &[

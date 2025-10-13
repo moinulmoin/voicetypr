@@ -48,6 +48,20 @@ export function GeneralSettings() {
 
   if (!settings) return null;
 
+  // Determine if current model is English-only
+  const currentModel = settings.current_model || "";
+  const currentEngine = (settings.current_model_engine as 'whisper' | 'parakeet') || 'whisper';
+  const isEnglishOnlyModel =
+    (currentEngine === 'whisper' && /\.en$/i.test(currentModel)) ||
+    (currentEngine === 'parakeet' && currentModel.includes('-v2'));
+
+  // Coerce to English if english-only model but settings language is not 'en'
+  useEffect(() => {
+    if (isEnglishOnlyModel && settings.language !== 'en') {
+      updateSettings({ language: 'en' });
+    }
+  }, [isEnglishOnlyModel, settings.language, updateSettings]);
+
   const handleAutostartToggle = async (checked: boolean) => {
     setAutostartLoading(true);
     try {
@@ -348,6 +362,8 @@ export function GeneralSettings() {
               </div>
               <LanguageSelection
                 value={settings.language || "en"}
+                engine={currentEngine}
+                englishOnly={isEnglishOnlyModel}
                 onValueChange={(value) => updateSettings({ language: value })}
               />
             </div>
