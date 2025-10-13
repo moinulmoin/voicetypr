@@ -43,8 +43,6 @@ export function AudioUploadSection() {
 
       if (selected && typeof selected === 'string') {
         setSelectedFile(selected);
-        const filename = selected.split('/').pop() || selected.split('\\').pop() || 'audio file';
-        toast.success(`Selected: ${filename}`);
       }
     } catch (error) {
       console.error("Failed to select file:", error);
@@ -136,8 +134,6 @@ export function AudioUploadSection() {
     }
 
     setSelectedFile(filePath);
-    const filename = filePath.split('/').pop() || filePath.split('\\').pop() || 'audio file';
-    toast.success(`Selected: ${filename}`);
   };
 
   // Setup drag and drop listeners
@@ -333,7 +329,6 @@ export function AudioUploadSection() {
                     <p>• <strong>Supported Formats:</strong> WAV, MP3, M4A, FLAC, OGG, MP4, WebM</p>
                     <p>• <strong>Processing:</strong> Happens locally on your device</p>
                     <p>• <strong>Duration:</strong> No limits, but longer files take more time</p>
-                    <p>• <strong>Memory Usage:</strong> ~230MB per hour of audio</p>
                     <p className="text-amber-600 font-medium mt-2">
                       ⚠️ Long recordings (4-5+ hours) may take several minutes and use significant memory
                     </p>
