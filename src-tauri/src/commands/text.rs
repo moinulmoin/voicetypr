@@ -52,11 +52,6 @@ pub async fn insert_text(app: tauri::AppHandle, text: String) -> Result<(), Stri
     .map_err(|e| format!("Task failed: {}", e))?
 }
 
-fn insert_via_clipboard(
-    text: String,
-    has_accessibility_permission: bool,
-    app_handle: Option<tauri::AppHandle>,
-) -> Result<(), String> {
 /// Copy plain text to the system clipboard without attempting to paste
 #[tauri::command]
 pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {

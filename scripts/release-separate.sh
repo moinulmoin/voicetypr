@@ -232,7 +232,48 @@ sign_update_artifact() {
     fi
 }
 
+# Build Parakeet sidecar (Apple Silicon, arm64) and prepare dist symlink
+build_parakeet_sidecar() {
+    echo -e "${YELLOW}Building Parakeet sidecar (arm64)...${NC}"
+    local SIDE_DIR="sidecar/parakeet-swift"
+    if [[ ! -d "$SIDE_DIR" ]]; then
+        echo -e "${YELLOW}Parakeet sidecar directory not found at $SIDE_DIR; skipping sidecar build${NC}"
+        return 0
+    fi
+
+    if ! command -v swift >/dev/null 2>&1; then
+        echo -e "${RED}Swift toolchain not found. Install Xcode Command Line Tools to build sidecar.${NC}"
+        exit 1
+    fi
+
+    pushd "$SIDE_DIR" > /dev/null
+
+    # Build for Apple Silicon
+    swift build -c release --arch arm64
+    # Determine binary output path
+    BIN_DIR=$(swift build -c release --arch arm64 --show-bin-path 2>/dev/null || echo ".build/arm64-apple-macosx/release")
+    SRC_BIN_NAME="ParakeetSidecar"
+    SRC_BIN_PATH="$BIN_DIR/$SRC_BIN_NAME"
+
+    if [[ ! -f "$SRC_BIN_PATH" ]]; then
+        echo -e "${RED}Error: Built sidecar not found at $SRC_BIN_PATH${NC}"
+        popd > /dev/null
+        exit 1
+    fi
+
+    mkdir -p dist
+    cp "$SRC_BIN_PATH" "dist/parakeet-sidecar-aarch64-apple-darwin"
+    chmod +x "dist/parakeet-sidecar-aarch64-apple-darwin"
+    ln -sfn "parakeet-sidecar-aarch64-apple-darwin" "dist/parakeet-sidecar"
+
+    echo -e "${GREEN}✓ Parakeet sidecar built and prepared at $SIDE_DIR/dist${NC}"
+    popd > /dev/null
+}
+
 # Intel (x86_64) build removed – Apple Silicon only
+
+## Ensure sidecar is built and available for bundling
+build_parakeet_sidecar
 
 # Build aarch64 binary with automatic notarization
 echo -e "${GREEN}🔨 Building aarch64 binary with notarization...${NC}"
