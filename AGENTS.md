@@ -1,16 +1,53 @@
-# Repository Guidelines
+# AGENTS.md — AI Agent Guide for VoiceTypr
 
-## Project Structure & Module Organization
-VoiceTypr pairs a Vite-powered React frontend with a Rust-backed Tauri shell. Frontend code lives in `src/`, with UI components under `src/components`, shared context in `src/contexts`, hooks in `src/hooks`, and cross-cutting helpers in `src/lib` and `src/utils`. Assets such as icons and stylesheets sit in `src/assets` and `src/globals.css`. Integration harnesses are collected in `src/test`. Native logic resides in `src-tauri/src`, split into `audio`, `commands`, `whisper`, and `state` modules plus `tests` for Rust-side checks. Static files ship from `public/`, while automation and quality scripts live in `scripts/`.
+## Purpose & Scope
+Guidance for AI coding agents and contributors working in this repository. Keep changes minimal, correct, and aligned with existing patterns. For deeper context, read:
+- `agent-docs/ARCHITECTURE.md`
+- `agent-docs/README.md`
+- `agent-reports/` (analysis reports)
+- `CLAUDE.md` (coding assistant ground rules)
 
-## Build, Test, and Development Commands
-Use `pnpm install` for setup. `pnpm dev` runs the web UI in Vite; pair it with `pnpm tauri dev` when you need the desktop shell. Produce a production bundle with `pnpm build`. Guard code quality via `pnpm lint`, `pnpm format`, and `pnpm typecheck`. Test suites run with `pnpm test` (Vitest), `pnpm test:watch` for TDD, and `pnpm test:backend` (Cargo) for Rust coverage. `pnpm quality-gate` executes the full preflight of linting, typing, and tests.
+## Repository Overview
+- Frontend (React + TypeScript): `src/`
+  - `components/`, `components/ui/`, `components/tabs/`, `components/sections/`
+  - `contexts/`, `hooks/`, `lib/`, `utils/`
+  - `assets/`, `globals.css`, `test/`
+- Backend (Rust + Tauri v2): `src-tauri/src/`
+  - `ai/`, `audio/`, `commands/`, `state/`, `utils/`, `whisper/`, `tests/`
+- Shared/other: `public/`, `scripts/`, `agent-docs/`, `agent-reports/`
+- Path alias: `@/*` → `./src/*` (see `tsconfig.json`)
 
-## Coding Style & Naming Conventions
-TypeScript and React components use 2-space indentation, PascalCase filenames for components (e.g., `SettingsPanel.tsx`), and camelCase utilities. Favor function components with hooks and keep shared state inside context providers. Tailwind utility classes belong in JSX; fall back to `globals.css` for cross-cutting styles. Run Prettier (`pnpm format`) before committing, and let ESLint flag unsafe patterns such as missing dependency arrays. Rust modules follow `snake_case` filenames and 4-space indentation enforced by `cargo fmt`.
+## Toolchain & Commands
+- Dev: `pnpm dev` (frontend), `pnpm tauri dev` (full app)
+- Build: `pnpm build`
+- Quality: `pnpm lint`, `pnpm typecheck`, `pnpm format`, `pnpm quality-gate`
+- Tests: `pnpm test`, `pnpm test:watch`, `pnpm test:backend` (Cargo)
 
-## Testing Guidelines
-Vitest with React Testing Library drives frontend tests; co-locate specs as `*.test.tsx` inside the relevant feature folder or in `src/test` when covering multi-module flows. Ensure new UI flows include accessibility assertions. Use `pnpm test:coverage` to confirm meaningful branches/happy-paths are exercised (aim for ≥80% on touched files). Backend changes require `pnpm test:backend` and adding Rust integration tests under `src-tauri/src/tests`. Document any manual steps in test descriptions when hardware interactions are involved.
+## Coding Conventions
+- Frontend
+  - React 19 with function components + hooks; strict TypeScript (see `tsconfig.json`)
+  - Tailwind CSS v4 utilities; shadcn/ui components in `src/components/ui/`
+  - Keep logic in hooks/lib; small, focused components; no unnecessary comments
+- Backend
+  - Rust 2021+, modules under `src-tauri/src/*`; run `cargo fmt`/`clippy` locally
+  - Tauri v2 commands in `src-tauri/src/commands`; audio/whisper modules encapsulate native work
 
-## Commit & Pull Request Guidelines
-Follow Conventional Commits (`fix:`, `feat:`, `refactor:`) as seen in the log, keeping scopes tight and messages under 72 characters. Reference issues with `Fixes #NN` where applicable. Before opening a PR, run `pnpm quality-gate` and attach screenshots or screen recordings for UI-visible work. PRs should describe intent, note any migrations or capability changes in `src-tauri/capabilities`, and call out follow-up tasks so reviewers can focus on correctness and regressions.
+## Testing Strategy
+- Frontend: Vitest + React Testing Library; component tests near components (e.g. `__tests__`) and integration in `src/test/`
+- Backend: Rust unit/integration tests in `src-tauri/src/tests`; run with `pnpm test:backend`
+
+## Agent Workflow & Guardrails
+1. Understand first: prefer `functions.Read`, `Grep`, `Glob`, `LS` for exploration; use absolute paths.
+2. Spec-first when asked “how to approach”: propose a concise plan before edits; await approval.
+3. Follow existing patterns/libraries; do not introduce new deps without necessity.
+4. Before completion: run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `cd src-tauri && cargo test` unless explicitly waived.
+5. Git safety: `git status` → review diffs → commit; never include secrets; don’t push unless asked.
+
+## Commit & PR Guidelines
+- Conventional Commits (e.g., `feat:`, `fix:`, `docs:`); keep scopes tight and messages concise.
+- Run `pnpm quality-gate` before opening PRs; document capability changes (Tauri) in the PR.
+
+## References
+- `agent-docs/ARCHITECTURE.md`, `agent-docs/EVENT-FLOW-ANALYSIS.md`, security docs in `agent-docs/` and `agent-reports/`
+- `README.md` for product overview and repo structure
+- `CLAUDE.md` for assistant rules and commands
