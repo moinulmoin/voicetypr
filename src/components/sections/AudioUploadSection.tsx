@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import {
   Upload,
   FileAudio,
-  Mic2,
+  FileText,
   Loader2,
   Copy,
   Check,
@@ -265,7 +265,7 @@ export function AudioUploadSection() {
                             </>
                           ) : (
                             <>
-                              <Mic2 className="h-4 w-4 mr-2" />
+                              <FileText className="h-4 w-4 mr-2" />
                               Transcribe
                             </>
                           )}
