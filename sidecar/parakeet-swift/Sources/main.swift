@@ -8,7 +8,7 @@ func log(_ message: String) {
 }
 
 // JSON message structures for communication with Tauri
-struct TranscriptionResponse: Codable {
+struct TranscriptionResponse: Encodable {
     let type: String = "transcription"
     let text: String
     let segments: [Segment]
@@ -23,11 +23,11 @@ struct TranscriptionResponse: Codable {
     }
 }
 
-struct Segment: Codable {
+struct Segment: Encodable {
     let text: String
 }
 
-struct StatusResponse: Codable {
+struct StatusResponse: Encodable {
     let type: String = "status"
     let loadedModel: String?
     let modelVersion: String?
@@ -36,7 +36,7 @@ struct StatusResponse: Codable {
     let attention: String? = nil
 }
 
-struct ErrorResponse: Codable {
+struct ErrorResponse: Encodable {
     let type: String = "error"
     let code: String
     let message: String
@@ -285,7 +285,7 @@ struct ParakeetSidecar {
         }
     }
 
-    static func sendResponse<T: Codable>(_ response: T, encoder: JSONEncoder) {
+    static func sendResponse<T: Encodable>(_ response: T, encoder: JSONEncoder) {
         do {
             let data = try encoder.encode(response)
             if let jsonString = String(data: data, encoding: .utf8) {

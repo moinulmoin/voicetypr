@@ -12,7 +12,7 @@ use crate::utils::system_monitor;
 use crate::whisper::cache::TranscriberCache;
 use crate::whisper::languages::validate_language;
 use crate::whisper::manager::WhisperManager;
-use crate::{emit_to_window, update_recording_state, AppState, RecordingState};
+use crate::{emit_to_window, update_recording_state, AppState, RecordingMode, RecordingState};
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde_json;
 use std::panic::{RefUnwindSafe, UnwindSafe};
@@ -434,6 +434,12 @@ pub async fn start_recording(
         ],
     );
 
+    // If we're stuck in Error, recover to Idle before attempting a new start
+    let current_state = crate::get_recording_state(&app);
+    if matches!(current_state, crate::RecordingState::Error) {
+        crate::update_recording_state(&app, crate::RecordingState::Idle, Some("recover".to_string()));
+    }
+
     // Validate all requirements upfront
     let validation_start = Instant::now();
     match validate_recording_requirements(&app).await {
@@ -464,6 +470,10 @@ pub async fn start_recording(
     // All validation passed, update state to starting
     log_state_transition("RECORDING", "idle", "starting", true, None);
     update_recording_state(&app, RecordingState::Starting, None);
+    // Ensure transition actually happened; if blocked, abort early
+    if !matches!(crate::get_recording_state(&app), crate::RecordingState::Starting) {
+        return Err("Cannot start recording in current state".to_string());
+    }
 
     // Load recording config once to avoid repeated store access
     let config = get_recording_config(&app).await.map_err(|e| {
@@ -923,6 +933,22 @@ pub async fn stop_recording(
         }
     };
 
+    // Fast-path: handle header-only/empty WAV files before normalization
+    if let Ok(meta) = std::fs::metadata(&audio_path) {
+        // A valid WAV header is typically 44 bytes; <= 44 implies no audio samples were written
+        if meta.len() <= 44 {
+            let _ = emit_to_window(&app, "pill", "recording-too-short", "No audio captured");
+            if let Err(e) = std::fs::remove_file(&audio_path) {
+                log::debug!("Failed to remove empty audio file: {}", e);
+            }
+            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                log::error!("Failed to hide pill window: {}", e);
+            }
+            update_recording_state(&app, RecordingState::Idle, None);
+            return Ok("".to_string());
+        }
+    }
+
     
     // Normalize captured audio to Whisper contract (WAV PCM s16, mono, 16k)
     let parent_dir = audio_path
@@ -946,7 +972,22 @@ pub async fn stop_recording(
         log::debug!("Failed to remove raw audio: {}", e);
     }
 
-    // Duration gate (min 5s) using normalized file
+    // Determine min duration based on recording mode (PTT vs Toggle) once
+    let (min_duration_s_f32, min_duration_s_i32) = {
+        let app_state = app.state::<AppState>();
+        let mode = app_state
+            .recording_mode
+            .lock()
+            .ok()
+            .map(|g| *g)
+            .unwrap_or(RecordingMode::Toggle);
+        match mode {
+            RecordingMode::PushToTalk => (1.0f32, 1i32),
+            RecordingMode::Toggle => (3.0f32, 3i32),
+        }
+    };
+
+    // Duration gate (mode-specific) using normalized file
     let too_short = (|| -> Result<bool, String> {
         let reader = hound::WavReader::open(&normalized_path)
             .map_err(|e| format!("Failed to open normalized wav: {}", e))?;
@@ -960,12 +1001,17 @@ pub async fn stop_recording(
             ("bits", &spec.bits_per_sample.to_string().as_str()),
             ("duration_s", &format!("{:.2}", duration).as_str()),
         ]);
-        Ok(duration < 5.0)
+        Ok(duration < min_duration_s_f32)
     })();
 
     if let Ok(true) = too_short {
         // Emit friendly feedback and stop here
-        let _ = emit_to_window(&app, "pill", "recording-too-short", "Recording shorter than 5 seconds");
+        let _ = emit_to_window(
+            &app,
+            "pill",
+            "recording-too-short",
+            format!("Recording shorter than {} seconds", min_duration_s_i32),
+        );
         if let Err(e) = std::fs::remove_file(&normalized_path) {
             log::debug!("Failed to remove short normalized audio: {}", e);
         }

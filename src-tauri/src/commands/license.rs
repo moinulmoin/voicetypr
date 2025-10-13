@@ -2,9 +2,7 @@ use crate::license::{api_client::LicenseApiClient, device, keychain, LicenseStat
 use crate::AppState;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_cache::{CacheExt, SetItemOptions};

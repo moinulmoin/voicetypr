@@ -137,7 +137,7 @@ impl ParakeetManager {
         &self,
         app: &AppHandle,
         model_name: &str,
-        cancel_flag: Option<Arc<AtomicBool>>,
+        _cancel_flag: Option<Arc<AtomicBool>>,
         progress_callback: impl Fn(u64, u64) + Send + 'static,
     ) -> Result<(), String> {
         let Some(definition) = self.get_model_definition(model_name) else {

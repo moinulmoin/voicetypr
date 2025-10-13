@@ -45,7 +45,7 @@ pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<Path
         return Err("WAV contains no samples".to_string());
     }
 
-    let mut samples_f32: Vec<f32> = samples_i16
+    let samples_f32: Vec<f32> = samples_i16
         .iter()
         .map(|&s| s as f32 / i16::MAX as f32)
         .collect();
@@ -69,7 +69,7 @@ pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<Path
         .iter()
         .fold(0.0f32, |m, &x| m.max(x.abs()));
     let gain = if peak > 0.0 { (TARGET_PEAK / peak).min(10.0) } else { 1.0 };
-    let mut normalized: Vec<f32> = if (gain - 1.0).abs() > 1e-3 {
+    let normalized: Vec<f32> = if (gain - 1.0).abs() > 1e-3 {
         resampled.iter().map(|&x| (x * gain).clamp(-1.0, 1.0)).collect()
     } else {
         resampled
