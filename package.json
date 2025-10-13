@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "sidecar:build": "bash ./scripts/build-parakeet-sidecar.sh",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
