@@ -60,7 +60,7 @@ pub static AVAILABLE_MODELS: Lazy<Vec<ParakeetModelDefinition>> = Lazy::new(|| {
             repo_id: "FluidInference/parakeet-tdt-0.6b-v2-coreml",
             description: "Native Swift transcription optimized for English",
             languages: &["en"],
-            recommended: false,
+            recommended: true,
             speed_score: 10,
             accuracy_score: 8,
             files: &[

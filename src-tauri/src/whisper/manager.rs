@@ -133,17 +133,7 @@ impl WhisperManager {
             },
         );
 
-        models.insert("large-v3-q5_0".to_string(), ModelInfo {
-            name: "large-v3-q5_0".to_string(),
-            display_name: "Large v3 Q5".to_string(),
-            size: 1_181_116_416, // 1.1 GiB = 1.1 * 1024 * 1024 * 1024 bytes
-            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin".to_string(),
-            sha256: "e6e2ed78495d403bef4b7cff42ef4aaadcfea8de".to_string(), // SHA1 (correct)
-            downloaded: false,
-            speed_score: 4,       // Quantized, faster than full large
-            accuracy_score: 8,    // Slight degradation from quantization
-            recommended: false,
-        });
+        // Removed: large-v3-q5_0 to simplify model list
 
         models.insert("large-v3-turbo".to_string(), ModelInfo {
             name: "large-v3-turbo".to_string(),
@@ -169,21 +159,11 @@ impl WhisperManager {
                 downloaded: false,
                 speed_score: 7,    // Fast for English-only
                 accuracy_score: 6, // Good accuracy for English
-                recommended: true,
+                recommended: false,
             },
         );
 
-        models.insert("large-v3-turbo-q8_0".to_string(), ModelInfo {
-            name: "large-v3-turbo-q8_0".to_string(),
-            display_name: "Large v3 Turbo Q8".to_string(),
-            size: 874_512_384, // 834 MiB = 834 * 1024 * 1024 bytes
-            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin".to_string(),
-            sha256: "01bf15bedffe9f39d65c1b6ff9b687ea91f59e0e".to_string(), // SHA1 (correct)
-            downloaded: false,
-            speed_score: 7,       // Fast, higher quality quantization
-            accuracy_score: 8,    // Excellent accuracy with minimal loss
-            recommended: false,
-        });
+        // Removed: large-v3-turbo-q8_0 to simplify model list
 
         let mut manager = Self { models_dir, models };
         manager.check_downloaded_models();
