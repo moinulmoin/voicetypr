@@ -15,6 +15,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "@/contexts/SettingsContext";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface TranscriptionResult {
   text: string;
@@ -279,9 +280,11 @@ export function AudioUploadSection() {
                       <div className="p-4 rounded-lg bg-accent/30 space-y-3">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1">
-                            <p className="text-sm leading-relaxed">
-                              {transcriptionResult.text}
-                            </p>
+                            <ScrollArea className="h-64">
+                              <p className="text-sm leading-relaxed pr-2">
+                                {transcriptionResult.text}
+                              </p>
+                            </ScrollArea>
                           </div>
                           <Button
                             size="icon"

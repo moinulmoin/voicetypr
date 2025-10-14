@@ -47,3 +47,5 @@ agent-docs/
 
 # Swift build artifacts
 .build/
+
+sidecar/ffmpeg/vendor
