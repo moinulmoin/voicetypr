@@ -863,6 +863,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if shortcut == &escape_shortcut {
                             log::info!("ESC key detected in global handler");
 
+                            // Only react to ESC key press events (ignore key release)
+                            if event.state() != ShortcutState::Pressed {
+                                log::debug!("Ignoring ESC event since it is not a key press: {:?}", event.state());
+                                return;
+                            }
+
                             // Handle ESC key for recording cancellation
                             let current_state = get_recording_state(&app_handle);
                             log::debug!("Current recording state: {:?}", current_state);
