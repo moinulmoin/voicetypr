@@ -67,7 +67,11 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     .map_err(|e| format!("Task failed: {}", e))?
 }
 
-fn insert_via_clipboard(text: String, has_accessibility_permission: bool, app_handle: Option<tauri::AppHandle>) -> Result<(), String> {
+fn insert_via_clipboard(
+    text: String,
+    has_accessibility_permission: bool,
+    app_handle: Option<tauri::AppHandle>,
+) -> Result<(), String> {
     // This function handles both copying text to clipboard AND pasting it at cursor
     // Initialize clipboard
     let mut clipboard =

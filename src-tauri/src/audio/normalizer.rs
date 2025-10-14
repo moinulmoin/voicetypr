@@ -1,6 +1,6 @@
+use crate::audio::resampler::resample_to_16khz;
 use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 use rand::Rng;
-use crate::audio::resampler::resample_to_16khz;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,8 +20,8 @@ pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<Path
     fs::create_dir_all(out_dir).map_err(|e| format!("Failed to create out_dir: {}", e))?;
 
     // Open source wav (expect our recorder: PCM 16-bit interleaved)
-    let mut reader = WavReader::open(input_wav)
-        .map_err(|e| format!("Failed to open WAV: {}", e))?;
+    let mut reader =
+        WavReader::open(input_wav).map_err(|e| format!("Failed to open WAV: {}", e))?;
     let spec = reader.spec();
 
     if spec.sample_format != SampleFormat::Int || spec.bits_per_sample != 16 {
@@ -29,7 +29,8 @@ pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<Path
         // Avoid surprising runtime errors by surfacing a clear message.
         log::warn!(
             "Normalizer expected 16-bit PCM. Got {:?} {}-bit; proceeding best-effort.",
-            spec.sample_format, spec.bits_per_sample
+            spec.sample_format,
+            spec.bits_per_sample
         );
     }
 
@@ -65,12 +66,17 @@ pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<Path
     };
 
     // Peak normalize to TARGET_PEAK with a soft clamp
-    let peak = resampled
-        .iter()
-        .fold(0.0f32, |m, &x| m.max(x.abs()));
-    let gain = if peak > 0.0 { (TARGET_PEAK / peak).min(10.0) } else { 1.0 };
+    let peak = resampled.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+    let gain = if peak > 0.0 {
+        (TARGET_PEAK / peak).min(10.0)
+    } else {
+        1.0
+    };
     let normalized: Vec<f32> = if (gain - 1.0).abs() > 1e-3 {
-        resampled.iter().map(|&x| (x * gain).clamp(-1.0, 1.0)).collect()
+        resampled
+            .iter()
+            .map(|&x| (x * gain).clamp(-1.0, 1.0))
+            .collect()
     } else {
         resampled
     };
@@ -101,7 +107,9 @@ pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<Path
             .write_sample(s)
             .map_err(|e| format!("WAV write failed: {}", e))?;
     }
-    writer.finalize().map_err(|e| format!("WAV finalize failed: {}", e))?;
+    writer
+        .finalize()
+        .map_err(|e| format!("WAV finalize failed: {}", e))?;
 
     Ok(out_path)
 }
@@ -124,10 +132,7 @@ fn downmix_equal_power_ignore_silent(input: &[f32], channels: usize) -> Vec<f32>
             sumsq[ch] += s * s;
         }
     }
-    let rms: Vec<f32> = sumsq
-        .iter()
-        .map(|&s| (s / frames as f32).sqrt())
-        .collect();
+    let rms: Vec<f32> = sumsq.iter().map(|&s| (s / frames as f32).sqrt()).collect();
     let mut active: Vec<usize> = rms
         .iter()
         .enumerate()

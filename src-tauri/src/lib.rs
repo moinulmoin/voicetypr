@@ -18,6 +18,7 @@ mod ai;
 mod audio;
 mod commands;
 mod license;
+mod ffmpeg;
 mod parakeet;
 mod secure_store;
 mod state;
@@ -33,12 +34,14 @@ use audio::recorder::AudioRecorder;
 use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
-        get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, update_ai_settings,
-        update_enhancement_options, validate_and_cache_api_key, set_openai_config, get_openai_config, test_openai_endpoint,
+        get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
+        set_openai_config, test_openai_endpoint, update_ai_settings, update_enhancement_options,
+        validate_and_cache_api_key,
     },
     audio::*,
     clipboard::{copy_image_to_clipboard, save_image_to_file},
     debug::{debug_transcription_flow, test_transcription_event},
+    device::get_device_id,
     keyring::{keyring_delete, keyring_get, keyring_has, keyring_set},
     license::*,
     logs::{clear_old_logs, get_log_directory, open_logs_folder},
@@ -46,7 +49,6 @@ use commands::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model, verify_model,
     },
-    device::get_device_id,
     permissions::{
         check_accessibility_permission, check_microphone_permission,
         request_accessibility_permission, request_microphone_permission,
@@ -226,7 +228,9 @@ async fn build_tray_menu<R: tauri::Runtime>(
                     })
                     .unwrap_or_else(|| "(unknown)".to_string());
 
-                if label.is_empty() { label = "(empty)".to_string(); }
+                if label.is_empty() {
+                    label = "(empty)".to_string();
+                }
 
                 let item = tauri::menu::MenuItem::with_id(
                     app,
@@ -240,7 +244,9 @@ async fn build_tray_menu<R: tauri::Runtime>(
         }
     }
     let mut recent_refs: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
-    for item in &recent_owned { recent_refs.push(item); }
+    for item in &recent_owned {
+        recent_refs.push(item);
+    }
 
     // Recording mode submenu (Toggle / Push-to-Talk)
     let (toggle_item, ptt_item) = {
@@ -274,7 +280,13 @@ async fn build_tray_menu<R: tauri::Runtime>(
     // Create menu items
     let separator1 = PredefinedMenuItem::separator(app)?;
     let settings_i = MenuItem::with_id(app, "settings", "Dashboard", true, None::<&str>)?;
-    let check_updates_i = MenuItem::with_id(app, "check_updates", "Check for Updates", true, None::<&str>)?;
+    let check_updates_i = MenuItem::with_id(
+        app,
+        "check_updates",
+        "Check for Updates",
+        true,
+        None::<&str>,
+    )?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit_i = MenuItem::with_id(app, "quit", "Quit VoiceTypr", true, None::<&str>)?;
 
@@ -290,19 +302,15 @@ async fn build_tray_menu<R: tauri::Runtime>(
 
     // Add Recent Transcriptions submenu if we have items
     if !recent_refs.is_empty() {
-        let recent_submenu = Submenu::with_id_and_items(
-            app,
-            "recent",
-            "Recent Transcriptions",
-            true,
-            &recent_refs,
-        )?;
+        let recent_submenu =
+            Submenu::with_id_and_items(app, "recent", "Recent Transcriptions", true, &recent_refs)?;
         menu_builder = menu_builder.item(&recent_submenu);
     }
 
     // Recording mode submenu
     let mode_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = vec![&toggle_item, &ptt_item];
-    let mode_submenu = Submenu::with_id_and_items(app, "recording_mode", "Recording Mode", true, &mode_items)?;
+    let mode_submenu =
+        Submenu::with_id_and_items(app, "recording_mode", "Recording Mode", true, &mode_items)?;
     menu_builder = menu_builder.item(&mode_submenu);
 
     let menu = menu_builder

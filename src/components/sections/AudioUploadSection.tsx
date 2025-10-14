@@ -65,16 +65,15 @@ export function AudioUploadSection() {
     const filename = selectedFile.split('/').pop() || selectedFile.split('\\').pop() || 'audio file';
 
     try {
-      toast.info("Processing audio file... This may take a while for long recordings", {
-        duration: 5000
-      });
-
-      // Call the new transcribe_audio_file command directly with the file path
-      const result = await invoke<string>("transcribe_audio_file", {
+      // Call the transcribe_audio_file command with camelCase args (app convention)
+      const args = {
         filePath: selectedFile,
         modelName: settings.current_model,
-        modelEngine: settings.current_model_engine || 'whisper'
-      });
+        modelEngine: settings.current_model_engine || 'whisper',
+      } as const;
+      console.debug('[Upload] Invoking transcribe_audio_file', args);
+      const result = await invoke<string>("transcribe_audio_file", args);
+      console.debug('[Upload] transcribe_audio_file completed, chars=', result?.length || 0);
 
       if (!result || result.trim() === "" || result === "[BLANK_AUDIO]") {
         toast.error("No speech detected in the audio file");
@@ -95,7 +94,7 @@ export function AudioUploadSection() {
 
       toast.success("Transcription completed and saved to history!");
     } catch (error) {
-      console.error("Transcription failed:", error);
+      console.error("[Upload] Transcription failed:", error);
       toast.error(`Transcription failed: ${error}`);
     } finally {
       setIsProcessing(false);

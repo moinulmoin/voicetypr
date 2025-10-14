@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "sidecar:ensure-ffmpeg": "node scripts/ensure-ffmpeg-sidecar.cjs",
     "sidecar:build": "bash ./scripts/build-parakeet-sidecar.sh",
     "build": "tsc && vite build",
     "preview": "vite preview",

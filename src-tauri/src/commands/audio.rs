@@ -437,7 +437,11 @@ pub async fn start_recording(
     // If we're stuck in Error, recover to Idle before attempting a new start
     let current_state = crate::get_recording_state(&app);
     if matches!(current_state, crate::RecordingState::Error) {
-        crate::update_recording_state(&app, crate::RecordingState::Idle, Some("recover".to_string()));
+        crate::update_recording_state(
+            &app,
+            crate::RecordingState::Idle,
+            Some("recover".to_string()),
+        );
     }
 
     // Validate all requirements upfront
@@ -471,7 +475,10 @@ pub async fn start_recording(
     log_state_transition("RECORDING", "idle", "starting", true, None);
     update_recording_state(&app, RecordingState::Starting, None);
     // Ensure transition actually happened; if blocked, abort early
-    if !matches!(crate::get_recording_state(&app), crate::RecordingState::Starting) {
+    if !matches!(
+        crate::get_recording_state(&app),
+        crate::RecordingState::Starting
+    ) {
         return Err("Cannot start recording in current state".to_string());
     }
 
@@ -949,22 +956,26 @@ pub async fn stop_recording(
         }
     }
 
-    
-    // Normalize captured audio to Whisper contract (WAV PCM s16, mono, 16k)
+    // Normalize captured audio to Whisper contract (WAV PCM s16, mono, 16k) via ffmpeg sidecar
     let parent_dir = audio_path
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::path::Path::new(".").to_path_buf());
 
-    let normalized_path = match crate::audio::normalizer::normalize_to_whisper_wav(&audio_path, &parent_dir) {
-        Ok(p) => p,
-        Err(e) => {
-            log::error!("Audio normalization failed: {}", e);
-            update_recording_state(&app, RecordingState::Error, Some("Audio normalization failed".to_string()));
-            // Attempt cleanup
+    let normalized_path = {
+        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let out_path = parent_dir.join(format!("normalized_{}.wav", ts));
+        if let Err(e) = crate::ffmpeg::normalize_streaming(&app, &audio_path, &out_path).await {
+            log::error!("Audio normalization (ffmpeg) failed: {}", e);
+            update_recording_state(
+                &app,
+                RecordingState::Error,
+                Some("Audio normalization failed".to_string()),
+            );
             let _ = std::fs::remove_file(&audio_path);
             return Err("Audio normalization failed".to_string());
         }
+        out_path
     };
 
     // Remove raw capture after successful normalization
@@ -994,13 +1005,17 @@ pub async fn stop_recording(
         let spec = reader.spec();
         let frames = reader.duration() / spec.channels as u32; // mono expected
         let duration = frames as f32 / spec.sample_rate as f32;
-        log_with_context(log::Level::Info, "NORMALIZED_AUDIO", &[
-            ("path", &format!("{:?}", normalized_path).as_str()),
-            ("sample_rate", &spec.sample_rate.to_string().as_str()),
-            ("channels", &spec.channels.to_string().as_str()),
-            ("bits", &spec.bits_per_sample.to_string().as_str()),
-            ("duration_s", &format!("{:.2}", duration).as_str()),
-        ]);
+        log_with_context(
+            log::Level::Info,
+            "NORMALIZED_AUDIO",
+            &[
+                ("path", &format!("{:?}", normalized_path).as_str()),
+                ("sample_rate", &spec.sample_rate.to_string().as_str()),
+                ("channels", &spec.channels.to_string().as_str()),
+                ("bits", &spec.bits_per_sample.to_string().as_str()),
+                ("duration_s", &format!("{:.2}", duration).as_str()),
+            ],
+        );
         Ok(duration < min_duration_s_f32)
     })();
 
@@ -1025,10 +1040,14 @@ pub async fn stop_recording(
 
     // Proceed to transcription with normalized file
     let audio_path = normalized_path;
-    log_with_context(log::Level::Debug, "Proceeding to transcription", &[
-        ("audio_path", &format!("{:?}", audio_path).as_str()),
-        ("stage", "pre_transcription")
-    ]);
+    log_with_context(
+        log::Level::Debug,
+        "Proceeding to transcription",
+        &[
+            ("audio_path", &format!("{:?}", audio_path).as_str()),
+            ("stage", "pre_transcription"),
+        ],
+    );
 
     // Get cached recording config to avoid repeated store access
     let config = get_recording_config(&app).await.map_err(|e| {
@@ -1462,7 +1481,9 @@ pub async fn stop_recording(
                                     };
 
                                     // Show short error on pill for visibility, then continue
-                                    log::warn!("Enhancement failed; showing pill error for 2s before hide");
+                                    log::warn!(
+                                        "Enhancement failed; showing pill error for 2s before hide"
+                                    );
                                     crate::show_pill_error_short(
                                         &app_for_process,
                                         "enhancing-failed",
@@ -1726,7 +1747,10 @@ pub async fn save_transcription(app: AppHandle, text: String, model: String) -> 
 
     // Refresh tray menu (best-effort) so Recent Transcriptions stays updated
     if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
-        log::warn!("Failed to update tray menu after saving transcription: {}", e);
+        log::warn!(
+            "Failed to update tray menu after saving transcription: {}",
+            e
+        );
     }
 
     log::info!("Saved transcription with {} characters", text.len());
@@ -1767,6 +1791,12 @@ pub async fn transcribe_audio_file(
     model_name: String,
     model_engine: Option<String>,
 ) -> Result<String, String> {
+    log::info!(
+        "[UPLOAD] transcribe_audio_file START | file_path={:?}, model_name={}, engine_hint={:?}",
+        file_path,
+        model_name,
+        model_engine
+    );
     // Validate requirements (includes license check)
     validate_recording_requirements(&app).await?;
 
@@ -1788,16 +1818,29 @@ pub async fn transcribe_audio_file(
     std::fs::create_dir_all(&recordings_dir)
         .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
 
-    let wav_path = crate::audio::converter::convert_to_wav(audio_path, &recordings_dir)?;
-    let is_converted = wav_path != audio_path;
+    // No pre-conversion needed; ffmpeg normalizer can read most formats directly.
+    let wav_path = audio_path.to_path_buf();
+    log::info!("[UPLOAD] Input ready at {:?}", wav_path);
 
-    // Normalize imported audio to Whisper contract (WAV PCM s16, mono, 16k)
-    let normalized_path = crate::audio::normalizer::normalize_to_whisper_wav(&wav_path, &recordings_dir)
-        .map_err(|e| format!("Audio normalization failed: {}", e))?;
+    // Normalize imported audio to Whisper contract (WAV PCM s16, mono, 16k) using ffmpeg sidecar for all files
+    log::debug!("[UPLOAD] Normalizing to Whisper WAV (16k mono s16)...");
+    let normalized_path = {
+        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
+        crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
+            .await
+            .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+        out_path
+    };
+    log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_path);
 
     // Resolve engine (whisper or parakeet) for the requested model
     let engine_selection =
         resolve_engine_for_model(&app, &model_name, model_engine.as_deref()).await?;
+    log::info!(
+        "[UPLOAD] Engine resolved to: {}",
+        engine_selection.engine_name()
+    );
 
     // Get language and translation settings
     let store = app.store("settings").map_err(|e| e.to_string())?;
@@ -1864,19 +1907,16 @@ pub async fn transcribe_audio_file(
         }
     };
 
-    // Clean up temporary WAV file if we created one
-    if is_converted {
-        if let Err(e) = std::fs::remove_file(&wav_path) {
-            log::warn!("Failed to remove temporary WAV file: {}", e);
-        } else {
-            log::debug!("Cleaned up temporary converted WAV file");
-        }
-    }
+    // No temp converted file to clean; normalization handled transcoding
     // Clean up normalized WAV
     if let Err(e) = std::fs::remove_file(&normalized_path) {
         log::warn!("Failed to remove normalized WAV file: {}", e);
     }
 
+    log::info!(
+        "[UPLOAD] Completed transcription, {} characters",
+        text.len()
+    );
     Ok(text)
 }
 
@@ -1887,6 +1927,12 @@ pub async fn transcribe_audio(
     model_name: String,
     model_engine: Option<String>,
 ) -> Result<String, String> {
+    log::info!(
+        "[UPLOAD] transcribe_audio (bytes) START | bytes={}, model_name={}, engine_hint={:?}",
+        audio_data.len(),
+        model_name,
+        model_engine
+    );
     // Validate requirements (includes license check)
     validate_recording_requirements(&app).await?;
 

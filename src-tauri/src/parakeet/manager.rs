@@ -179,7 +179,9 @@ impl ParakeetManager {
                 "Sidecar loaded '{}' but '{}' was requested",
                 other_id, definition.id
             )),
-            Ok(ParakeetResponse::Ok { .. }) => Err("Unexpected OK without status payload".to_string()),
+            Ok(ParakeetResponse::Ok { .. }) => {
+                Err("Unexpected OK without status payload".to_string())
+            }
             Ok(ParakeetResponse::Error { code, message, .. }) => {
                 Err(format!("Failed to download model: {}: {}", code, message))
             }
@@ -255,13 +257,40 @@ impl ParakeetManager {
 
         match self.send_command(app, &command).await? {
             ParakeetResponse::Ok { .. } => Ok(()),
+            ParakeetResponse::Status {
+                loaded_model,
+                model_version,
+                ..
+            } => {
+                let expected_v = version.to_string();
+                let ok = match (loaded_model.as_deref(), model_version.as_deref()) {
+                    (Some(id), mv) if mv == Some(expected_v.as_str()) => {
+                        // Accept exact match ("parakeet-...-v2") or prefix match for id variants
+                        id == format!("{}", definition.id)
+                            || id == format!("{}-{}", definition.id, expected_v)
+                            || id.starts_with(definition.id)
+                    }
+                    _ => false,
+                };
+                if ok {
+                    Ok(())
+                } else {
+                    Err(ParakeetError::SidecarError {
+                        code: "load_mismatch".to_string(),
+                        message: format!(
+                            "Sidecar loaded '{:?}' (version {:?}) but '{}' (version {}) was requested",
+                            loaded_model, model_version, definition.id, expected_v
+                        ),
+                    })
+                }
+            }
             ParakeetResponse::Error { code, message, .. } => {
                 Err(ParakeetError::SidecarError { code, message })
             }
-            other => {
-                info!("Unexpected response while loading model: {:?}", other);
-                Ok(())
-            }
+            other => Err(ParakeetError::SidecarError {
+                code: "unexpected_response".to_string(),
+                message: format!("Unexpected response: {:?}", other),
+            }),
         }
     }
 

@@ -230,7 +230,9 @@ pub async fn validate_and_cache_api_key(
         if !inferred_no_auth {
             let key = provided_key.trim();
             if key.is_empty() {
-                return Err("API key is required (leave empty to use no authentication)".to_string());
+                return Err(
+                    "API key is required (leave empty to use no authentication)".to_string()
+                );
             }
             req = req.header("Authorization", format!("Bearer {}", key));
         }
@@ -275,7 +277,10 @@ pub async fn test_openai_endpoint(
     no_auth: Option<bool>,
 ) -> Result<(), String> {
     let no_auth = no_auth.unwrap_or(false)
-        || api_key.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true);
+        || api_key
+            .as_deref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
 
     let validate_url = normalize_chat_completions_url(&base_url);
 
@@ -559,17 +564,14 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
                 .lock()
                 .map_err(|_| "Failed to access cache".to_string())?;
             let key_name = format!("ai_api_key_{}", provider);
-            cache
-                .get(&key_name)
-                .cloned()
-                .ok_or_else(|| {
-                    log::error!(
-                        "API key not found in cache for provider: {}. Cache keys: {:?}",
-                        provider,
-                        cache.keys().collect::<Vec<_>>()
-                    );
-                    "API key not found in cache".to_string()
-                })?
+            cache.get(&key_name).cloned().ok_or_else(|| {
+                log::error!(
+                    "API key not found in cache for provider: {}. Cache keys: {:?}",
+                    provider,
+                    cache.keys().collect::<Vec<_>>()
+                );
+                "API key not found in cache".to_string()
+            })?
         };
 
         let mut opts = std::collections::HashMap::new();
@@ -582,17 +584,14 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
             .lock()
             .map_err(|_| "Failed to access cache".to_string())?;
         let key_name = format!("ai_api_key_{}", provider);
-        let api_key = cache
-            .get(&key_name)
-            .cloned()
-            .ok_or_else(|| {
-                log::error!(
-                    "API key not found in cache for provider: {}. Cache keys: {:?}",
-                    provider,
-                    cache.keys().collect::<Vec<_>>()
-                );
-                "API key not found in cache".to_string()
-            })?;
+        let api_key = cache.get(&key_name).cloned().ok_or_else(|| {
+            log::error!(
+                "API key not found in cache for provider: {}. Cache keys: {:?}",
+                provider,
+                cache.keys().collect::<Vec<_>>()
+            );
+            "API key not found in cache".to_string()
+        })?;
 
         (api_key, std::collections::HashMap::new())
     } else {
@@ -613,7 +612,13 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
     );
 
     // Create provider config
-    let config = AIProviderConfig { provider, model, api_key, enabled: true, options };
+    let config = AIProviderConfig {
+        provider,
+        model,
+        api_key,
+        enabled: true,
+        options,
+    };
 
     // Create provider and enhance text
     let provider = AIProviderFactory::create(&config)
@@ -660,9 +665,15 @@ pub struct SetOpenAIConfigArgs {
 }
 
 #[tauri::command]
-pub async fn set_openai_config(app: tauri::AppHandle, args: SetOpenAIConfigArgs) -> Result<(), String> {
+pub async fn set_openai_config(
+    app: tauri::AppHandle,
+    args: SetOpenAIConfigArgs,
+) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
-    store.set("ai_openai_base_url", serde_json::Value::String(args.base_url));
+    store.set(
+        "ai_openai_base_url",
+        serde_json::Value::String(args.base_url),
+    );
     store.set("ai_openai_no_auth", serde_json::Value::Bool(args.no_auth));
     store
         .save()
