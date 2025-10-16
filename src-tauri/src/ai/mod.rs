@@ -8,7 +8,7 @@ pub mod groq;
 pub mod openai;
 pub mod prompts;
 
-pub use config::{MAX_CUSTOM_VOCABULARY, MAX_TEXT_LENGTH, MAX_VOCABULARY_TERM_LENGTH};
+pub use config::MAX_TEXT_LENGTH;
 pub use prompts::EnhancementOptions;
 
 #[cfg(test)]

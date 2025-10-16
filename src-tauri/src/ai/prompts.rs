@@ -1,8 +1,20 @@
 use serde::{Deserialize, Serialize};
 
-// Self-correction rules that apply to ALL presets
-const SELF_CORRECTION_RULES: &str = r#"FIRST, handle self-corrections:
-When speakers correct themselves mid-sentence (e.g., "send it to John... to Mary"), keep only the final version ("send it to Mary")."#;
+// 100/100 Base Prompt - deterministic last-intent processing
+const BASE_PROMPT: &str = r#"You are a post-processor for voice transcripts.
+
+Resolve self-corrections and intent changes: delete the retracted part and keep only the final intended phrasing (last-intent wins).
+Tie-breakers:
+- Prefer the last explicit affirmative directive ("we will", "let's", "I'll").
+- For conflicting recipients/places/dates/numbers, keep the last stated value.
+- Remove "or/maybe" alternatives that precede a final choice.
+- If still uncertain, output the safest minimal intent without adding details.
+
+Rewrite into clear, natural written English while preserving meaning and tone.
+Remove fillers/false starts; fix grammar, punctuation, capitalization, and spacing.
+Normalize obvious names/brands/terms when unambiguous; if uncertain, don't guess—keep generic.
+Format numbers/dates/times as spoken. Handle dictation commands only when explicitly said (e.g., "period", "new line").
+Output only the polished text."#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EnhancementPreset {
@@ -15,14 +27,12 @@ pub enum EnhancementPreset {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnhancementOptions {
     pub preset: EnhancementPreset,
-    pub custom_vocabulary: Vec<String>,
 }
 
 impl Default for EnhancementOptions {
     fn default() -> Self {
         Self {
             preset: EnhancementPreset::Default,
-            custom_vocabulary: vec![],
         }
     }
 }
@@ -33,7 +43,7 @@ pub fn build_enhancement_prompt(
     options: &EnhancementOptions,
 ) -> String {
     // Base processing applies to ALL presets
-    let base_processing = format!("{}\n\n{}", SELF_CORRECTION_RULES, DEFAULT_PROMPT);
+    let base_prompt = BASE_PROMPT;
 
     // Add mode-specific transformation if not Default
     let mode_transform = match options.preset {
@@ -46,12 +56,12 @@ pub fn build_enhancement_prompt(
     // Build the complete prompt
     let mut prompt = if mode_transform.is_empty() {
         // Default preset: just base processing
-        format!("{}\n\nTranscribed text:\n{}", base_processing, text.trim())
+        format!("{}\n\nTranscribed text:\n{}", base_prompt, text.trim())
     } else {
         // Other presets: base + transform
         format!(
             "{}\n\n{}\n\nTranscribed text:\n{}",
-            base_processing,
+            base_prompt,
             mode_transform,
             text.trim()
         )
@@ -62,105 +72,31 @@ pub fn build_enhancement_prompt(
         prompt.push_str(&format!("\n\nContext: {}", ctx));
     }
 
-    // Add custom vocabulary
-    if !options.custom_vocabulary.is_empty() {
-        prompt.push_str(&format!(
-            "\n\nRecognize these terms: {}",
-            options.custom_vocabulary.join(", ")
-        ));
-    }
-
     prompt
 }
 
-const DEFAULT_PROMPT: &str = r#"THEN clean up this voice transcription:
+// Minimal transformation layer for Prompts preset
+const PROMPTS_TRANSFORM: &str = r#"Now transform the cleaned text into a concise AI prompt:
+- Classify as Request, Question, or Task.
+- Add only essential missing what/how/why.
+- Include constraints and success criteria if relevant.
+- Specify output format when helpful.
+- Preserve all technical details; do not invent any.
+Return only the enhanced prompt."#;
 
-- Remove filler words and stutters
-- Fix all errors: grammar, spelling, punctuation, word choice
-- Fix logical inconsistencies and nonsensical phrases
-- Correct informal speech if inappropriate (gonna → going to)
-- Correct technical terms and proper nouns
-- Format numbers, dates, times naturally
-- Handle dictation commands when explicitly stated
-- Keep the original tone and flow - don't restructure or change style
+// Minimal transformation layer for Email preset
+const EMAIL_TRANSFORM: &str = r#"Now format the cleaned text as an email:
+- Subject: specific and action-oriented.
+- Greeting: Hi/Dear/Hello [Name].
+- Body: short paragraphs; lead with the key info or ask.
+- If it's a request, include action items and deadlines if present.
+- Match tone (formal/casual) to the source.
+- Closing: appropriate sign-off; use [Your Name].
+Return only the formatted email."#;
 
-Return ONLY the cleaned text as natural dictation output."#;
-
-// Thin transformation layer for Prompts preset
-const PROMPTS_TRANSFORM: &str = r#"FINALLY, transform the cleaned text into a well-structured AI prompt:
-
-IDENTIFY the type:
-- Request: Add deliverables and success criteria
-- Question: Clarify scope and depth needed
-- Task: Include constraints and requirements
-
-ENHANCE by:
-- Adding "what/how/why" if missing
-- Specifying output format if relevant
-- Preserving all technical details
-
-Examples:
-"fix the login bug" → "Fix the login bug. Explain what caused it and show the code changes needed."
-"make a todo app" → "Create a todo app with add, edit, delete, and mark complete functionality. Include basic UI."
-"what's this do" → "Explain what this code does, its purpose, and key implementation details."
-
-Return ONLY the enhanced prompt."#;
-
-// Thin transformation layer for Email preset
-const EMAIL_TRANSFORM: &str = r#"FINALLY, format the cleaned text as an email:
-
-DETECT intent and tone:
-- Request: Include clear action items
-- Update: Lead with key information  
-- Question: Be specific about what you need
-- Formal: Use professional language
-- Casual: Keep friendly but clear
-
-STRUCTURE:
-- Subject: Specific and action-oriented
-- Greeting: Match relationship (Hi/Dear/Hello)
-- Body: Paragraph breaks for readability
-- Closing: Appropriate sign-off
-- Use [Name] for placeholders
-
-Examples:
-"need the Q3 report by Friday" →
-"Subject: Q3 Report Needed by Friday
-
-Hi [Name],
-
-Could you please send me the Q3 report by Friday?
-
-Thanks,
-[Your name]"
-
-"following up on our discussion about the new feature yesterday" →
-"Subject: Follow-up: New Feature Discussion
-
-Hi [Name],
-
-Following up on our discussion about the new feature yesterday.
-
-[Your name]"
-
-Return ONLY the formatted email."#;
-
-// Thin transformation layer for Commit preset
-const COMMIT_TRANSFORM: &str = r#"FINALLY, convert to conventional commit format:
-
-FORMAT: type(scope): description
-
-TYPES: feat, fix, docs, style, refactor, perf, test, chore, build, ci
-
-RULES:
-- Lowercase verb, present tense
-- No period at end
-- Under 72 characters
-- Add ! for breaking changes
-
-Examples:
-"fixed the login bug" → "fix(auth): resolve login authentication failure"
-"added dark mode" → "feat(ui): add dark mode toggle"
-"updated readme" → "docs: update installation instructions"
-
-Return ONLY the commit message."#;
+// Minimal transformation layer for Commit preset
+const COMMIT_TRANSFORM: &str = r#"Now convert the cleaned text to a Conventional Commit:
+Format: type(scope): description
+Types: feat, fix, docs, style, refactor, perf, test, chore, build, ci
+Rules: present tense, no period, ≤72 chars; add ! for breaking changes.
+Return only the commit message."#;

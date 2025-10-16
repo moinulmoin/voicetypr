@@ -468,26 +468,6 @@ pub async fn update_enhancement_options(
 ) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
-    // Validate custom vocabulary
-    for term in &options.custom_vocabulary {
-        if term.trim().is_empty() {
-            return Err("Custom vocabulary terms cannot be empty".to_string());
-        }
-        if term.len() > crate::ai::MAX_VOCABULARY_TERM_LENGTH {
-            return Err(format!(
-                "Custom vocabulary terms must be less than {} characters",
-                crate::ai::MAX_VOCABULARY_TERM_LENGTH
-            ));
-        }
-    }
-
-    if options.custom_vocabulary.len() > crate::ai::MAX_CUSTOM_VOCABULARY {
-        return Err(format!(
-            "Maximum {} custom vocabulary terms allowed",
-            crate::ai::MAX_CUSTOM_VOCABULARY
-        ));
-    }
-
     store.set(
         "enhancement_options",
         serde_json::to_value(&options)
@@ -499,9 +479,8 @@ pub async fn update_enhancement_options(
         .map_err(|e| format!("Failed to save enhancement options: {}", e))?;
 
     log::info!(
-        "Enhancement options updated: preset={:?}, vocab_count={}",
-        options.preset,
-        options.custom_vocabulary.len()
+        "Enhancement options updated: preset={:?}",
+        options.preset
     );
 
     Ok(())

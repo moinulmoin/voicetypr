@@ -17,9 +17,3 @@ pub const DEFAULT_TEMPERATURE: f32 = 0.5;
 
 /// Maximum text length for enhancement requests
 pub const MAX_TEXT_LENGTH: usize = 10_000;
-
-/// Maximum custom vocabulary terms allowed
-pub const MAX_CUSTOM_VOCABULARY: usize = 50;
-
-/// Maximum length for each vocabulary term
-pub const MAX_VOCABULARY_TERM_LENGTH: usize = 100;
