@@ -46,7 +46,6 @@ tauri-plugin-log = { version = "2", features = ["colored"] }
 chrono = { version = "0.4", features = ["serde"] }
 tauri-plugin-updater = "2.9.0"
 tauri-plugin-process = "2.3.0"
-tauri-plugin-cache = "0.1.5"
 once_cell = "1.20"
 dotenv = "0.15"
 async-trait = "0.1"

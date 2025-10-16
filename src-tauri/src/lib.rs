@@ -23,6 +23,7 @@ mod parakeet;
 mod secure_store;
 mod state;
 mod state_machine;
+mod simple_cache;
 mod utils;
 mod whisper;
 mod window_manager;
@@ -674,7 +675,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(setup_logging().build())
-        .plugin(tauri_plugin_cache::init())
+        // Replaced tauri-plugin-cache with simple_store-backed cache
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
@@ -1029,15 +1030,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // Clear license cache on app start to ensure fresh checks
             {
-                use tauri_plugin_cache::CacheExt;
-                let cache = app.cache();
-                if let Err(e) = cache.remove("license_status") {
-                    log::debug!("No license cache to clear on startup: {}", e);
-                } else {
-                    log::info!("🧹 Cleared license cache on app startup for fresh check");
-                }
-                // Also clear the last validation tracker
-                let _ = cache.remove("last_license_validation");
+                use crate::simple_cache;
+                let _ = simple_cache::remove(&app.app_handle(), "license_status");
+                let _ = simple_cache::remove(&app.app_handle(), "last_license_validation");
             }
 
             // Run comprehensive startup checks
@@ -1664,6 +1659,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             activate_license,
             deactivate_license,
             open_purchase_page,
+            invalidate_license_cache,
             reset_app_data,
             copy_image_to_clipboard,
             save_image_to_file,

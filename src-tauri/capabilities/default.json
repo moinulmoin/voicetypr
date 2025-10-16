@@ -30,7 +30,6 @@
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
-    "cache:default",
     "updater:default",
     "updater:allow-check",
     "updater:allow-download-and-install",

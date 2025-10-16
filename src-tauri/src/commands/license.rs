@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::time::Instant;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_cache::{CacheExt, SetItemOptions};
+use crate::simple_cache::{self as scache, SetItemOptions};
 
 /// Cached license status to avoid repeated API calls
 /// Cache is valid for 6 hours to balance freshness with performance
@@ -82,9 +82,10 @@ fn hours_to_days(hours: i64) -> i32 {
 
 // Check if we're within the grace period for offline access
 fn is_within_grace_period(app: &AppHandle) -> Option<i64> {
-    let cache = app.cache();
+    // Use store-backed cache helper
+    // let cache = app.cache();
 
-    if let Ok(Some(timestamp_json)) = cache.get(LAST_VALIDATION_KEY) {
+    if let Ok(Some(timestamp_json)) = scache::get(app, LAST_VALIDATION_KEY) {
         if let Ok(last_validation) = serde_json::from_value::<DateTime<Utc>>(timestamp_json) {
             let elapsed = Utc::now().signed_duration_since(last_validation);
             let days_elapsed = elapsed.num_days();
@@ -100,15 +101,15 @@ fn is_within_grace_period(app: &AppHandle) -> Option<i64> {
 
 // Check if grace period timestamp exists (regardless of whether it's valid)
 fn has_grace_period_timestamp(app: &AppHandle) -> bool {
-    let cache = app.cache();
-    cache.get(LAST_VALIDATION_KEY).ok().flatten().is_some()
+    // let cache = app.cache();
+    scache::get(app, LAST_VALIDATION_KEY).ok().flatten().is_some()
 }
 
 // Check if we're within the trial grace period
 fn is_within_trial_grace_period(app: &AppHandle) -> Option<i64> {
-    let cache = app.cache();
+    // let cache = app.cache();
 
-    if let Ok(Some(timestamp_json)) = cache.get(LAST_TRIAL_VALIDATION_KEY) {
+    if let Ok(Some(timestamp_json)) = scache::get(app, LAST_TRIAL_VALIDATION_KEY) {
         if let Ok(last_validation) = serde_json::from_value::<DateTime<Utc>>(timestamp_json) {
             let elapsed = Utc::now().signed_duration_since(last_validation);
             let days_elapsed = elapsed.num_days();
@@ -147,10 +148,10 @@ pub async fn check_license_status(app: AppHandle) -> Result<LicenseStatus, Strin
 
 /// Internal implementation of license status check
 async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, String> {
-    let cache = app.cache();
+    // let cache = app.cache();
 
     // Try to get cached status (cache is cleared on app start)
-    match cache.get(LICENSE_CACHE_KEY) {
+    match scache::get(&app, LICENSE_CACHE_KEY) {
         Ok(Some(cached_json)) => {
             log::info!("📦 Cache hit: Found cached license status");
             log::debug!("Raw cached data: {:?}", cached_json);
@@ -261,8 +262,9 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
 
                     // Store last successful validation timestamp
                     let validation_time = Utc::now();
-                    let _ = cache.set(
-                        LAST_VALIDATION_KEY.to_string(),
+                    let _ = scache::set(
+                        &app,
+                        LAST_VALIDATION_KEY,
                         serde_json::to_value(&validation_time).unwrap_or_default(),
                         None,
                     );
@@ -278,8 +280,9 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                         compress: None,
                         compression_method: None,
                     });
-                    match cache.set(
-                        LICENSE_CACHE_KEY.to_string(),
+                    match scache::set(
+                        &app,
+                        LICENSE_CACHE_KEY,
                         serde_json::to_value(&wrapped_status).unwrap_or_default(),
                         cache_options,
                     ) {
@@ -340,8 +343,9 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                         compress: None,
                         compression_method: None,
                     });
-                    let _ = cache.set(
-                        LICENSE_CACHE_KEY.to_string(),
+                    let _ = scache::set(
+                        &app,
+                        LICENSE_CACHE_KEY,
                         serde_json::to_value(&wrapped_status).unwrap_or_default(),
                         cache_options,
                     );
@@ -355,7 +359,7 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                                   OFFLINE_GRACE_PERIOD_DAYS);
                         // DO NOT DELETE THE LICENSE! User paid for it and might just be offline temporarily
                         // Clear the timestamp so next successful validation starts fresh grace period
-                        let _ = cache.remove(LAST_VALIDATION_KEY);
+                        let _ = scache::remove(&app, LAST_VALIDATION_KEY);
                         return Err("Grace period expired. Please connect to internet to revalidate your license.".to_string());
                     } else {
                         // No timestamp exists - this is the first offline attempt
@@ -405,8 +409,9 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
 
                 // Set last successful trial validation timestamp for grace period tracking
                 let validation_time = Utc::now();
-                if let Err(e) = cache.set(
-                    LAST_TRIAL_VALIDATION_KEY.to_string(),
+                if let Err(e) = scache::set(
+                    &app,
+                    LAST_TRIAL_VALIDATION_KEY,
                     serde_json::to_value(&validation_time).unwrap_or_default(),
                     None, // No TTL for validation timestamp
                 ) {
@@ -423,8 +428,9 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                         compress: None,
                         compression_method: None,
                     });
-                    match cache.set(
-                        TRIAL_EXPIRES_KEY.to_string(),
+                    match scache::set(
+                        &app,
+                        TRIAL_EXPIRES_KEY,
                         serde_json::to_value(expires_at).unwrap_or_default(),
                         cache_options,
                     ) {
@@ -450,8 +456,9 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                         compress: None,
                         compression_method: None,
                     });
-                    match cache.set(
-                        LICENSE_CACHE_KEY.to_string(),
+                    match scache::set(
+                        &app,
+                        LICENSE_CACHE_KEY,
                         serde_json::to_value(&wrapped_status).unwrap_or_default(),
                         cache_options,
                     ) {
@@ -476,7 +483,7 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
             log::error!("Failed to check trial status: {}", e);
 
             // FIRST: Check if we have a cached trial expiry date
-            if let Ok(Some(expires_json)) = cache.get(TRIAL_EXPIRES_KEY) {
+            if let Ok(Some(expires_json)) = scache::get(&app, TRIAL_EXPIRES_KEY) {
                 if let Ok(expires_at_str) = serde_json::from_value::<String>(expires_json) {
                     if let Ok(expires_at) = DateTime::parse_from_rfc3339(&expires_at_str) {
                         let expires_utc = expires_at.with_timezone(&Utc);
@@ -486,8 +493,8 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                         if now >= expires_utc {
                             log::info!("Trial has expired (was valid until {}). No need to check grace period.", expires_at_str);
                             // Clear the expired trial cache
-                            let _ = cache.remove(TRIAL_EXPIRES_KEY);
-                            let _ = cache.remove(LAST_TRIAL_VALIDATION_KEY);
+                            let _ = scache::remove(&app, TRIAL_EXPIRES_KEY);
+                            let _ = scache::remove(&app, LAST_TRIAL_VALIDATION_KEY);
 
                             return Ok(LicenseStatus {
                                 status: LicenseState::Expired,
@@ -554,7 +561,7 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
             }
 
             // Check if we have a cached license status to fall back on
-            if let Ok(Some(cached_json)) = cache.get(LICENSE_CACHE_KEY) {
+            if let Ok(Some(cached_json)) = scache::get(&app, LICENSE_CACHE_KEY) {
                 if let Ok(cached) = serde_json::from_value::<CachedLicenseStatus>(cached_json) {
                     let age = Utc::now().signed_duration_since(cached.cached_at);
 
@@ -620,13 +627,13 @@ pub async fn restore_license(app: AppHandle) -> Result<LicenseStatus, String> {
                 log::info!("License restored successfully");
 
                 // Clear cache when license is restored
-                invalidate_license_cache(&app).await;
+                let _ = invalidate_license_cache(app.clone()).await;
 
                 // Set last validation timestamp for grace period tracking
                 let validation_time = Utc::now();
-                let cache = app.cache();
-                if let Err(e) = cache.set(
-                    LAST_VALIDATION_KEY.to_string(),
+                if let Err(e) = scache::set(
+                    &app,
+                    LAST_VALIDATION_KEY,
                     serde_json::to_value(&validation_time).unwrap_or_default(),
                     None, // No TTL for validation timestamp
                 ) {
@@ -745,13 +752,13 @@ async fn activate_license_internal(
                 log::info!("License activated successfully");
 
                 // Clear cache when license is activated
-                invalidate_license_cache(&app).await;
+                let _ = invalidate_license_cache(app.clone()).await;
 
                 // Set last validation timestamp for grace period tracking
                 let validation_time = Utc::now();
-                let cache = app.cache();
-                if let Err(e) = cache.set(
-                    LAST_VALIDATION_KEY.to_string(),
+                if let Err(e) = scache::set(
+                    &app,
+                    LAST_VALIDATION_KEY,
                     serde_json::to_value(&validation_time).unwrap_or_default(),
                     None, // No TTL for validation timestamp
                 ) {
@@ -813,16 +820,16 @@ pub async fn deactivate_license(app: AppHandle) -> Result<(), String> {
                 keychain::delete_license(&app)?;
 
                 // Clear cache when license is deactivated
-                let cache = app.cache();
-                match cache.remove(LICENSE_CACHE_KEY) {
+                // let cache = app.cache();
+                match scache::remove(&app, LICENSE_CACHE_KEY) {
                     Ok(_) => log::info!("Cleared license cache after deactivation"),
                     Err(e) => log::warn!("Failed to clear cache after deactivation: {}", e),
                 }
                 // Clear validation timestamp when deactivating - this is intentional removal
-                let _ = cache.remove(LAST_VALIDATION_KEY);
+                let _ = scache::remove(&app, LAST_VALIDATION_KEY);
 
                 // Clear our performance cache too
-                invalidate_license_cache(&app).await;
+                let _ = invalidate_license_cache(app.clone()).await;
 
                 log::info!("License deactivated successfully");
 
@@ -852,8 +859,8 @@ pub async fn deactivate_license(app: AppHandle) -> Result<(), String> {
             );
 
             // Clear cache even on failure
-            let cache = app.cache();
-            match cache.remove(LICENSE_CACHE_KEY) {
+            // let cache = app.cache();
+            match scache::remove(&app, LICENSE_CACHE_KEY) {
                 Ok(_) => log::info!("Cleared license cache after deactivation failure"),
                 Err(e) => log::warn!("Failed to clear cache after deactivation failure: {}", e),
             }
@@ -917,18 +924,19 @@ pub async fn check_license_status_internal(app: &AppHandle) -> Result<LicenseSta
 }
 
 /// Invalidate cached license status when license state changes
-pub async fn invalidate_license_cache(app: &AppHandle) {
+#[tauri::command]
+pub async fn invalidate_license_cache(app: AppHandle) -> Result<(), String> {
     // Clear both the old cache and the new performance cache
-    let cache = app.cache();
-    match cache.remove(LICENSE_CACHE_KEY) {
+    match scache::remove(&app, LICENSE_CACHE_KEY) {
         Ok(_) => log::debug!("Cleared old license cache"),
         Err(e) => log::warn!("Failed to clear old license cache: {}", e),
     }
-    let _ = cache.remove(LAST_VALIDATION_KEY);
+    let _ = scache::remove(&app, LAST_VALIDATION_KEY);
 
     // Clear the new performance cache
     let app_state = app.state::<AppState>();
     let mut perf_cache = app_state.license_cache.write().await;
     *perf_cache = None;
     log::debug!("License cache invalidated due to license state change");
+    Ok(())
 }
