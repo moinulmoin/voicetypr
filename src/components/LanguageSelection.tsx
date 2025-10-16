@@ -125,7 +125,7 @@ interface LanguageSelectionProps {
   value: string
   onValueChange: (value: string) => void
   className?: string
-  engine?: 'whisper' | 'parakeet'
+  engine?: 'whisper' | 'parakeet' | 'soniox'
   englishOnly?: boolean
 }
 
@@ -137,6 +137,11 @@ export function LanguageSelection({ value, onValueChange, className, engine = 'w
     'bg','cs','da','de','el','en','es','et','fi','fr','hr','hu','it','lt','lv','mt','nl','pl','pt','ro','ru','sk','sl','sv','uk'
   ]), [])
 
+  // Soniox supported languages (static list per docs). Keep in sync with codes in `languages` above.
+  const sonioxAllowed = React.useMemo(() => new Set<string>([
+    'en','es','fr','de','it','pt','nl','ru','zh','ja','ko','ar','hi','tr','pl','sv','no','da','fi','el','cs','ro','hu','sk','uk','he','id','vi','th','ms','tl','fa','ur','bn','ta','te','gu','pa','bg','hr','sr','sl','lv','lt','et','is','ca','gl'
+  ]), [])
+
   const displayed = React.useMemo(() => {
     if (englishOnly) {
       return languages.filter(l => l.value === 'en')
@@ -144,8 +149,11 @@ export function LanguageSelection({ value, onValueChange, className, engine = 'w
     if (engine === 'parakeet') {
       return languages.filter(l => parakeetAllowed.has(l.value))
     }
+    if (engine === 'soniox') {
+      return languages.filter(l => sonioxAllowed.has(l.value))
+    }
     return languages
-  }, [engine, parakeetAllowed, englishOnly])
+  }, [engine, parakeetAllowed, sonioxAllowed, englishOnly])
   
   return (
     <Popover open={open} onOpenChange={setOpen}>

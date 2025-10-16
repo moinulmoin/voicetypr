@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useSettings } from '@/contexts/SettingsContext';
 import type { ModelInfo } from '@/types';
+import { hasSttApiKeySoniox } from '@/utils/keyring';
 
 interface ModelStatusResponse {
   models: ModelInfo[];
@@ -17,6 +18,15 @@ export function useModelAvailability() {
   const checkModels = useCallback(async () => {
     setIsChecking(true);
     try {
+      // If using Soniox cloud engine, availability depends on token
+      const engine = settings?.current_model_engine;
+      if (engine === 'soniox') {
+        const hasKey = await hasSttApiKeySoniox();
+        setHasModels(hasKey);
+        setSelectedModelAvailable(hasKey);
+        return;
+      }
+
       // Check which models are downloaded
       const status = await invoke<ModelStatusResponse>('get_model_status');
       const downloadedModels = status.models.filter(m => m.downloaded);
@@ -33,8 +43,15 @@ export function useModelAvailability() {
       }
     } catch (error) {
       console.error('Failed to check model availability:', error);
-      setHasModels(false);
-      setSelectedModelAvailable(false);
+      // If Soniox is selected but check failed, conservatively treat as unavailable
+      const engine = settings?.current_model_engine;
+      if (engine === 'soniox') {
+        setHasModels(false);
+        setSelectedModelAvailable(false);
+      } else {
+        setHasModels(false);
+        setSelectedModelAvailable(false);
+      }
     } finally {
       setIsChecking(false);
     }

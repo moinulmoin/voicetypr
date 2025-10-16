@@ -85,8 +85,9 @@ export function ModelsTab() {
       onCancelDownload={cancelDownload}
       onSelect={async (modelName) => {
         if (settings) {
-          const selected = sortedModels.find(([name]) => name === modelName)?.[1];
-          const engine = selected?.engine ?? 'whisper';
+          const engine = modelName === 'soniox'
+            ? 'soniox'
+            : (sortedModels.find(([name]) => name === modelName)?.[1]?.engine ?? 'whisper');
           await saveSettings({ current_model: modelName, current_model_engine: engine });
         }
       }}

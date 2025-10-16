@@ -8,7 +8,7 @@ export interface ModelInfo {
   speed_score: number;     // 1-10, 10 being fastest
   accuracy_score: number;  // 1-10, 10 being most accurate
   recommended: boolean;    // Whether this model is recommended
-  engine: 'whisper' | 'parakeet';
+  engine: 'whisper' | 'parakeet' | 'soniox';
 }
 
 export type RecordingMode = 'toggle' | 'push_to_talk';
@@ -29,7 +29,7 @@ export interface AppSettings {
   recording_mode?: RecordingMode;
   use_different_ptt_key?: boolean;
   ptt_hotkey?: string;
-  current_model_engine?: 'whisper' | 'parakeet';
+  current_model_engine?: 'whisper' | 'parakeet' | 'soniox';
 }
 
 export interface TranscriptionHistory {

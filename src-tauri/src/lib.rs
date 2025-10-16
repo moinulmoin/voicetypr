@@ -49,6 +49,7 @@ use commands::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model, verify_model,
     },
+    stt::{clear_soniox_key_cache, validate_and_cache_soniox_key},
     permissions::{
         check_accessibility_permission, check_microphone_permission,
         request_accessibility_permission, request_microphone_permission,
@@ -218,12 +219,16 @@ async fn build_tray_menu<R: tauri::Runtime>(
                     .and_then(|v| v.as_str())
                     .map(|s| {
                         let first_line = s.lines().next().unwrap_or("").trim();
-                        if first_line.len() > 40 {
-                            format!("{}…", &first_line[..40])
-                        } else if first_line.is_empty() {
+                        // Build preview safely by Unicode scalar values to avoid slicing in the middle of a codepoint
+                        let char_count = first_line.chars().count();
+                        let mut preview: String = first_line.chars().take(40).collect();
+                        if char_count > 40 {
+                            preview.push('…');
+                        }
+                        if preview.is_empty() {
                             "(empty)".to_string()
                         } else {
-                            first_line.to_string()
+                            preview
                         }
                     })
                     .unwrap_or_else(|| "(unknown)".to_string());
@@ -1680,6 +1685,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             keyring_get,
             keyring_delete,
             keyring_has,
+            validate_and_cache_soniox_key,
+            clear_soniox_key_cache,
             get_log_directory,
             open_logs_folder,
             get_device_id,

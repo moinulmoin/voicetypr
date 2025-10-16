@@ -50,7 +50,7 @@ export function GeneralSettings() {
 
   // Determine if current model is English-only
   const currentModel = settings.current_model || "";
-  const currentEngine = (settings.current_model_engine as 'whisper' | 'parakeet') || 'whisper';
+  const currentEngine = (settings.current_model_engine as 'whisper' | 'parakeet' | 'soniox') || 'whisper';
   const isEnglishOnlyModel =
     (currentEngine === 'whisper' && /\.en$/i.test(currentModel)) ||
     (currentEngine === 'parakeet' && currentModel.includes('-v2'));

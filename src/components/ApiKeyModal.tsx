@@ -54,6 +54,8 @@ export function ApiKeyModal({
         return 'https://console.groq.com/keys';
       case 'gemini':
         return 'https://aistudio.google.com/apikey';
+      case 'soniox':
+        return 'https://soniox.com/docs/stt/get-started';
       default:
         return '';
     }

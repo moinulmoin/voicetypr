@@ -108,6 +108,9 @@ enum ActiveEngineSelection {
     Parakeet {
         model_name: String,
     },
+    Soniox {
+        model_name: String,
+    },
 }
 
 impl ActiveEngineSelection {
@@ -115,6 +118,7 @@ impl ActiveEngineSelection {
         match self {
             ActiveEngineSelection::Whisper { .. } => "whisper",
             ActiveEngineSelection::Parakeet { .. } => "parakeet",
+            ActiveEngineSelection::Soniox { .. } => "soniox",
         }
     }
 
@@ -122,6 +126,7 @@ impl ActiveEngineSelection {
         match self {
             ActiveEngineSelection::Whisper { model_name, .. } => model_name,
             ActiveEngineSelection::Parakeet { model_name } => model_name,
+            ActiveEngineSelection::Soniox { model_name } => model_name,
         }
     }
 }
@@ -168,6 +173,13 @@ async fn resolve_engine_for_model(
     let parakeet_manager = app.state::<ParakeetManager>();
 
     match engine_hint.map(|e| e.to_lowercase()) {
+        Some(ref engine) if engine == "soniox" => {
+            if crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false) {
+                Ok(ActiveEngineSelection::Soniox { model_name: model_name.to_string() })
+            } else {
+                Err("Soniox token not configured. Please configure it in Models.".to_string())
+            }
+        }
         Some(ref engine) if engine == "parakeet" => {
             let status = parakeet_manager
                 .list_models()
@@ -202,6 +214,13 @@ async fn resolve_engine_for_model(
         }
         Some(engine) => Err(format!("Unknown model engine '{}'.", engine)),
         None => {
+            if model_name == "soniox" {
+                if crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false) {
+                    return Ok(ActiveEngineSelection::Soniox { model_name: model_name.to_string() });
+                } else {
+                    return Err("Soniox token not configured. Please configure it in Models.".to_string());
+                }
+            }
             if let Some(path) = whisper_state.read().await.get_model_path(model_name) {
                 return Ok(ActiveEngineSelection::Whisper {
                     model_name: model_name.to_string(),
@@ -326,7 +345,26 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
         .into_iter()
         .any(|m| m.downloaded);
 
-    let has_models = has_whisper_models || has_parakeet_models;
+    // Consider cloud Soniox as satisfying availability when selected and configured
+    let (is_soniox_selected, soniox_ready) = {
+        match app.store("settings") {
+            Ok(store) => {
+                let engine = store
+                    .get("current_model_engine")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "whisper".to_string());
+                if engine == "soniox" {
+                    let has_key = crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
+                    (true, has_key)
+                } else {
+                    (false, false)
+                }
+            }
+            Err(_) => (false, false),
+        }
+    };
+
+    let has_models = has_whisper_models || has_parakeet_models || (is_soniox_selected && soniox_ready);
 
     if !has_models {
         log::error!("No models downloaded");
@@ -337,13 +375,11 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
             "no-models-error",
             serde_json::json!({
                 "title": "No Speech Recognition Models",
-                "message": "Please download at least one model from Settings before recording.",
+                "message": if is_soniox_selected { "Please configure your Soniox token in Settings before recording." } else { "Please download at least one model from Settings before recording." },
                 "action": "open-settings"
             }),
         );
-        return Err(
-            "No speech recognition models installed. Please download a model first.".to_string(),
-        );
+        return Err(if is_soniox_selected { "Soniox token missing".to_string() } else { "No speech recognition models installed. Please download a model first.".to_string() });
     }
 
     // Check license status (with caching to improve performance)
@@ -956,111 +992,11 @@ pub async fn stop_recording(
         }
     }
 
-    // Normalize captured audio to Whisper contract (WAV PCM s16, mono, 16k) via ffmpeg sidecar
-    let parent_dir = audio_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::Path::new(".").to_path_buf());
-
-    let normalized_path = {
-        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let out_path = parent_dir.join(format!("normalized_{}.wav", ts));
-        if let Err(e) = crate::ffmpeg::normalize_streaming(&app, &audio_path, &out_path).await {
-            log::error!("Audio normalization (ffmpeg) failed: {}", e);
-            update_recording_state(
-                &app,
-                RecordingState::Error,
-                Some("Audio normalization failed".to_string()),
-            );
-            let _ = std::fs::remove_file(&audio_path);
-            return Err("Audio normalization failed".to_string());
-        }
-        out_path
-    };
-
-    // Remove raw capture after successful normalization
-    if let Err(e) = std::fs::remove_file(&audio_path) {
-        log::debug!("Failed to remove raw audio: {}", e);
-    }
-
-    // Determine min duration based on recording mode (PTT vs Toggle) once
-    let (min_duration_s_f32, min_duration_s_i32) = {
-        let app_state = app.state::<AppState>();
-        let mode = app_state
-            .recording_mode
-            .lock()
-            .ok()
-            .map(|g| *g)
-            .unwrap_or(RecordingMode::Toggle);
-        match mode {
-            RecordingMode::PushToTalk => (1.0f32, 1i32),
-            RecordingMode::Toggle => (3.0f32, 3i32),
-        }
-    };
-
-    // Duration gate (mode-specific) using normalized file
-    let too_short = (|| -> Result<bool, String> {
-        let reader = hound::WavReader::open(&normalized_path)
-            .map_err(|e| format!("Failed to open normalized wav: {}", e))?;
-        let spec = reader.spec();
-        let frames = reader.duration() / spec.channels as u32; // mono expected
-        let duration = frames as f32 / spec.sample_rate as f32;
-        log_with_context(
-            log::Level::Info,
-            "NORMALIZED_AUDIO",
-            &[
-                ("path", &format!("{:?}", normalized_path).as_str()),
-                ("sample_rate", &spec.sample_rate.to_string().as_str()),
-                ("channels", &spec.channels.to_string().as_str()),
-                ("bits", &spec.bits_per_sample.to_string().as_str()),
-                ("duration_s", &format!("{:.2}", duration).as_str()),
-            ],
-        );
-        Ok(duration < min_duration_s_f32)
-    })();
-
-    if let Ok(true) = too_short {
-        // Emit friendly feedback and stop here
-        let _ = emit_to_window(
-            &app,
-            "pill",
-            "recording-too-short",
-            format!("Recording shorter than {} seconds", min_duration_s_i32),
-        );
-        if let Err(e) = std::fs::remove_file(&normalized_path) {
-            log::debug!("Failed to remove short normalized audio: {}", e);
-        }
-        // Hide pill and return to Idle
-        if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-            log::error!("Failed to hide pill window: {}", e);
-        }
-        update_recording_state(&app, RecordingState::Idle, None);
-        return Ok("".to_string());
-    }
-
-    // Proceed to transcription with normalized file
-    let audio_path = normalized_path;
-    log_with_context(
-        log::Level::Debug,
-        "Proceeding to transcription",
-        &[
-            ("audio_path", &format!("{:?}", audio_path).as_str()),
-            ("stage", "pre_transcription"),
-        ],
-    );
-
-    // Get cached recording config to avoid repeated store access
+    // Decide engine early to optionally skip normalization for Soniox
     let config = get_recording_config(&app).await.map_err(|e| {
         log::error!("Failed to load recording config: {}", e);
         format!("Configuration error: {}", e)
     })?;
-    log::debug!(
-        "Using cached config: model={}, language={}, translate={}, ai_enabled={}",
-        config.current_model,
-        config.language,
-        config.translate_to_english,
-        config.ai_enabled
-    );
 
     let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
 
@@ -1101,6 +1037,29 @@ pub async fn stop_recording(
             ActiveEngineSelection::Parakeet {
                 model_name: config.current_model.clone(),
             }
+        }
+        "soniox" => {
+            if config.current_model.is_empty() {
+                return abort_due_to_missing_model(
+                    &app,
+                    &audio_path,
+                    "No Soniox model selected",
+                    "Please select the Soniox cloud model before recording.",
+                )
+                .await;
+            }
+
+            if !crate::secure_store::secure_has(&app, "stt_api_key_soniox").unwrap_or(false) {
+                return abort_due_to_missing_model(
+                    &app,
+                    &audio_path,
+                    "Soniox token not configured",
+                    "Please configure your Soniox token in Settings before recording.",
+                )
+                .await;
+            }
+
+            ActiveEngineSelection::Soniox { model_name: config.current_model.clone() }
         }
         _ => {
             let downloaded_models = whisper_manager.read().await.get_downloaded_model_names();
@@ -1208,6 +1167,116 @@ pub async fn stop_recording(
             }
         }
     };
+
+    // For Whisper/Parakeet: normalize and duration gate; for Soniox: skip both
+    let audio_path = match &engine_selection {
+        ActiveEngineSelection::Soniox { .. } => {
+            log::info!("[RECORD] Soniox selected — skipping normalization");
+            audio_path
+        }
+        _ => {
+            // Normalize captured audio to Whisper contract (WAV PCM s16, mono, 16k) via ffmpeg sidecar
+            let parent_dir = audio_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::Path::new(".").to_path_buf());
+
+            let normalized_path = {
+                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                let out_path = parent_dir.join(format!("normalized_{}.wav", ts));
+                if let Err(e) = crate::ffmpeg::normalize_streaming(&app, &audio_path, &out_path).await {
+                    log::error!("Audio normalization (ffmpeg) failed: {}", e);
+                    update_recording_state(
+                        &app,
+                        RecordingState::Error,
+                        Some("Audio normalization failed".to_string()),
+                    );
+                    let _ = std::fs::remove_file(&audio_path);
+                    return Err("Audio normalization failed".to_string());
+                }
+                out_path
+            };
+
+            // Remove raw capture after successful normalization
+            if let Err(e) = std::fs::remove_file(&audio_path) {
+                log::debug!("Failed to remove raw audio: {}", e);
+            }
+
+            // Determine min duration based on recording mode (PTT vs Toggle) once
+            let (min_duration_s_f32, min_duration_s_i32) = {
+                let app_state = app.state::<AppState>();
+                let mode = app_state
+                    .recording_mode
+                    .lock()
+                    .ok()
+                    .map(|g| *g)
+                    .unwrap_or(RecordingMode::Toggle);
+                match mode {
+                    RecordingMode::PushToTalk => (1.0f32, 1i32),
+                    RecordingMode::Toggle => (3.0f32, 3i32),
+                }
+            };
+
+            // Duration gate (mode-specific) using normalized file
+            let too_short = (|| -> Result<bool, String> {
+                let reader = hound::WavReader::open(&normalized_path)
+                    .map_err(|e| format!("Failed to open normalized wav: {}", e))?;
+                let spec = reader.spec();
+                let frames = reader.duration() / spec.channels as u32; // mono expected
+                let duration = frames as f32 / spec.sample_rate as f32;
+                log_with_context(
+                    log::Level::Info,
+                    "NORMALIZED_AUDIO",
+                    &[
+                        ("path", &format!("{:?}", normalized_path).as_str()),
+                        ("sample_rate", &spec.sample_rate.to_string().as_str()),
+                        ("channels", &spec.channels.to_string().as_str()),
+                        ("bits", &spec.bits_per_sample.to_string().as_str()),
+                        ("duration_s", &format!("{:.2}", duration).as_str()),
+                    ],
+                );
+                Ok(duration < min_duration_s_f32)
+            })();
+
+            if let Ok(true) = too_short {
+                // Emit friendly feedback and stop here
+                let _ = emit_to_window(
+                    &app,
+                    "pill",
+                    "recording-too-short",
+                    format!("Recording shorter than {} seconds", min_duration_s_i32),
+                );
+                if let Err(e) = std::fs::remove_file(&normalized_path) {
+                    log::debug!("Failed to remove short normalized audio: {}", e);
+                }
+                // Hide pill and return to Idle
+                if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                    log::error!("Failed to hide pill window: {}", e);
+                }
+                update_recording_state(&app, RecordingState::Idle, None);
+                return Ok("".to_string());
+            }
+
+            normalized_path
+        }
+    };
+
+    log_with_context(
+        log::Level::Debug,
+        "Proceeding to transcription",
+        &[
+            ("audio_path", &format!("{:?}", audio_path).as_str()),
+            ("stage", "pre_transcription"),
+        ],
+    );
+    log::debug!(
+        "Using cached config: model={}, language={}, translate={}, ai_enabled={}",
+        config.current_model,
+        config.language,
+        config.translate_to_english,
+        config.ai_enabled
+    );
+
 
     let language = if config.language.is_empty() {
         None
@@ -1359,6 +1428,12 @@ pub async fn stop_recording(
                         Err(message)
                     }
                     Err(e) => Err(e.to_string()),
+                }
+            }
+            ActiveEngineSelection::Soniox { .. } => {
+                match soniox_transcribe_async(&app_for_task, &audio_path_clone, language_for_task.as_deref()).await {
+                    Ok(text) => Ok(text),
+                    Err(e) => Err(e),
                 }
             }
         };
@@ -1724,6 +1799,36 @@ pub async fn cleanup_old_transcriptions(app: AppHandle, days: Option<u32>) -> Re
 
 #[tauri::command]
 pub async fn save_transcription(app: AppHandle, text: String, model: String) -> Result<(), String> {
+    // De-dup guard: skip saving if the most recent entry matches the same text & model within a short window
+    if let Ok(store) = app.store("transcriptions") {
+        // Find most recent entry
+        let mut latest: Option<(String, serde_json::Value)> = None;
+        for key in store.keys() {
+            if let Some(value) = store.get(&key) {
+                match &latest {
+                    Some((ts, _)) => {
+                        if key > *ts { latest = Some((key.to_string(), value)); }
+                    }
+                    None => latest = Some((key.to_string(), value))
+                }
+            }
+        }
+
+        if let Some((ts, v)) = latest {
+            let same_text = v.get("text").and_then(|x| x.as_str()).map(|s| s == text).unwrap_or(false);
+            let same_model = v.get("model").and_then(|x| x.as_str()).map(|s| s == model).unwrap_or(false);
+            let within_window = chrono::DateTime::parse_from_rfc3339(&ts)
+                .ok()
+                .and_then(|t| t.with_timezone(&chrono::Utc).signed_duration_since(chrono::Utc::now()).num_seconds().checked_abs())
+                .map(|secs| secs <= 2)
+                .unwrap_or(false);
+            if same_text && same_model && within_window {
+                log::info!("Skipping duplicate transcription save (same text/model within 2s)");
+                return Ok(());
+            }
+        }
+    }
+
     // Save transcription to store with current timestamp
     let store = app
         .store("transcriptions")
@@ -1822,19 +1927,7 @@ pub async fn transcribe_audio_file(
     let wav_path = audio_path.to_path_buf();
     log::info!("[UPLOAD] Input ready at {:?}", wav_path);
 
-    // Normalize imported audio to Whisper contract (WAV PCM s16, mono, 16k) using ffmpeg sidecar for all files
-    log::debug!("[UPLOAD] Normalizing to Whisper WAV (16k mono s16)...");
-    let normalized_path = {
-        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
-        crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
-            .await
-            .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
-        out_path
-    };
-    log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_path);
-
-    // Resolve engine (whisper or parakeet) for the requested model
+    // Resolve engine (whisper/parakeet/soniox) for the requested model
     let engine_selection =
         resolve_engine_for_model(&app, &model_name, model_engine.as_deref()).await?;
     log::info!(
@@ -1864,21 +1957,46 @@ pub async fn transcribe_audio_file(
         translate_to_english
     );
 
+    // For Soniox, skip normalization and send original wav_path
     let text = match engine_selection {
         ActiveEngineSelection::Whisper { model_path, .. } => {
+            // Normalize to Whisper contract
+            log::debug!("[UPLOAD] Normalizing to Whisper WAV (16k mono s16)...");
+            let normalized_path = {
+                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
+                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
+                    .await
+                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+                out_path
+            };
+            log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_path);
             let transcriber = {
                 let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
                 let mut cache = cache_state.lock().await;
                 cache.get_or_create(&model_path)?
             };
 
-            transcriber.transcribe_with_translation(
+            let result = transcriber.transcribe_with_translation(
                 &normalized_path,
                 Some(&language),
                 translate_to_english,
-            )?
+            )?;
+            let _ = std::fs::remove_file(&normalized_path);
+            result
         }
         ActiveEngineSelection::Parakeet { model_name } => {
+            // Normalize to Whisper/Parakeet contract first
+            log::debug!("[UPLOAD] Normalizing to Whisper WAV (16k mono s16)...");
+            let normalized_path = {
+                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
+                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
+                    .await
+                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+                out_path
+            };
+            log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_path);
             let parakeet_manager = app.state::<ParakeetManager>();
 
             parakeet_manager
@@ -1896,7 +2014,10 @@ pub async fn transcribe_audio_file(
                 )
                 .await
             {
-                Ok(ParakeetResponse::Transcription { text, .. }) => text,
+                Ok(ParakeetResponse::Transcription { text, .. }) => {
+                    let _ = std::fs::remove_file(&normalized_path);
+                    text
+                }
                 Ok(other) => {
                     return Err(format!("Unexpected Parakeet response: {:?}", other));
                 }
@@ -1905,13 +2026,10 @@ pub async fn transcribe_audio_file(
                 }
             }
         }
+        ActiveEngineSelection::Soniox { .. } => {
+            soniox_transcribe_async(&app, &wav_path, Some(&language)).await?
+        }
     };
-
-    // No temp converted file to clean; normalization handled transcoding
-    // Clean up normalized WAV
-    if let Err(e) = std::fs::remove_file(&normalized_path) {
-        log::warn!("Failed to remove normalized WAV file: {}", e);
-    }
 
     log::info!(
         "[UPLOAD] Completed transcription, {} characters",
@@ -2013,6 +2131,9 @@ pub async fn transcribe_audio(
                 Err(err) => return Err(format!("Parakeet transcription failed: {}", err)),
             }
         }
+        ActiveEngineSelection::Soniox { .. } => {
+            soniox_transcribe_async(&app, &temp_path, Some(&language)).await?
+        }
     };
 
     // Clean up
@@ -2021,6 +2142,136 @@ pub async fn transcribe_audio(
     }
 
     Ok(text)
+}
+
+// Soniox async transcription via v1 Files + Transcriptions flow
+async fn soniox_transcribe_async(app: &AppHandle, wav_path: &Path, language: Option<&str>) -> Result<String, String> {
+    use tokio::fs;
+    use reqwest::multipart::{Form, Part};
+
+    let key = crate::secure_store::secure_get(app, "stt_api_key_soniox")?
+        .ok_or_else(|| "Soniox API key not set".to_string())?;
+
+    let wav_bytes = fs::read(wav_path)
+        .await
+        .map_err(|e| format!("Failed to read audio file: {}", e))?;
+
+    let client = reqwest::Client::new();
+    let base = "https://api.soniox.com/v1";
+
+    // 1) Upload file -> file_id
+    let filename = wav_path.file_name().and_then(|s| s.to_str()).unwrap_or("audio.wav");
+    let file_part = Part::bytes(wav_bytes)
+        .file_name(filename.to_string())
+        .mime_str("audio/wav").map_err(|e| e.to_string())?;
+    let form = Form::new().part("file", file_part);
+
+    let upload_url = format!("{}/files", base);
+    let upload_resp = client
+        .post(&upload_url)
+        .bearer_auth(&key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Network error (upload): {}", e))?;
+    if !upload_resp.status().is_success() {
+        let code = upload_resp.status();
+        let body = upload_resp.text().await.unwrap_or_default();
+        let snippet: String = body.chars().take(300).collect();
+        return Err(format!("Soniox upload failed: HTTP {}: {}", code, snippet));
+    }
+    let upload_json: serde_json::Value = upload_resp.json().await.map_err(|e| e.to_string())?;
+    let file_id = upload_json.get("id").and_then(|v| v.as_str()).ok_or("Missing file_id")?.to_string();
+
+    // 2) Create transcription -> transcription_id
+    let mut payload = serde_json::json!({
+        "model": "stt-async-preview",
+        "file_id": file_id,
+    });
+    if let Some(lang) = language { payload["language_hints"] = serde_json::json!([lang]); }
+
+    let create_url = format!("{}/transcriptions", base);
+    let create_resp = client
+        .post(&create_url)
+        .bearer_auth(&key)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Network error (create): {}", e))?;
+    if !create_resp.status().is_success() {
+        let code = create_resp.status();
+        let body = create_resp.text().await.unwrap_or_default();
+        let snippet: String = body.chars().take(300).collect();
+        return Err(format!("Soniox create transcription failed: HTTP {}: {}", code, snippet));
+    }
+    let create_json: serde_json::Value = create_resp.json().await.map_err(|e| e.to_string())?;
+    let transcription_id = create_json.get("id").and_then(|v| v.as_str()).ok_or("Missing transcription id")?.to_string();
+
+    // 3) Poll status
+    let status_url = format!("{}/transcriptions/{}", base, transcription_id);
+    let started = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(180);
+    loop {
+        let resp = client
+            .get(&status_url)
+            .bearer_auth(&key)
+            .send()
+            .await
+            .map_err(|e| format!("Network error (status): {}", e))?;
+        if !resp.status().is_success() {
+            let code = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let snippet: String = body.chars().take(200).collect();
+            return Err(format!("Soniox status failed: HTTP {}: {}", code, snippet));
+        }
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        match status {
+            "completed" => break,
+            "error" => {
+                let msg = json.get("error_message").and_then(|v| v.as_str()).unwrap_or("Job failed");
+                return Err(format!("Soniox job failed: {}", msg));
+            }
+            _ => {
+                if started.elapsed() > timeout { return Err("Soniox transcription timed out".to_string()); }
+                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            }
+        }
+    }
+
+    // 4) Fetch transcript
+    let transcript_url = format!("{}/transcriptions/{}/transcript", base, transcription_id);
+    let resp = client
+        .get(&transcript_url)
+        .bearer_auth(&key)
+        .send()
+        .await
+        .map_err(|e| format!("Network error (transcript): {}", e))?;
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let snippet: String = body.chars().take(200).collect();
+        return Err(format!("Soniox transcript failed: HTTP {}: {}", code, snippet));
+    }
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    // Prefer direct text if present, else join tokens
+    if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
+        return Ok(text.to_string());
+    }
+    if let Some(tokens) = json.get("tokens").and_then(|v| v.as_array()) {
+        let mut out = String::new();
+        let mut first = true;
+        for t in tokens {
+            if let Some(txt) = t.get("text").and_then(|v| v.as_str()) {
+                if !first { out.push(' '); } else { first = false; }
+                out.push_str(txt);
+            }
+        }
+        if !out.is_empty() { return Ok(out); }
+    }
+    Err("Soniox transcript format not recognized".to_string())
 }
 
 #[tauri::command]

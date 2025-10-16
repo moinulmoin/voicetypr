@@ -162,7 +162,7 @@ export function AudioUploadSection() {
           <div>
             <h1 className="text-2xl font-semibold">Audio Upload</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Transcribe audio files locally
+              {settings?.current_model_engine === 'soniox' ? 'Transcribe audio files via cloud' : 'Transcribe audio files locally'}
             </p>
           </div>
         </div>

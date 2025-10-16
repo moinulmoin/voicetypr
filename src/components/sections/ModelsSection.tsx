@@ -3,6 +3,13 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { ModelInfo } from "@/types";
 import { CheckCircle, HardDrive, Star, Zap, Bot, Download } from "lucide-react";
 import { useMemo } from "react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { ApiKeyModal } from "@/components/ApiKeyModal";
+import { useEffect, useState, useCallback } from "react";
+import { hasSttApiKeySoniox, saveSttApiKeySoniox, removeSttApiKeySoniox } from "@/utils/keyring";
+import { toast } from "sonner";
+import { useSettings } from "@/contexts/SettingsContext";
 
 interface ModelsSectionProps {
   models: [string, ModelInfo][];
@@ -25,6 +32,34 @@ export function ModelsSection({
   onCancelDownload,
   onSelect
 }: ModelsSectionProps) {
+  const { settings, updateSettings } = useSettings();
+  const [sonioxHasKey, setSonioxHasKey] = useState<boolean>(false);
+  const [showSonioxModal, setShowSonioxModal] = useState(false);
+
+  const refreshSonioxKey = useCallback(async () => {
+    try {
+      setSonioxHasKey(await hasSttApiKeySoniox());
+    } catch (e) {
+      setSonioxHasKey(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshSonioxKey();
+  }, [refreshSonioxKey]);
+
+  const handleRemoveSonioxKey = useCallback(async () => {
+    try {
+      await removeSttApiKeySoniox();
+      await refreshSonioxKey();
+      toast.success('Soniox API key removed');
+      if (settings?.current_model === 'soniox') {
+        await updateSettings({ current_model: '', current_model_engine: 'whisper' });
+      }
+    } catch (e) {
+      toast.error(`Failed to remove key: ${e}`);
+    }
+  }, [refreshSonioxKey, settings?.current_model, updateSettings]);
   // Categorize models
   const { installedModels, availableModels } = useMemo(() => {
     const installed: [string, ModelInfo][] = [];
@@ -112,6 +147,52 @@ export function ModelsSection({
       <div className="flex-1 min-h-0 overflow-hidden">
         <ScrollArea className="h-full">
           <div className="p-6 space-y-6">
+            {/* Soniox (Cloud) inline card */}
+            <div className="grid gap-3">
+              <Card
+                className={`px-4 py-3 border-border/50 transition ${sonioxHasKey ? 'cursor-pointer hover:border-border' : 'opacity-80'} ${currentModel === 'soniox' ? 'bg-primary/5' : ''}`}
+                onClick={() => {
+                  if (sonioxHasKey) {
+                    onSelect('soniox');
+                  } else {
+                    setShowSonioxModal(true);
+                  }
+                }}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="font-medium text-sm">Soniox (Cloud)</h3>
+                    <p className="text-xs text-muted-foreground mt-1">High-accuracy cloud transcription via Soniox</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!sonioxHasKey ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowSonioxModal(true);
+                        }}
+                      >
+                        Add API Key
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveSonioxKey();
+                        }}
+                      >
+                        Remove API Key
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            </div>
+
             {/* Installed Models */}
             {installedModels.length > 0 && (
               <div className="space-y-4">
@@ -191,6 +272,23 @@ export function ModelsSection({
           </div>
         </ScrollArea>
       </div>
+
+      {/* Soniox API Key Modal */}
+      <ApiKeyModal
+        isOpen={showSonioxModal}
+        onClose={() => setShowSonioxModal(false)}
+        onSubmit={async (key) => {
+          try {
+            await saveSttApiKeySoniox(key.trim());
+            toast.success('Soniox token saved');
+            setShowSonioxModal(false);
+            refreshSonioxKey();
+          } catch (e) {
+            toast.error(`Failed to save token: ${e}`);
+          }
+        }}
+        providerName="Soniox"
+      />
     </div>
   );
 }
