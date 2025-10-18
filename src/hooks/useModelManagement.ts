@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ModelInfo } from "../types";
+import { ModelInfo, isCloudModel } from "../types";
 import { useEventCoordinator } from "./useEventCoordinator";
 
 interface UseModelManagementOptions {
@@ -10,10 +10,24 @@ interface UseModelManagementOptions {
   showToasts?: boolean;
 }
 
+const CLOUD_SPEED_FALLBACK = 8;
+const CLOUD_ACCURACY_FALLBACK = 9;
+
+const getSpeedScore = (model: ModelInfo) =>
+  model.speed_score ?? (isCloudModel(model) ? CLOUD_SPEED_FALLBACK : 0);
+
+const getAccuracyScore = (model: ModelInfo) =>
+  model.accuracy_score ?? (isCloudModel(model) ? CLOUD_ACCURACY_FALLBACK : 0);
+
+const getSizeValue = (model: ModelInfo) =>
+  isCloudModel(model) ? Number.POSITIVE_INFINITY : model.size ?? Number.POSITIVE_INFINITY;
+
 // Helper function to calculate balanced performance score
 function calculateBalancedScore(model: ModelInfo): number {
+  const speed = getSpeedScore(model);
+  const accuracy = getAccuracyScore(model);
   // Weighted average: 40% speed, 60% accuracy
-  return ((model.speed_score * 0.4 + model.accuracy_score * 0.6) / 10) * 100;
+  return ((speed * 0.4 + accuracy * 0.6) / 10) * 100;
 }
 
 // Helper function to sort models by various criteria
@@ -25,11 +39,14 @@ export function sortModels(
     // Sort by the specified criteria
     switch (sortBy) {
       case "speed":
-        return b.speed_score - a.speed_score;
+        return getSpeedScore(b) - getSpeedScore(a);
       case "accuracy":
-        return a.accuracy_score - b.accuracy_score;
+        return getAccuracyScore(a) - getAccuracyScore(b);
       case "size":
-        return a.size - b.size;
+        if (isCloudModel(a) && isCloudModel(b)) return 0;
+        if (isCloudModel(a)) return 1;
+        if (isCloudModel(b)) return -1;
+        return getSizeValue(a) - getSizeValue(b);
       case "balanced":
       default:
         return calculateBalancedScore(b) - calculateBalancedScore(a);
@@ -82,6 +99,14 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
   // Download model
   const downloadModel = useCallback(async (modelName: string) => {
+    const target = models[modelName];
+    if (target && isCloudModel(target)) {
+      if (showToasts) {
+        toast.info(`${target.display_name} is a cloud model and does not require downloading.`);
+      }
+      return;
+    }
+
     // Check if already downloading
     if (activeDownloads.current.has(modelName)) {
       if (showToasts) {
@@ -123,7 +148,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       // Remove from active downloads
       activeDownloads.current.delete(modelName);
     }
-  }, [showToasts]);
+  }, [models, showToasts]);
 
   // Cancel download
   const cancelDownload = useCallback(async (modelName: string) => {
@@ -149,6 +174,14 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
   // Delete model
   const deleteModel = useCallback(async (modelName: string) => {
+    const target = models[modelName];
+    if (target && isCloudModel(target)) {
+      if (showToasts) {
+        toast.info(`${target.display_name} is a cloud model and cannot be deleted locally.`);
+      }
+      return;
+    }
+
     try {
       const confirmed = await ask(`Are you sure you want to delete the ${modelName} model?`, {
         title: "Delete Model",
@@ -171,7 +204,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         toast.error(`Failed to delete model: ${error}`);
       }
     }
-  }, [loadModels, showToasts]);
+  }, [loadModels, models, showToasts]);
 
   // Setup event listeners BEFORE any other effects
   useEffect(() => {

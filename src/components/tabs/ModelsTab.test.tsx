@@ -34,7 +34,9 @@ let mockModels = {
     speed_score: 7,
     accuracy_score: 5,
     recommended: false,
-    engine: 'whisper'
+    engine: 'whisper',
+    kind: 'local' as const,
+    requires_setup: false
   },
   'small.en': {
     name: 'small.en',
@@ -46,7 +48,9 @@ let mockModels = {
     speed_score: 5,
     accuracy_score: 7,
     recommended: false,
-    engine: 'whisper'
+    engine: 'whisper',
+    kind: 'local' as const,
+    requires_setup: false
   }
 };
 
@@ -62,6 +66,7 @@ vi.mock('@/contexts/ModelManagementContext', () => ({
     cancelDownload: vi.fn(),
     retryDownload: vi.fn(),
     refreshModels: vi.fn(),
+    loadModels: vi.fn(),
     preloadModel: vi.fn(),
     verifyModel: vi.fn()
   })

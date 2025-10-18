@@ -130,10 +130,6 @@ export function usePermissions(options?: {
         if (showToasts) {
           toast.info(`Please grant ${type} permission in System Settings`, {
             duration: 8000,
-            action: {
-              label: 'Open Settings',
-              onClick: () => open(settingsUrl),
-            },
           });
         }
       } else if (type === 'accessibility') {
@@ -143,10 +139,6 @@ export function usePermissions(options?: {
         if (showToasts) {
           toast.info('Please grant accessibility permission in System Settings', {
             duration: 8000,
-            action: {
-              label: 'Open Settings',
-              onClick: () => open(settingsUrl),
-            },
           });
         }
       }

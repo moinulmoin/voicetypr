@@ -11,9 +11,6 @@
   platform: 'darwin'
 };
 
-// Mock Tauri internals for IPC
-(window as any).__TAURI_INTERNALS__ = {
-  invoke: () => Promise.resolve(),
-  transformCallback: (cb: any) => cb,
-  metadata: {}
-};
+// NOTE: Do NOT manually set __TAURI_INTERNALS__ here
+// Let @tauri-apps/api/mocks.mockIPC handle it in setup.ts
+// Setting it manually conflicts with mockIPC internals

@@ -122,12 +122,6 @@ export class UpdateService {
     if (isBackgroundCheck) {
       toast.info(`Update ${update.version} is available!`, {
         duration: 10000,
-        action: {
-          label: 'Update Now',
-          onClick: async () => {
-            await this.showUpdateDialog(update);
-          }
-        }
       });
     } else {
       // For manual checks, show dialog immediately

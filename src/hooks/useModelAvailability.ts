@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useSettings } from '@/contexts/SettingsContext';
 import type { ModelInfo } from '@/types';
-import { hasSttApiKeySoniox } from '@/utils/keyring';
 
 interface ModelStatusResponse {
   models: ModelInfo[];
@@ -18,40 +17,25 @@ export function useModelAvailability() {
   const checkModels = useCallback(async () => {
     setIsChecking(true);
     try {
-      // If using Soniox cloud engine, availability depends on token
-      const engine = settings?.current_model_engine;
-      if (engine === 'soniox') {
-        const hasKey = await hasSttApiKeySoniox();
-        setHasModels(hasKey);
-        setSelectedModelAvailable(hasKey);
-        return;
-      }
-
-      // Check which models are downloaded
       const status = await invoke<ModelStatusResponse>('get_model_status');
-      const downloadedModels = status.models.filter(m => m.downloaded);
-      setHasModels(downloadedModels.length > 0);
+      const readyModels = status.models.filter(
+        (model) => model.downloaded && !model.requires_setup
+      );
+      setHasModels(readyModels.length > 0);
 
-      // Check if selected model is available using settings from context
       const selectedModel = settings?.current_model;
-      
       if (selectedModel) {
-        const isAvailable = downloadedModels.some(m => m.name === selectedModel);
+        const match = status.models.find((model) => model.name === selectedModel);
+        const isAvailable =
+          !!match && match.downloaded && !match.requires_setup;
         setSelectedModelAvailable(isAvailable);
       } else {
         setSelectedModelAvailable(false);
       }
     } catch (error) {
       console.error('Failed to check model availability:', error);
-      // If Soniox is selected but check failed, conservatively treat as unavailable
-      const engine = settings?.current_model_engine;
-      if (engine === 'soniox') {
-        setHasModels(false);
-        setSelectedModelAvailable(false);
-      } else {
-        setHasModels(false);
-        setSelectedModelAvailable(false);
-      }
+      setHasModels(false);
+      setSelectedModelAvailable(false);
     } finally {
       setIsChecking(false);
     }
@@ -79,8 +63,24 @@ export function useModelAvailability() {
       checkModels();
     });
 
+    const unlistenCloudSaved = listen('stt-key-saved', () => {
+      console.log('[useModelAvailability] Cloud provider connected');
+      checkModels();
+    });
+
+    const unlistenCloudRemoved = listen('stt-key-removed', () => {
+      console.log('[useModelAvailability] Cloud provider disconnected');
+      checkModels();
+    });
+
     return () => {
-      Promise.all([unlistenDownloaded, unlistenDeleted, unlistenModelChanged]).then(unsubs => {
+      Promise.all([
+        unlistenDownloaded,
+        unlistenDeleted,
+        unlistenModelChanged,
+        unlistenCloudSaved,
+        unlistenCloudRemoved
+      ]).then(unsubs => {
         unsubs.forEach(unsub => unsub());
       });
     };

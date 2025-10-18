@@ -11,7 +11,7 @@ pub mod model;
 pub mod permissions;
 pub mod reset;
 pub mod settings;
+pub mod stt;
 pub mod text;
 pub mod utils;
 pub mod window;
-pub mod stt;

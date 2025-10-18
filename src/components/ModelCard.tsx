@@ -1,5 +1,5 @@
 import { CheckCircle, Download, HardDrive, Loader2, Star, X, Zap, Trash2 } from 'lucide-react';
-import { ModelInfo } from '../types';
+import { ModelInfo, isLocalModel } from '../types';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Progress } from './ui/progress';
@@ -29,6 +29,11 @@ export const ModelCard = function ModelCard({
   onCancelDownload,
   showSelectButton = true
 }: ModelCardProps) {
+
+  if (!isLocalModel(model)) {
+    console.warn(`[ModelCard] Skipping non-local model card for ${model.name}`);
+    return null;
+  }
 
   const formatSize = () => {
     const sizeInMB = model.size / (1024 * 1024);

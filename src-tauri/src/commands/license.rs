@@ -1,11 +1,11 @@
 use crate::license::{api_client::LicenseApiClient, device, keychain, LicenseState, LicenseStatus};
+use crate::simple_cache::{self as scache, SetItemOptions};
 use crate::AppState;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::time::Instant;
 use tauri::{AppHandle, Manager};
-use crate::simple_cache::{self as scache, SetItemOptions};
 
 /// Cached license status to avoid repeated API calls
 /// Cache is valid for 6 hours to balance freshness with performance
@@ -102,7 +102,10 @@ fn is_within_grace_period(app: &AppHandle) -> Option<i64> {
 // Check if grace period timestamp exists (regardless of whether it's valid)
 fn has_grace_period_timestamp(app: &AppHandle) -> bool {
     // let cache = app.cache();
-    scache::get(app, LAST_VALIDATION_KEY).ok().flatten().is_some()
+    scache::get(app, LAST_VALIDATION_KEY)
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 // Check if we're within the trial grace period

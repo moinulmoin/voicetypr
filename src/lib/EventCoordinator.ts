@@ -17,7 +17,12 @@ export class EventCoordinator {
   private static instance: EventCoordinator;
   private registrations: Map<string, EventRegistration[]> = new Map();
   private activeWindow: WindowId = "main";
-  private debug = true; // Enable debug logging to diagnose event issues
+  // Disable debug logs under test to keep output clean
+  private debug = !(
+    typeof process !== 'undefined' &&
+    // @ts-ignore - process may be shimmed in browser tests
+    process?.env?.NODE_ENV === 'test'
+  );
 
   private constructor() {
     // Singleton pattern

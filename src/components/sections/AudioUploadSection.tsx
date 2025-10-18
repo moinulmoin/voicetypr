@@ -13,6 +13,7 @@ import { toast } from "sonner";
 // invoke handled inside zustand store
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "@/contexts/SettingsContext";
+import { useModelAvailability } from "@/hooks/useModelAvailability";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -24,6 +25,7 @@ export function AudioUploadSection() {
   const [copied, setCopied] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const { settings } = useSettings();
+  const { selectedModelAvailable } = useModelAvailability();
   const {
     selectedFile,
     status,
@@ -66,7 +68,17 @@ export function AudioUploadSection() {
     }
 
     if (!settings?.current_model) {
-      toast.error("Please download a model first from Settings");
+      toast.error("Select a speech model in Models before transcribing.");
+      return;
+    }
+
+    if (selectedModelAvailable === false) {
+      const engine = settings.current_model_engine || 'whisper';
+      toast.error(
+        engine === 'soniox'
+          ? 'Connect your cloud provider before transcribing audio.'
+          : 'Download the selected model before transcribing audio.'
+      );
       return;
     }
 
@@ -162,7 +174,9 @@ export function AudioUploadSection() {
           <div>
             <h1 className="text-2xl font-semibold">Audio Upload</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              {settings?.current_model_engine === 'soniox' ? 'Transcribe audio files via cloud' : 'Transcribe audio files locally'}
+              {settings?.current_model_engine === 'soniox'
+                ? 'Transcribe audio files through your connected cloud model'
+                : 'Transcribe audio files locally with your downloaded model'}
             </p>
           </div>
         </div>
@@ -299,6 +313,15 @@ export function AudioUploadSection() {
                         <Button onClick={handleReset} variant="outline">
                           Transcribe Another File
                         </Button>
+                      </div>
+                    </div>
+                )}
+
+                {status === 'error' && storeError && (
+                    <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-200/50 flex items-start gap-2">
+                      <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5" />
+                      <div>
+                        <p className="text-sm text-amber-700">{storeError}</p>
                       </div>
                     </div>
                 )}

@@ -15,7 +15,7 @@ describe('ApiKeyModal', () => {
     render(<ApiKeyModal {...defaultProps} />);
     
     expect(screen.getByText('Add Groq API Key')).toBeInTheDocument();
-    expect(screen.getByText(/Enter your API key to enable AI enhancement/)).toBeInTheDocument();
+    expect(screen.getByText(/Enter your API key to enable Groq/)).toBeInTheDocument();
   });
 
   it('does not render when closed', () => {

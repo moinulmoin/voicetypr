@@ -27,12 +27,7 @@ fn resolve_binary(app: &AppHandle, names: &[&str], label: &str) -> Result<PathBu
 
     if let Ok(resource_dir) = app.path().resource_dir() {
         push_dir(resource_dir.clone());
-        push_dir(
-            resource_dir
-                .join("sidecar")
-                .join("ffmpeg")
-                .join("dist"),
-        );
+        push_dir(resource_dir.join("sidecar").join("ffmpeg").join("dist"));
     }
 
     if let Ok(exe_path) = std::env::current_exe() {
@@ -51,19 +46,10 @@ fn resolve_binary(app: &AppHandle, names: &[&str], label: &str) -> Result<PathBu
 
     if let Ok(cwd) = std::env::current_dir() {
         push_dir(cwd.join("sidecar").join("ffmpeg").join("dist"));
-        push_dir(
-            cwd.join("..")
-                .join("sidecar")
-                .join("ffmpeg")
-                .join("dist"),
-        );
+        push_dir(cwd.join("..").join("sidecar").join("ffmpeg").join("dist"));
     }
 
-    log::debug!(
-        "Searching for {} in directories: {:?}",
-        label,
-        search_dirs
-    );
+    log::debug!("Searching for {} in directories: {:?}", label, search_dirs);
 
     for dir in &search_dirs {
         for name in names {
@@ -115,19 +101,12 @@ async fn run_ffmpeg_command(
         .await
         .map_err(|e| format!("Failed to spawn '{}': {}", bin.display(), e))?;
     if !status.success() {
-        return Err(format!(
-            "{} exited with status {:?}",
-            label,
-            status.code()
-        ));
+        return Err(format!("{} exited with status {:?}", label, status.code()));
     }
     Ok(())
 }
 
-async fn run_ffprobe_capture(
-    app: &AppHandle,
-    args: &[String],
-) -> Result<Vec<u8>, String> {
+async fn run_ffprobe_capture(app: &AppHandle, args: &[String]) -> Result<Vec<u8>, String> {
     let bin = resolve_binary(app, FFPROBE_CANDIDATES, "ffprobe")?;
     log::debug!(
         "Running ffprobe from {} with args {:?}",
@@ -185,7 +164,11 @@ pub async fn to_wav_streaming(app: &AppHandle, input: &Path, output: &Path) -> R
     run_ffmpeg_command(app, FFMPEG_CANDIDATES, &args, "ffmpeg").await
 }
 
-pub async fn normalize_streaming(app: &AppHandle, input: &Path, output: &Path) -> Result<(), String> {
+pub async fn normalize_streaming(
+    app: &AppHandle,
+    input: &Path,
+    output: &Path,
+) -> Result<(), String> {
     // For now, same as to_wav_streaming. Two-pass loudness can be added later.
     to_wav_streaming(app, input, output).await
 }

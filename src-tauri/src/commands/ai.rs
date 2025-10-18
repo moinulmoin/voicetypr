@@ -478,10 +478,7 @@ pub async fn update_enhancement_options(
         .save()
         .map_err(|e| format!("Failed to save enhancement options: {}", e))?;
 
-    log::info!(
-        "Enhancement options updated: preset={:?}",
-        options.preset
-    );
+    log::info!("Enhancement options updated: preset={:?}", options.preset);
 
     Ok(())
 }

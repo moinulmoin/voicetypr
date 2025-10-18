@@ -2,7 +2,10 @@ use reqwest::StatusCode;
 use tauri::AppHandle;
 
 #[tauri::command]
-pub async fn validate_and_cache_soniox_key(api_key: Option<String>, apiKey: Option<String>) -> Result<(), String> {
+pub async fn validate_and_cache_soniox_key(
+    api_key: Option<String>,
+    apiKey: Option<String>,
+) -> Result<(), String> {
     let api_key = apiKey.or(api_key).unwrap_or_default();
     if api_key.trim().is_empty() {
         return Err("API key cannot be empty".into());

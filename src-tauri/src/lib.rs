@@ -17,13 +17,13 @@ use crate::utils::logger::*;
 mod ai;
 mod audio;
 mod commands;
-mod license;
 mod ffmpeg;
+mod license;
 mod parakeet;
 mod secure_store;
+mod simple_cache;
 mod state;
 mod state_machine;
-mod simple_cache;
 mod utils;
 mod whisper;
 mod window_manager;
@@ -50,7 +50,6 @@ use commands::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model, verify_model,
     },
-    stt::{clear_soniox_key_cache, validate_and_cache_soniox_key},
     permissions::{
         check_accessibility_permission, check_microphone_permission,
         request_accessibility_permission, request_microphone_permission,
@@ -58,6 +57,7 @@ use commands::{
     },
     reset::reset_app_data,
     settings::*,
+    stt::{clear_soniox_key_cache, validate_and_cache_soniox_key},
     text::*,
     utils::export_transcriptions,
     window::*,
@@ -88,25 +88,41 @@ async fn build_tray_menu<R: tauri::Runtime>(
         }
     };
 
-    // Get downloaded models with their info
-    let (downloaded_models, models_info) = {
+    // Get available models across Whisper, Parakeet, and cloud (Soniox)
+    // Whisper models map retained for display name lookup
+    let (available_models, whisper_models_info) = {
         let whisper_state = app.state::<AsyncRwLock<whisper::manager::WhisperManager>>();
         let manager = whisper_state.read().await;
-        let all_models = manager.get_models_status();
-        let downloaded: Vec<(String, String)> = all_models
+        let whisper_all = manager.get_models_status();
+        let mut models: Vec<(String, String)> = whisper_all
             .iter()
             .filter(|(_, info)| info.downloaded)
             .map(|(name, info)| (name.clone(), info.display_name.clone()))
             .collect();
-        (downloaded, all_models)
+
+        // Include Parakeet downloaded models
+        let parakeet_manager = app.state::<crate::parakeet::ParakeetManager>();
+        for m in parakeet_manager.list_models().into_iter() {
+            if m.downloaded {
+                models.push((m.name.clone(), m.display_name.clone()));
+            }
+        }
+
+        // Include Soniox (cloud) if connected
+        let has_soniox = crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
+        if has_soniox {
+            models.push(("soniox".to_string(), "Soniox (Cloud)".to_string()));
+        }
+
+        (models, whisper_all)
     };
 
-    // Create model submenu if there are downloaded models
-    let model_submenu = if !downloaded_models.is_empty() {
+    // Create model submenu if there are any available models
+    let model_submenu = if !available_models.is_empty() {
         let mut model_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
         let mut model_check_items = Vec::new();
 
-        for (model_name, display_name) in downloaded_models {
+        for (model_name, display_name) in available_models {
             let is_selected = model_name == current_model;
             let model_item = CheckMenuItem::with_id(
                 app,
@@ -127,10 +143,24 @@ async fn build_tray_menu<R: tauri::Runtime>(
         let current_model_display = if current_model.is_empty() {
             "Model: None".to_string()
         } else {
-            let display_name = models_info
-                .get(&current_model)
-                .map(|info| info.display_name.clone())
-                .unwrap_or_else(|| current_model.clone());
+            // Try Whisper first
+            let display_name = if let Some(info) = whisper_models_info.get(&current_model) {
+                info.display_name.clone()
+            } else {
+                // Try Parakeet registry
+                let parakeet_manager = app.state::<crate::parakeet::ParakeetManager>();
+                if let Some(pm) = parakeet_manager
+                    .list_models()
+                    .into_iter()
+                    .find(|m| m.name == current_model)
+                {
+                    pm.display_name
+                } else if current_model == "soniox" {
+                    "Soniox (Cloud)".to_string()
+                } else {
+                    current_model.clone()
+                }
+            };
             format!("Model: {}", display_name)
         };
 

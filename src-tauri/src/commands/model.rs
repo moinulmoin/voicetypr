@@ -2,6 +2,7 @@ use crate::commands::license::check_license_status_internal;
 use crate::emit_to_all;
 use crate::license::LicenseState;
 use crate::parakeet::{ParakeetManager, ParakeetModelStatus};
+use crate::secure_store;
 use crate::utils::onboarding_logger;
 #[cfg(debug_assertions)]
 use crate::utils::system_monitor;
@@ -293,6 +294,11 @@ pub async fn download_model(
                 log::warn!("Failed to emit model-downloaded event: {}", e);
             }
 
+            // Refresh tray menu so the new model appears in the tray immediately
+            if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+                log::warn!("Failed to update tray menu after model download: {}", e);
+            }
+
             Ok(())
         }
         Err(e) => {
@@ -340,6 +346,8 @@ pub struct UnifiedModelInfo {
     pub accuracy_score: u8,
     pub recommended: bool,
     pub engine: String,
+    pub kind: String,
+    pub requires_setup: bool,
 }
 
 /// Returns status of all available speech recognition models (Whisper + Parakeet).
@@ -354,7 +362,7 @@ pub struct UnifiedModelInfo {
 pub async fn get_model_status(
     whisper_state: State<'_, RwLock<WhisperManager>>,
     parakeet_manager: State<'_, ParakeetManager>,
-    _app: tauri::AppHandle,
+    app: tauri::AppHandle,
 ) -> Result<ModelStatusResponse, String> {
     log::info!("[GET_MODEL_STATUS] Refreshing downloaded status...");
 
@@ -372,8 +380,15 @@ pub async fn get_model_status(
     let parakeet_models = parakeet_manager.list_models();
     models.extend(parakeet_models.into_iter().map(convert_parakeet_model));
 
-    // Sort strictly by size (smallest to largest)
-    models.sort_by(|a, b| a.size.cmp(&b.size));
+    // Inject cloud providers (e.g., Soniox)
+    models.extend(collect_cloud_models(&app));
+
+    // Sort with local models first (by size), cloud models afterwards
+    models.sort_by(|a, b| {
+        let a_key = (a.kind == "cloud", a.size);
+        let b_key = (b.kind == "cloud", b.size);
+        a_key.cmp(&b_key)
+    });
 
     log::info!("[GET_MODEL_STATUS] Returning {} models", models.len());
 
@@ -408,6 +423,11 @@ pub async fn delete_model(
             "engine": engine.as_str()
         }),
     );
+
+    // Refresh tray menu so the deleted model is removed from tray selection
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!("Failed to update tray menu after model deletion: {}", e);
+    }
 
     Ok(())
 }
@@ -489,6 +509,8 @@ fn convert_whisper_model(name: String, info: ModelInfo) -> UnifiedModelInfo {
         accuracy_score: info.accuracy_score,
         recommended: info.recommended,
         engine: ModelEngine::Whisper.as_str().to_string(),
+        kind: "local".to_string(),
+        requires_setup: false,
     }
 }
 
@@ -504,7 +526,35 @@ fn convert_parakeet_model(status: ParakeetModelStatus) -> UnifiedModelInfo {
         accuracy_score: status.accuracy_score,
         recommended: status.recommended,
         engine: ModelEngine::Parakeet.as_str().to_string(),
+        kind: "local".to_string(),
+        requires_setup: false,
     }
+}
+
+fn collect_cloud_models(app: &AppHandle) -> Vec<UnifiedModelInfo> {
+    const STT_API_KEY_SONIOX: &str = "stt_api_key_soniox";
+    let has_soniox_key = secure_store::secure_has(app, STT_API_KEY_SONIOX).unwrap_or_else(|err| {
+        log::warn!(
+            "[GET_MODEL_STATUS] Failed to check Soniox key presence: {}",
+            err
+        );
+        false
+    });
+
+    vec![UnifiedModelInfo {
+        name: "soniox".to_string(),
+        display_name: "Soniox (Cloud)".to_string(),
+        size: 0,
+        url: String::new(),
+        sha256: String::new(),
+        downloaded: has_soniox_key,
+        speed_score: 9,
+        accuracy_score: 10,
+        recommended: true,
+        engine: "soniox".to_string(),
+        kind: "cloud".to_string(),
+        requires_setup: !has_soniox_key,
+    }]
 }
 
 #[tauri::command]

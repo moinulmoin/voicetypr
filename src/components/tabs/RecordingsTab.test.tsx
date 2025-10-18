@@ -1,8 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { RecordingsTab } from './RecordingsTab';
-import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
-import { EventCallback } from '@tauri-apps/api/event';
+import { emit } from '@tauri-apps/api/event';
 
 // Mock sonner
 vi.mock('sonner', () => ({
@@ -22,17 +21,17 @@ vi.mock('@/contexts/SettingsContext', () => ({
 // Track registered events
 const registeredEvents: Record<string, any> = {};
 
-vi.mock('@/hooks/useEventCoordinator', () => ({
-  useEventCoordinator: () => ({
-    registerEvent: vi.fn((event: string, callback: EventCallback<any>) => {
-      // Store callbacks for testing
-      (window as any).__testEventCallbacks = (window as any).__testEventCallbacks || {};
-      (window as any).__testEventCallbacks[event] = callback;
-      registeredEvents[event] = callback;
-      return vi.fn(); // Return unregister function
-    })
-  })
+// Mock Tauri core invoke so we don't depend on window.__TAURI_INTERNALS__
+let invokeMock = vi.fn<(
+  cmd: string,
+  args?: Record<string, unknown>
+) => Promise<any>>();
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (cmd: string, args?: Record<string, unknown>) => invokeMock(cmd, args),
 }));
+
+// Use real useEventCoordinator; events are mocked globally in setup
 
 // Mock RecentRecordings component
 vi.mock('@/components/sections/RecentRecordings', () => ({
@@ -52,18 +51,14 @@ describe('RecordingsTab', () => {
     vi.clearAllMocks();
     (window as any).__testEventCallbacks = {};
     Object.keys(registeredEvents).forEach(key => delete registeredEvents[key]);
-    
-    // Setup default Tauri IPC mock
-    mockIPC((cmd) => {
-      if (cmd === 'get_transcription_history') {
-        return [];
-      }
+    invokeMock = vi.fn(async (cmd: string) => {
+      if (cmd === 'get_transcription_history') return [];
       return null;
     });
   });
   
   afterEach(() => {
-    clearMocks();
+    // no-op; mocks reset in beforeEach
   });
 
 
@@ -77,11 +72,8 @@ describe('RecordingsTab', () => {
     ];
     
     // Setup mock for this test
-    clearMocks();
-    mockIPC((cmd) => {
-      if (cmd === 'get_transcription_history') {
-        return mockHistory;
-      }
+    invokeMock = vi.fn(async (cmd: string) => {
+      if (cmd === 'get_transcription_history') return mockHistory;
       return null;
     });
     
@@ -104,11 +96,8 @@ describe('RecordingsTab', () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     
     // Mock to throw an error
-    clearMocks();
-    mockIPC((cmd) => {
-      if (cmd === 'get_transcription_history') {
-        throw new Error('Failed to load');
-      }
+    invokeMock = vi.fn(async (cmd: string) => {
+      if (cmd === 'get_transcription_history') throw new Error('Failed to load');
       return null;
     });
     
@@ -133,8 +122,7 @@ describe('RecordingsTab', () => {
     
     // Setup mock to return empty first, then updated history
     let callCount = 0;
-    clearMocks();
-    mockIPC((cmd) => {
+    invokeMock = vi.fn(async (cmd: string) => {
       if (cmd === 'get_transcription_history') {
         callCount++;
         return callCount === 1 ? [] : mockHistory;
@@ -149,9 +137,8 @@ describe('RecordingsTab', () => {
       expect(screen.getByText('History count: 0')).toBeInTheDocument();
     });
     
-    // Fire the event
-    const callback = (window as any).__testEventCallbacks['history-updated'];
-    await callback();
+    // Fire the event (behavioral path)
+    await act(async () => { await emit('history-updated'); });
     
     // Should reload and show updated history
     await waitFor(() => {
@@ -159,49 +146,23 @@ describe('RecordingsTab', () => {
     });
   });
 
-  it('handles recording error event with toast', async () => {
+  it('ignores recording error event in main window (pill handles toasts)', async () => {
     const { toast } = await import('sonner');
     
     render(<RecordingsTab />);
     
-    // Wait for events to be registered
-    await waitFor(() => {
-      expect((window as any).__testEventCallbacks['recording-error']).toBeDefined();
-    });
-    
-    const callback = (window as any).__testEventCallbacks['recording-error'];
-    if (callback) {
-      callback('Microphone not available');
-    }
-    
-    expect(toast.error).toHaveBeenCalledWith(
-      'Recording Failed',
-      expect.objectContaining({
-        description: 'Microphone not available'
-      })
-    );
+    await act(async () => { await emit('recording-error', 'Microphone not available'); });
+    // Routed to pill window; main should not show toast
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it('handles transcription error event with toast', async () => {
+  it('ignores transcription error event in main window (pill handles toasts)', async () => {
     const { toast } = await import('sonner');
     
     render(<RecordingsTab />);
     
-    // Wait for events to be registered
-    await waitFor(() => {
-      expect((window as any).__testEventCallbacks['transcription-error']).toBeDefined();
-    });
-    
-    const callback = (window as any).__testEventCallbacks['transcription-error'];
-    if (callback) {
-      callback('Model not loaded');
-    }
-    
-    expect(toast.error).toHaveBeenCalledWith(
-      'Transcription Failed',
-      expect.objectContaining({
-        description: 'Model not loaded'
-      })
-    );
+    await act(async () => { await emit('transcription-error', 'Model not loaded'); });
+    // Routed to pill window; main should not show toast
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });

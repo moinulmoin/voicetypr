@@ -1,5 +1,7 @@
 use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_combination};
+use crate::parakeet::ParakeetManager;
 use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
+use crate::whisper::manager::WhisperManager;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -249,6 +251,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
     // Preload new model and update tray menu if model changed
     let is_parakeet_engine = settings.current_model_engine == "parakeet";
+    let is_cloud_engine = settings.current_model_engine == "soniox";
 
     if !settings.current_model.is_empty() && old_model != settings.current_model {
         use crate::commands::model::preload_model;
@@ -260,7 +263,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             settings.current_model
         );
 
-        if !is_parakeet_engine {
+        if !(is_parakeet_engine || is_cloud_engine) {
             // Preload the new Whisper model
             let app_clone = app.clone();
             let model_name = settings.current_model.clone();
@@ -273,7 +276,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
                 }
             });
         } else {
-            log::info!("Skipping Whisper preload for Parakeet engine selection");
+            log::info!(
+                "Skipping preload for {} engine selection",
+                settings.current_model_engine
+            );
         }
 
         // Update the tray menu to reflect the new selection
@@ -444,9 +450,39 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     // Get current settings
     let mut settings = get_settings(app.clone()).await?;
 
+    let engine = if model_name == "soniox" {
+        "soniox".to_string()
+    } else {
+        let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
+        let whisper_has = {
+            let guard = whisper_state.read().await;
+            guard.get_models_status().contains_key(&model_name)
+        };
+
+        if whisper_has {
+            "whisper".to_string()
+        } else {
+            let parakeet_manager = app.state::<ParakeetManager>();
+            let is_parakeet = parakeet_manager
+                .list_models()
+                .into_iter()
+                .any(|m| m.name == model_name);
+            if is_parakeet {
+                "parakeet".to_string()
+            } else {
+                log::warn!(
+                    "set_model_from_tray: model '{}' not found in registries; defaulting to whisper",
+                    model_name
+                );
+                "whisper".to_string()
+            }
+        }
+    };
+
     // Update the model
     settings.current_model = model_name.clone();
-    settings.current_model_engine = "whisper".to_string();
+    settings.current_model_engine = engine.clone();
+    settings.language = "en".to_string();
 
     // Save settings (this will also preload the model)
     save_settings(app.clone(), settings).await?;
@@ -459,7 +495,7 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
         "model-changed",
         json!({
             "model": model_name,
-            "engine": "whisper"
+            "engine": engine
         }),
     ) {
         log::warn!("Failed to emit model-changed event: {}", e);

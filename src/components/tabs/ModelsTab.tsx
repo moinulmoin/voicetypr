@@ -17,6 +17,7 @@ export function ModelsTab() {
     downloadModel,
     cancelDownload,
     deleteModel,
+    loadModels,
     sortedModels
   } = useModelManagementContext();
 
@@ -84,12 +85,21 @@ export function ModelsTab() {
       onDelete={handleDeleteModel}
       onCancelDownload={cancelDownload}
       onSelect={async (modelName) => {
-        if (settings) {
-          const engine = modelName === 'soniox'
-            ? 'soniox'
-            : (sortedModels.find(([name]) => name === modelName)?.[1]?.engine ?? 'whisper');
-          await saveSettings({ current_model: modelName, current_model_engine: engine });
+        if (!settings) return;
+        const engine = sortedModels.find(([name]) => name === modelName)?.[1]?.engine ?? 'whisper';
+
+        await saveSettings({
+          current_model: modelName,
+          current_model_engine: engine,
+          language: 'en',
+        });
+
+        if (settings.language !== 'en') {
+          toast.info('Spoken language reset to English for the new model.');
         }
+      }}
+      refreshModels={async () => {
+        await loadModels();
       }}
     />
   );

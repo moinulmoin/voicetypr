@@ -131,9 +131,7 @@ mod tests {
         let mut prompts_options = EnhancementOptions::default();
         prompts_options.preset = EnhancementPreset::Prompts;
         let prompts_prompt = build_enhancement_prompt(text, None, &prompts_options);
-        assert!(
-            prompts_prompt.contains("transform the cleaned text into a concise AI prompt")
-        );
+        assert!(prompts_prompt.contains("transform the cleaned text into a concise AI prompt"));
 
         // Test Email preset
         let mut email_options = EnhancementOptions::default();
@@ -235,10 +233,16 @@ mod tests {
             prompt.contains("self-corrections"),
             "Should handle self-corrections"
         );
-        assert!(prompt.contains("last-intent wins"), "Should use last-intent policy");
+        assert!(
+            prompt.contains("last-intent wins"),
+            "Should use last-intent policy"
+        );
 
         // 2. Error correction
-        assert!(prompt.contains("grammar, punctuation, capitalization"), "Should handle grammar and spelling");
+        assert!(
+            prompt.contains("grammar, punctuation, capitalization"),
+            "Should handle grammar and spelling"
+        );
 
         // 3. Number and time formatting
         assert!(

@@ -1,15 +1,41 @@
-export interface ModelInfo {
+export type SpeechModelEngine = 'whisper' | 'parakeet' | 'soniox';
+export type ModelKind = 'local' | 'cloud';
+
+interface BaseModelInfo {
   name: string;
   display_name: string;
+  engine: SpeechModelEngine;
+  kind: ModelKind;
+  recommended: boolean;
+  downloaded: boolean;
+  requires_setup: boolean;
+  speed_score?: number; // Optional for cloud providers
+  accuracy_score?: number; // Optional for cloud providers
+  size?: number;
+  url?: string;
+  sha256?: string;
+}
+
+export interface LocalModelInfo extends BaseModelInfo {
+  kind: 'local';
   size: number;
   url: string;
   sha256: string;
-  downloaded: boolean;
-  speed_score: number;     // 1-10, 10 being fastest
-  accuracy_score: number;  // 1-10, 10 being most accurate
-  recommended: boolean;    // Whether this model is recommended
-  engine: 'whisper' | 'parakeet' | 'soniox';
+  speed_score: number;
+  accuracy_score: number;
 }
+
+export interface CloudModelInfo extends BaseModelInfo {
+  kind: 'cloud';
+}
+
+export type ModelInfo = LocalModelInfo | CloudModelInfo;
+
+export const isCloudModel = (model: ModelInfo): model is CloudModelInfo =>
+  model.kind === 'cloud';
+
+export const isLocalModel = (model: ModelInfo): model is LocalModelInfo =>
+  model.kind === 'local';
 
 export type RecordingMode = 'toggle' | 'push_to_talk';
 

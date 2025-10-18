@@ -7,8 +7,8 @@ use tauri_plugin_store::StoreExt;
 
 #[derive(Clone, Debug, Default)]
 pub struct SetItemOptions {
-    pub ttl: Option<u64>,                // seconds
-    pub compress: Option<bool>,          // ignored
+    pub ttl: Option<u64>,                   // seconds
+    pub compress: Option<bool>,             // ignored
     pub compression_method: Option<String>, // ignored
 }
 
@@ -24,14 +24,19 @@ struct Meta {
     #[serde(default)]
     cached_at: Option<DateTime<Utc>>, // RFC3339
     #[serde(default)]
-    ttl: Option<u64>,                 // seconds
+    ttl: Option<u64>, // seconds
 }
 
-fn open_store<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<Arc<tauri_plugin_store::Store<R>>, String> {
+fn open_store<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<Arc<tauri_plugin_store::Store<R>>, String> {
     app.store("cache").map_err(|e| e.to_string())
 }
 
-pub fn get<R: tauri::Runtime>(app: &tauri::AppHandle<R>, key: &str) -> Result<Option<Value>, String> {
+pub fn get<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    key: &str,
+) -> Result<Option<Value>, String> {
     let store = open_store(app)?;
     if let Some(v) = store.get(key) {
         // Try to interpret as envelope first

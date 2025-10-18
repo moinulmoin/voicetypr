@@ -113,13 +113,19 @@ export const OnboardingDesktop = function OnboardingDesktop({
   useEffect(() => {
     // Only auto-select if no model is selected yet
     if (!settings?.current_model) {
-      // Find a downloaded model
-      const downloadedModel = Object.entries(models).find(([_, m]) => m.downloaded);
-      if (downloadedModel) {
-        updateSettings({ current_model: downloadedModel[0] });
+      const downloadedModelEntry = Object.entries(models).find(([_, m]) => m.downloaded);
+      if (downloadedModelEntry) {
+        const [modelName, info] = downloadedModelEntry;
+        updateSettings({
+          current_model: modelName,
+          current_model_engine: info.engine ?? 'whisper',
+          language: 'en'
+        }).catch((error) => {
+          console.error('[OnboardingDesktop] Failed to auto-select model:', error);
+        });
       }
     }
-  }, [models, settings?.current_model]); // Depend on both to react to changes
+  }, [models, settings?.current_model, updateSettings]); // Depend on both to react to changes
 
   const checkPermissions = async () => {
     // Use the hook methods to check permissions
@@ -189,6 +195,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         hotkey: hotkey,
         current_model: selectedModelName,
         current_model_engine: engine,
+        language: 'en',
         onboarding_completed: true
       });
     } catch (error) {
@@ -479,7 +486,14 @@ export const OnboardingDesktop = function OnboardingDesktop({
                               isVerifying={verifyingModels.has(name)}
                               isSelected={settings?.current_model === name}
                               onDownload={downloadModel}
-                              onSelect={(modelName) => updateSettings({ current_model: modelName })}
+                              onSelect={async (modelName) => {
+                                const info = models[modelName];
+                                await updateSettings({
+                                  current_model: modelName,
+                                  current_model_engine: info?.engine ?? 'whisper',
+                                  language: 'en'
+                                });
+                              }}
                               onCancelDownload={cancelDownload}
                               showSelectButton={model.downloaded}
                             />

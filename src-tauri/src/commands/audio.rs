@@ -175,7 +175,9 @@ async fn resolve_engine_for_model(
     match engine_hint.map(|e| e.to_lowercase()) {
         Some(ref engine) if engine == "soniox" => {
             if crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false) {
-                Ok(ActiveEngineSelection::Soniox { model_name: model_name.to_string() })
+                Ok(ActiveEngineSelection::Soniox {
+                    model_name: model_name.to_string(),
+                })
             } else {
                 Err("Soniox token not configured. Please configure it in Models.".to_string())
             }
@@ -216,9 +218,13 @@ async fn resolve_engine_for_model(
         None => {
             if model_name == "soniox" {
                 if crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false) {
-                    return Ok(ActiveEngineSelection::Soniox { model_name: model_name.to_string() });
+                    return Ok(ActiveEngineSelection::Soniox {
+                        model_name: model_name.to_string(),
+                    });
                 } else {
-                    return Err("Soniox token not configured. Please configure it in Models.".to_string());
+                    return Err(
+                        "Soniox token not configured. Please configure it in Models.".to_string(),
+                    );
                 }
             }
             if let Some(path) = whisper_state.read().await.get_model_path(model_name) {
@@ -354,7 +360,8 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
                     .and_then(|v| v.as_str().map(|s| s.to_string()))
                     .unwrap_or_else(|| "whisper".to_string());
                 if engine == "soniox" {
-                    let has_key = crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
+                    let has_key =
+                        crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
                     (true, has_key)
                 } else {
                     (false, false)
@@ -364,7 +371,8 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
         }
     };
 
-    let has_models = has_whisper_models || has_parakeet_models || (is_soniox_selected && soniox_ready);
+    let has_models =
+        has_whisper_models || has_parakeet_models || (is_soniox_selected && soniox_ready);
 
     if !has_models {
         log::error!("No models downloaded");
@@ -375,11 +383,15 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
             "no-models-error",
             serde_json::json!({
                 "title": "No Speech Recognition Models",
-                "message": if is_soniox_selected { "Please configure your Soniox token in Settings before recording." } else { "Please download at least one model from Settings before recording." },
+                "message": if is_soniox_selected { "Please configure your Soniox token in Models before recording." } else { "Please download at least one model from Models before recording." },
                 "action": "open-settings"
             }),
         );
-        return Err(if is_soniox_selected { "Soniox token missing".to_string() } else { "No speech recognition models installed. Please download a model first.".to_string() });
+        return Err(if is_soniox_selected {
+            "Soniox token missing".to_string()
+        } else {
+            "No speech recognition models installed. Please download a model first.".to_string()
+        });
     }
 
     // Check license status (with caching to improve performance)
@@ -1054,12 +1066,14 @@ pub async fn stop_recording(
                     &app,
                     &audio_path,
                     "Soniox token not configured",
-                    "Please configure your Soniox token in Settings before recording.",
+                    "Please configure your Soniox token in Models before recording.",
                 )
                 .await;
             }
 
-            ActiveEngineSelection::Soniox { model_name: config.current_model.clone() }
+            ActiveEngineSelection::Soniox {
+                model_name: config.current_model.clone(),
+            }
         }
         _ => {
             let downloaded_models = whisper_manager.read().await.get_downloaded_model_names();
@@ -1070,7 +1084,7 @@ pub async fn stop_recording(
                     &app,
                     &audio_path,
                     "No speech recognition models installed",
-                    "Please download at least one speech recognition model from Settings to use VoiceTypr.",
+                    "Please download at least one speech recognition model from Models to use VoiceTypr.",
                 )
                 .await;
             }
@@ -1184,7 +1198,9 @@ pub async fn stop_recording(
             let normalized_path = {
                 let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
                 let out_path = parent_dir.join(format!("normalized_{}.wav", ts));
-                if let Err(e) = crate::ffmpeg::normalize_streaming(&app, &audio_path, &out_path).await {
+                if let Err(e) =
+                    crate::ffmpeg::normalize_streaming(&app, &audio_path, &out_path).await
+                {
                     log::error!("Audio normalization (ffmpeg) failed: {}", e);
                     update_recording_state(
                         &app,
@@ -1276,7 +1292,6 @@ pub async fn stop_recording(
         config.translate_to_english,
         config.ai_enabled
     );
-
 
     let language = if config.language.is_empty() {
         None
@@ -1431,7 +1446,13 @@ pub async fn stop_recording(
                 }
             }
             ActiveEngineSelection::Soniox { .. } => {
-                match soniox_transcribe_async(&app_for_task, &audio_path_clone, language_for_task.as_deref()).await {
+                match soniox_transcribe_async(
+                    &app_for_task,
+                    &audio_path_clone,
+                    language_for_task.as_deref(),
+                )
+                .await
+                {
                     Ok(text) => Ok(text),
                     Err(e) => Err(e),
                 }
@@ -1807,19 +1828,34 @@ pub async fn save_transcription(app: AppHandle, text: String, model: String) -> 
             if let Some(value) = store.get(&key) {
                 match &latest {
                     Some((ts, _)) => {
-                        if key > *ts { latest = Some((key.to_string(), value)); }
+                        if key > *ts {
+                            latest = Some((key.to_string(), value));
+                        }
                     }
-                    None => latest = Some((key.to_string(), value))
+                    None => latest = Some((key.to_string(), value)),
                 }
             }
         }
 
         if let Some((ts, v)) = latest {
-            let same_text = v.get("text").and_then(|x| x.as_str()).map(|s| s == text).unwrap_or(false);
-            let same_model = v.get("model").and_then(|x| x.as_str()).map(|s| s == model).unwrap_or(false);
+            let same_text = v
+                .get("text")
+                .and_then(|x| x.as_str())
+                .map(|s| s == text)
+                .unwrap_or(false);
+            let same_model = v
+                .get("model")
+                .and_then(|x| x.as_str())
+                .map(|s| s == model)
+                .unwrap_or(false);
             let within_window = chrono::DateTime::parse_from_rfc3339(&ts)
                 .ok()
-                .and_then(|t| t.with_timezone(&chrono::Utc).signed_duration_since(chrono::Utc::now()).num_seconds().checked_abs())
+                .and_then(|t| {
+                    t.with_timezone(&chrono::Utc)
+                        .signed_duration_since(chrono::Utc::now())
+                        .num_seconds()
+                        .checked_abs()
+                })
                 .map(|secs| secs <= 2)
                 .unwrap_or(false);
             if same_text && same_model && within_window {
@@ -2145,9 +2181,13 @@ pub async fn transcribe_audio(
 }
 
 // Soniox async transcription via v1 Files + Transcriptions flow
-async fn soniox_transcribe_async(app: &AppHandle, wav_path: &Path, language: Option<&str>) -> Result<String, String> {
-    use tokio::fs;
+async fn soniox_transcribe_async(
+    app: &AppHandle,
+    wav_path: &Path,
+    language: Option<&str>,
+) -> Result<String, String> {
     use reqwest::multipart::{Form, Part};
+    use tokio::fs;
 
     let key = crate::secure_store::secure_get(app, "stt_api_key_soniox")?
         .ok_or_else(|| "Soniox API key not set".to_string())?;
@@ -2160,10 +2200,14 @@ async fn soniox_transcribe_async(app: &AppHandle, wav_path: &Path, language: Opt
     let base = "https://api.soniox.com/v1";
 
     // 1) Upload file -> file_id
-    let filename = wav_path.file_name().and_then(|s| s.to_str()).unwrap_or("audio.wav");
+    let filename = wav_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("audio.wav");
     let file_part = Part::bytes(wav_bytes)
         .file_name(filename.to_string())
-        .mime_str("audio/wav").map_err(|e| e.to_string())?;
+        .mime_str("audio/wav")
+        .map_err(|e| e.to_string())?;
     let form = Form::new().part("file", file_part);
 
     let upload_url = format!("{}/files", base);
@@ -2181,14 +2225,20 @@ async fn soniox_transcribe_async(app: &AppHandle, wav_path: &Path, language: Opt
         return Err(format!("Soniox upload failed: HTTP {}: {}", code, snippet));
     }
     let upload_json: serde_json::Value = upload_resp.json().await.map_err(|e| e.to_string())?;
-    let file_id = upload_json.get("id").and_then(|v| v.as_str()).ok_or("Missing file_id")?.to_string();
+    let file_id = upload_json
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing file_id")?
+        .to_string();
 
     // 2) Create transcription -> transcription_id
     let mut payload = serde_json::json!({
         "model": "stt-async-preview",
         "file_id": file_id,
     });
-    if let Some(lang) = language { payload["language_hints"] = serde_json::json!([lang]); }
+    if let Some(lang) = language {
+        payload["language_hints"] = serde_json::json!([lang]);
+    }
 
     let create_url = format!("{}/transcriptions", base);
     let create_resp = client
@@ -2203,10 +2253,17 @@ async fn soniox_transcribe_async(app: &AppHandle, wav_path: &Path, language: Opt
         let code = create_resp.status();
         let body = create_resp.text().await.unwrap_or_default();
         let snippet: String = body.chars().take(300).collect();
-        return Err(format!("Soniox create transcription failed: HTTP {}: {}", code, snippet));
+        return Err(format!(
+            "Soniox create transcription failed: HTTP {}: {}",
+            code, snippet
+        ));
     }
     let create_json: serde_json::Value = create_resp.json().await.map_err(|e| e.to_string())?;
-    let transcription_id = create_json.get("id").and_then(|v| v.as_str()).ok_or("Missing transcription id")?.to_string();
+    let transcription_id = create_json
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing transcription id")?
+        .to_string();
 
     // 3) Poll status
     let status_url = format!("{}/transcriptions/{}", base, transcription_id);
@@ -2230,11 +2287,16 @@ async fn soniox_transcribe_async(app: &AppHandle, wav_path: &Path, language: Opt
         match status {
             "completed" => break,
             "error" => {
-                let msg = json.get("error_message").and_then(|v| v.as_str()).unwrap_or("Job failed");
+                let msg = json
+                    .get("error_message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Job failed");
                 return Err(format!("Soniox job failed: {}", msg));
             }
             _ => {
-                if started.elapsed() > timeout { return Err("Soniox transcription timed out".to_string()); }
+                if started.elapsed() > timeout {
+                    return Err("Soniox transcription timed out".to_string());
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
             }
         }
@@ -2252,7 +2314,10 @@ async fn soniox_transcribe_async(app: &AppHandle, wav_path: &Path, language: Opt
         let code = resp.status();
         let body = resp.text().await.unwrap_or_default();
         let snippet: String = body.chars().take(200).collect();
-        return Err(format!("Soniox transcript failed: HTTP {}: {}", code, snippet));
+        return Err(format!(
+            "Soniox transcript failed: HTTP {}: {}",
+            code, snippet
+        ));
     }
     let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
 
@@ -2265,11 +2330,17 @@ async fn soniox_transcribe_async(app: &AppHandle, wav_path: &Path, language: Opt
         let mut first = true;
         for t in tokens {
             if let Some(txt) = t.get("text").and_then(|v| v.as_str()) {
-                if !first { out.push(' '); } else { first = false; }
+                if !first {
+                    out.push(' ');
+                } else {
+                    first = false;
+                }
                 out.push_str(txt);
             }
         }
-        if !out.is_empty() { return Ok(out); }
+        if !out.is_empty() {
+            return Ok(out);
+        }
     }
     Err("Soniox transcript format not recognized".to_string())
 }
