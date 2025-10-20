@@ -270,10 +270,49 @@ build_parakeet_sidecar() {
     popd > /dev/null
 }
 
+# Ensure ffmpeg/ffprobe sidecar binaries exist before packaging
+ensure_ffmpeg_sidecar() {
+    echo -e "${YELLOW}Ensuring ffmpeg sidecar binaries...${NC}"
+    pnpm run sidecar:ensure-ffmpeg
+
+    local DIST_DIR="sidecar/ffmpeg/dist"
+    if [[ ! -d "$DIST_DIR" ]]; then
+        echo -e "${RED}Error: sidecar directory missing at $DIST_DIR${NC}"
+        exit 1
+    fi
+
+    local REQUIRED_BINARIES=()
+    case "$(uname -s)" in
+        Darwin|Linux)
+            REQUIRED_BINARIES=("ffmpeg" "ffprobe")
+            ;;
+        MINGW*|MSYS*|CYGWIN*|Windows_NT)
+            REQUIRED_BINARIES=("ffmpeg.exe" "ffprobe.exe")
+            ;;
+        *)
+            REQUIRED_BINARIES=("ffmpeg" "ffprobe")
+            ;;
+    esac
+
+    local missing=()
+    for bin in "${REQUIRED_BINARIES[@]}"; do
+        if [[ ! -f "$DIST_DIR/$bin" ]]; then
+            missing+=("$bin")
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo -e "${RED}Error: Missing ffmpeg sidecar binaries: ${missing[*]}${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ ffmpeg sidecar binaries present${NC}"
+}
 # Intel (x86_64) build removed – Apple Silicon only
 
 ## Ensure sidecar is built and available for bundling
 build_parakeet_sidecar
+ensure_ffmpeg_sidecar
 
 # Build aarch64 binary with automatic notarization
 echo -e "${GREEN}🔨 Building aarch64 binary with notarization...${NC}"

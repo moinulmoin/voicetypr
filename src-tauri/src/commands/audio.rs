@@ -1398,9 +1398,10 @@ pub async fn stop_recording(
                                     e,
                                     RETRY_DELAY_MS
                                 );
-                                std::thread::sleep(std::time::Duration::from_millis(
+                                tokio::time::sleep(std::time::Duration::from_millis(
                                     RETRY_DELAY_MS,
-                                ));
+                                ))
+                                .await;
                             } else {
                                 log::error!(
                                     "Transcription failed after {} attempts: {}",
