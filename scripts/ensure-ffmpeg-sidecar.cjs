@@ -171,9 +171,17 @@ function verifyChecksum(file, expected, label) {
         const txt = fs.readFileSync(shaFile, 'utf8');
         // Typical format: <sha256> *ffmpeg-release-essentials.zip
         winSha = (txt.split(/\s+/)[0] || '').trim();
-      } catch (_) {}
+      } catch (err) {
+        // No checksum available from remote and none provided via env.
+        // Refuse to install unverified binaries.
+        fail(
+          'Missing SHA256 for Windows ffmpeg.zip.\n' +
+            'Provide FFMPEG_WIN_ZIP_SHA256 env to pin a known archive, or ensure the .sha256 file is accessible.\n' +
+            'Example: FFMPEG_WIN_URL + FFMPEG_WIN_ZIP_SHA256.'
+        );
+      }
     }
-    if (winSha) verifyChecksum(zipFile, winSha, 'Windows ffmpeg.zip');
+    verifyChecksum(zipFile, winSha, 'Windows ffmpeg.zip');
     const outDir = path.join(tmp, 'out');
     unzip(zipFile, outDir);
 
