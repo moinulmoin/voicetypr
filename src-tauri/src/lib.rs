@@ -67,12 +67,35 @@ use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem, Subm
 use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
 
+/// Determines if a model should appear as selected in the tray given onboarding status
+pub(crate) fn should_mark_model_selected(
+    onboarding_done: bool,
+    model_name: &str,
+    current_model: &str,
+) -> bool {
+    onboarding_done && model_name == current_model
+}
+
+/// Formats the tray's model label given onboarding status and an optional resolved display name
+pub(crate) fn format_tray_model_label(
+    onboarding_done: bool,
+    current_model: &str,
+    resolved_display_name: Option<String>,
+) -> String {
+    if !onboarding_done || current_model.is_empty() {
+        "Model: None".to_string()
+    } else {
+        let name = resolved_display_name.unwrap_or_else(|| current_model.to_string());
+        format!("Model: {}", name)
+    }
+}
+
 // Function to build the tray menu
 async fn build_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<tauri::menu::Menu<R>, Box<dyn std::error::Error>> {
     // Get current settings for menu state
-    let (current_model, selected_microphone) = {
+    let (current_model, selected_microphone, onboarding_done) = {
         match app.store("settings") {
             Ok(store) => {
                 let model = store
@@ -82,9 +105,13 @@ async fn build_tray_menu<R: tauri::Runtime>(
                 let microphone = store
                     .get("selected_microphone")
                     .and_then(|v| v.as_str().map(|s| s.to_string()));
-                (model, microphone)
+                let onboarding_done = store
+                    .get("onboarding_completed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                (model, microphone, onboarding_done)
             }
-            Err(_) => ("".to_string(), None),
+            Err(_) => ("".to_string(), None, false),
         }
     };
 
@@ -123,7 +150,8 @@ async fn build_tray_menu<R: tauri::Runtime>(
         let mut model_check_items = Vec::new();
 
         for (model_name, display_name) in available_models {
-            let is_selected = model_name == current_model;
+            // Do not show any selection until onboarding is completed
+            let is_selected = should_mark_model_selected(onboarding_done, &model_name, &current_model);
             let model_item = CheckMenuItem::with_id(
                 app,
                 &format!("model_{}", model_name),
@@ -140,12 +168,11 @@ async fn build_tray_menu<R: tauri::Runtime>(
             model_items.push(item);
         }
 
-        let current_model_display = if current_model.is_empty() {
-            "Model: None".to_string()
-        } else {
+        // Resolve a display name only if onboarding is complete and a model is set
+        let resolved_display_name = if onboarding_done && !current_model.is_empty() {
             // Try Whisper first
-            let display_name = if let Some(info) = whisper_models_info.get(&current_model) {
-                info.display_name.clone()
+            if let Some(info) = whisper_models_info.get(&current_model) {
+                Some(info.display_name.clone())
             } else {
                 // Try Parakeet registry
                 let parakeet_manager = app.state::<crate::parakeet::ParakeetManager>();
@@ -154,15 +181,18 @@ async fn build_tray_menu<R: tauri::Runtime>(
                     .into_iter()
                     .find(|m| m.name == current_model)
                 {
-                    pm.display_name
+                    Some(pm.display_name)
                 } else if current_model == "soniox" {
-                    "Soniox (Cloud)".to_string()
+                    Some("Soniox (Cloud)".to_string())
                 } else {
-                    current_model.clone()
+                    Some(current_model.clone())
                 }
-            };
-            format!("Model: {}", display_name)
+            }
+        } else {
+            None
         };
+
+        let current_model_display = format_tray_model_label(onboarding_done, &current_model, resolved_display_name);
 
         Some(Submenu::with_id_and_items(
             app,

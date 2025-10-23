@@ -172,11 +172,9 @@ export function AudioUploadSection() {
       <div className="px-6 py-4 border-b border-border/40">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold">Audio Upload</h1>
+            <h1 className="text-2xl font-semibold">Upload files</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              {settings?.current_model_engine === 'soniox'
-                ? 'Transcribe audio files through your connected cloud model'
-                : 'Transcribe audio files locally with your downloaded model'}
+              Transcribe audio or video files locally
             </p>
           </div>
         </div>
