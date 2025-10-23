@@ -2236,7 +2236,7 @@ async fn soniox_transcribe_async(
 
     // 2) Create transcription -> transcription_id
     let mut payload = serde_json::json!({
-        "model": "stt-async-preview",
+        "model": "stt-async-v3",
         "file_id": file_id,
     });
     if let Some(lang) = language {

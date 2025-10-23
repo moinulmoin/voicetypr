@@ -34,11 +34,19 @@ fn resolve_binary(app: &AppHandle, names: &[&str], label: &str) -> Result<PathBu
     if let Ok(resource_dir) = app.path().resource_dir() {
         push_dir(resource_dir.clone());
         push_dir(resource_dir.join("sidecar").join("ffmpeg").join("dist"));
+        // On macOS, externalBin are placed under Contents/MacOS; include that sibling of Resources
+        #[cfg(target_os = "macos")]
+        if let Some(contents_dir) = resource_dir.parent() {
+            let macos_dir = contents_dir.join("MacOS");
+            push_dir(macos_dir);
+        }
     }
 
     if let Ok(exe_path) = std::env::current_exe() {
         let mut dir_opt = exe_path.parent();
         while let Some(dir) = dir_opt {
+            // Search the executable directory itself (e.g., .../Contents/MacOS)
+            push_dir(dir.to_path_buf());
             push_dir(dir.join("sidecar").join("ffmpeg").join("dist"));
             push_dir(
                 dir.join("Resources")
