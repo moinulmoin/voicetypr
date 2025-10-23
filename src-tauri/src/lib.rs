@@ -1,4 +1,4 @@
-use chrono::Local;
+﻿use chrono::Local;
 use serde_json;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -284,7 +284,7 @@ async fn build_tray_menu<R: tauri::Runtime>(
                         let char_count = first_line.chars().count();
                         let mut preview: String = first_line.chars().take(40).collect();
                         if char_count > 40 {
-                            preview.push('…');
+                            preview.push('\u{2026}');
                         }
                         if preview.is_empty() {
                             "(empty)".to_string()
@@ -741,6 +741,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // When a second instance is launched, bring the existing window to focus
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin({
             #[cfg(target_os = "macos")]
             let autostart = tauri_plugin_autostart::init(
@@ -1001,7 +1008,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .setup(move |app| {
             let setup_start = Instant::now();
             log::info!("🚀 App setup START - version: {}", app_version);
-            
+
             // Keyring is now used instead of Stronghold for API keys
             // Much faster and uses OS-native secure storage
             log::info!("🔐 Using OS-native keyring for secure API key storage");
@@ -1011,12 +1018,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             log_with_context(log::Level::Debug, "Setting up panic handler", &[
                 ("component", "panic_handler")
             ]);
-            
+
             std::panic::set_hook(Box::new(|panic_info| {
                 let location = panic_info.location()
                     .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
                     .unwrap_or_else(|| "unknown location".to_string());
-                
+
                 let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
                     s.to_string()
                 } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
@@ -1024,7 +1031,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     "Unknown panic payload".to_string()
                 };
-                
+
                 log::error!("💥 CRITICAL PANIC at {}: {}", location, message);
                 log_failed("PANIC", "Application panic occurred");
                 log_with_context(log::Level::Error, "Panic details", &[
@@ -1033,7 +1040,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     ("severity", "critical")
                 ]);
                 eprintln!("Application panic at {}: {}", location, message);
-                
+
                 // Try to save panic info to a crash file for debugging
                 if let Ok(home_dir) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
                     let crash_file = std::path::Path::new(&home_dir).join(".voicetypr_crash.log");
@@ -1043,7 +1050,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     ));
                 }
             }));
-            
+
             log::info!("✅ Panic handler configured");
 
             // Clean up old logs on startup (keep last 30 days)
@@ -1051,7 +1058,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             log_with_context(log::Level::Debug, "Cleaning up old logs", &[
                 ("retention_days", "30")
             ]);
-            
+
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let cleanup_start = Instant::now();
@@ -1082,7 +1089,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 log_with_context(log::Level::Debug, "Setting up macOS policy", &[
                     ("policy", "Accessory")
                 ]);
-                
+
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 log::info!("🍎 Set macOS activation policy to Accessory");
 
@@ -1124,7 +1131,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             let whisper_manager = whisper::manager::WhisperManager::new(models_dir.clone());
             app.manage(AsyncRwLock::new(whisper_manager));
-            
+
             log::info!("✅ Whisper manager initialized and managed");
 
             // Initialize Parakeet manager and cache directory
@@ -1241,7 +1248,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     } else if event_id == "microphone_default" {
                         // Handle default microphone selection
                         let app_handle = app.app_handle().clone();
-                        
+
                         tauri::async_runtime::spawn(async move {
                             match crate::commands::settings::set_audio_device(app_handle.clone(), None).await {
                                 Ok(_) => {
@@ -1351,7 +1358,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             log_with_context(log::Level::Debug, "Setting up hotkey", &[
                 ("default", "CommandOrControl+Shift+Space")
             ]);
-            
+
             let hotkey_str = match app.store("settings") {
                 Ok(store) => {
                     store
@@ -1445,7 +1452,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let registration_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 app.global_shortcut().register(shortcut.clone())
             }));
-            
+
             match registration_result {
                 Ok(Ok(_)) => {
                     log_complete("HOTKEY_REGISTRATION", registration_start.elapsed().as_millis() as u64);
@@ -1462,10 +1469,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         ("normalized", &normalized_hotkey),
                         ("suggestion", "Try different hotkey or close conflicting apps")
                     ]);
-                    
+
                     log::error!("❌ Failed to register global hotkey '{}': {}", hotkey_str, e);
                     log::warn!("⚠️  The app will continue without global hotkey support. Another application may be using this shortcut.");
-                    
+
                     // Emit event to notify frontend that hotkey registration failed
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.emit("hotkey-registration-failed", serde_json::json!({
@@ -1483,10 +1490,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         "Unknown panic during hotkey registration".to_string()
                     };
-                    
+
                     log::error!("💥 PANIC during hotkey registration: {}", panic_msg);
                     log::warn!("⚠️  Continuing without global hotkey due to panic");
-                    
+
                     // Emit event to notify frontend
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.emit("hotkey-registration-failed", serde_json::json!({
@@ -1988,3 +1995,6 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         checks_start.elapsed().as_millis()
     );
 }
+
+
+

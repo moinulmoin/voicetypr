@@ -77,9 +77,6 @@ importers:
       tailwindcss:
         specifier: ^4.1.11
         version: 4.1.11
-      tauri-plugin-cache-api:
-        specifier: ^0.1.5
-        version: 0.1.5
       tauri-plugin-macos-permissions-api:
         specifier: ^2.3.0
         version: 2.3.0
@@ -2974,9 +2971,6 @@ packages:
   tar@7.4.3:
     resolution: {integrity: sha512-5S7Va8hKfV7W5U6g3aYxXmlPoZVAwUMy9AOKyF2fVuZa2UD3qZjg578OrLRt8PcNN1PleVaL/5/yYATNL0ICUw==}
     engines: {node: '>=18'}
-
-  tauri-plugin-cache-api@0.1.5:
-    resolution: {integrity: sha512-wNhvhanmB47d18hy7Xom3uY/LRzSM/E7z8SFELPffpVHvNcBLJyWqAqqNkj1WjT+4dr8J45YQmqJMCcKUi0Jyg==}
 
   tauri-plugin-macos-permissions-api@2.3.0:
     resolution: {integrity: sha512-pZp0jmDySysBqrGueknd1a7Rr4XEO9aXpMv9TNrT2PDHP0MSH20njieOagsFYJ5MCVb8A+wcaK0cIkjUC2dOww==}
@@ -6126,10 +6120,6 @@ snapshots:
       minizlib: 3.0.2
       mkdirp: 3.0.1
       yallist: 5.0.0
-
-  tauri-plugin-cache-api@0.1.5:
-    dependencies:
-      '@tauri-apps/api': 2.6.0
 
   tauri-plugin-macos-permissions-api@2.3.0:
     dependencies:

@@ -44,7 +44,7 @@ $ReleaseTag = "v$Version"
 $OutputDir = "release-windows-$Version"
 
 # Save original config at the start to avoid race condition
-$originalConfig = Get-Content "src-tauri\tauri.conf.json" -Raw
+## Redundant now: Windows NSIS config lives in src-tauri\tauri.conf.json
 
 # Create output directory
 if (-not (Test-Path $OutputDir)) {
@@ -70,16 +70,6 @@ if (-not $SkipBuild) {
         exit 1
     }
     
-    # Update tauri.conf.json to use smart installer hooks
-    $config = Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
-    # Create new nsis object with both properties
-    $nsisConfig = @{
-        installMode = "currentUser"
-        installerHooks = "./windows/smart-installer-hooks.nsh"
-    }
-    $config.bundle.windows.nsis = $nsisConfig
-    $config | ConvertTo-Json -Depth 10 | Set-Content "src-tauri\tauri.conf.json"
-    
     # Clean to ensure fresh build
     cargo clean --manifest-path src-tauri\Cargo.toml
     
@@ -88,14 +78,9 @@ if (-not $SkipBuild) {
     pnpm tauri build
     
     if ($LASTEXITCODE -ne 0) {
-        # Restore config
-        $originalConfig | Set-Content "src-tauri\tauri.conf.json"
         Write-Error "Build failed!"
         exit 1
     }
-    
-    # Restore original config
-    $originalConfig | Set-Content "src-tauri\tauri.conf.json"
     
     # Copy installer
     $installer = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" | Select-Object -First 1

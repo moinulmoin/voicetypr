@@ -150,8 +150,13 @@ function verifyChecksum(file, expected, label) {
     const ffprobeDst = path.join(distDir, 'ffprobe.exe');
     if (fs.existsSync(ffmpegDst) && fs.existsSync(ffprobeDst)) {
       // Ensure arch-named copies for bundler compatibility
+      // Some bundlers look for both patterns:
+      //  - ffmpeg-x86_64-pc-windows-msvc.exe
+      //  - ffmpeg.exe-x86_64-pc-windows-msvc.exe
       ensureCopy(ffmpegDst, path.join(distDir, 'ffmpeg-x86_64-pc-windows-msvc.exe'));
       ensureCopy(ffprobeDst, path.join(distDir, 'ffprobe-x86_64-pc-windows-msvc.exe'));
+      ensureCopy(ffmpegDst, path.join(distDir, 'ffmpeg.exe-x86_64-pc-windows-msvc.exe'));
+      ensureCopy(ffprobeDst, path.join(distDir, 'ffprobe.exe-x86_64-pc-windows-msvc.exe'));
       console.log('[ensure-ffmpeg-sidecar] ffmpeg/ffprobe sidecars present. Copies ensured.');
       return;
     }
@@ -199,6 +204,8 @@ function verifyChecksum(file, expected, label) {
     fs.copyFileSync(srcFfprobe, ffprobeDst);
     ensureCopy(ffmpegDst, path.join(distDir, 'ffmpeg-x86_64-pc-windows-msvc.exe'));
     ensureCopy(ffprobeDst, path.join(distDir, 'ffprobe-x86_64-pc-windows-msvc.exe'));
+    ensureCopy(ffmpegDst, path.join(distDir, 'ffmpeg.exe-x86_64-pc-windows-msvc.exe'));
+    ensureCopy(ffprobeDst, path.join(distDir, 'ffprobe.exe-x86_64-pc-windows-msvc.exe'));
     console.log('[ensure-ffmpeg-sidecar] Installed Windows sidecar binaries by download.');
     return;
   }

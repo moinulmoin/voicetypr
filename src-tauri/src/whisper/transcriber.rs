@@ -513,10 +513,9 @@ impl Transcriber {
             params.set_translate(false);
         }
 
-        // Use all available CPU cores for multi-threaded processing
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get() as i32)
-            .unwrap_or(4); // Default to 4 threads if detection fails
+        // Use most cores but leave one free to keep UI responsive
+        let hw = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        let threads = std::cmp::max(1, hw.saturating_sub(1)) as i32; // e.g., 8 cores -> 7 threads
         params.set_n_threads(threads);
         log::info!("[PERFORMANCE] Using {} threads for transcription", threads);
 

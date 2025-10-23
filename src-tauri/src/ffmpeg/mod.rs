@@ -4,6 +4,12 @@ use tauri::AppHandle;
 use tauri::Manager;
 use tokio::process::Command;
 
+// On Windows ensure spawned console apps (ffmpeg/ffprobe) don't flash a console window
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt as _;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[cfg(target_os = "windows")]
 const FFMPEG_CANDIDATES: &[&str] = &["ffmpeg.exe", "ffmpeg-x86_64-pc-windows-msvc.exe"];
 #[cfg(not(target_os = "windows"))]
@@ -95,8 +101,14 @@ async fn run_ffmpeg_command(
         bin.display(),
         args
     );
-    let status = Command::new(&bin)
-        .args(args)
+    let mut cmd = Command::new(&bin);
+    cmd.args(args);
+    // Hide console window on Windows
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let status = cmd
         .status()
         .await
         .map_err(|e| format!("Failed to spawn '{}': {}", bin.display(), e))?;
@@ -113,8 +125,14 @@ async fn run_ffprobe_capture(app: &AppHandle, args: &[String]) -> Result<Vec<u8>
         bin.display(),
         args
     );
-    let output = Command::new(&bin)
-        .args(args)
+    let mut cmd = Command::new(&bin);
+    cmd.args(args);
+    // Hide console window on Windows
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("Failed to spawn '{}': {}", bin.display(), e))?;

@@ -4,9 +4,9 @@
   "version": "1.9.0",
   "identifier": "com.ideaplexa.voicetypr",
   "build": {
-    "beforeDevCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm run sidecar:build && pnpm dev",
+    "beforeDevCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm run sidecar:build && pnpm build",
+    "beforeBuildCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -46,7 +46,6 @@
       "dmg"
     ],
     "externalBin": [
-      "../sidecar/parakeet-swift/dist/parakeet-sidecar",
       "../sidecar/ffmpeg/dist/ffmpeg",
       "../sidecar/ffmpeg/dist/ffprobe",
       "../sidecar/ffmpeg/dist/ffmpeg.exe",

@@ -1,5 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeDevCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm run sidecar:build && pnpm dev",
+    "beforeBuildCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm run sidecar:build && pnpm build"
+  },
   "bundle": {
     "externalBin": [
       "../sidecar/parakeet-swift/dist/parakeet-sidecar"

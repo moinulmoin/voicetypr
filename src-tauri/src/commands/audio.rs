@@ -1328,6 +1328,8 @@ pub async fn stop_recording(
         update_recording_state(&app_for_task, RecordingState::Transcribing, None);
         // Also emit legacy event to pill window
         let _ = emit_to_window(&app_for_task, "pill", "transcription-started", ());
+        // Give UI a moment to render the loader before heavy CPU work
+        tokio::task::yield_now().await;
 
         // Check for cancellation before loading model
         let app_state = app_for_task.state::<AppState>();
