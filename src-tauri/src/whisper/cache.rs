@@ -126,36 +126,49 @@ impl TranscriberCache {
     fn evict_lru(&mut self) {
         if let Some(key) = self.lru_order.pop_front() {
             log::info!("Evicting model from cache: {}", key);
-            
+
             // Log model cleanup with context
-            log_with_context(log::Level::Info, "Model cleanup started", &[
-                ("operation", "MODEL_CLEANUP"),
-                ("model_path", &key),
-                ("reason", "cache_eviction"),
-                ("cache_size", &self.map.len().to_string().as_str())
-            ]);
-            
+            log_with_context(
+                log::Level::Info,
+                "Model cleanup started",
+                &[
+                    ("operation", "MODEL_CLEANUP"),
+                    ("model_path", &key),
+                    ("reason", "cache_eviction"),
+                    ("cache_size", &self.map.len().to_string().as_str()),
+                ],
+            );
+
             // Remove from cache - this will drop the Arc<Transcriber>
             if let Some(transcriber) = self.map.remove(&key) {
                 let ref_count = Arc::strong_count(&transcriber);
-                log_with_context(log::Level::Debug, "Model cleanup complete", &[
-                    ("operation", "MODEL_CLEANUP"),
-                    ("model_path", &key),
-                    ("ref_count_before_drop", &ref_count.to_string().as_str()),
-                    ("cleanup_result", "success")
-                ]);
+                log_with_context(
+                    log::Level::Debug,
+                    "Model cleanup complete",
+                    &[
+                        ("operation", "MODEL_CLEANUP"),
+                        ("model_path", &key),
+                        ("ref_count_before_drop", &ref_count.to_string().as_str()),
+                        ("cleanup_result", "success"),
+                    ],
+                );
             } else {
-                log_with_context(log::Level::Warn, "Model cleanup warning", &[
-                    ("operation", "MODEL_CLEANUP"),
-                    ("model_path", &key),
-                    ("issue", "model_not_found_in_cache")
-                ]);
+                log_with_context(
+                    log::Level::Warn,
+                    "Model cleanup warning",
+                    &[
+                        ("operation", "MODEL_CLEANUP"),
+                        ("model_path", &key),
+                        ("issue", "model_not_found_in_cache"),
+                    ],
+                );
             }
         } else {
-            log_with_context(log::Level::Debug, "Model cleanup skipped", &[
-                ("operation", "MODEL_CLEANUP"),
-                ("reason", "cache_empty")
-            ]);
+            log_with_context(
+                log::Level::Debug,
+                "Model cleanup skipped",
+                &[("operation", "MODEL_CLEANUP"), ("reason", "cache_empty")],
+            );
         }
     }
 

@@ -1,4 +1,4 @@
-use chrono::Local;
+﻿use chrono::Local;
 use serde_json;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,8 +17,11 @@ use crate::utils::logger::*;
 mod ai;
 mod audio;
 mod commands;
+mod ffmpeg;
 mod license;
+mod parakeet;
 mod secure_store;
+mod simple_cache;
 mod state;
 mod state_machine;
 mod utils;
@@ -32,12 +35,14 @@ use audio::recorder::AudioRecorder;
 use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
-        get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, update_ai_settings,
-        update_enhancement_options, validate_and_cache_api_key, set_openai_config, get_openai_config, test_openai_endpoint,
+        get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
+        set_openai_config, test_openai_endpoint, update_ai_settings, update_enhancement_options,
+        validate_and_cache_api_key,
     },
     audio::*,
     clipboard::{copy_image_to_clipboard, save_image_to_file},
     debug::{debug_transcription_flow, test_transcription_event},
+    device::get_device_id,
     keyring::{keyring_delete, keyring_get, keyring_has, keyring_set},
     license::*,
     logs::{clear_old_logs, get_log_directory, open_logs_folder},
@@ -45,7 +50,6 @@ use commands::{
         cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
         preload_model, verify_model,
     },
-    device::get_device_id,
     permissions::{
         check_accessibility_permission, check_microphone_permission,
         request_accessibility_permission, request_microphone_permission,
@@ -53,6 +57,7 @@ use commands::{
     },
     reset::reset_app_data,
     settings::*,
+    stt::{clear_soniox_key_cache, validate_and_cache_soniox_key},
     text::*,
     utils::export_transcriptions,
     window::*,
@@ -62,12 +67,35 @@ use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem, Subm
 use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
 
+/// Determines if a model should appear as selected in the tray given onboarding status
+pub(crate) fn should_mark_model_selected(
+    onboarding_done: bool,
+    model_name: &str,
+    current_model: &str,
+) -> bool {
+    onboarding_done && model_name == current_model
+}
+
+/// Formats the tray's model label given onboarding status and an optional resolved display name
+pub(crate) fn format_tray_model_label(
+    onboarding_done: bool,
+    current_model: &str,
+    resolved_display_name: Option<String>,
+) -> String {
+    if !onboarding_done || current_model.is_empty() {
+        "Model: None".to_string()
+    } else {
+        let name = resolved_display_name.unwrap_or_else(|| current_model.to_string());
+        format!("Model: {}", name)
+    }
+}
+
 // Function to build the tray menu
 async fn build_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<tauri::menu::Menu<R>, Box<dyn std::error::Error>> {
     // Get current settings for menu state
-    let (current_model, selected_microphone) = {
+    let (current_model, selected_microphone, onboarding_done) = {
         match app.store("settings") {
             Ok(store) => {
                 let model = store
@@ -77,32 +105,53 @@ async fn build_tray_menu<R: tauri::Runtime>(
                 let microphone = store
                     .get("selected_microphone")
                     .and_then(|v| v.as_str().map(|s| s.to_string()));
-                (model, microphone)
+                let onboarding_done = store
+                    .get("onboarding_completed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                (model, microphone, onboarding_done)
             }
-            Err(_) => ("".to_string(), None),
+            Err(_) => ("".to_string(), None, false),
         }
     };
 
-    // Get downloaded models with their info
-    let (downloaded_models, models_info) = {
+    // Get available models across Whisper, Parakeet, and cloud (Soniox)
+    // Whisper models map retained for display name lookup
+    let (available_models, whisper_models_info) = {
         let whisper_state = app.state::<AsyncRwLock<whisper::manager::WhisperManager>>();
         let manager = whisper_state.read().await;
-        let all_models = manager.get_models_status();
-        let downloaded: Vec<(String, String)> = all_models
+        let whisper_all = manager.get_models_status();
+        let mut models: Vec<(String, String)> = whisper_all
             .iter()
             .filter(|(_, info)| info.downloaded)
             .map(|(name, info)| (name.clone(), info.display_name.clone()))
             .collect();
-        (downloaded, all_models)
+
+        // Include Parakeet downloaded models
+        let parakeet_manager = app.state::<crate::parakeet::ParakeetManager>();
+        for m in parakeet_manager.list_models().into_iter() {
+            if m.downloaded {
+                models.push((m.name.clone(), m.display_name.clone()));
+            }
+        }
+
+        // Include Soniox (cloud) if connected
+        let has_soniox = crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
+        if has_soniox {
+            models.push(("soniox".to_string(), "Soniox (Cloud)".to_string()));
+        }
+
+        (models, whisper_all)
     };
 
-    // Create model submenu if there are downloaded models
-    let model_submenu = if !downloaded_models.is_empty() {
+    // Create model submenu if there are any available models
+    let model_submenu = if !available_models.is_empty() {
         let mut model_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
         let mut model_check_items = Vec::new();
 
-        for (model_name, display_name) in downloaded_models {
-            let is_selected = model_name == current_model;
+        for (model_name, display_name) in available_models {
+            // Do not show any selection until onboarding is completed
+            let is_selected = should_mark_model_selected(onboarding_done, &model_name, &current_model);
             let model_item = CheckMenuItem::with_id(
                 app,
                 &format!("model_{}", model_name),
@@ -119,15 +168,31 @@ async fn build_tray_menu<R: tauri::Runtime>(
             model_items.push(item);
         }
 
-        let current_model_display = if current_model.is_empty() {
-            "Model: None".to_string()
+        // Resolve a display name only if onboarding is complete and a model is set
+        let resolved_display_name = if onboarding_done && !current_model.is_empty() {
+            // Try Whisper first
+            if let Some(info) = whisper_models_info.get(&current_model) {
+                Some(info.display_name.clone())
+            } else {
+                // Try Parakeet registry
+                let parakeet_manager = app.state::<crate::parakeet::ParakeetManager>();
+                if let Some(pm) = parakeet_manager
+                    .list_models()
+                    .into_iter()
+                    .find(|m| m.name == current_model)
+                {
+                    Some(pm.display_name)
+                } else if current_model == "soniox" {
+                    Some("Soniox (Cloud)".to_string())
+                } else {
+                    Some(current_model.clone())
+                }
+            }
         } else {
-            let display_name = models_info
-                .get(&current_model)
-                .map(|info| info.display_name.clone())
-                .unwrap_or_else(|| current_model.clone());
-            format!("Model: {}", display_name)
+            None
         };
+
+        let current_model_display = format_tray_model_label(onboarding_done, &current_model, resolved_display_name);
 
         Some(Submenu::with_id_and_items(
             app,
@@ -142,7 +207,7 @@ async fn build_tray_menu<R: tauri::Runtime>(
 
     // Get available audio devices
     let available_devices = audio::recorder::AudioRecorder::get_devices();
-    
+
     // Create microphone submenu
     let microphone_submenu = if !available_devices.is_empty() {
         let mut mic_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
@@ -215,17 +280,23 @@ async fn build_tray_menu<R: tauri::Runtime>(
                     .and_then(|v| v.as_str())
                     .map(|s| {
                         let first_line = s.lines().next().unwrap_or("").trim();
-                        if first_line.len() > 40 {
-                            format!("{}…", &first_line[..40])
-                        } else if first_line.is_empty() {
+                        // Build preview safely by Unicode scalar values to avoid slicing in the middle of a codepoint
+                        let char_count = first_line.chars().count();
+                        let mut preview: String = first_line.chars().take(40).collect();
+                        if char_count > 40 {
+                            preview.push('\u{2026}');
+                        }
+                        if preview.is_empty() {
                             "(empty)".to_string()
                         } else {
-                            first_line.to_string()
+                            preview
                         }
                     })
                     .unwrap_or_else(|| "(unknown)".to_string());
 
-                if label.is_empty() { label = "(empty)".to_string(); }
+                if label.is_empty() {
+                    label = "(empty)".to_string();
+                }
 
                 let item = tauri::menu::MenuItem::with_id(
                     app,
@@ -239,7 +310,9 @@ async fn build_tray_menu<R: tauri::Runtime>(
         }
     }
     let mut recent_refs: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
-    for item in &recent_owned { recent_refs.push(item); }
+    for item in &recent_owned {
+        recent_refs.push(item);
+    }
 
     // Recording mode submenu (Toggle / Push-to-Talk)
     let (toggle_item, ptt_item) = {
@@ -273,7 +346,13 @@ async fn build_tray_menu<R: tauri::Runtime>(
     // Create menu items
     let separator1 = PredefinedMenuItem::separator(app)?;
     let settings_i = MenuItem::with_id(app, "settings", "Dashboard", true, None::<&str>)?;
-    let check_updates_i = MenuItem::with_id(app, "check_updates", "Check for Updates", true, None::<&str>)?;
+    let check_updates_i = MenuItem::with_id(
+        app,
+        "check_updates",
+        "Check for Updates",
+        true,
+        None::<&str>,
+    )?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit_i = MenuItem::with_id(app, "quit", "Quit VoiceTypr", true, None::<&str>)?;
 
@@ -282,26 +361,22 @@ async fn build_tray_menu<R: tauri::Runtime>(
     if let Some(model_submenu) = model_submenu {
         menu_builder = menu_builder.item(&model_submenu);
     }
-    
+
     if let Some(microphone_submenu) = microphone_submenu {
         menu_builder = menu_builder.item(&microphone_submenu);
     }
 
     // Add Recent Transcriptions submenu if we have items
     if !recent_refs.is_empty() {
-        let recent_submenu = Submenu::with_id_and_items(
-            app,
-            "recent",
-            "Recent Transcriptions",
-            true,
-            &recent_refs,
-        )?;
+        let recent_submenu =
+            Submenu::with_id_and_items(app, "recent", "Recent Transcriptions", true, &recent_refs)?;
         menu_builder = menu_builder.item(&recent_submenu);
     }
 
     // Recording mode submenu
     let mode_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = vec![&toggle_item, &ptt_item];
-    let mode_submenu = Submenu::with_id_and_items(app, "recording_mode", "Recording Mode", true, &mode_items)?;
+    let mode_submenu =
+        Submenu::with_id_and_items(app, "recording_mode", "Recording Mode", true, &mode_items)?;
     menu_builder = menu_builder.item(&mode_submenu);
 
     let menu = menu_builder
@@ -335,8 +410,8 @@ impl Default for RecordingState {
 // Recording mode enum to distinguish between toggle and push-to-talk
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordingMode {
-    Toggle,      // Click to start/stop recording
-    PushToTalk,  // Hold to record, release to stop
+    Toggle,     // Click to start/stop recording
+    PushToTalk, // Hold to record, release to stop
 }
 
 // Application state - managed by Tauri (runtime state only)
@@ -363,7 +438,8 @@ pub struct AppState {
     pub window_manager: Arc<Mutex<Option<WindowManager>>>,
 
     // Performance optimization: Cache frequently accessed settings
-    pub recording_config_cache: Arc<tokio::sync::RwLock<Option<crate::commands::audio::RecordingConfig>>>,
+    pub recording_config_cache:
+        Arc<tokio::sync::RwLock<Option<crate::commands::audio::RecordingConfig>>>,
 
     // License cache with 6-hour expiration
     pub license_cache: Arc<tokio::sync::RwLock<Option<crate::commands::license::CachedLicense>>>,
@@ -621,7 +697,7 @@ fn setup_logging() -> tauri_plugin_log::Builder {
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app_start = Instant::now();
     let app_version = env!("CARGO_PKG_VERSION");
-    
+
     // Log application startup
     log_lifecycle_event("APPLICATION_START", Some(app_version), None);
 
@@ -640,12 +716,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize encryption key for secure storage
     log_start("ENCRYPTION_INIT");
-    log_with_context(log::Level::Debug, "Initializing encryption", &[
-        ("component", "secure_store")
-    ]);
-    
+    log_with_context(
+        log::Level::Debug,
+        "Initializing encryption",
+        &[("component", "secure_store")],
+    );
+
     if let Err(e) = secure_store::initialize_encryption_key() {
-        log_failed("ENCRYPTION_INIT", &format!("Failed to initialize encryption: {}", e));
+        log_failed(
+            "ENCRYPTION_INIT",
+            &format!("Failed to initialize encryption: {}", e),
+        );
         eprintln!("Failed to initialize encryption: {}", e);
     } else {
         log::info!("✅ Encryption initialized successfully");
@@ -654,12 +735,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(setup_logging().build())
-        .plugin(tauri_plugin_cache::init())
+        // Replaced tauri-plugin-cache with simple_store-backed cache
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // When a second instance is launched, bring the existing window to focus
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin({
             #[cfg(target_os = "macos")]
             let autostart = tauri_plugin_autostart::init(
@@ -848,6 +936,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if shortcut == &escape_shortcut {
                             log::info!("ESC key detected in global handler");
 
+                            // Only react to ESC key press events (ignore key release)
+                            if event.state() != ShortcutState::Pressed {
+                                log::debug!("Ignoring ESC event since it is not a key press: {:?}", event.state());
+                                return;
+                            }
+
                             // Handle ESC key for recording cancellation
                             let current_state = get_recording_state(&app_handle);
                             log::debug!("Current recording state: {:?}", current_state);
@@ -914,7 +1008,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .setup(move |app| {
             let setup_start = Instant::now();
             log::info!("🚀 App setup START - version: {}", app_version);
-            
+
             // Keyring is now used instead of Stronghold for API keys
             // Much faster and uses OS-native secure storage
             log::info!("🔐 Using OS-native keyring for secure API key storage");
@@ -924,12 +1018,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             log_with_context(log::Level::Debug, "Setting up panic handler", &[
                 ("component", "panic_handler")
             ]);
-            
+
             std::panic::set_hook(Box::new(|panic_info| {
                 let location = panic_info.location()
                     .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
                     .unwrap_or_else(|| "unknown location".to_string());
-                
+
                 let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
                     s.to_string()
                 } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
@@ -937,7 +1031,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     "Unknown panic payload".to_string()
                 };
-                
+
                 log::error!("💥 CRITICAL PANIC at {}: {}", location, message);
                 log_failed("PANIC", "Application panic occurred");
                 log_with_context(log::Level::Error, "Panic details", &[
@@ -946,7 +1040,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     ("severity", "critical")
                 ]);
                 eprintln!("Application panic at {}: {}", location, message);
-                
+
                 // Try to save panic info to a crash file for debugging
                 if let Ok(home_dir) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
                     let crash_file = std::path::Path::new(&home_dir).join(".voicetypr_crash.log");
@@ -956,7 +1050,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     ));
                 }
             }));
-            
+
             log::info!("✅ Panic handler configured");
 
             // Clean up old logs on startup (keep last 30 days)
@@ -964,7 +1058,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             log_with_context(log::Level::Debug, "Cleaning up old logs", &[
                 ("retention_days", "30")
             ]);
-            
+
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let cleanup_start = Instant::now();
@@ -995,7 +1089,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 log_with_context(log::Level::Debug, "Setting up macOS policy", &[
                     ("policy", "Accessory")
                 ]);
-                
+
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 log::info!("🍎 Set macOS activation policy to Accessory");
 
@@ -1003,15 +1097,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // Clear license cache on app start to ensure fresh checks
             {
-                use tauri_plugin_cache::CacheExt;
-                let cache = app.cache();
-                if let Err(e) = cache.remove("license_status") {
-                    log::debug!("No license cache to clear on startup: {}", e);
-                } else {
-                    log::info!("🧹 Cleared license cache on app startup for fresh check");
-                }
-                // Also clear the last validation tracker
-                let _ = cache.remove("last_license_validation");
+                use crate::simple_cache;
+                let _ = simple_cache::remove(&app.app_handle(), "license_status");
+                let _ = simple_cache::remove(&app.app_handle(), "last_license_validation");
             }
 
             // Run comprehensive startup checks
@@ -1041,10 +1129,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            let whisper_manager = whisper::manager::WhisperManager::new(models_dir);
+            let whisper_manager = whisper::manager::WhisperManager::new(models_dir.clone());
             app.manage(AsyncRwLock::new(whisper_manager));
-            
+
             log::info!("✅ Whisper manager initialized and managed");
+
+            // Initialize Parakeet manager and cache directory
+            let parakeet_dir = models_dir.join("parakeet");
+            if let Err(e) = std::fs::create_dir_all(&parakeet_dir) {
+                let error_msg = format!("Failed to create parakeet models directory: {}", e);
+                log_file_operation("CREATE_DIR", &format!("{:?}", parakeet_dir), false, None, Some(&e.to_string()));
+                return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, error_msg)));
+            }
+
+            log_file_operation("CREATE_DIR", &format!("{:?}", parakeet_dir), true, None, None);
+            let parakeet_manager = parakeet::ParakeetManager::new(parakeet_dir);
+            app.manage(parakeet_manager);
+            log::info!("🦜 Parakeet manager initialized");
 
             // Manage active downloads for cancellation
             app.manage(Arc::new(Mutex::new(HashMap::<String, Arc<AtomicBool>>::new())));
@@ -1147,7 +1248,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     } else if event_id == "microphone_default" {
                         // Handle default microphone selection
                         let app_handle = app.app_handle().clone();
-                        
+
                         tauri::async_runtime::spawn(async move {
                             match crate::commands::settings::set_audio_device(app_handle.clone(), None).await {
                                 Ok(_) => {
@@ -1257,7 +1358,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             log_with_context(log::Level::Debug, "Setting up hotkey", &[
                 ("default", "CommandOrControl+Shift+Space")
             ]);
-            
+
             let hotkey_str = match app.store("settings") {
                 Ok(store) => {
                     store
@@ -1351,7 +1452,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let registration_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 app.global_shortcut().register(shortcut.clone())
             }));
-            
+
             match registration_result {
                 Ok(Ok(_)) => {
                     log_complete("HOTKEY_REGISTRATION", registration_start.elapsed().as_millis() as u64);
@@ -1368,10 +1469,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         ("normalized", &normalized_hotkey),
                         ("suggestion", "Try different hotkey or close conflicting apps")
                     ]);
-                    
+
                     log::error!("❌ Failed to register global hotkey '{}': {}", hotkey_str, e);
                     log::warn!("⚠️  The app will continue without global hotkey support. Another application may be using this shortcut.");
-                    
+
                     // Emit event to notify frontend that hotkey registration failed
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.emit("hotkey-registration-failed", serde_json::json!({
@@ -1389,10 +1490,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         "Unknown panic during hotkey registration".to_string()
                     };
-                    
+
                     log::error!("💥 PANIC during hotkey registration: {}", panic_msg);
                     log::warn!("⚠️  Continuing without global hotkey due to panic");
-                    
+
                     // Emit event to notify frontend
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.emit("hotkey-registration-failed", serde_json::json!({
@@ -1625,6 +1726,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             activate_license,
             deactivate_license,
             open_purchase_page,
+            invalidate_license_cache,
             reset_app_data,
             copy_image_to_clipboard,
             save_image_to_file,
@@ -1646,6 +1748,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             keyring_get,
             keyring_delete,
             keyring_has,
+            validate_and_cache_soniox_key,
+            clear_soniox_key_cache,
             get_log_directory,
             open_logs_folder,
             get_device_id,
@@ -1676,10 +1780,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("VoiceTypr failed to start: {}", e);
             Box::new(e)
         })?;
-        
+
     // Log successful application startup
     log_lifecycle_event("APPLICATION_READY", Some(app_version), None);
-    
+
     Ok(())
 }
 
@@ -1687,18 +1791,26 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 async fn perform_startup_checks(app: tauri::AppHandle) {
     let checks_start = Instant::now();
     log_start("STARTUP_CHECKS");
-    log_with_context(log::Level::Debug, "Running startup checks", &[
-        ("stage", "comprehensive_validation")
-    ]);
+    log_with_context(
+        log::Level::Debug,
+        "Running startup checks",
+        &[("stage", "comprehensive_validation")],
+    );
 
     // Check if any models are downloaded
     if let Some(whisper_manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
     {
         let has_models = whisper_manager.read().await.has_downloaded_models();
-        
-        log_model_operation("AVAILABILITY_CHECK", "all", 
-            if has_models { "AVAILABLE" } else { "NONE_FOUND" },
-            None
+
+        log_model_operation(
+            "AVAILABILITY_CHECK",
+            "all",
+            if has_models {
+                "AVAILABLE"
+            } else {
+                "NONE_FOUND"
+            },
+            None,
         );
 
         if !has_models {
@@ -1767,6 +1879,8 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         }
     }
 
+    let mut autoload_parakeet_model: Option<String> = None;
+
     // Pre-check recording settings
     if let Ok(store) = app.store("settings") {
         // Validate language setting
@@ -1788,24 +1902,82 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
             }
         }
 
-        // Check current model is still available
+        // Check current model is still available based on engine type
         let mut _model_available = false;
         if let Some(current_model) = store
             .get("current_model")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
         {
             if !current_model.is_empty() {
-                if let Some(whisper_manager) =
-                    app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
-                {
-                    let downloaded = whisper_manager.read().await.get_downloaded_model_names();
-                    _model_available = downloaded.contains(&current_model);
-                    if !_model_available {
-                        log::warn!("Current model '{}' no longer available", current_model);
-                        // Clear the selection
-                        store.set("current_model", serde_json::Value::String(String::new()));
-                        let _ = store.save();
+                // Get the engine type to determine which manager to check
+                let engine = store
+                    .get("current_model_engine")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "whisper".to_string());
+
+                if engine == "parakeet" {
+                    // Check ParakeetManager for Parakeet models
+                    if let Some(parakeet_manager) = app.try_state::<parakeet::ParakeetManager>() {
+                        let models = parakeet_manager.list_models();
+                        if let Some(status) = models.iter().find(|m| m.name == current_model) {
+                            _model_available = status.downloaded;
+                            if status.downloaded {
+                                autoload_parakeet_model = Some(current_model.clone());
+                            }
+                        }
+                        if !_model_available {
+                            log::warn!(
+                                "Current Parakeet model '{}' no longer available",
+                                current_model
+                            );
+                            // Clear the selection
+                            store.set("current_model", serde_json::Value::String(String::new()));
+                            store.set(
+                                "current_model_engine",
+                                serde_json::Value::String("whisper".to_string()),
+                            );
+                            let _ = store.save();
+                        }
                     }
+                } else {
+                    // Check WhisperManager for Whisper models (default)
+                    if let Some(whisper_manager) =
+                        app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
+                    {
+                        let downloaded = whisper_manager.read().await.get_downloaded_model_names();
+                        _model_available = downloaded.contains(&current_model);
+                        if !_model_available {
+                            log::warn!(
+                                "Current Whisper model '{}' no longer available",
+                                current_model
+                            );
+                            // Clear the selection
+                            store.set("current_model", serde_json::Value::String(String::new()));
+                            let _ = store.save();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(model_name) = autoload_parakeet_model {
+        if let Some(parakeet_manager) = app.try_state::<parakeet::ParakeetManager>() {
+            match parakeet_manager.load_model(&app, &model_name).await {
+                Ok(_) => {
+                    log::info!("✅ Parakeet model '{}' autoloaded from cache", model_name);
+                }
+                Err(err) => {
+                    log::warn!(
+                        "Failed to autoload Parakeet model '{}': {}",
+                        model_name,
+                        err
+                    );
+                    let message = format!(
+                        "Unable to load Parakeet model '{}'. Please re-download it.",
+                        model_name
+                    );
+                    let _ = app.emit("parakeet-unavailable", message.clone());
                 }
             }
         }
@@ -1813,8 +1985,16 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
 
     // Log startup checks completion
     log_complete("STARTUP_CHECKS", checks_start.elapsed().as_millis() as u64);
-    log_with_context(log::Level::Debug, "Startup checks complete", &[
-        ("status", "all_checks_completed")
-    ]);
-    log::info!("✅ Startup checks COMPLETED in {}ms", checks_start.elapsed().as_millis());
+    log_with_context(
+        log::Level::Debug,
+        "Startup checks complete",
+        &[("status", "all_checks_completed")],
+    );
+    log::info!(
+        "✅ Startup checks COMPLETED in {}ms",
+        checks_start.elapsed().as_millis()
+    );
 }
+
+
+

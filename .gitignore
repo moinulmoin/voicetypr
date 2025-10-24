@@ -44,4 +44,8 @@ notarized-build-*
 claudedocs/
 
 agent-docs/
-.build
+
+# Swift build artifacts
+.build/
+
+sidecar/ffmpeg/vendor

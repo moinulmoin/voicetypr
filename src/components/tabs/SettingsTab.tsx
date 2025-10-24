@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { GeneralSettings } from "../sections/GeneralSettings";
@@ -29,18 +28,6 @@ export function SettingsTab() {
           
           toast.error('Hotkey Registration Failed', {
             description: data.suggestion || 'The hotkey is in use by another application',
-            action: {
-              label: 'Change Hotkey',
-              onClick: () => {
-                // Show additional guidance
-                setTimeout(() => {
-                  toast.info('Hotkey Conflict', {
-                    description: `The hotkey "${data.hotkey}" could not be registered. Please choose a different combination in General Settings.`,
-                    duration: 6000
-                  });
-                }, 500);
-              }
-            },
             duration: 10000 // Persistent for important errors
           });
         });
@@ -54,21 +41,6 @@ export function SettingsTab() {
           
           toastFn(data.title || 'No Speech Detected', {
             description: data.message || 'Please check your microphone and speak clearly',
-            action: {
-              label: data.actions?.includes('settings') ? 'Open Settings' : 'Try Again',
-              onClick: () => {
-                if (data.actions?.includes('settings')) {
-                  // Already on settings tab, scroll to relevant section or show guidance
-                  toast.info('Audio Settings', {
-                    description: 'Check your microphone input level and ensure you have the correct input device selected.',
-                    duration: 5000
-                  });
-                } else {
-                  // Trigger recording again
-                  invoke('start_recording').catch(console.error);
-                }
-              }
-            },
             duration: data.severity === 'error' ? 8000 : 5000
           });
         });

@@ -107,20 +107,13 @@ mod tests {
         let prompt = build_enhancement_prompt("hello world", None, &options);
 
         assert!(prompt.contains("hello world"));
-        assert!(prompt.contains("THEN clean up this voice transcription"));
+        assert!(prompt.contains("post-processor for voice transcripts"));
 
         // Test with context
         let prompt_with_context =
             build_enhancement_prompt("hello world", Some("Casual conversation"), &options);
 
         assert!(prompt_with_context.contains("Context: Casual conversation"));
-
-        // Test with custom vocabulary
-        let mut options_with_vocab = EnhancementOptions::default();
-        options_with_vocab.custom_vocabulary = vec!["TypeScript".to_string(), "React".to_string()];
-        let prompt_with_vocab = build_enhancement_prompt("hello world", None, &options_with_vocab);
-
-        assert!(prompt_with_vocab.contains("Recognize these terms: TypeScript, React"));
     }
 
     #[test]
@@ -132,29 +125,25 @@ mod tests {
         // Test Default preset
         let default_options = EnhancementOptions::default();
         let default_prompt = build_enhancement_prompt(text, None, &default_options);
-        assert!(default_prompt.contains("THEN clean up this voice transcription"));
+        assert!(default_prompt.contains("post-processor for voice transcripts"));
 
         // Test Prompts preset
         let mut prompts_options = EnhancementOptions::default();
         prompts_options.preset = EnhancementPreset::Prompts;
         let prompts_prompt = build_enhancement_prompt(text, None, &prompts_options);
-        assert!(
-            prompts_prompt.contains("transform the cleaned text into a well-structured AI prompt")
-        );
+        assert!(prompts_prompt.contains("transform the cleaned text into a concise AI prompt"));
 
         // Test Email preset
         let mut email_options = EnhancementOptions::default();
         email_options.preset = EnhancementPreset::Email;
         let email_prompt = build_enhancement_prompt(text, None, &email_options);
-        assert!(
-            email_prompt.contains("format the cleaned text as an email")
-        );
+        assert!(email_prompt.contains("format the cleaned text as an email"));
 
         // Test Commit preset
         let mut commit_options = EnhancementOptions::default();
         commit_options.preset = EnhancementPreset::Commit;
         let commit_prompt = build_enhancement_prompt(text, None, &commit_options);
-        assert!(commit_prompt.contains("convert to conventional commit format"));
+        assert!(commit_prompt.contains("convert the cleaned text to a Conventional Commit"));
     }
 
     #[test]
@@ -175,10 +164,10 @@ mod tests {
             let mut options = EnhancementOptions::default();
             options.preset = preset.clone();
             let prompt = build_enhancement_prompt(test_text, None, &options);
-            
+
             // All prompts should include self-correction rules
             assert!(
-                prompt.contains("handle self-corrections"),
+                prompt.contains("self-corrections"),
                 "Preset {:?} should include self-correction rules",
                 preset
             );
@@ -190,7 +179,7 @@ mod tests {
         use crate::ai::prompts::{build_enhancement_prompt, EnhancementOptions, EnhancementPreset};
 
         let test_text = "test";
-        
+
         // Test that all presets include base processing
         let presets = vec![
             EnhancementPreset::Default,
@@ -203,26 +192,26 @@ mod tests {
             let mut options = EnhancementOptions::default();
             options.preset = preset.clone();
             let prompt = build_enhancement_prompt(test_text, None, &options);
-            
+
             // All should include self-correction rules
             assert!(
-                prompt.contains("handle self-corrections"),
+                prompt.contains("self-corrections"),
                 "Preset {:?} should include self-correction rules",
                 preset
             );
-            
-            // All should include default processing
+
+            // All should include base processing
             assert!(
-                prompt.contains("THEN clean up this voice transcription"),
-                "Preset {:?} should include default processing",
+                prompt.contains("post-processor for voice transcripts"),
+                "Preset {:?} should include base processing",
                 preset
             );
-            
-            // Non-default presets should have FINALLY instruction
+
+            // Non-default presets should have transformation instruction
             if !matches!(preset, EnhancementPreset::Default) {
                 assert!(
-                    prompt.contains("FINALLY"),
-                    "Preset {:?} should have FINALLY transformation",
+                    prompt.contains("Now"),
+                    "Preset {:?} should have transformation",
                     preset
                 );
             }
@@ -238,20 +227,34 @@ mod tests {
         let prompt = build_enhancement_prompt(test_text, None, &options);
 
         // Test that Default prompt includes all comprehensive features
-        
-        // 1. Speech artifacts removal
-        assert!(prompt.contains("Remove filler words"), "Should include filler word removal");
-        assert!(prompt.contains("stutters"), "Should handle stutters");
-        
+
+        // 1. Self-correction handling
+        assert!(
+            prompt.contains("self-corrections"),
+            "Should handle self-corrections"
+        );
+        assert!(
+            prompt.contains("last-intent wins"),
+            "Should use last-intent policy"
+        );
+
         // 2. Error correction
-        assert!(prompt.contains("Fix all errors"), "Should fix errors");
-        assert!(prompt.contains("grammar, spelling, punctuation"), "Should handle grammar and spelling");
-        
+        assert!(
+            prompt.contains("grammar, punctuation, capitalization"),
+            "Should handle grammar and spelling"
+        );
+
         // 3. Number and time formatting
-        assert!(prompt.contains("Format numbers, dates, times"), "Should format numbers and dates");
-        
+        assert!(
+            prompt.contains("numbers/dates/times as spoken"),
+            "Should format numbers and dates"
+        );
+
         // 4. Technical terms
-        assert!(prompt.contains("Correct technical terms"), "Should preserve technical terms");
+        assert!(
+            prompt.contains("Normalize obvious names/brands/terms"),
+            "Should normalize technical terms"
+        );
     }
 
     #[test]

@@ -61,12 +61,6 @@ export function RecordingsTab() {
           
           toast.error('Recording Failed', {
             description: errorMessage || 'An error occurred during recording. Please try again.',
-            action: {
-              label: 'Try Again',
-              onClick: () => {
-                invoke('start_recording').catch(console.error);
-              }
-            },
             duration: 6000
           });
         });
@@ -77,12 +71,6 @@ export function RecordingsTab() {
           
           toast.error('Transcription Failed', {
             description: errorMessage || 'An error occurred during transcription. Please try again.',
-            action: {
-              label: 'Try Again',
-              onClick: () => {
-                invoke('start_recording').catch(console.error);
-              }
-            },
             duration: 6000
           });
         });

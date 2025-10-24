@@ -1,11 +1,10 @@
+use hound::{SampleFormat, WavSpec, WavWriter};
 /// Test Data Helpers for Audio Testing
-/// 
+///
 /// This module provides utilities for generating various types of test audio data
 /// to thoroughly test audio validation, processing, and error handling.
-
 use std::f32::consts::PI;
 use tempfile::NamedTempFile;
-use hound::{WavWriter, WavSpec, SampleFormat};
 
 /// Audio test data generator with various audio patterns
 pub struct AudioTestDataGenerator {
@@ -44,7 +43,7 @@ impl AudioTestDataGenerator {
     pub fn generate_quiet_audio(&self, duration_seconds: f32, amplitude: f32) -> Vec<i16> {
         let sample_count = (self.sample_rate as f32 * duration_seconds) as usize;
         let max_amplitude = (amplitude * i16::MAX as f32) as i16;
-        
+
         (0..sample_count)
             .flat_map(|i| {
                 let sample = ((i as f32 * 0.01).sin() * max_amplitude as f32) as i16;
@@ -57,17 +56,17 @@ impl AudioTestDataGenerator {
     pub fn generate_speech_like_audio(&self, duration_seconds: f32) -> Vec<i16> {
         let sample_count = (self.sample_rate as f32 * duration_seconds) as usize;
         let base_frequency = 200.0; // Typical voice frequency
-        
+
         (0..sample_count)
             .flat_map(|i| {
                 let t = i as f32 / self.sample_rate as f32;
                 let fundamental = (2.0 * PI * base_frequency * t).sin();
                 let harmonic1 = 0.5 * (2.0 * PI * base_frequency * 2.0 * t).sin();
                 let harmonic2 = 0.25 * (2.0 * PI * base_frequency * 3.0 * t).sin();
-                
+
                 // Add some amplitude modulation to simulate speech patterns
                 let envelope = (2.0 * PI * 2.0 * t).sin().abs(); // 2 Hz modulation
-                
+
                 let sample = ((fundamental + harmonic1 + harmonic2) * envelope * 8000.0) as i16;
                 vec![sample; self.channels as usize]
             })
@@ -78,7 +77,7 @@ impl AudioTestDataGenerator {
     pub fn generate_white_noise(&self, duration_seconds: f32, amplitude: f32) -> Vec<i16> {
         let sample_count = (self.sample_rate as f32 * duration_seconds) as usize;
         let max_amplitude = (amplitude * i16::MAX as f32) as i16;
-        
+
         (0..sample_count)
             .flat_map(|_| {
                 let sample = ((rand::random::<f32>() * 2.0 - 1.0) * max_amplitude as f32) as i16;
@@ -90,7 +89,7 @@ impl AudioTestDataGenerator {
     /// Generate clipped/distorted audio
     pub fn generate_clipped_audio(&self, duration_seconds: f32) -> Vec<i16> {
         let sample_count = (self.sample_rate as f32 * duration_seconds) as usize;
-        
+
         (0..sample_count)
             .flat_map(|i| {
                 let sample = if (i / 100) % 2 == 0 {
@@ -107,7 +106,7 @@ impl AudioTestDataGenerator {
     pub fn generate_intermittent_speech(&self, duration_seconds: f32) -> Vec<i16> {
         let sample_count = (self.sample_rate as f32 * duration_seconds) as usize;
         let speech_segment_size = self.sample_rate as usize; // 1 second segments
-        
+
         (0..sample_count)
             .flat_map(|i| {
                 let segment = i / speech_segment_size;
@@ -125,10 +124,15 @@ impl AudioTestDataGenerator {
     }
 
     /// Generate a pure tone at specified frequency
-    pub fn generate_pure_tone(&self, duration_seconds: f32, frequency_hz: f32, amplitude: f32) -> Vec<i16> {
+    pub fn generate_pure_tone(
+        &self,
+        duration_seconds: f32,
+        frequency_hz: f32,
+        amplitude: f32,
+    ) -> Vec<i16> {
         let sample_count = (self.sample_rate as f32 * duration_seconds) as usize;
         let max_amplitude = (amplitude * i16::MAX as f32) as i16;
-        
+
         (0..sample_count)
             .flat_map(|i| {
                 let t = i as f32 / self.sample_rate as f32;
@@ -141,7 +145,7 @@ impl AudioTestDataGenerator {
     /// Generate audio with varying amplitude (fade in/out)
     pub fn generate_fade_audio(&self, duration_seconds: f32, fade_type: FadeType) -> Vec<i16> {
         let sample_count = (self.sample_rate as f32 * duration_seconds) as usize;
-        
+
         (0..sample_count)
             .flat_map(|i| {
                 let t = i as f32 / sample_count as f32;
@@ -156,7 +160,7 @@ impl AudioTestDataGenerator {
                         }
                     }
                 };
-                
+
                 let base_sample = ((i as f32 * 0.01).sin() * 8000.0) as i16;
                 let sample = (base_sample as f32 * fade_factor) as i16;
                 vec![sample; self.channels as usize]
@@ -165,16 +169,22 @@ impl AudioTestDataGenerator {
     }
 
     /// Generate multi-frequency audio (complex waveform)
-    pub fn generate_multi_frequency_audio(&self, duration_seconds: f32, frequencies: &[f32]) -> Vec<i16> {
+    pub fn generate_multi_frequency_audio(
+        &self,
+        duration_seconds: f32,
+        frequencies: &[f32],
+    ) -> Vec<i16> {
         let sample_count = (self.sample_rate as f32 * duration_seconds) as usize;
-        
+
         (0..sample_count)
             .flat_map(|i| {
                 let t = i as f32 / self.sample_rate as f32;
-                let combined_sample: f32 = frequencies.iter()
+                let combined_sample: f32 = frequencies
+                    .iter()
                     .map(|&freq| (2.0 * PI * freq * t).sin())
-                    .sum::<f32>() / frequencies.len() as f32;
-                
+                    .sum::<f32>()
+                    / frequencies.len() as f32;
+
                 let sample = (combined_sample * 8000.0) as i16;
                 vec![sample; self.channels as usize]
             })
@@ -182,7 +192,10 @@ impl AudioTestDataGenerator {
     }
 
     /// Create a WAV file from sample data
-    pub fn create_wav_file(&self, samples: Vec<i16>) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
+    pub fn create_wav_file(
+        &self,
+        samples: Vec<i16>,
+    ) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
         let temp_file = NamedTempFile::new()?;
         let spec = WavSpec {
             channels: self.channels,
@@ -190,13 +203,13 @@ impl AudioTestDataGenerator {
             bits_per_sample: self.bits_per_sample,
             sample_format: SampleFormat::Int,
         };
-        
+
         let mut writer = WavWriter::create(temp_file.path(), spec)?;
         for sample in samples {
             writer.write_sample(sample)?;
         }
         writer.finalize()?;
-        
+
         Ok(temp_file)
     }
 
@@ -204,7 +217,10 @@ impl AudioTestDataGenerator {
     pub fn create_corrupted_wav_file(&self) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
         let temp_file = NamedTempFile::new()?;
         // Write invalid WAV data
-        std::fs::write(temp_file.path(), b"RIFF invalid WAV data that should fail to parse")?;
+        std::fs::write(
+            temp_file.path(),
+            b"RIFF invalid WAV data that should fail to parse",
+        )?;
         Ok(temp_file)
     }
 
@@ -234,21 +250,27 @@ impl TestAudioScenarios {
     }
 
     /// Create silent audio that should trigger "no speech detected"
-    pub fn create_silent_recording(duration_seconds: f32) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
+    pub fn create_silent_recording(
+        duration_seconds: f32,
+    ) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
         let generator = Self::standard_generator();
         let samples = generator.generate_silent_audio(duration_seconds);
         generator.create_wav_file(samples)
     }
 
     /// Create quiet audio that should trigger "too quiet" warning
-    pub fn create_quiet_recording(duration_seconds: f32) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
+    pub fn create_quiet_recording(
+        duration_seconds: f32,
+    ) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
         let generator = Self::standard_generator();
         let samples = generator.generate_quiet_audio(duration_seconds, 0.03); // 3% amplitude
         generator.create_wav_file(samples)
     }
 
     /// Create valid speech-like audio that should pass validation
-    pub fn create_valid_speech_recording(duration_seconds: f32) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
+    pub fn create_valid_speech_recording(
+        duration_seconds: f32,
+    ) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
         let generator = Self::standard_generator();
         let samples = generator.generate_speech_like_audio(duration_seconds);
         generator.create_wav_file(samples)
@@ -262,35 +284,45 @@ impl TestAudioScenarios {
     }
 
     /// Create very long recording for performance testing
-    pub fn create_long_recording(duration_seconds: f32) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
+    pub fn create_long_recording(
+        duration_seconds: f32,
+    ) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
         let generator = Self::standard_generator();
         let samples = generator.generate_speech_like_audio(duration_seconds);
         generator.create_wav_file(samples)
     }
 
     /// Create clipped/distorted audio for robustness testing
-    pub fn create_clipped_recording(duration_seconds: f32) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
+    pub fn create_clipped_recording(
+        duration_seconds: f32,
+    ) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
         let generator = Self::standard_generator();
         let samples = generator.generate_clipped_audio(duration_seconds);
         generator.create_wav_file(samples)
     }
 
     /// Create intermittent speech (realistic pattern)
-    pub fn create_realistic_speech_recording(duration_seconds: f32) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
+    pub fn create_realistic_speech_recording(
+        duration_seconds: f32,
+    ) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
         let generator = Self::standard_generator();
         let samples = generator.generate_intermittent_speech(duration_seconds);
         generator.create_wav_file(samples)
     }
 
     /// Create stereo audio for multi-channel testing
-    pub fn create_stereo_recording(duration_seconds: f32) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
+    pub fn create_stereo_recording(
+        duration_seconds: f32,
+    ) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
         let generator = AudioTestDataGenerator::new(16000, 2, 16); // Stereo
         let samples = generator.generate_speech_like_audio(duration_seconds);
         generator.create_wav_file(samples)
     }
 
     /// Create high sample rate audio
-    pub fn create_high_quality_recording(duration_seconds: f32) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
+    pub fn create_high_quality_recording(
+        duration_seconds: f32,
+    ) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
         let generator = AudioTestDataGenerator::new(48000, 1, 16); // 48kHz
         let samples = generator.generate_speech_like_audio(duration_seconds);
         generator.create_wav_file(samples)
@@ -316,53 +348,87 @@ impl BatchTestDataGenerator {
     }
 
     /// Generate a comprehensive test suite of audio files
-    pub fn generate_test_suite(&self) -> Result<Vec<(String, NamedTempFile)>, Box<dyn std::error::Error>> {
+    pub fn generate_test_suite(
+        &self,
+    ) -> Result<Vec<(String, NamedTempFile)>, Box<dyn std::error::Error>> {
         let mut test_files = Vec::new();
 
         // Basic validation tests
-        test_files.push(("silent_1s".to_string(), TestAudioScenarios::create_silent_recording(1.0)?));
-        test_files.push(("quiet_1s".to_string(), TestAudioScenarios::create_quiet_recording(1.0)?));
-        test_files.push(("valid_1s".to_string(), TestAudioScenarios::create_valid_speech_recording(1.0)?));
-        test_files.push(("too_short".to_string(), TestAudioScenarios::create_too_short_recording()?));
+        test_files.push((
+            "silent_1s".to_string(),
+            TestAudioScenarios::create_silent_recording(1.0)?,
+        ));
+        test_files.push((
+            "quiet_1s".to_string(),
+            TestAudioScenarios::create_quiet_recording(1.0)?,
+        ));
+        test_files.push((
+            "valid_1s".to_string(),
+            TestAudioScenarios::create_valid_speech_recording(1.0)?,
+        ));
+        test_files.push((
+            "too_short".to_string(),
+            TestAudioScenarios::create_too_short_recording()?,
+        ));
 
         // Edge cases
-        test_files.push(("clipped_1s".to_string(), TestAudioScenarios::create_clipped_recording(1.0)?));
-        test_files.push(("realistic_3s".to_string(), TestAudioScenarios::create_realistic_speech_recording(3.0)?));
-        test_files.push(("stereo_1s".to_string(), TestAudioScenarios::create_stereo_recording(1.0)?));
+        test_files.push((
+            "clipped_1s".to_string(),
+            TestAudioScenarios::create_clipped_recording(1.0)?,
+        ));
+        test_files.push((
+            "realistic_3s".to_string(),
+            TestAudioScenarios::create_realistic_speech_recording(3.0)?,
+        ));
+        test_files.push((
+            "stereo_1s".to_string(),
+            TestAudioScenarios::create_stereo_recording(1.0)?,
+        ));
 
-        // Performance tests  
-        test_files.push(("long_10s".to_string(), TestAudioScenarios::create_long_recording(10.0)?));
-        test_files.push(("high_quality_1s".to_string(), TestAudioScenarios::create_high_quality_recording(1.0)?));
+        // Performance tests
+        test_files.push((
+            "long_10s".to_string(),
+            TestAudioScenarios::create_long_recording(10.0)?,
+        ));
+        test_files.push((
+            "high_quality_1s".to_string(),
+            TestAudioScenarios::create_high_quality_recording(1.0)?,
+        ));
 
         // Error handling tests
-        test_files.push(("corrupted".to_string(), TestAudioScenarios::create_corrupted_recording()?));
+        test_files.push((
+            "corrupted".to_string(),
+            TestAudioScenarios::create_corrupted_recording()?,
+        ));
 
         Ok(test_files)
     }
 
     /// Generate specific test cases for audio validation
-    pub fn generate_validation_test_cases(&self) -> Result<Vec<(String, NamedTempFile, &'static str)>, Box<dyn std::error::Error>> {
+    pub fn generate_validation_test_cases(
+        &self,
+    ) -> Result<Vec<(String, NamedTempFile, &'static str)>, Box<dyn std::error::Error>> {
         let mut test_cases = Vec::new();
 
         test_cases.push((
-            "silent".to_string(), 
-            TestAudioScenarios::create_silent_recording(1.0)?, 
-            "should_be_silent"
+            "silent".to_string(),
+            TestAudioScenarios::create_silent_recording(1.0)?,
+            "should_be_silent",
         ));
         test_cases.push((
-            "too_quiet".to_string(), 
-            TestAudioScenarios::create_quiet_recording(1.0)?, 
-            "should_be_too_quiet"
+            "too_quiet".to_string(),
+            TestAudioScenarios::create_quiet_recording(1.0)?,
+            "should_be_too_quiet",
         ));
         test_cases.push((
-            "too_short".to_string(), 
-            TestAudioScenarios::create_too_short_recording()?, 
-            "should_be_too_short"
+            "too_short".to_string(),
+            TestAudioScenarios::create_too_short_recording()?,
+            "should_be_too_short",
         ));
         test_cases.push((
-            "valid".to_string(), 
-            TestAudioScenarios::create_valid_speech_recording(1.0)?, 
-            "should_be_valid"
+            "valid".to_string(),
+            TestAudioScenarios::create_valid_speech_recording(1.0)?,
+            "should_be_valid",
         ));
 
         Ok(test_cases)
@@ -377,7 +443,7 @@ mod tests {
     fn test_audio_generator_silent() {
         let generator = AudioTestDataGenerator::default();
         let samples = generator.generate_silent_audio(1.0);
-        
+
         assert_eq!(samples.len(), 16000); // 1 second at 16kHz
         assert!(samples.iter().all(|&s| s == 0));
     }
@@ -386,9 +452,9 @@ mod tests {
     fn test_audio_generator_quiet() {
         let generator = AudioTestDataGenerator::default();
         let samples = generator.generate_quiet_audio(1.0, 0.1);
-        
+
         assert_eq!(samples.len(), 16000);
-        
+
         // Should have some non-zero samples but low amplitude
         let max_amplitude = samples.iter().map(|&s| s.abs()).max().unwrap();
         assert!(max_amplitude > 0);
@@ -399,9 +465,9 @@ mod tests {
     fn test_audio_generator_speech_like() {
         let generator = AudioTestDataGenerator::default();
         let samples = generator.generate_speech_like_audio(1.0);
-        
+
         assert_eq!(samples.len(), 16000);
-        
+
         // Should have reasonable amplitude for speech
         let max_amplitude = samples.iter().map(|&s| s.abs()).max().unwrap();
         assert!(max_amplitude > 1000);
@@ -412,9 +478,9 @@ mod tests {
     fn test_wav_file_creation() {
         let generator = AudioTestDataGenerator::default();
         let samples = generator.generate_speech_like_audio(0.5);
-        
+
         let wav_file = generator.create_wav_file(samples).unwrap();
-        
+
         // Verify file exists and has content
         let metadata = std::fs::metadata(wav_file.path()).unwrap();
         assert!(metadata.len() > 0);
@@ -434,9 +500,9 @@ mod tests {
     fn test_batch_generator() {
         let batch_generator = BatchTestDataGenerator::new();
         let test_suite = batch_generator.generate_test_suite().unwrap();
-        
+
         assert!(test_suite.len() >= 10); // Should have multiple test files
-        
+
         // Verify all files exist
         for (name, file) in &test_suite {
             let metadata = std::fs::metadata(file.path()).unwrap();
@@ -448,9 +514,9 @@ mod tests {
     fn test_validation_test_cases() {
         let batch_generator = BatchTestDataGenerator::new();
         let validation_cases = batch_generator.generate_validation_test_cases().unwrap();
-        
+
         assert_eq!(validation_cases.len(), 4);
-        
+
         for (name, file, expected_result) in &validation_cases {
             let metadata = std::fs::metadata(file.path()).unwrap();
             assert!(metadata.len() > 0, "File {} should have content", name);
@@ -461,13 +527,13 @@ mod tests {
     #[test]
     fn test_different_sample_rates() {
         let rates = [8000, 16000, 22050, 44100, 48000];
-        
+
         for &rate in &rates {
             let generator = AudioTestDataGenerator::new(rate, 1, 16);
             let samples = generator.generate_speech_like_audio(1.0);
-            
+
             assert_eq!(samples.len(), rate as usize);
-            
+
             let wav_file = generator.create_wav_file(samples).unwrap();
             let metadata = std::fs::metadata(wav_file.path()).unwrap();
             assert!(metadata.len() > 0);
@@ -478,10 +544,10 @@ mod tests {
     fn test_stereo_generation() {
         let generator = AudioTestDataGenerator::new(16000, 2, 16);
         let samples = generator.generate_speech_like_audio(1.0);
-        
+
         // Stereo should have double the samples (2 channels)
         assert_eq!(samples.len(), 32000);
-        
+
         let wav_file = generator.create_wav_file(samples).unwrap();
         let metadata = std::fs::metadata(wav_file.path()).unwrap();
         assert!(metadata.len() > 0);

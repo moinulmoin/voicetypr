@@ -7,10 +7,131 @@ import { mockIPC, mockWindows, clearMocks } from '@tauri-apps/api/mocks';
 // Extend Vitest's expect with jest-dom matchers
 expect.extend(matchers);
 
-// Setup and cleanup
+const defaultIpcHandler = (cmd: string) => {
+  // Default mock responses for common commands
+  switch (cmd) {
+    case 'start_recording':
+      return true;
+    
+    case 'stop_recording':
+      return true;
+
+    case 'get_current_recording_state':
+      return { state: 'idle', error: null };
+
+    case 'get_settings':
+      return {
+        hotkey: 'CommandOrControl+Shift+Space',
+        language: 'en',
+        theme: 'system',
+        current_model: 'base.en',
+        current_model_engine: 'whisper',
+        transcription_cleanup_days: 30,
+        onboarding_completed: true,
+        auto_launch: true,
+        microphone_device: null,
+        ai_provider: 'groq',
+        ai_enhancement_enabled: false
+      };
+
+    case 'save_settings':
+      return true;
+
+    case 'get_model_status':
+      return {
+        models: [
+          {
+            name: 'tiny.en',
+            display_name: 'Tiny English',
+            size: 39,
+            url: '',
+            sha256: '',
+            downloaded: false,
+            speed_score: 10,
+            accuracy_score: 3,
+            recommended: false,
+            engine: 'whisper',
+            kind: 'local',
+            requires_setup: false,
+          },
+          {
+            name: 'base.en',
+            display_name: 'Base English',
+            size: 74,
+            url: '',
+            sha256: '',
+            downloaded: true,
+            speed_score: 7,
+            accuracy_score: 5,
+            recommended: false,
+            engine: 'whisper',
+            kind: 'local',
+            requires_setup: false,
+          },
+          {
+            name: 'soniox',
+            display_name: 'Soniox (Cloud)',
+            size: 0,
+            url: '',
+            sha256: '',
+            downloaded: true,
+            speed_score: 9,
+            accuracy_score: 10,
+            recommended: true,
+            engine: 'soniox',
+            kind: 'cloud',
+            requires_setup: false,
+          }
+        ]
+      };
+
+    case 'download_model':
+      return true;
+
+    case 'delete_model':
+      return true;
+
+    case 'get_audio_devices':
+      return ['Default Microphone', 'USB Microphone'];
+
+    case 'cleanup_old_transcriptions':
+      return true;
+
+    case 'get_transcription_history':
+      return [];
+
+    case 'get_recording_state':
+      return { state: 'idle', error: null };
+
+    case 'get_ai_settings':
+      return { enabled: false, provider: 'groq', model: '', hasApiKey: false };
+
+    case 'get_enhancement_options':
+      return { preset: 'Default', custom_vocabulary: [] };
+
+    case 'init_cleanup_schedule':
+      return true;
+
+    case 'load_api_keys_to_cache':
+      return true;
+
+    case 'register_hotkey':
+      return true;
+
+    case 'check_permissions':
+      return { microphone: true, accessibility: true };
+
+    default:
+      return null;
+  }
+};
+
+// Setup and cleanup per test
 beforeEach(() => {
-  // Mock the main window
+  vi.clearAllMocks();
+  // Re-initialize Tauri mocks for each test
   mockWindows('main');
+  mockIPC(defaultIpcHandler);
 });
 
 afterEach(() => {
@@ -38,96 +159,6 @@ if (!window.crypto) {
     },
   });
 }
-
-// Mock Tauri IPC calls with default responses
-mockIPC((cmd) => {
-  // Default mock responses for common commands
-  switch (cmd) {
-    case 'start_recording':
-      return true;
-    
-    case 'stop_recording':
-      return true;
-    
-    case 'get_settings':
-      return {
-        hotkey: 'CommandOrControl+Shift+Space',
-        language: 'en',
-        theme: 'system',
-        current_model: 'base.en',
-        transcription_cleanup_days: 30,
-        onboarding_completed: true,
-        auto_launch: true,
-        microphone_device: null,
-        ai_provider: 'groq',
-        ai_enhancement_enabled: false
-      };
-    
-    case 'update_setting':
-    case 'save_settings':
-      return true;
-    
-    case 'get_model_status':
-      return [
-        {
-          id: 'tiny.en',
-          name: 'Tiny English',
-          size: 39,
-          downloaded: false,
-          speed_score: 10,
-          accuracy_score: 3,
-        },
-        {
-          id: 'base.en',
-          name: 'Base English',
-          size: 74,
-          downloaded: true,
-          speed_score: 7,
-          accuracy_score: 5,
-        },
-        {
-          id: 'small.en',
-          name: 'Small English',
-          size: 244,
-          downloaded: true,
-          speed_score: 5,
-          accuracy_score: 7,
-        }
-      ];
-    
-    case 'download_model':
-      return true;
-    
-    case 'delete_model':
-      return true;
-    
-    case 'get_audio_devices':
-      return ['Default Microphone', 'USB Microphone'];
-    
-    case 'cleanup_old_transcriptions':
-      return true;
-    
-    case 'get_transcription_history':
-      return [];
-    
-    case 'init_cleanup_schedule':
-      return true;
-    
-    case 'load_api_keys_to_cache':
-      return true;
-    
-    case 'register_hotkey':
-      return true;
-    
-    case 'check_permissions':
-      return { microphone: true, accessibility: true };
-    
-    default:
-      // Don't reject for unknown commands, just return null
-      // This prevents tests from failing on commands we haven't mocked
-      return null;
-  }
-});
 
 // Mock event listeners
 const eventListeners = new Map<string, Set<Function>>();

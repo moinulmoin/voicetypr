@@ -80,10 +80,10 @@ git push origin "v${NEW_VERSION}"
 echo -e "${GREEN}🔨 Building for both architectures...${NC}"
 echo -e "${YELLOW}Building for Intel (x86_64)...${NC}"
 cd src-tauri
-cargo tauri build --target x86_64-apple-darwin
+cargo tauri build --target x86_64-apple-darwin --config tauri.macos.conf.json
 
 echo -e "${YELLOW}Building for Apple Silicon (aarch64)...${NC}"
-cargo tauri build --target aarch64-apple-darwin
+cargo tauri build --target aarch64-apple-darwin --config tauri.macos.conf.json
 cd ..
 
 # Fix archives to remove AppleDouble files

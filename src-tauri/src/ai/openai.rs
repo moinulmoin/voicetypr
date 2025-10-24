@@ -56,7 +56,13 @@ impl OpenAIProvider {
             serde_json::Value::String(base_root.to_string()),
         );
 
-        Ok(Self { api_key, model, client, base_url, options })
+        Ok(Self {
+            api_key,
+            model,
+            client,
+            base_url,
+            options,
+        })
     }
 
     async fn make_request_with_retry(
@@ -85,7 +91,10 @@ impl OpenAIProvider {
         Err(last_error.unwrap_or_else(|| AIError::NetworkError("Unknown error".to_string())))
     }
 
-    async fn make_single_request(&self, request: &OpenAIRequest) -> Result<OpenAIResponse, AIError> {
+    async fn make_single_request(
+        &self,
+        request: &OpenAIRequest,
+    ) -> Result<OpenAIResponse, AIError> {
         // Determine if auth header should be sent
         let no_auth = self
             .options
@@ -213,7 +222,9 @@ impl AIProvider for OpenAIProvider {
             .to_string();
 
         if enhanced_text.is_empty() {
-            return Err(AIError::InvalidResponse("Empty response from API".to_string()));
+            return Err(AIError::InvalidResponse(
+                "Empty response from API".to_string(),
+            ));
         }
 
         Ok(AIEnhancementResponse {

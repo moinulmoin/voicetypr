@@ -230,7 +230,9 @@ pub async fn validate_and_cache_api_key(
         if !inferred_no_auth {
             let key = provided_key.trim();
             if key.is_empty() {
-                return Err("API key is required (leave empty to use no authentication)".to_string());
+                return Err(
+                    "API key is required (leave empty to use no authentication)".to_string()
+                );
             }
             req = req.header("Authorization", format!("Bearer {}", key));
         }
@@ -275,7 +277,10 @@ pub async fn test_openai_endpoint(
     no_auth: Option<bool>,
 ) -> Result<(), String> {
     let no_auth = no_auth.unwrap_or(false)
-        || api_key.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true);
+        || api_key
+            .as_deref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
 
     let validate_url = normalize_chat_completions_url(&base_url);
 
@@ -334,7 +339,7 @@ pub async fn clear_ai_api_key_cache(
     let mut cache = API_KEY_CACHE
         .lock()
         .map_err(|_| "Failed to access cache".to_string())?;
-    
+
     if !provider.is_empty() {
         cache.remove(&format!("ai_api_key_{}", provider));
         log::info!("API key cache cleared for provider: {}", provider);
@@ -463,26 +468,6 @@ pub async fn update_enhancement_options(
 ) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
-    // Validate custom vocabulary
-    for term in &options.custom_vocabulary {
-        if term.trim().is_empty() {
-            return Err("Custom vocabulary terms cannot be empty".to_string());
-        }
-        if term.len() > crate::ai::MAX_VOCABULARY_TERM_LENGTH {
-            return Err(format!(
-                "Custom vocabulary terms must be less than {} characters",
-                crate::ai::MAX_VOCABULARY_TERM_LENGTH
-            ));
-        }
-    }
-
-    if options.custom_vocabulary.len() > crate::ai::MAX_CUSTOM_VOCABULARY {
-        return Err(format!(
-            "Maximum {} custom vocabulary terms allowed",
-            crate::ai::MAX_CUSTOM_VOCABULARY
-        ));
-    }
-
     store.set(
         "enhancement_options",
         serde_json::to_value(&options)
@@ -493,11 +478,7 @@ pub async fn update_enhancement_options(
         .save()
         .map_err(|e| format!("Failed to save enhancement options: {}", e))?;
 
-    log::info!(
-        "Enhancement options updated: preset={:?}, vocab_count={}",
-        options.preset,
-        options.custom_vocabulary.len()
-    );
+    log::info!("Enhancement options updated: preset={:?}", options.preset);
 
     Ok(())
 }
@@ -559,17 +540,14 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
                 .lock()
                 .map_err(|_| "Failed to access cache".to_string())?;
             let key_name = format!("ai_api_key_{}", provider);
-            cache
-                .get(&key_name)
-                .cloned()
-                .ok_or_else(|| {
-                    log::error!(
-                        "API key not found in cache for provider: {}. Cache keys: {:?}",
-                        provider,
-                        cache.keys().collect::<Vec<_>>()
-                    );
-                    "API key not found in cache".to_string()
-                })?
+            cache.get(&key_name).cloned().ok_or_else(|| {
+                log::error!(
+                    "API key not found in cache for provider: {}. Cache keys: {:?}",
+                    provider,
+                    cache.keys().collect::<Vec<_>>()
+                );
+                "API key not found in cache".to_string()
+            })?
         };
 
         let mut opts = std::collections::HashMap::new();
@@ -582,17 +560,14 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
             .lock()
             .map_err(|_| "Failed to access cache".to_string())?;
         let key_name = format!("ai_api_key_{}", provider);
-        let api_key = cache
-            .get(&key_name)
-            .cloned()
-            .ok_or_else(|| {
-                log::error!(
-                    "API key not found in cache for provider: {}. Cache keys: {:?}",
-                    provider,
-                    cache.keys().collect::<Vec<_>>()
-                );
-                "API key not found in cache".to_string()
-            })?;
+        let api_key = cache.get(&key_name).cloned().ok_or_else(|| {
+            log::error!(
+                "API key not found in cache for provider: {}. Cache keys: {:?}",
+                provider,
+                cache.keys().collect::<Vec<_>>()
+            );
+            "API key not found in cache".to_string()
+        })?;
 
         (api_key, std::collections::HashMap::new())
     } else {
@@ -613,7 +588,13 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
     );
 
     // Create provider config
-    let config = AIProviderConfig { provider, model, api_key, enabled: true, options };
+    let config = AIProviderConfig {
+        provider,
+        model,
+        api_key,
+        enabled: true,
+        options,
+    };
 
     // Create provider and enhance text
     let provider = AIProviderFactory::create(&config)
@@ -660,9 +641,15 @@ pub struct SetOpenAIConfigArgs {
 }
 
 #[tauri::command]
-pub async fn set_openai_config(app: tauri::AppHandle, args: SetOpenAIConfigArgs) -> Result<(), String> {
+pub async fn set_openai_config(
+    app: tauri::AppHandle,
+    args: SetOpenAIConfigArgs,
+) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
-    store.set("ai_openai_base_url", serde_json::Value::String(args.base_url));
+    store.set(
+        "ai_openai_base_url",
+        serde_json::Value::String(args.base_url),
+    );
     store.set("ai_openai_no_auth", serde_json::Value::Bool(args.no_auth));
     store
         .save()

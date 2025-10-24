@@ -67,8 +67,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
     modelOrder,
     downloadProgress,
     verifyingModels,
-    selectedModel,
-    setSelectedModel,
     loadModels,
     downloadModel,
     cancelDownload,
@@ -114,14 +112,20 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
   useEffect(() => {
     // Only auto-select if no model is selected yet
-    if (!selectedModel) {
-      // Find a downloaded model
-      const downloadedModel = Object.entries(models).find(([_, m]) => m.downloaded);
-      if (downloadedModel) {
-        setSelectedModel(downloadedModel[0]);
+    if (!settings?.current_model) {
+      const downloadedModelEntry = Object.entries(models).find(([_, m]) => m.downloaded);
+      if (downloadedModelEntry) {
+        const [modelName, info] = downloadedModelEntry;
+        updateSettings({
+          current_model: modelName,
+          current_model_engine: info.engine ?? 'whisper',
+          language: 'en'
+        }).catch((error) => {
+          console.error('[OnboardingDesktop] Failed to auto-select model:', error);
+        });
       }
     }
-  }, [models]); // Only depend on models, not selectedModel to avoid loops
+  }, [models, settings?.current_model, updateSettings]); // Depend on both to react to changes
 
   const checkPermissions = async () => {
     // Use the hook methods to check permissions
@@ -182,9 +186,16 @@ export const OnboardingDesktop = function OnboardingDesktop({
     try {
       await invoke("set_global_shortcut", { shortcut: hotkey });
 
+      // Dynamically detect engine from selected model
+      const selectedModelName = settings?.current_model || "";
+      const selectedModel = selectedModelName ? models[selectedModelName] : null;
+      const engine = selectedModel?.engine || 'whisper';
+
       await updateSettings({
         hotkey: hotkey,
-        current_model: selectedModel || "",
+        current_model: selectedModelName,
+        current_model_engine: engine,
+        language: 'en',
         onboarding_completed: true
       });
     } catch (error) {
@@ -241,7 +252,13 @@ export const OnboardingDesktop = function OnboardingDesktop({
       // automation check removed for now
       case "models":
         // User can proceed if they have selected a model that is downloaded
-        return selectedModel !== null && models[selectedModel]?.downloaded === true;
+        {
+          const currentModel = settings?.current_model;
+          if (!currentModel) {
+            return false;
+          }
+          return models[currentModel]?.downloaded === true;
+        }
       default:
         return true;
     }
@@ -467,9 +484,16 @@ export const OnboardingDesktop = function OnboardingDesktop({
                               model={model}
                               downloadProgress={progress}
                               isVerifying={verifyingModels.has(name)}
-                              isSelected={selectedModel === name}
+                              isSelected={settings?.current_model === name}
                               onDownload={downloadModel}
-                              onSelect={setSelectedModel}
+                              onSelect={async (modelName) => {
+                                const info = models[modelName];
+                                await updateSettings({
+                                  current_model: modelName,
+                                  current_model_engine: info?.engine ?? 'whisper',
+                                  language: 'en'
+                                });
+                              }}
                               onCancelDownload={cancelDownload}
                               showSelectButton={model.downloaded}
                             />

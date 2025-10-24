@@ -12,7 +12,8 @@ use symphonia::core::probe::Hint;
 /// Returns the path to the converted WAV file
 pub fn convert_to_wav(input_path: &Path, output_dir: &Path) -> Result<PathBuf, String> {
     // Check if input is already a WAV file
-    if input_path.extension()
+    if input_path
+        .extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_lowercase() == "wav")
         .unwrap_or(false)
@@ -29,8 +30,7 @@ pub fn convert_to_wav(input_path: &Path, output_dir: &Path) -> Result<PathBuf, S
     let output_path = output_dir.join(format!("converted_{}.wav", timestamp));
 
     // Open the input file
-    let file = File::open(input_path)
-        .map_err(|e| format!("Failed to open audio file: {}", e))?;
+    let file = File::open(input_path).map_err(|e| format!("Failed to open audio file: {}", e))?;
 
     // Create media source stream
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -63,7 +63,11 @@ pub fn convert_to_wav(input_path: &Path, output_dir: &Path) -> Result<PathBuf, S
 
     let track_id = track.id;
     let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
-    let channels = track.codec_params.channels.map(|ch| ch.count()).unwrap_or(2);
+    let channels = track
+        .codec_params
+        .channels
+        .map(|ch| ch.count())
+        .unwrap_or(2);
 
     // Create decoder
     let dec_opts: DecoderOptions = Default::default();
@@ -149,12 +153,13 @@ pub fn convert_to_wav(input_path: &Path, output_dir: &Path) -> Result<PathBuf, S
 
     // Resample to 16kHz if needed
     let final_samples = if sample_rate != 16000 {
-        use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
+        use rubato::{
+            Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType,
+            WindowFunction,
+        };
 
         // Convert i16 to f32 for resampling
-        let samples_f32: Vec<f32> = mono_samples.iter()
-            .map(|&s| s as f32 / 32768.0)
-            .collect();
+        let samples_f32: Vec<f32> = mono_samples.iter().map(|&s| s as f32 / 32768.0).collect();
 
         // Setup resampler
         let params = SincInterpolationParameters {
@@ -171,14 +176,17 @@ pub fn convert_to_wav(input_path: &Path, output_dir: &Path) -> Result<PathBuf, S
             params,
             samples_f32.len(),
             1,
-        ).map_err(|e| format!("Failed to create resampler: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to create resampler: {}", e))?;
 
         // Resample
-        let resampled = resampler.process(&[samples_f32], None)
+        let resampled = resampler
+            .process(&[samples_f32], None)
             .map_err(|e| format!("Failed to resample: {}", e))?;
 
         // Convert back to i16
-        resampled[0].iter()
+        resampled[0]
+            .iter()
             .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
             .collect()
     } else {
@@ -197,11 +205,13 @@ pub fn convert_to_wav(input_path: &Path, output_dir: &Path) -> Result<PathBuf, S
         .map_err(|e| format!("Failed to create WAV file: {}", e))?;
 
     for sample in final_samples {
-        writer.write_sample(sample)
+        writer
+            .write_sample(sample)
             .map_err(|e| format!("Failed to write sample: {}", e))?;
     }
 
-    writer.finalize()
+    writer
+        .finalize()
         .map_err(|e| format!("Failed to finalize WAV file: {}", e))?;
 
     Ok(output_path)

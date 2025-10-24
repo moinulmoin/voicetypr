@@ -3,31 +3,42 @@ import { Button } from "@/components/ui/button";
 import {
   Upload,
   FileAudio,
-  Mic2,
+  FileText,
   Loader2,
   Copy,
   Check,
   AlertCircle
 } from "lucide-react";
 import { toast } from "sonner";
-import { invoke } from "@tauri-apps/api/core";
+// invoke handled inside zustand store
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "@/contexts/SettingsContext";
+import { useModelAvailability } from "@/hooks/useModelAvailability";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { useUploadStore } from "@/state/upload";
 
-interface TranscriptionResult {
-  text: string;
-  filename: string;
-}
+// local result type not needed; handled by store
 
 export function AudioUploadSection() {
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [transcriptionResult, setTranscriptionResult] = useState<TranscriptionResult | null>(null);
   const [copied, setCopied] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const { settings } = useSettings();
+  const { selectedModelAvailable } = useModelAvailability();
+  const {
+    selectedFile,
+    status,
+    resultText,
+    error: storeError,
+    select,
+    clearSelection,
+    start,
+    reset
+  } = useUploadStore();
+  const isProcessing = status === 'processing';
+  const effectiveFileName = selectedFile?.name || null;
+  const hasEffectiveSelection = !!selectedFile;
 
   const handleFileSelect = async () => {
     try {
@@ -35,16 +46,14 @@ export function AudioUploadSection() {
         multiple: false,
         filters: [
           {
-            name: "Audio Files",
+            name: "Audio/Video Files",
             extensions: ["wav", "mp3", "m4a", "flac", "ogg", "mp4", "webm"]
           }
         ]
       });
 
       if (selected && typeof selected === 'string') {
-        setSelectedFile(selected);
-        const filename = selected.split('/').pop() || selected.split('\\').pop() || 'audio file';
-        toast.success(`Selected: ${filename}`);
+        select(selected);
       }
     } catch (error) {
       console.error("Failed to select file:", error);
@@ -59,54 +68,45 @@ export function AudioUploadSection() {
     }
 
     if (!settings?.current_model) {
-      toast.error("Please download a model first from Settings");
+      toast.error("Select a speech model in Models before transcribing.");
       return;
     }
 
-    setIsProcessing(true);
-    const filename = selectedFile.split('/').pop() || selectedFile.split('\\').pop() || 'audio file';
+    if (selectedModelAvailable === false) {
+      const engine = settings.current_model_engine || 'whisper';
+      toast.error(
+        engine === 'soniox'
+          ? 'Connect your cloud provider before transcribing audio.'
+          : 'Download the selected model before transcribing audio.'
+      );
+      return;
+    }
+
+    if (isProcessing) {
+      toast.info("A transcription is already in progress");
+      return;
+    }
+
+    await start(settings.current_model, settings.current_model_engine || 'whisper');
 
     try {
-      toast.info("Processing audio file... This may take a while for long recordings", {
-        duration: 5000
-      });
-
-      // Call the new transcribe_audio_file command directly with the file path
-      const result = await invoke<string>("transcribe_audio_file", {
-        filePath: selectedFile,
-        modelName: settings.current_model
-      });
-
-      if (!result || result.trim() === "" || result === "[BLANK_AUDIO]") {
-        toast.error("No speech detected in the audio file");
-        setIsProcessing(false);
-        return;
+      if (storeError) {
+        toast.error(storeError);
+      } else if (status === 'done') {
+        toast.success("Transcription completed and saved to history!");
       }
-
-      setTranscriptionResult({
-        text: result,
-        filename
-      });
-
-      // Save to history
-      await invoke("save_transcription", {
-        text: result,
-        model: settings.current_model
-      });
-
-      toast.success("Transcription completed and saved to history!");
     } catch (error) {
-      console.error("Transcription failed:", error);
+      console.error("[Upload] Transcription handling failed:", error);
       toast.error(`Transcription failed: ${error}`);
     } finally {
-      setIsProcessing(false);
+      // keep store state; UI renders from it
     }
   };
 
   const handleCopy = async () => {
-    if (transcriptionResult?.text) {
+    if (resultText) {
       try {
-        await navigator.clipboard.writeText(transcriptionResult.text);
+        await navigator.clipboard.writeText(resultText);
         setCopied(true);
         toast.success("Copied to clipboard");
         setTimeout(() => setCopied(false), 2000);
@@ -118,8 +118,7 @@ export function AudioUploadSection() {
   };
 
   const handleReset = () => {
-    setSelectedFile(null);
-    setTranscriptionResult(null);
+    reset();
     setCopied(false);
   };
 
@@ -134,9 +133,7 @@ export function AudioUploadSection() {
       return;
     }
 
-    setSelectedFile(filePath);
-    const filename = filePath.split('/').pop() || filePath.split('\\').pop() || 'audio file';
-    toast.success(`Selected: ${filename}`);
+    select(filePath);
   };
 
   // Setup drag and drop listeners
@@ -175,9 +172,9 @@ export function AudioUploadSection() {
       <div className="px-6 py-4 border-b border-border/40">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold">Audio Upload</h1>
+            <h1 className="text-2xl font-semibold">Upload files</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Transcribe audio files locally
+              Transcribe audio or video files locally
             </p>
           </div>
         </div>
@@ -195,23 +192,25 @@ export function AudioUploadSection() {
             <div className="p-6">
               <div className="space-y-4">
                 {/* File Selection / Drop Zone */}
-                {!transcriptionResult && (
+                {status !== 'done' && (
                     <div className="space-y-4">
-                      {selectedFile ? (
+                      {hasEffectiveSelection ? (
                         <div className="flex items-center justify-between p-3 rounded-lg bg-accent/50">
                           <div className="flex items-center gap-3">
                             <FileAudio className="h-4 w-4 text-muted-foreground" />
                             <span className="text-sm font-medium">
-                              {selectedFile.split('/').pop() || selectedFile.split('\\').pop()}
+                              {effectiveFileName}
                             </span>
                           </div>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={handleReset}
-                          >
-                            Change
-                          </Button>
+                          {!isProcessing && selectedFile && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => { clearSelection(); setCopied(false); }}
+                            >
+                              Change
+                            </Button>
+                          )}
                         </div>
                       ) : (
                         <div className={cn(
@@ -224,7 +223,7 @@ export function AudioUploadSection() {
                             <div className="space-y-1">
                               <Upload className="h-7 w-7 mx-auto text-primary animate-bounce" />
                               <p className="text-sm font-medium text-primary">
-                                Drop your audio file here
+                                Drop your audio or video file here
                               </p>
                               <p className="text-xs text-muted-foreground">
                                 WAV, MP3, M4A, FLAC, OGG, MP4, WebM
@@ -235,7 +234,7 @@ export function AudioUploadSection() {
                               <div className="space-y-1">
                                 <Upload className="h-7 w-7 mx-auto text-muted-foreground" />
                                 <p className="text-sm font-medium">
-                                  Drag & drop your audio file here
+                                  Drag & drop your audio or video file here
                                 </p>
                                 <p className="text-xs text-muted-foreground">
                                   or click to browse
@@ -255,7 +254,7 @@ export function AudioUploadSection() {
                         </div>
                       )}
 
-                      {selectedFile && (
+                      {hasEffectiveSelection && (
                         <Button
                           onClick={handleTranscribe}
                           className="w-full"
@@ -264,11 +263,11 @@ export function AudioUploadSection() {
                           {isProcessing ? (
                             <>
                               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                              Transcribing...
+                              Processing...
                             </>
                           ) : (
                             <>
-                              <Mic2 className="h-4 w-4 mr-2" />
+                              <FileText className="h-4 w-4 mr-2" />
                               Transcribe
                             </>
                           )}
@@ -278,41 +277,50 @@ export function AudioUploadSection() {
                 )}
 
                 {/* Transcription Result */}
-                {transcriptionResult && (
+                {status === 'done' && resultText && selectedFile && (
                     <div className="space-y-4">
                       <div className="p-4 rounded-lg bg-accent/30 space-y-3">
-                        <div className="flex items-start justify-between gap-4">
+                        <div className="flex items-start gap-4">
                           <div className="flex-1">
-                            <p className="text-sm leading-relaxed">
-                              {transcriptionResult.text}
-                            </p>
+                            <ScrollArea className="h-64">
+                              <p className="text-sm leading-relaxed pr-2">
+                                {resultText}
+                              </p>
+                            </ScrollArea>
                           </div>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={handleCopy}
-                            className="shrink-0"
-                          >
-                            {copied ? (
-                              <Check className="h-4 w-4 text-green-500" />
-                            ) : (
-                              <Copy className="h-4 w-4" />
-                            )}
-                          </Button>
                         </div>
                         <div className="flex items-center justify-between text-xs text-muted-foreground">
-                          <span>{transcriptionResult.filename}</span>
-                          <span>{transcriptionResult.text.split(' ').length} words</span>
+                          <span>{selectedFile.name}</span>
+                          <span>{resultText.split(' ').length} words</span>
                         </div>
                       </div>
 
-                      <Button
-                        onClick={handleReset}
-                        variant="outline"
-                        className="w-full"
-                      >
-                        Transcribe Another File
-                      </Button>
+                      <div className="flex items-center justify-between gap-3">
+                        <Button onClick={handleCopy} variant="outline">
+                          {copied ? (
+                            <>
+                              <Check className="h-4 w-4 mr-2 text-green-500" /> Copied
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-4 w-4 mr-2" /> Copy
+                            </>
+                          )}
+                        </Button>
+
+                        <Button onClick={handleReset} variant="outline">
+                          Transcribe Another File
+                        </Button>
+                      </div>
+                    </div>
+                )}
+
+                {status === 'error' && storeError && (
+                    <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-200/50 flex items-start gap-2">
+                      <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5" />
+                      <div>
+                        <p className="text-sm text-amber-700">{storeError}</p>
+                      </div>
                     </div>
                 )}
               </div>
@@ -330,11 +338,12 @@ export function AudioUploadSection() {
                   <h3 className="font-medium text-sm">Important Information</h3>
                   <div className="text-sm text-muted-foreground space-y-1">
                     <p>• <strong>Supported Formats:</strong> WAV, MP3, M4A, FLAC, OGG, MP4, WebM</p>
+                    <p>• <strong>Conversion:</strong> Non-WAV files will be converted to 16 kHz mono WAV before transcription; this may take time</p>
+                    <p>• <strong>Video:</strong> Video files are supported; audio is extracted first</p>
                     <p>• <strong>Processing:</strong> Happens locally on your device</p>
-                    <p>• <strong>Duration:</strong> No limits, but longer files take more time</p>
-                    <p>• <strong>Memory Usage:</strong> ~230MB per hour of audio</p>
+                    <p>• <strong>Duration:</strong> Longer media may take longer and use more memory</p>
                     <p className="text-amber-600 font-medium mt-2">
-                      ⚠️ Long recordings (4-5+ hours) may take several minutes and use significant memory
+                      ⚠️ Long media (4-5+ hours) may take several minutes and use significant memory
                     </p>
                   </div>
                 </div>

@@ -96,6 +96,17 @@ export function AppContainer() {
           toast.error(event.payload as string);
         });
 
+        registerEvent<string>("parakeet-unavailable", (message) => {
+          const description = typeof message === "string" && message.trim().length > 0
+            ? message
+            : "Parakeet is unavailable on this Mac. Please reinstall VoiceTypr or remove the quarantine flag.";
+          console.error("Parakeet unavailable:", description);
+          toast.error("Parakeet Unavailable", {
+            description,
+            duration: 8000
+          });
+        });
+
         // Listen for license-required event and navigate to License section
         registerEvent<{ title: string; message: string; action?: string }>(
           "license-required", 
@@ -114,22 +125,10 @@ export function AppContainer() {
         // Listen for no models error (when trying to record without any models)
         registerEvent<ErrorEventPayload>("no-models-error", (data) => {
           console.error("No models available:", data);
-          
           toast.error(data.title || 'No Models Available', {
-            description: data.message || 'Please download at least one model from Settings before recording.',
-            action: {
-              label: 'Download Models',
-              onClick: () => {
-                setActiveSection('models');
-                // Show additional guidance after navigation
-                setTimeout(() => {
-                  toast.info('Download Required', {
-                    description: 'Choose a model size based on your needs. Larger models are more accurate but require more storage space.',
-                    duration: 6000
-                  });
-                }, 500);
-              }
-            },
+            description:
+              data.message ||
+              'Connect a cloud provider or download a local model in Models before recording.',
             duration: 8000
           });
         });

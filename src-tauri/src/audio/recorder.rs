@@ -74,7 +74,11 @@ impl AudioRecorder {
         }
     }
 
-    pub fn start_recording(&mut self, output_path: &str, device_name: Option<String>) -> Result<(), String> {
+    pub fn start_recording(
+        &mut self,
+        output_path: &str,
+        device_name: Option<String>,
+    ) -> Result<(), String> {
         log::info!(
             "AudioRecorder::start_recording called with path: {}",
             output_path
@@ -115,7 +119,10 @@ impl AudioRecorder {
                     .map_err(|e| format!("Failed to enumerate input devices: {}", e))?
                     .find(|d| d.name().map(|n| n == device_name).unwrap_or(false))
                     .ok_or_else(|| {
-                        log::warn!("Specified device '{}' not found, falling back to default", device_name);
+                        log::warn!(
+                            "Specified device '{}' not found, falling back to default",
+                            device_name
+                        );
                         format!("Device '{}' not found", device_name)
                     })
                     .or_else(|_| {
@@ -384,7 +391,7 @@ impl AudioRecorder {
             let thread_handle = handle.thread_handle;
             let timeout = Duration::from_secs(5); // Reasonable timeout for normal operation
             let start = std::time::Instant::now();
-            
+
             // Try to join thread with timeout by checking if it's finished
             while start.elapsed() < timeout {
                 if thread_handle.is_finished() {
@@ -396,7 +403,7 @@ impl AudioRecorder {
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
-            
+
             // If we get here, the thread didn't finish within timeout
             Err("Recording thread failed to stop within timeout".to_string())
         } else {

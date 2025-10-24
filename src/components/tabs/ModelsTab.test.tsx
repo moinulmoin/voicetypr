@@ -16,15 +16,42 @@ vi.mock('sonner', () => ({
 vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
     settings: {
-      current_model: 'base.en'
+      current_model: 'base.en',
+      current_model_engine: 'whisper'
     }
   })
 }));
 
 // Mock hooks
 let mockModels = {
-  'base.en': { id: 'base.en', name: 'Base English', size: 74, downloaded: true },
-  'small.en': { id: 'small.en', name: 'Small English', size: 244, downloaded: false }
+  'base.en': {
+    name: 'base.en',
+    display_name: 'Base English',
+    size: 74,
+    url: '',
+    sha256: '',
+    downloaded: true,
+    speed_score: 7,
+    accuracy_score: 5,
+    recommended: false,
+    engine: 'whisper',
+    kind: 'local' as const,
+    requires_setup: false
+  },
+  'small.en': {
+    name: 'small.en',
+    display_name: 'Small English',
+    size: 244,
+    url: '',
+    sha256: '',
+    downloaded: false,
+    speed_score: 5,
+    accuracy_score: 7,
+    recommended: false,
+    engine: 'whisper',
+    kind: 'local' as const,
+    requires_setup: false
+  }
 };
 
 // Mock the ModelManagementContext that ModelsTab actually imports
@@ -39,6 +66,7 @@ vi.mock('@/contexts/ModelManagementContext', () => ({
     cancelDownload: vi.fn(),
     retryDownload: vi.fn(),
     refreshModels: vi.fn(),
+    loadModels: vi.fn(),
     preloadModel: vi.fn(),
     verifyModel: vi.fn()
   })

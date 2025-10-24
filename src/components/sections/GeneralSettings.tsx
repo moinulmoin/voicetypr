@@ -10,7 +10,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import {
   AlertCircle,
-  Globe,
   Info,
   Keyboard,
   Mic,
@@ -19,7 +18,6 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { LanguageSelection } from "../LanguageSelection";
 import { MicrophoneSelection } from "../MicrophoneSelection";
 
 export function GeneralSettings() {
@@ -328,40 +326,6 @@ export function GeneralSettings() {
                 </p>
               </div>
             </div>
-          </div>
-
-          {/* Language Section */}
-          <div className="rounded-lg border border-border/50 bg-card p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-1.5 rounded-md bg-blue-500/10">
-                  <Globe className="h-4 w-4 text-blue-500" />
-                </div>
-                <div className="space-y-0.5">
-                  <Label htmlFor="language" className="text-sm font-medium">
-                    Spoken Language
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    The language you'll be speaking in
-                  </p>
-                </div>
-              </div>
-              <LanguageSelection
-                value={settings.language || "en"}
-                onValueChange={(value) => updateSettings({ language: value })}
-              />
-            </div>
-
-            {/* {settings.language !== 'en' && (
-              <div className="flex items-center justify-between pl-4">
-                <Label htmlFor="translate" className="text-sm">Translate to English</Label>
-                <Switch
-                  id="translate"
-                  checked={settings.translate_to_english || false}
-                  onCheckedChange={async (checked) => await updateSettings({ ...settings, translate_to_english: checked })}
-                />
-              </div>
-            )} */}
           </div>
 
           {/* Startup Section */}

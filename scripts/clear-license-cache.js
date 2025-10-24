@@ -1,9 +1,10 @@
-// Quick script to clear license cache
-import { remove } from 'tauri-plugin-cache-api';
+// Quick script to clear license cache using store-backed helper via Tauri command
+import { invoke } from '@tauri-apps/api/core';
 
 async function clearLicenseCache() {
   try {
-    await remove('license_status');
+    // We expose a lightweight command path: reuse backend invalidation
+    await invoke('invalidate_license_cache');
     console.log('License cache cleared successfully');
   } catch (error) {
     console.error('Failed to clear cache:', error);

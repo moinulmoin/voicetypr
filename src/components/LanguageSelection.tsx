@@ -125,10 +125,35 @@ interface LanguageSelectionProps {
   value: string
   onValueChange: (value: string) => void
   className?: string
+  engine?: 'whisper' | 'parakeet' | 'soniox'
+  englishOnly?: boolean
 }
 
-export function LanguageSelection({ value, onValueChange, className }: LanguageSelectionProps) {
+export function LanguageSelection({ value, onValueChange, className, engine = 'whisper', englishOnly = false }: LanguageSelectionProps) {
   const [open, setOpen] = React.useState(false)
+
+  // Parakeet v3 supports 25 European languages
+  const parakeetAllowed = React.useMemo(() => new Set([
+    'bg','cs','da','de','el','en','es','et','fi','fr','hr','hu','it','lt','lv','mt','nl','pl','pt','ro','ru','sk','sl','sv','uk'
+  ]), [])
+
+  // Soniox supported languages (static list per docs). Keep in sync with codes in `languages` above.
+  const sonioxAllowed = React.useMemo(() => new Set<string>([
+    'en','es','fr','de','it','pt','nl','ru','zh','ja','ko','ar','hi','tr','pl','sv','no','da','fi','el','cs','ro','hu','sk','uk','he','id','vi','th','ms','tl','fa','ur','bn','ta','te','gu','pa','bg','hr','sr','sl','lv','lt','et','is','ca','gl'
+  ]), [])
+
+  const displayed = React.useMemo(() => {
+    if (englishOnly) {
+      return languages.filter(l => l.value === 'en')
+    }
+    if (engine === 'parakeet') {
+      return languages.filter(l => parakeetAllowed.has(l.value))
+    }
+    if (engine === 'soniox') {
+      return languages.filter(l => sonioxAllowed.has(l.value))
+    }
+    return languages
+  }, [engine, parakeetAllowed, sonioxAllowed, englishOnly])
   
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -137,11 +162,14 @@ export function LanguageSelection({ value, onValueChange, className }: LanguageS
           variant="outline"
           role="combobox"
           aria-expanded={open}
+          disabled={englishOnly}
           className={cn("w-48 justify-between", className)}
         >
-          {value
-            ? languages.find((language) => language.value === value)?.label
-            : "Select language"}
+          {englishOnly
+            ? "English"
+            : value
+              ? languages.find((language) => language.value === value)?.label
+              : "Select language"}
           <ChevronsUpDown className="opacity-50" />
         </Button>
       </PopoverTrigger>
@@ -151,7 +179,7 @@ export function LanguageSelection({ value, onValueChange, className }: LanguageS
           <CommandList>
             <CommandEmpty>No language found.</CommandEmpty>
             <CommandGroup>
-              {languages.map((language) => (
+              {displayed.map((language) => (
                 <CommandItem
                   key={language.value}
                   // Use label for search instead of value so users can search by language name

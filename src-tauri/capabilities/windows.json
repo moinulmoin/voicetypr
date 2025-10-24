@@ -28,11 +28,13 @@
     "dialog:default",
     "fs:scope-appdata",
     "shell:allow-open",
-    "shell:allow-execute",
+    { "identifier": "shell:allow-spawn", "allow": [
+      { "name": "ffmpeg.exe", "sidecar": true },
+      { "name": "ffprobe.exe", "sidecar": true }
+    ] },
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
-    "cache:default",
     "updater:default",
     "updater:allow-check",
     "updater:allow-download-and-install",

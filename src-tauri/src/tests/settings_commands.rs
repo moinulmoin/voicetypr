@@ -22,6 +22,7 @@ mod tests {
         let settings = Settings {
             hotkey: "CommandOrControl+A".to_string(),
             current_model: "base".to_string(),
+            current_model_engine: "whisper".to_string(),
             language: "es".to_string(),
             theme: "dark".to_string(),
             transcription_cleanup_days: Some(7),
@@ -78,6 +79,7 @@ mod tests {
         let settings = Settings {
             hotkey: "CommandOrControl+B".to_string(),
             current_model: "tiny".to_string(),
+            current_model_engine: "whisper".to_string(),
             language: "fr".to_string(),
             theme: "light".to_string(),
             transcription_cleanup_days: Some(30),
@@ -155,6 +157,7 @@ mod tests {
         // Empty model means auto-select
         let auto_settings = Settings {
             current_model: "".to_string(),
+            current_model_engine: "whisper".to_string(),
             ..Settings::default()
         };
         assert_eq!(auto_settings.current_model, "");
@@ -162,6 +165,7 @@ mod tests {
         // Specific model
         let specific_settings = Settings {
             current_model: "base".to_string(),
+            current_model_engine: "whisper".to_string(),
             ..Settings::default()
         };
         assert_eq!(specific_settings.current_model, "base");

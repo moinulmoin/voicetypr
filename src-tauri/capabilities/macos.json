@@ -28,12 +28,22 @@
     "dialog:default",
     "fs:scope-appdata",
     "shell:allow-open",
-    "shell:allow-execute",
+    { "identifier": "shell:allow-spawn", "allow": [
+      { "name": "parakeet-sidecar", "sidecar": true },
+      { "name": "parakeet-sidecar-aarch64-apple-darwin", "sidecar": true },
+      { "name": "ffmpeg", "sidecar": true },
+      { "name": "ffprobe", "sidecar": true }
+    ] },
+    { "identifier": "shell:allow-stdin-write", "allow": [
+      { "name": "parakeet-sidecar", "sidecar": true },
+      { "name": "parakeet-sidecar-aarch64-apple-darwin", "sidecar": true },
+      { "name": "ffmpeg", "sidecar": true },
+      { "name": "ffprobe", "sidecar": true }
+    ] },
     "macos-permissions:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
-    "cache:default",
     "updater:default",
     "updater:allow-check",
     "updater:allow-download-and-install",

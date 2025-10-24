@@ -18,6 +18,10 @@ interface ApiKeyModalProps {
   onSubmit: (apiKey: string) => void;
   providerName: string;
   isLoading?: boolean;
+  title?: string;
+  description?: string;
+  submitLabel?: string;
+  docsUrl?: string;
 }
 
 export function ApiKeyModal({
@@ -26,6 +30,10 @@ export function ApiKeyModal({
   onSubmit,
   providerName,
   isLoading = false,
+  title,
+  description,
+  submitLabel = 'Save API Key',
+  docsUrl,
 }: ApiKeyModalProps) {
   const [apiKey, setApiKey] = useState('');
 
@@ -54,21 +62,27 @@ export function ApiKeyModal({
         return 'https://console.groq.com/keys';
       case 'gemini':
         return 'https://aistudio.google.com/apikey';
+      case 'soniox':
+        return 'https://soniox.com/docs/stt/get-started';
       default:
         return '';
     }
   };
 
-  const providerUrl = getProviderUrl();
+  const providerUrl = docsUrl ?? getProviderUrl();
+  const resolvedTitle = title ?? `Add ${providerName} API Key`;
+  const resolvedDescription =
+    description ??
+    `Enter your API key to enable ${providerName}. Your key is stored securely in the system keychain.`;
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-[425px]">
         <form onSubmit={handleSubmit}>
           <DialogHeader>
-            <DialogTitle>Add {providerName} API Key</DialogTitle>
+            <DialogTitle>{resolvedTitle}</DialogTitle>
             <DialogDescription>
-              Enter your API key to enable AI enhancement. Your key is stored securely in the system keychain
+              {resolvedDescription}
             </DialogDescription>
           </DialogHeader>
 
@@ -120,7 +134,7 @@ export function ApiKeyModal({
                   Saving...
                 </>
               ) : (
-                'Save API Key'
+                submitLabel
               )}
             </Button>
           </DialogFooter>

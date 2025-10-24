@@ -232,14 +232,94 @@ sign_update_artifact() {
     fi
 }
 
+# Build Parakeet sidecar (Apple Silicon, arm64) and prepare dist symlink
+build_parakeet_sidecar() {
+    echo -e "${YELLOW}Building Parakeet sidecar (arm64)...${NC}"
+    local SIDE_DIR="sidecar/parakeet-swift"
+    if [[ ! -d "$SIDE_DIR" ]]; then
+        echo -e "${YELLOW}Parakeet sidecar directory not found at $SIDE_DIR; skipping sidecar build${NC}"
+        return 0
+    fi
+
+    if ! command -v swift >/dev/null 2>&1; then
+        echo -e "${RED}Swift toolchain not found. Install Xcode Command Line Tools to build sidecar.${NC}"
+        exit 1
+    fi
+
+    pushd "$SIDE_DIR" > /dev/null
+
+    # Build for Apple Silicon
+    swift build -c release --arch arm64
+    # Determine binary output path
+    BIN_DIR=$(swift build -c release --arch arm64 --show-bin-path 2>/dev/null || echo ".build/arm64-apple-macosx/release")
+    SRC_BIN_NAME="ParakeetSidecar"
+    SRC_BIN_PATH="$BIN_DIR/$SRC_BIN_NAME"
+
+    if [[ ! -f "$SRC_BIN_PATH" ]]; then
+        echo -e "${RED}Error: Built sidecar not found at $SRC_BIN_PATH${NC}"
+        popd > /dev/null
+        exit 1
+    fi
+
+    mkdir -p dist
+    cp "$SRC_BIN_PATH" "dist/parakeet-sidecar-aarch64-apple-darwin"
+    chmod +x "dist/parakeet-sidecar-aarch64-apple-darwin"
+    ln -sfn "parakeet-sidecar-aarch64-apple-darwin" "dist/parakeet-sidecar"
+
+    echo -e "${GREEN}✓ Parakeet sidecar built and prepared at $SIDE_DIR/dist${NC}"
+    popd > /dev/null
+}
+
+# Ensure ffmpeg/ffprobe sidecar binaries exist before packaging
+ensure_ffmpeg_sidecar() {
+    echo -e "${YELLOW}Ensuring ffmpeg sidecar binaries...${NC}"
+    pnpm run sidecar:ensure-ffmpeg
+
+    local DIST_DIR="sidecar/ffmpeg/dist"
+    if [[ ! -d "$DIST_DIR" ]]; then
+        echo -e "${RED}Error: sidecar directory missing at $DIST_DIR${NC}"
+        exit 1
+    fi
+
+    local REQUIRED_BINARIES=()
+    case "$(uname -s)" in
+        Darwin|Linux)
+            REQUIRED_BINARIES=("ffmpeg" "ffprobe")
+            ;;
+        MINGW*|MSYS*|CYGWIN*|Windows_NT)
+            REQUIRED_BINARIES=("ffmpeg.exe" "ffprobe.exe")
+            ;;
+        *)
+            REQUIRED_BINARIES=("ffmpeg" "ffprobe")
+            ;;
+    esac
+
+    local missing=()
+    for bin in "${REQUIRED_BINARIES[@]}"; do
+        if [[ ! -f "$DIST_DIR/$bin" ]]; then
+            missing+=("$bin")
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo -e "${RED}Error: Missing ffmpeg sidecar binaries: ${missing[*]}${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ ffmpeg sidecar binaries present${NC}"
+}
 # Intel (x86_64) build removed – Apple Silicon only
+
+## Ensure sidecar is built and available for bundling
+build_parakeet_sidecar
+ensure_ffmpeg_sidecar
 
 # Build aarch64 binary with automatic notarization
 echo -e "${GREEN}🔨 Building aarch64 binary with notarization...${NC}"
 echo -e "${BLUE}This will take some time as it includes notarization...${NC}"
 
 cd src-tauri
-cargo tauri build --target aarch64-apple-darwin --bundles app,dmg
+cargo tauri build --target aarch64-apple-darwin --bundles app,dmg --config tauri.macos.conf.json
 cd ..
 
 # Find aarch64 build artifacts

@@ -91,7 +91,7 @@ echo -e "${YELLOW}Cleaning previous builds...${NC}"
 rm -rf target/universal-apple-darwin/release/bundle
 
 # Build universal binary - Tauri will automatically sign and notarize
-cargo tauri build --target universal-apple-darwin --bundles app,dmg
+cargo tauri build --target universal-apple-darwin --bundles app,dmg --config tauri.macos.conf.json
 
 cd ..
 

@@ -4,9 +4,9 @@
   "version": "1.9.0",
   "identifier": "com.ideaplexa.voicetypr",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -18,7 +18,7 @@
         "height": 600,
         "resizable": false,
         "center": true,
-        "visible": true,
+        "visible": false,
         "skipTaskbar": true,
         "alwaysOnTop": false,
         "minimizable": false,
@@ -44,6 +44,12 @@
       "nsis",
       "app",
       "dmg"
+    ],
+    "externalBin": [
+      "../sidecar/ffmpeg/dist/ffmpeg",
+      "../sidecar/ffmpeg/dist/ffprobe",
+      "../sidecar/ffmpeg/dist/ffmpeg.exe",
+      "../sidecar/ffmpeg/dist/ffprobe.exe"
     ],
     "icon": [
       "icons/32x32.png",

@@ -64,6 +64,22 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
             }
         }
 
+        // Delete Parakeet model directories (for Swift sidecar)
+        // These might exist from old Python implementation or tracking
+        let parakeet_dirs = vec![
+            app_data_dir.join("parakeet-tdt-0.6b-v3"),
+            app_data_dir.join("parakeet-tdt-0.6b-v2"),
+        ];
+        for parakeet_dir in parakeet_dirs {
+            if parakeet_dir.exists() {
+                if let Err(e) = fs::remove_dir_all(&parakeet_dir) {
+                    errors.push(format!("Failed to delete Parakeet directory: {}", e));
+                } else {
+                    cleared_items.push("Parakeet model data".to_string());
+                }
+            }
+        }
+
         // Delete recordings directory
         let recordings_dir = app_data_dir.join("recordings");
         if recordings_dir.exists() {
@@ -111,6 +127,26 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
     // 5. Clear app preferences
     #[cfg(target_os = "macos")]
     {
+        // Clear FluidAudio cached models (for Swift Parakeet sidecar)
+        if let Ok(home_dir) = app.path().home_dir() {
+            let fluid_audio_paths = vec![
+                home_dir.join("Library/Application Support/FluidAudio"),
+                home_dir.join("Library/Application Support/parakeet-tdt-0.6b-v3-coreml"),
+                home_dir.join("Library/Application Support/parakeet-tdt-0.6b-v2-coreml"),
+                home_dir.join("Library/Caches/FluidAudio"),
+            ];
+
+            for fluid_path in fluid_audio_paths {
+                if fluid_path.exists() {
+                    if let Err(e) = fs::remove_dir_all(&fluid_path) {
+                        errors.push(format!("Failed to delete FluidAudio cache: {}", e));
+                    } else {
+                        cleared_items.push("FluidAudio model cache".to_string());
+                    }
+                }
+            }
+        }
+
         // macOS defaults system
         match std::process::Command::new("defaults")
             .args(&["delete", "com.ideaplexa.voicetypr"])

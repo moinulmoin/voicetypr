@@ -21,6 +21,9 @@ export function useRecording(): UseRecordingReturn {
     const checkInitialState = async () => {
       try {
         const currentState = await invoke<{ state: RecordingState; error: string | null }>('get_current_recording_state');
+        if (!currentState || typeof currentState.state !== 'string') {
+          return;
+        }
         console.log('[Recording Hook] Initial state:', currentState);
         setState(currentState.state);
         setError(currentState.error);

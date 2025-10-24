@@ -2,7 +2,6 @@ use chrono::{Local, NaiveDate};
 use std::fs;
 use tauri::Manager;
 
-
 #[tauri::command]
 pub async fn clear_old_logs(app: tauri::AppHandle, days_to_keep: u32) -> Result<u32, String> {
     let log_dir = app
@@ -86,7 +85,7 @@ pub async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), String> {
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        
+
         std::process::Command::new("explorer")
             .arg(&log_dir)
             .creation_flags(CREATE_NO_WINDOW)

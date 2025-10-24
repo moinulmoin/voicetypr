@@ -15,6 +15,9 @@ describe('ModelCard', () => {
     speed_score: 7,
     accuracy_score: 5,
     recommended: false,
+    engine: 'whisper',
+    kind: 'local',
+    requires_setup: false
   };
 
   const mockOnDownload = vi.fn();

@@ -1,5 +1,5 @@
 import { CheckCircle, Download, HardDrive, Loader2, Star, X, Zap, Trash2 } from 'lucide-react';
-import { ModelInfo } from '../types';
+import { ModelInfo, isLocalModel } from '../types';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Progress } from './ui/progress';
@@ -29,6 +29,11 @@ export const ModelCard = function ModelCard({
   onCancelDownload,
   showSelectButton = true
 }: ModelCardProps) {
+
+  if (!isLocalModel(model)) {
+    console.warn(`[ModelCard] Skipping non-local model card for ${model.name}`);
+    return null;
+  }
 
   const formatSize = () => {
     const sizeInMB = model.size / (1024 * 1024);
@@ -101,8 +106,18 @@ export const ModelCard = function ModelCard({
             </div>
           ) : downloadProgress !== undefined ? (
             <>
-              <Progress value={downloadProgress} className="w-20 h-1.5" />
-              <span className="text-xs font-medium text-blue-600 w-10 text-right">{Math.round(downloadProgress)}%</span>
+              {/* For Parakeet models, show indeterminate progress (FluidAudio doesn't report progress) */}
+              {model.engine === 'parakeet' && downloadProgress === 0 ? (
+                <div className="flex items-center gap-2 px-2 py-1 rounded bg-blue-500/10">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                  <span className="text-xs font-medium text-blue-600">Downloading...</span>
+                </div>
+              ) : (
+                <>
+                  <Progress value={downloadProgress} className="w-20 h-1.5" />
+                  <span className="text-xs font-medium text-blue-600 w-10 text-right">{Math.round(downloadProgress)}%</span>
+                </>
+              )}
               {onCancelDownload && (
                 <Button
                   onClick={(e) => {

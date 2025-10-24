@@ -122,8 +122,8 @@ mod tests {
         // Create a WhisperManager with known models
         let manager = WhisperManager::new(models_dir.clone());
 
-        // Create model files for known models only
-        for model_name in ["base.en", "large-v3", "large-v3-q5_0"] {
+        // Create model files for known models only (current catalog)
+        for model_name in ["base.en", "large-v3", "large-v3-turbo"] {
             let file_path = models_dir.join(format!("{}.bin", model_name));
             std::fs::write(&file_path, b"dummy model data").unwrap();
         }
@@ -140,7 +140,7 @@ mod tests {
         assert_eq!(downloaded.len(), 3);
         assert!(downloaded.contains(&"base.en".to_string()));
         assert!(downloaded.contains(&"large-v3".to_string()));
-        assert!(downloaded.contains(&"large-v3-q5_0".to_string()));
+        assert!(downloaded.contains(&"large-v3-turbo".to_string()));
         assert!(!downloaded.contains(&"readme".to_string()));
         assert!(!downloaded.contains(&"unknown".to_string()));
     }

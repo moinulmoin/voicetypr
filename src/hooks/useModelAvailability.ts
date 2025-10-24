@@ -2,15 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useSettings } from '@/contexts/SettingsContext';
+import type { ModelInfo } from '@/types';
 
 interface ModelStatusResponse {
-  models: Array<{
-    name: string;
-    info: {
-      downloaded: boolean;
-      // other fields we don't need
-    };
-  }>;
+  models: ModelInfo[];
 }
 
 export function useModelAvailability() {
@@ -22,16 +17,17 @@ export function useModelAvailability() {
   const checkModels = useCallback(async () => {
     setIsChecking(true);
     try {
-      // Check which models are downloaded
       const status = await invoke<ModelStatusResponse>('get_model_status');
-      const downloadedModels = status.models.filter(m => m.info.downloaded);
-      setHasModels(downloadedModels.length > 0);
+      const readyModels = status.models.filter(
+        (model) => model.downloaded && !model.requires_setup
+      );
+      setHasModels(readyModels.length > 0);
 
-      // Check if selected model is available using settings from context
       const selectedModel = settings?.current_model;
-      
       if (selectedModel) {
-        const isAvailable = downloadedModels.some(m => m.name === selectedModel);
+        const match = status.models.find((model) => model.name === selectedModel);
+        const isAvailable =
+          !!match && match.downloaded && !match.requires_setup;
         setSelectedModelAvailable(isAvailable);
       } else {
         setSelectedModelAvailable(false);
@@ -67,8 +63,24 @@ export function useModelAvailability() {
       checkModels();
     });
 
+    const unlistenCloudSaved = listen('stt-key-saved', () => {
+      console.log('[useModelAvailability] Cloud provider connected');
+      checkModels();
+    });
+
+    const unlistenCloudRemoved = listen('stt-key-removed', () => {
+      console.log('[useModelAvailability] Cloud provider disconnected');
+      checkModels();
+    });
+
     return () => {
-      Promise.all([unlistenDownloaded, unlistenDeleted, unlistenModelChanged]).then(unsubs => {
+      Promise.all([
+        unlistenDownloaded,
+        unlistenDeleted,
+        unlistenModelChanged,
+        unlistenCloudSaved,
+        unlistenCloudRemoved
+      ]).then(unsubs => {
         unsubs.forEach(unsub => unsub());
       });
     };
