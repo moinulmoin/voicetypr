@@ -1,5 +1,27 @@
 # Changelog
 
+# [1.10.0](https://github.com/moinulmoin/voicetypr/compare/v1.9.0...v1.10.0) (2025-10-24)
+
+
+### Bug Fixes
+
+* **audio:** prevent empty or ultra-short recordings from causing errors; add mode-specific min durations (PTT≥1s, Toggle≥3s); auto-recover from Error→Idle and gate start transitions ([97e9fad](https://github.com/moinulmoin/voicetypr/commit/97e9fad0de58714cecf5f9a55f20cd17500bca78))
+* avoid panic when requesting parakeet sidecar ([855a2ed](https://github.com/moinulmoin/voicetypr/commit/855a2ed9d2190eb1673a3cc166132fdacf612ff7))
+* **macOS): bundle ffmpeg/ffprobe via platform config and resolve lookup in Contents/MacOS to prevent normalization failures in packaged app; chore(stt/soniox:** update async model to stt-async-v3 ([17108f6](https://github.com/moinulmoin/voicetypr/commit/17108f6dda9755ce52a8ac24ca28ddb3e9923e87))
+* persist Parakeet model selection across restarts ([fffba52](https://github.com/moinulmoin/voicetypr/commit/fffba520d2ada9a9b489cc7c12d7cbdf570477f8))
+* resolve Parakeet sidecar MLX module loading and build issues ([33c3913](https://github.com/moinulmoin/voicetypr/commit/33c39134e829363bb066e71a2dd006ff94928592))
+* **tauri:** scope Parakeet sidecar to macOS builds and improve UX ([2f54a53](https://github.com/moinulmoin/voicetypr/commit/2f54a5307d5c0c93662d51fa00f06f448702246a))
+* **tray:** gate selection until onboarding completes; add tests for tray label and selection logic; ui: simplify Upload section copy ([0ac219a](https://github.com/moinulmoin/voicetypr/commit/0ac219a0fcbe8e6f46c940a53dcc1cde2f103be7))
+
+
+### Features
+
+* :sparkles: update windows ffmpeg ([734fddb](https://github.com/moinulmoin/voicetypr/commit/734fddb335b627e7e66426c0ac50d7b4b705c2c4))
+* add Parakeet MLX sidecar integration ([ead96e3](https://github.com/moinulmoin/voicetypr/commit/ead96e3f804bcba277f32767269d54aa42a9804e))
+* **parakeet:** add version-aware v2/v3 download/load/delete with FluidAudio 0.6.1; fix false-success download for v2 by verifying loaded model and cache; autoload selected Parakeet model on startup ([bec2e3e](https://github.com/moinulmoin/voicetypr/commit/bec2e3e62bdc32c7ccad1af4bacc7280e4f53d4c))
+* replace Python Parakeet with Swift/FluidAudio implementation ([10909df](https://github.com/moinulmoin/voicetypr/commit/10909df13b05074948333233307536c88ec3cad3))
+* **tray:** unify model selection and keep tray/dashboard in sync ([748675e](https://github.com/moinulmoin/voicetypr/commit/748675e0a2df69b7521fdf3810f0da266c3fe04f))
+
 # [1.9.0](https://github.com/moinulmoin/voicetypr/compare/v1.8.0...v1.9.0) (2025-10-12)
 
 
