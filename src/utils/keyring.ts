@@ -44,10 +44,10 @@ export const saveApiKey = async (provider: string, apiKey: string): Promise<void
   // Cache or validate depending on provider
   if (provider === 'openai') {
     // OpenAI-compatible requires validation (may include no-auth path via separate modal)
-    await invoke('validate_and_cache_api_key', { provider, apiKey });
+    await invoke('validate_and_cache_api_key', { args: { provider, apiKey } });
   } else {
     // For Groq/Gemini, just cache the key; validation happens during usage
-    await invoke('cache_ai_api_key', { provider, apiKey });
+    await invoke('cache_ai_api_key', { args: { provider, apiKey } });
   }
   
   console.log(`[Keyring] API key saved and validated for ${provider}`);
@@ -87,7 +87,7 @@ export const loadApiKeysToCache = async (): Promise<void> => {
     try {
       const apiKey = await getApiKey(provider);
       if (apiKey) {
-        await invoke('cache_ai_api_key', { provider, apiKey });
+        await invoke('cache_ai_api_key', { args: { provider, apiKey } });
         console.log(`[Keyring] Loaded ${provider} API key from keyring to cache`);
       }
     } catch (error) {
@@ -98,7 +98,7 @@ export const loadApiKeysToCache = async (): Promise<void> => {
 
 // OpenAI-compatible configuration helpers
 export const setOpenAIConfig = async (baseUrl: string, noAuth: boolean): Promise<void> => {
-  await invoke('set_openai_config', { base_url: baseUrl, no_auth: noAuth });
+  await invoke('set_openai_config', { args: { baseUrl, noAuth } });
 };
 
 export const saveOpenAIKeyWithConfig = async (
@@ -114,12 +114,13 @@ export const saveOpenAIKeyWithConfig = async (
   }
 
   await invoke('validate_and_cache_api_key', {
-    provider,
-    // Standardize to snake_case for Tauri commands
-    api_key: apiKey || undefined,
-    base_url: baseUrl,
-    model,
-    no_auth: noAuth || !apiKey?.trim(),
+    args: {
+      provider,
+      apiKey: apiKey || undefined,
+      baseUrl,
+      model,
+      noAuth,
+    },
   });
 
   // Persist provider + model selection

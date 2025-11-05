@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { EnhancementOptions } from "@/types/ai";
 import { fromBackendOptions, toBackendOptions } from "@/types/ai";
-import { hasApiKey, removeApiKey, saveApiKey, getApiKey, saveOpenAIKeyWithConfig } from "@/utils/keyring";
+import { hasApiKey, removeApiKey, saveApiKey, getApiKey, keyringSet } from "@/utils/keyring";
 import { useReadinessState } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -53,14 +53,8 @@ export function EnhancementsSection() {
   });
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 
-  // Groq, Gemini, and OpenAI-compatible
+  // Gemini and OpenAI-compatible
   const models: AIModel[] = [
-    {
-      id: "llama-3.1-8b-instant",
-      name: "Llama 3.1 8B Instant",
-      provider: "groq",
-      description: "Fast and efficient model for instant responses"
-    },
     {
       id: "gemini-2.5-flash-lite",
       name: "Gemini 2.5 Flash Lite",
@@ -102,7 +96,7 @@ export function EnhancementsSection() {
             try {
               const apiKey = await getApiKey(provider);
               if (apiKey) {
-                await invoke('cache_ai_api_key', { provider, apiKey });
+                await invoke('cache_ai_api_key', { args: { provider, apiKey } });
               }
             } catch (error) {
               console.error(`Failed to cache ${provider} API key:`, error);
@@ -204,9 +198,12 @@ export function EnhancementsSection() {
       // Update local state immediately
       setProviderApiKeys(prev => ({ ...prev, [event.payload.provider]: false }));
       
-      // Check if the removed key was for the currently selected model
-      const selectedModel = models.find(m => m.id === aiSettings.model);
-      if (selectedModel && selectedModel.provider === event.payload.provider) {
+      // For OpenAI provider, always clear selection when key is removed
+      // For other providers, only clear if the selected model belongs to that provider
+      const shouldClearSelection = event.payload.provider === 'openai' || 
+        (models.find(m => m.id === aiSettings.model)?.provider === event.payload.provider);
+      
+      if (shouldClearSelection) {
         console.log('[AI Settings] Clearing model selection for removed API key');
         // Clear the model selection and disable AI
         setAISettings(prev => ({
@@ -224,6 +221,7 @@ export function EnhancementsSection() {
             provider: "",
             model: ""
           });
+          console.log('[AI Settings] Backend settings cleared successfully');
         } catch (error) {
           console.error('Failed to update backend settings:', error);
         }
@@ -469,17 +467,56 @@ export function EnhancementsSection() {
       />
       <OpenAICompatConfigModal
         isOpen={showOpenAIConfig}
-        defaultBaseUrl="https://api.openai.com"
+        defaultBaseUrl="https://api.openai.com/v1"
         defaultModel={aiSettings.model}
         onClose={() => setShowOpenAIConfig(false)}
-        onSubmit={async ({ baseUrl, model, apiKey, noAuth }) => {
+        onSubmit={async ({ baseUrl, model, apiKey }) => {
           try {
             setIsLoading(true);
-            await saveOpenAIKeyWithConfig(apiKey?.trim() || '', baseUrl.trim(), model.trim(), !!noAuth);
-            setAISettings(prev => ({ ...prev, provider: 'openai', model: model.trim(), hasApiKey: true }));
+            const trimmedBase = baseUrl.trim();
+            const trimmedModel = model.trim();
+            const trimmedKey = apiKey?.trim() || '';
+
+            console.log('[OpenAI Config] Saving configuration:', { 
+              hasKey: !!trimmedKey, 
+              baseUrl: trimmedBase, 
+              model: trimmedModel 
+            });
+
+            // 1) Persist base URL only (no explicit noAuth flag)
+            await invoke('set_openai_config', { args: { baseUrl: trimmedBase } });
+
+            // 2) If API key provided, store in keyring and cache for backend use
+            if (trimmedKey) {
+              console.log('[OpenAI Config] Saving API key to keyring and cache');
+              await keyringSet('ai_api_key_openai', trimmedKey);
+              await invoke('cache_ai_api_key', { args: { provider: 'openai', apiKey: trimmedKey } });
+              console.log('[OpenAI Config] API key saved and cached successfully');
+            } else {
+              console.log('[OpenAI Config] No API key provided, using no-auth mode');
+            }
+
+            // 3) Persist provider + model selection
+            await invoke('update_ai_settings', { enabled: false, provider: 'openai', model: trimmedModel });
+
+            // 4) Update local state immediately
+            setAISettings(prev => ({
+              ...prev,
+              provider: 'openai',
+              model: trimmedModel,
+              hasApiKey: !!trimmedKey
+            }));
+
+            // 5) Update provider API key status
+            setProviderApiKeys(prev => ({ 
+              ...prev, 
+              'openai': !!trimmedKey 
+            }));
+
             toast.success('Configuration saved');
             setShowOpenAIConfig(false);
           } catch (error) {
+            console.error('[OpenAI Config] Failed to save configuration:', error);
             toast.error(`Failed to save configuration: ${error}`);
           } finally {
             setIsLoading(false);

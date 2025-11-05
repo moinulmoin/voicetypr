@@ -51,7 +51,7 @@ describe('EnhancementsSection', () => {
     
     // Wait for models to load
     await waitFor(() => {
-      expect(screen.getByText('Llama 3.1 8B Instant')).toBeInTheDocument();
+      expect(screen.getByText('Gemini 2.5 Flash Lite')).toBeInTheDocument();
     });
   });
 
@@ -59,8 +59,8 @@ describe('EnhancementsSection', () => {
     render(<EnhancementsSection />);
     
     await waitFor(() => {
-      expect(screen.getByText('Llama 3.1 8B Instant')).toBeInTheDocument();
       expect(screen.getByText('Gemini 2.5 Flash Lite')).toBeInTheDocument();
+      expect(screen.getByText('OpenAI Compatible')).toBeInTheDocument();
     });
   });
 
@@ -108,25 +108,25 @@ describe('EnhancementsSection', () => {
     // Import the mocked hasApiKey function
     const { hasApiKey } = await import('@/utils/keyring');
     
-    // Mock hasApiKey to return true for groq provider
+    // Mock hasApiKey to return true for gemini provider
     (hasApiKey as any).mockImplementation((provider: string) => {
-      return Promise.resolve(provider === 'groq');
+      return Promise.resolve(provider === 'gemini');
     });
     
     (invoke as any).mockImplementation((cmd: string, args?: any) => {
       if (cmd === 'get_ai_settings') {
         return Promise.resolve({
           enabled: false,
-          provider: 'groq',
-          model: 'llama-3.1-8b-instant',  // Model is selected
+          provider: 'gemini',
+          model: 'gemini-2.5-flash-lite',  // Model is selected
           hasApiKey: true,
         });
       }
       if (cmd === 'get_ai_settings_for_provider') {
         return Promise.resolve({
           enabled: false,
-          provider: args?.provider || 'groq',
-          model: 'llama-3.1-8b-instant',
+          provider: args?.provider || 'gemini',
+          model: 'gemini-2.5-flash-lite',
           hasApiKey: true,
         });
       }
@@ -145,26 +145,26 @@ describe('EnhancementsSection', () => {
     // Import the mocked hasApiKey function
     const { hasApiKey } = await import('@/utils/keyring');
     
-    // Mock hasApiKey to return true for groq provider
+    // Mock hasApiKey to return true for gemini provider
     (hasApiKey as any).mockImplementation((provider: string) => {
-      return Promise.resolve(provider === 'groq');
+      return Promise.resolve(provider === 'gemini');
     });
     
-    // Mock that we have an API key for groq provider
+    // Mock that we have an API key for gemini provider
     (invoke as any).mockImplementation((cmd: string, args?: any) => {
       if (cmd === 'get_ai_settings') {
         return Promise.resolve({
           enabled: false,
-          provider: 'groq',
-          model: 'llama-3.1-8b-instant',
+          provider: 'gemini',
+          model: 'gemini-2.5-flash-lite',
           hasApiKey: true,
         });
       }
       if (cmd === 'get_ai_settings_for_provider') {
         return Promise.resolve({
           enabled: false,
-          provider: args?.provider || 'groq',
-          model: 'llama-3.1-8b-instant',
+          provider: args?.provider || 'gemini',
+          model: 'gemini-2.5-flash-lite',
           hasApiKey: true,
         });
       }
@@ -188,8 +188,8 @@ describe('EnhancementsSection', () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
         enabled: true,
-        provider: 'groq',
-        model: 'llama-3.1-8b-instant',
+        provider: 'gemini',
+        model: 'gemini-2.5-flash-lite',
       });
       expect(toast.success).toHaveBeenCalledWith('AI formatting enabled');
     });
@@ -204,7 +204,7 @@ describe('EnhancementsSection', () => {
       if (cmd === 'get_ai_settings') {
         return Promise.resolve({
           enabled: false,
-          provider: 'groq',
+          provider: 'gemini',
           model: '',
           hasApiKey: true,
         });
@@ -212,7 +212,7 @@ describe('EnhancementsSection', () => {
       if (cmd === 'get_ai_settings_for_provider') {
         return Promise.resolve({
           enabled: false,
-          provider: 'groq',
+          provider: 'gemini',
           model: '',
           hasApiKey: true,
         });
@@ -240,7 +240,7 @@ describe('EnhancementsSection', () => {
     
     // User should see available models
     await waitFor(() => {
-      const models = screen.getAllByText(/Llama|Mixtral|Gemma/);
+      const models = screen.getAllByText(/Gemini|OpenAI Compatible/);
       expect(models.length).toBeGreaterThan(0);
     });
     
@@ -266,12 +266,12 @@ describe('EnhancementsSection', () => {
     
     // Wait for modal to open and check it's visible
     await waitFor(() => {
-      const modalTitle = screen.getByText(/Add (Groq|Gemini) API Key/);
+      const modalTitle = screen.getByText(/Add Gemini API Key/);
       expect(modalTitle).toBeInTheDocument();
     });
     
     // Enter API key
-    const input = screen.getByPlaceholderText(/Enter your (Groq|Gemini) API key/);
+    const input = screen.getByPlaceholderText(/Enter your Gemini API key/);
     fireEvent.change(input, { target: { value: 'test-api-key-12345' } });
     
     // Submit
