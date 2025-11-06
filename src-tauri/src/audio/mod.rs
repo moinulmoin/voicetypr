@@ -1,4 +1,5 @@
 pub mod converter;
+pub mod device_watcher;
 pub mod level_meter;
 pub mod normalizer;
 pub mod recorder;

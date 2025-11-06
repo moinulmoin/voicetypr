@@ -1183,6 +1183,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Initialize recorder state (kept separate for backwards compatibility)
             app.manage(RecorderState(Mutex::new(AudioRecorder::new())));
 
+            // Spawn watcher to keep microphone list in sync with system devices
+            app.manage(audio::device_watcher::DeviceWatcher::start(app.app_handle().clone()));
+
             // Create tray icon
             use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 
