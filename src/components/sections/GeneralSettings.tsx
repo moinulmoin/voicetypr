@@ -312,6 +312,29 @@ export function GeneralSettings() {
                   }
                 />
               </div>
+
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor="clipboard-retain"
+                    className="text-sm font-medium"
+                  >
+                    Keep Transcript in Clipboard
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Leave transcribed text available for manual pastes
+                  </p>
+                </div>
+                <Switch
+                  id="clipboard-retain"
+                  checked={settings.keep_transcription_in_clipboard ?? false}
+                  onCheckedChange={async (checked) =>
+                    await updateSettings({
+                      keep_transcription_in_clipboard: checked,
+                    })
+                  }
+                />
+              </div>
             </div>
 
             <div className="px-4 pb-4">

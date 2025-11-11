@@ -28,6 +28,7 @@ pub struct Settings {
     pub recording_mode: String, // "toggle" or "push_to_talk"
     pub use_different_ptt_key: bool,
     pub ptt_hotkey: Option<String>,
+    pub keep_transcription_in_clipboard: bool,
 }
 
 impl Default for Settings {
@@ -49,6 +50,7 @@ impl Default for Settings {
             recording_mode: "toggle".to_string(), // Default to toggle mode for backward compatibility
             use_different_ptt_key: false,         // Default to using same key
             ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
+            keep_transcription_in_clipboard: false, // Default to restoring clipboard after paste
         }
     }
 }
@@ -128,6 +130,10 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
         ptt_hotkey: store
             .get("ptt_hotkey")
             .and_then(|v| v.as_str().map(|s| s.to_string())),
+        keep_transcription_in_clipboard: store
+            .get("keep_transcription_in_clipboard")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().keep_transcription_in_clipboard),
     };
 
     // Pill position is already loaded from store, no need for duplicate state
@@ -184,6 +190,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     if let Some(ref ptt_hotkey) = settings.ptt_hotkey {
         store.set("ptt_hotkey", json!(ptt_hotkey));
     }
+    store.set(
+        "keep_transcription_in_clipboard",
+        json!(settings.keep_transcription_in_clipboard),
+    );
 
     // Save pill position if provided
     if let Some((x, y)) = settings.pill_position {

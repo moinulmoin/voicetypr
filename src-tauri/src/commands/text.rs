@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use tauri::Emitter;
+use tauri_plugin_store::StoreExt;
 
 // Import rdev for more reliable keyboard simulation
 use rdev::{simulate, EventType, Key as RdevKey, SimulateError};
@@ -43,10 +44,25 @@ pub async fn insert_text(app: tauri::AppHandle, text: String) -> Result<(), Stri
     let has_accessibility_permission = true;
 
     // Move to a blocking task since clipboard operations are synchronous
+    let keep_transcription_in_clipboard = {
+        let store = app
+            .store("settings")
+            .map_err(|e| format!("Failed to access settings: {}", e))?;
+        store
+            .get("keep_transcription_in_clipboard")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    };
+
     tokio::task::spawn_blocking(move || {
         // Always use clipboard method for reliability and to prevent duplicate insertion
         // This function handles both copying to clipboard and pasting at cursor
-        insert_via_clipboard(text, has_accessibility_permission, Some(app))
+        insert_via_clipboard(
+            text,
+            has_accessibility_permission,
+            Some(app),
+            keep_transcription_in_clipboard,
+        )
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?
@@ -71,89 +87,123 @@ fn insert_via_clipboard(
     text: String,
     has_accessibility_permission: bool,
     app_handle: Option<tauri::AppHandle>,
+    keep_transcription_in_clipboard: bool,
 ) -> Result<(), String> {
     // This function handles both copying text to clipboard AND pasting it at cursor
     // Initialize clipboard
     let mut clipboard =
         Clipboard::new().map_err(|e| format!("Failed to initialize clipboard: {}", e))?;
 
-    // Set transcribed text as clipboard content
-    // Note: We don't restore original clipboard because:
-    // 1. User expects transcribed text to be available for additional pastes
-    // 2. Restoring after 200ms would be confusing if user pastes again
-    // 3. The transcribed text IS the intended clipboard content
-    clipboard
-        .set_text(&text)
-        .map_err(|e| format!("Failed to set clipboard: {}", e))?;
-
-    log::info!("Set clipboard content: {}", text);
-
-    // Small delay to ensure clipboard is ready
-    thread::sleep(Duration::from_millis(50));
-
-    // Verify clipboard content was set
-    if let Ok(clipboard_check) = clipboard.get_text() {
-        log::info!("Clipboard content verified: {}", clipboard_check);
-    }
-
-    // Check if we have accessibility permissions before attempting to paste
-    if !has_accessibility_permission {
-        log::warn!(
-            "No accessibility permission - text copied to clipboard but cannot paste automatically"
-        );
-        // Return a specific error so the caller knows it's an accessibility issue
-        return Err("No accessibility permission - text copied to clipboard. Please paste manually or grant accessibility permission.".to_string());
-    }
-
-    // Try to paste using Cmd+V (macOS) with panic protection
-    // Add delay since pill was just hidden
-
-    // First try with rdev, fallback to AppleScript if it fails
-    let rdev_result = try_paste_with_rdev();
-
-    match rdev_result {
-        Ok(_) => {
-            log::info!("Successfully pasted with rdev");
+    let previous_clipboard_text = if keep_transcription_in_clipboard {
+        None
+    } else {
+        match clipboard.get_text() {
+            Ok(value) => Some(value),
+            Err(err) => {
+                log::debug!(
+                    "Could not capture previous clipboard text (likely non-text content): {}",
+                    err
+                );
+                None
+            }
         }
-        Err(e) => {
-            log::warn!("rdev paste failed: {}, trying AppleScript fallback", e);
+    };
 
-            // Fallback to AppleScript
-            let paste_result =
-                panic::catch_unwind(AssertUnwindSafe(|| try_paste_with_applescript()));
+    let insertion_result: Result<(), String> = (|| {
+        // Set transcribed text as clipboard content
+        clipboard
+            .set_text(&text)
+            .map_err(|e| format!("Failed to set clipboard: {}", e))?;
 
-            match paste_result {
-                Ok(Ok(_)) => {
-                    log::info!("Successfully pasted with AppleScript");
-                }
-                Ok(Err(e)) => {
-                    log::warn!("AppleScript paste failed: {}, text remains in clipboard", e);
-                    // Notify user through pill that paste failed but text is in clipboard
-                    if let Some(app) = app_handle {
-                        app.emit("paste-error", "Paste failed - copied to clipboard")
-                            .ok();
+        log::info!("Set clipboard content: {}", text);
+
+        // Small delay to ensure clipboard is ready
+        thread::sleep(Duration::from_millis(50));
+
+        // Verify clipboard content was set
+        if let Ok(clipboard_check) = clipboard.get_text() {
+            log::info!("Clipboard content verified: {}", clipboard_check);
+        }
+
+        // Check if we have accessibility permissions before attempting to paste
+        if !has_accessibility_permission {
+            log::warn!(
+                "No accessibility permission - text copied to clipboard but cannot paste automatically"
+            );
+            // Return a specific error so the caller knows it's an accessibility issue
+            return Err("No accessibility permission - text copied to clipboard. Please paste manually or grant accessibility permission.".to_string());
+        }
+
+        // Try to paste using Cmd+V (macOS) with panic protection
+        // Add delay since pill was just hidden
+
+        // First try with rdev, fallback to AppleScript if it fails
+        let rdev_result = try_paste_with_rdev();
+
+        match rdev_result {
+            Ok(_) => {
+                log::info!("Successfully pasted with rdev");
+            }
+            Err(e) => {
+                log::warn!("rdev paste failed: {}, trying AppleScript fallback", e);
+
+                // Fallback to AppleScript
+                let paste_result =
+                    panic::catch_unwind(AssertUnwindSafe(|| try_paste_with_applescript()));
+
+                match paste_result {
+                    Ok(Ok(_)) => {
+                        log::info!("Successfully pasted with AppleScript");
                     }
-                    // Don't fail - text is still in clipboard for manual paste
-                }
-                Err(panic_err) => {
-                    log::error!(
-                        "PANIC during paste: {:?}, text remains in clipboard",
-                        panic_err
-                    );
-                    // Notify user through pill about the failure
-                    if let Some(app) = app_handle {
-                        app.emit("paste-error", "Paste failed - copied to clipboard")
-                            .ok();
+                    Ok(Err(e)) => {
+                        log::warn!("AppleScript paste failed: {}, text remains in clipboard", e);
+                        // Notify user through pill that paste failed but text is in clipboard
+                        if let Some(app) = &app_handle {
+                            app.emit("paste-error", "Paste failed - copied to clipboard")
+                                .ok();
+                        }
+                        // Don't fail - text is still in clipboard for manual paste
                     }
-                    // Don't fail - text is still in clipboard for manual paste
+                    Err(panic_err) => {
+                        log::error!(
+                            "PANIC during paste: {:?}, text remains in clipboard",
+                            panic_err
+                        );
+                        // Notify user through pill about the failure
+                        if let Some(app) = &app_handle {
+                            app.emit("paste-error", "Paste failed - copied to clipboard")
+                                .ok();
+                        }
+                        // Don't fail - text is still in clipboard for manual paste
+                    }
                 }
             }
         }
+
+        Ok(())
+    })();
+
+    if !keep_transcription_in_clipboard {
+        if insertion_result.is_ok() {
+            if let Some(previous_text) = previous_clipboard_text {
+                if let Err(e) = clipboard.set_text(&previous_text) {
+                    log::error!("Failed to restore original clipboard text: {}", e);
+                } else {
+                    log::debug!("Restored original clipboard text after paste");
+                }
+            } else {
+                log::debug!(
+                    "No plain-text clipboard content to restore; leaving clipboard unchanged"
+                );
+            }
+        } else {
+            log::debug!(
+                "Skipping clipboard restoration after paste failure; transcript remains available for manual paste"
+            );
+        }
     }
 
-    // Keep transcribed text in clipboard - no restoration needed
-    // User expects and wants the transcribed text available for future pastes
-    Ok(())
+    insertion_result
 }
 
 fn try_paste_with_applescript() -> Result<(), String> {

@@ -36,6 +36,7 @@ mod tests {
             recording_mode: "toggle".to_string(),
             use_different_ptt_key: false,
             ptt_hotkey: Some("Alt+Space".to_string()),
+            keep_transcription_in_clipboard: false,
         };
 
         // Test serialization
@@ -93,6 +94,7 @@ mod tests {
             recording_mode: "push_to_talk".to_string(),
             use_different_ptt_key: true,
             ptt_hotkey: Some("CommandOrControl+Space".to_string()),
+            keep_transcription_in_clipboard: true,
         };
 
         let cloned = settings.clone();
