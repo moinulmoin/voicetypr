@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter};
 
 use crate::audio::recorder::AudioRecorder;
 use crate::commands::settings::{get_settings, set_audio_device, update_tray_menu};

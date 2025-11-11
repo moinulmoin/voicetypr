@@ -33,7 +33,6 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
 
   // Fetch audio devices on mount
   React.useEffect(() => {
-    let unlisten: (() => void) | undefined
 
     const fetchDevices = async () => {
       try {
@@ -51,19 +50,23 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
 
     fetchDevices()
 
-    listen<string[]>("audio-devices-updated", ({ payload }) => {
+    const listenerPromise = listen<string[]>("audio-devices-updated", ({ payload }) => {
       console.log("Audio devices updated:", payload)
       setDevices(Array.isArray(payload) ? payload : [])
     })
-      .then((dispose) => {
-        unlisten = dispose
-      })
       .catch((error) => {
         console.warn("Failed to listen for audio device updates:", error)
+        return () => {}
       })
 
     return () => {
-      unlisten?.()
+      listenerPromise
+        ?.then((dispose) => {
+          dispose()
+        })
+        .catch((error) => {
+          console.warn("Failed to unsubscribe from audio device updates:", error)
+        })
     }
   }, [])
 
