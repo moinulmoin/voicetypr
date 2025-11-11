@@ -672,7 +672,7 @@ fn setup_logging() -> tauri_plugin_log::Builder {
                     && !target.contains("hound")
             }),
             Target::new(TargetKind::LogDir {
-                file_name: Some(format!("voicetypr-{}.log", today)),
+                file_name: Some(format!("voicetypr-{}", today)),
             })
             .filter(|metadata| {
                 // Filter out noisy logs from file as well
@@ -1998,6 +1998,5 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         checks_start.elapsed().as_millis()
     );
 }
-
 
 
