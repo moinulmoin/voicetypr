@@ -2,8 +2,8 @@ import { AudioWaveAnimation } from "@/components/AudioWaveAnimation";
 import IOSSpinner from "@/components/ios-spinner";
 import { Button } from "@/components/ui/button";
 import { useSetting } from "@/contexts/SettingsContext";
+import { useEventCoordinator } from "@/hooks/useEventCoordinator";
 import { useRecording } from "@/hooks/useRecording";
-import { listen } from "@tauri-apps/api/event";
 import { AlertCircle, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -13,17 +13,10 @@ export function RecordingPill() {
   const [feedbackMessage, setFeedbackMessage] = useState<string>("");
   const [isCompact, setIsCompact] = useState(true);
   const [isEnhancing, setIsEnhancing] = useState(false);
-  const [, forceUpdate] = useState({});
+  const { registerEvent } = useEventCoordinator("pill");
 
   // Track timer IDs for cleanup
   const feedbackTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const mountedRef = useRef(true);
-  const feedbackMessageRef = useRef<string>("");
-
-  // Debug re-renders
-  useEffect(() => {
-    console.log("RecordingPill: Component re-rendered, feedbackMessage:", feedbackMessage, "ref:", feedbackMessageRef.current);
-  });
 
   const isRecording = recording.state === "recording";
   const isTranscribing = recording.state === "transcribing";
@@ -31,7 +24,6 @@ export function RecordingPill() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      mountedRef.current = false;
       if (feedbackTimerRef.current) {
         clearTimeout(feedbackTimerRef.current);
       }
@@ -40,30 +32,17 @@ export function RecordingPill() {
 
   // Helper function to set feedback message with auto-hide
   const setFeedbackWithTimeout = (message: string, timeout: number) => {
-    console.log("RecordingPill: Setting feedback message:", message, "for", timeout, "ms", "mountedRef:", mountedRef.current);
-
     // Clear any existing timer
     if (feedbackTimerRef.current) {
       clearTimeout(feedbackTimerRef.current);
     }
 
-    // Remove the mounted check - just set the state directly
-    // Update ref
-    feedbackMessageRef.current = message;
-
-    // Force a fresh state update
+    // Update state
     setFeedbackMessage(message);
-    // Also force update to ensure re-render
-    forceUpdate({});
-
-    console.log("RecordingPill: Updated state and ref to:", message);
 
     // Set new timer
     feedbackTimerRef.current = setTimeout(() => {
-      console.log("RecordingPill: Clearing feedback message");
-      feedbackMessageRef.current = "";
       setFeedbackMessage("");
-      forceUpdate({});
       feedbackTimerRef.current = null;
     }, timeout);
   };
@@ -84,109 +63,155 @@ export function RecordingPill() {
       return;
     }
 
-    const unlisten = listen<number>("audio-level", (event) => {
-      setAudioLevel(event.payload);
+    let cancelled = false;
+    const setup = async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const unlisten = await listen<number>("audio-level", (event) => {
+        if (!cancelled) {
+          setAudioLevel(event.payload);
+        }
+      });
+      return unlisten;
+    };
+
+    let cleanup: (() => void) | undefined;
+    setup().then((unlisten) => {
+      cleanup = unlisten;
     });
 
     return () => {
-      unlisten.then((fn) => fn());
+      cancelled = true;
+      if (cleanup) {
+        cleanup();
+      }
     };
   }, [isRecording]);
 
   // Listen for feedback events
   useEffect(() => {
-    const unlisteners: Promise<() => void>[] = [];
+    let cancelled = false;
+    const setup = async () => {
+      const unsubs: Array<() => void> = [];
 
-    // Listen for empty transcription
-    unlisteners.push(
-      listen<string>("transcription-empty", (event) => {
-        console.log("RecordingPill: Received transcription-empty event", event.payload);
-        setFeedbackWithTimeout(event.payload, 2000);
-      })
-    );
+      // Empty transcription
+      unsubs.push(
+        await registerEvent<string>("transcription-empty", (message) => {
+          if (!cancelled) {
+            setFeedbackWithTimeout(message, 2000);
+          }
+        })
+      );
 
-    // Listen for recording stopped due to silence
-    unlisteners.push(
-      listen("recording-stopped-silence", () => {
-        console.log("RecordingPill: Received recording-stopped-silence event");
-        setFeedbackWithTimeout("No sound detected", 2000);
-      })
-    );
+      // Recording stopped due to silence
+      unsubs.push(
+        await registerEvent("recording-stopped-silence", () => {
+          if (!cancelled) {
+            setFeedbackWithTimeout("No sound detected", 2000);
+          }
+        })
+      );
 
-    // Listen for ESC first press from backend
-    unlisteners.push(
-      listen<string>("esc-first-press", (event) => {
-        console.log("RecordingPill: Received esc-first-press event", event.payload);
-        setFeedbackWithTimeout(event.payload, 3000);
-      })
-    );
+      // ESC first press from backend
+      unsubs.push(
+        await registerEvent<string>("esc-first-press", (message) => {
+          if (!cancelled) {
+            setFeedbackWithTimeout(message, 3000);
+          }
+        })
+      );
 
-    // Listen for recording errors
-    unlisteners.push(
-      listen<string>("recording-error", (event) => {
-        setFeedbackWithTimeout(event.payload || "Recording error occurred", 3000);
-      })
-    );
+      // Recording errors
+      unsubs.push(
+        await registerEvent<string>("recording-error", (message) => {
+          if (!cancelled) {
+            setFeedbackWithTimeout(message || "Recording error occurred", 3000);
+          }
+        })
+      );
 
-    // Listen for transcription errors
-    unlisteners.push(
-      listen<string>("transcription-error", (event) => {
-        setFeedbackWithTimeout(event.payload || "Transcription error occurred", 3000);
-      })
-    );
+      // Transcription errors
+      unsubs.push(
+        await registerEvent<string>("transcription-error", (message) => {
+          if (!cancelled) {
+            setFeedbackWithTimeout(message || "Transcription error occurred", 3000);
+          }
+        })
+      );
 
-    // Listen for no models error
-    unlisteners.push(
-      listen<{ title: string; message: string; action: string }>("no-models-error", (event) => {
-        setFeedbackWithTimeout(event.payload.message, 4000);
-      })
-    );
+      // No models error
+      unsubs.push(
+        await registerEvent<{ title: string; message: string; action: string }>(
+          "no-models-error",
+          (payload) => {
+            if (!cancelled) {
+              setFeedbackWithTimeout(payload.message, 4000);
+            }
+          }
+        )
+      );
 
-    // Listen for enhancing events
-    unlisteners.push(
-      listen("enhancing-started", () => {
-        console.log("RecordingPill: Received enhancing-started event");
-        setIsEnhancing(true);
-      })
-    );
+      // Enhancing events
+      unsubs.push(
+        await registerEvent("enhancing-started", () => {
+          if (!cancelled) {
+            setIsEnhancing(true);
+          }
+        })
+      );
 
-    unlisteners.push(
-      listen("enhancing-completed", () => {
-        console.log("RecordingPill: Received enhancing-completed event");
-        setIsEnhancing(false);
-      })
-    );
+      unsubs.push(
+        await registerEvent("enhancing-completed", () => {
+          if (!cancelled) {
+            setIsEnhancing(false);
+          }
+        })
+      );
 
-    unlisteners.push(
-      listen<string>("enhancing-failed", (event) => {
-        console.log("RecordingPill: Received enhancing-failed event", event.payload);
-        setIsEnhancing(false);
-        // Show short message only
-        setFeedbackWithTimeout("Formatting failed", 2000);
-      })
-    );
+      unsubs.push(
+        await registerEvent<string>("enhancing-failed", () => {
+          if (!cancelled) {
+            setIsEnhancing(false);
+            setFeedbackWithTimeout("Formatting failed", 2000);
+          }
+        })
+      );
 
-    // Listen for generic formatting error event and show short message
-    unlisteners.push(
-      listen<string>("formatting-error", (event) => {
-        console.log("RecordingPill: Received formatting-error event", event.payload);
-        setIsEnhancing(false);
-        setFeedbackWithTimeout("Formatting failed", 2000);
-      })
-    );
+      // Generic formatting error
+      unsubs.push(
+        await registerEvent<string>("formatting-error", () => {
+          if (!cancelled) {
+            setIsEnhancing(false);
+            setFeedbackWithTimeout("Formatting failed", 2000);
+          }
+        })
+      );
 
-    // Listen for paste errors (accessibility permission)
-    unlisteners.push(
-      listen<string>("paste-error", (event) => {
-        console.log("RecordingPill: Received paste-error event", event.payload);
-        setFeedbackWithTimeout(event.payload, 4000);
-      })
-    );
+      // Paste errors (accessibility permission)
+      unsubs.push(
+        await registerEvent<string>("paste-error", (message) => {
+          if (!cancelled) {
+            setFeedbackWithTimeout(message, 4000);
+          }
+        })
+      );
+
+      return () => {
+        unsubs.forEach((fn) => fn());
+      };
+    };
+
+    let cleanup: (() => void) | undefined;
+    setup().then((fn) => {
+      cleanup = fn;
+    });
 
     return () => {
-      unlisteners.forEach((unlisten) => unlisten.then((fn) => fn()));
+      cancelled = true;
+      if (cleanup) {
+        cleanup();
+      }
     };
-  }, []);
+  }, [registerEvent]);
 
 
   // Handle click to stop recording
