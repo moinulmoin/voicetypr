@@ -20,9 +20,7 @@ fn check_has_api_key<R: tauri::Runtime>(
     cache: &HashMap<String, String>,
 ) -> bool {
     if provider == "openai" {
-        let configured_base = store
-            .get("ai_openai_base_url")
-            .is_some();
+        let configured_base = store.get("ai_openai_base_url").is_some();
         configured_base || cache.contains_key(&format!("ai_api_key_{}", provider))
     } else {
         cache.contains_key(&format!("ai_api_key_{}", provider))
@@ -159,15 +157,15 @@ pub struct CacheApiKeyArgs {
 }
 
 #[tauri::command]
-pub async fn cache_ai_api_key(
-    _app: tauri::AppHandle,
-    args: CacheApiKeyArgs,
-) -> Result<(), String> {
+pub async fn cache_ai_api_key(_app: tauri::AppHandle, args: CacheApiKeyArgs) -> Result<(), String> {
     let CacheApiKeyArgs { provider, api_key } = args;
     validate_provider_name(&provider)?;
 
     if api_key.trim().is_empty() {
-        log::warn!("Attempted to cache empty API key for provider: {}", provider);
+        log::warn!(
+            "Attempted to cache empty API key for provider: {}",
+            provider
+        );
         return Err("API key cannot be empty".to_string());
     }
 
@@ -175,25 +173,32 @@ pub async fn cache_ai_api_key(
     // Validation happens when saving new keys in a separate command
 
     // Store API key in memory cache
-    let mut cache = API_KEY_CACHE
-        .lock()
-        .map_err(|e| {
-            log::error!("Failed to acquire API key cache lock: {}", e);
-            "Failed to access cache".to_string()
-        })?;
-    
+    let mut cache = API_KEY_CACHE.lock().map_err(|e| {
+        log::error!("Failed to acquire API key cache lock: {}", e);
+        "Failed to access cache".to_string()
+    })?;
+
     let key_name = format!("ai_api_key_{}", provider);
     cache.insert(key_name.clone(), api_key.clone());
 
-    log::info!("API key cached for provider: {} (key: {}...)", 
-              provider, 
-              if api_key.len() > 8 { &api_key[..8] } else { &api_key });
-    
+    log::info!(
+        "API key cached for provider: {} (key: {}...)",
+        provider,
+        if api_key.len() > 8 {
+            &api_key[..8]
+        } else {
+            &api_key
+        }
+    );
+
     // Verify the key was actually stored
     if cache.contains_key(&key_name) {
         log::debug!("Verified API key is in cache for provider: {}", provider);
     } else {
-        log::error!("Failed to store API key in cache for provider: {}", provider);
+        log::error!(
+            "Failed to store API key in cache for provider: {}",
+            provider
+        );
         return Err("Failed to store API key in cache".to_string());
     }
 
@@ -218,7 +223,13 @@ pub async fn validate_and_cache_api_key(
     app: tauri::AppHandle,
     args: ValidateAndCacheApiKeyArgs,
 ) -> Result<(), String> {
-    let ValidateAndCacheApiKeyArgs { provider, api_key, base_url, model, no_auth } = args;
+    let ValidateAndCacheApiKeyArgs {
+        provider,
+        api_key,
+        base_url,
+        model,
+        no_auth,
+    } = args;
     validate_provider_name(&provider)?;
 
     let provided_key = api_key.clone().unwrap_or_default();
@@ -422,9 +433,7 @@ pub async fn update_ai_settings(
                     .map_err(|_| "Failed to access cache".to_string())?;
                 cache.contains_key(&format!("ai_api_key_{}", provider))
             };
-            let configured_base = store
-                .get("ai_openai_base_url")
-                .is_some();
+            let configured_base = store.get("ai_openai_base_url").is_some();
 
             if !(cache_has_key || configured_base) {
                 log::warn!(
@@ -573,21 +582,22 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
             .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
         // Send Authorization only if a key is cached
-        let cache = API_KEY_CACHE
-            .lock()
-            .map_err(|e| {
-                log::error!("Failed to access API key cache: {}", e);
-                "Failed to access cache".to_string()
-            })?;
+        let cache = API_KEY_CACHE.lock().map_err(|e| {
+            log::error!("Failed to access API key cache: {}", e);
+            "Failed to access cache".to_string()
+        })?;
         let key_name = format!("ai_api_key_{}", provider);
         let cached = cache.get(&key_name).cloned();
-        
+
         // Log detailed information about API key lookup
         if cached.is_some() {
             log::info!("Using cached API key for OpenAI provider");
         } else {
             log::warn!("No cached API key found for OpenAI provider, using no-auth mode");
-            log::debug!("Available cache keys: {:?}", cache.keys().collect::<Vec<_>>());
+            log::debug!(
+                "Available cache keys: {:?}",
+                cache.keys().collect::<Vec<_>>()
+            );
         }
         drop(cache);
 

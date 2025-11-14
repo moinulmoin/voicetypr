@@ -1,4 +1,4 @@
-﻿use chrono::Local;
+use chrono::Local;
 use serde_json;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -136,7 +136,8 @@ async fn build_tray_menu<R: tauri::Runtime>(
         }
 
         // Include Soniox (cloud) if connected
-        let has_soniox = crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
+        let has_soniox =
+            crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
         if has_soniox {
             models.push(("soniox".to_string(), "Soniox (Cloud)".to_string()));
         }
@@ -151,7 +152,8 @@ async fn build_tray_menu<R: tauri::Runtime>(
 
         for (model_name, display_name) in available_models {
             // Do not show any selection until onboarding is completed
-            let is_selected = should_mark_model_selected(onboarding_done, &model_name, &current_model);
+            let is_selected =
+                should_mark_model_selected(onboarding_done, &model_name, &current_model);
             let model_item = CheckMenuItem::with_id(
                 app,
                 &format!("model_{}", model_name),
@@ -192,7 +194,8 @@ async fn build_tray_menu<R: tauri::Runtime>(
             None
         };
 
-        let current_model_display = format_tray_model_label(onboarding_done, &current_model, resolved_display_name);
+        let current_model_display =
+            format_tray_model_label(onboarding_done, &current_model, resolved_display_name);
 
         Some(Submenu::with_id_and_items(
             app,
@@ -530,6 +533,170 @@ impl AppState {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RecognitionAvailabilitySnapshot {
+    pub whisper_available: bool,
+    pub parakeet_available: bool,
+    pub soniox_selected: bool,
+    pub soniox_ready: bool,
+}
+
+impl RecognitionAvailabilitySnapshot {
+    pub fn any_available(&self) -> bool {
+        self.whisper_available
+            || self.parakeet_available
+            || (self.soniox_selected && self.soniox_ready)
+    }
+}
+
+pub async fn recognition_availability_snapshot(
+    app: &tauri::AppHandle,
+) -> RecognitionAvailabilitySnapshot {
+    let whisper_available =
+        if let Some(manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>() {
+            manager.read().await.has_downloaded_models()
+        } else {
+            false
+        };
+
+    let parakeet_available =
+        if let Some(parakeet_manager) = app.try_state::<parakeet::ParakeetManager>() {
+            parakeet_manager
+                .list_models()
+                .into_iter()
+                .any(|model| model.downloaded)
+        } else {
+            false
+        };
+
+    let (soniox_selected, soniox_ready) = match app.store("settings") {
+        Ok(store) => {
+            let engine = store
+                .get("current_model_engine")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "whisper".to_string());
+
+            if engine == "soniox" {
+                let has_key =
+                    crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
+                (true, has_key)
+            } else {
+                (false, false)
+            }
+        }
+        Err(_) => (false, false),
+    };
+
+    RecognitionAvailabilitySnapshot {
+        whisper_available,
+        parakeet_available,
+        soniox_selected,
+        soniox_ready,
+    }
+}
+
+fn pick_best_parakeet_model(models: Vec<parakeet::ParakeetModelStatus>) -> Option<String> {
+    let mut downloaded: Vec<_> = models.into_iter().filter(|m| m.downloaded).collect();
+    downloaded.sort_by(|a, b| {
+        b.recommended
+            .cmp(&a.recommended)
+            .then(b.accuracy_score.cmp(&a.accuracy_score))
+            .then(a.size.cmp(&b.size))
+    });
+    downloaded.first().map(|m| m.name.clone())
+}
+
+async fn pick_best_whisper_model(
+    manager: &AsyncRwLock<whisper::manager::WhisperManager>,
+) -> Option<String> {
+    let manager = manager.read().await;
+    let mut downloaded: Vec<_> = manager
+        .get_models_status()
+        .into_iter()
+        .filter(|(_, info)| info.downloaded)
+        .collect();
+    downloaded.sort_by(|a, b| {
+        b.1.recommended
+            .cmp(&a.1.recommended)
+            .then(b.1.accuracy_score.cmp(&a.1.accuracy_score))
+            .then(a.1.size.cmp(&b.1.size))
+    });
+    downloaded.first().map(|(name, _)| name.clone())
+}
+
+async fn auto_select_model_if_needed(
+    app: &tauri::AppHandle,
+    availability: &RecognitionAvailabilitySnapshot,
+) -> Result<(), String> {
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    let current_model = store
+        .get("current_model")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    if !current_model.is_empty() {
+        return Ok(());
+    }
+
+    let mut selection: Option<(String, String)> = None;
+
+    if availability.parakeet_available {
+        if let Some(parakeet_manager) = app.try_state::<parakeet::ParakeetManager>() {
+            if let Some(model) = pick_best_parakeet_model(parakeet_manager.list_models()) {
+                selection = Some(("parakeet".to_string(), model));
+            }
+        }
+    }
+
+    if selection.is_none() && availability.whisper_available {
+        if let Some(whisper_state) =
+            app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
+        {
+            if let Some(model) = pick_best_whisper_model(&whisper_state).await {
+                selection = Some(("whisper".to_string(), model));
+            }
+        }
+    }
+
+    if selection.is_none() && availability.soniox_selected && availability.soniox_ready {
+        selection = Some(("soniox".to_string(), "soniox".to_string()));
+    }
+
+    let Some((engine, model)) = selection else {
+        return Ok(());
+    };
+
+    store.set("current_model", serde_json::Value::String(model.clone()));
+    store.set(
+        "current_model_engine",
+        serde_json::Value::String(engine.clone()),
+    );
+    store.set("onboarding_completed", serde_json::Value::Bool(true));
+    store.save().map_err(|e| e.to_string())?;
+
+    log::info!(
+        "Auto-selected {} model '{}' based on availability snapshot",
+        engine,
+        model
+    );
+
+    if let Err(e) = app.emit(
+        "model-auto-selected",
+        serde_json::json!({ "engine": engine, "model": model }),
+    ) {
+        log::warn!("Failed to emit model auto-selection event: {}", e);
+    }
+
+    let app_for_tray = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = crate::commands::settings::update_tray_menu(app_for_tray.clone()).await {
+            log::warn!("Failed to refresh tray menu after auto-selection: {}", e);
+        }
+    });
+
+    Ok(())
+}
+
 // Helper function to update recording state and emit event
 pub fn update_recording_state(
     app: &tauri::AppHandle,
@@ -785,7 +952,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     );
 
                     let app_handle = app.app_handle();
-                    let app_state = app_handle.state::<AppState>();
+                    let Some(app_state) = app_handle.try_state::<AppState>() else {
+                        log::warn!("Global shortcut triggered before AppState initialized");
+                        return;
+                    };
 
                     // Get current recording mode
                     let recording_mode = {
@@ -1102,12 +1272,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = simple_cache::remove(&app.app_handle(), "last_license_validation");
             }
 
-            // Run comprehensive startup checks
-            let app_handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                perform_startup_checks(app_handle).await;
-            });
-
             // Initialize whisper manager
             let models_dir = app.path().app_data_dir()?.join("models");
             log::info!("🗂️  Models directory: {:?}", models_dir);
@@ -1157,11 +1321,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // Initialize unified application state
             app.manage(AppState::new());
+            log::info!("🧠 App state managed and ready");
 
             // Initialize window manager after app state is managed
             let app_state = app.state::<AppState>();
             let window_manager = WindowManager::new(app.app_handle().clone());
             app_state.set_window_manager(window_manager);
+
+            // Run comprehensive startup checks after state/window manager are ready
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                perform_startup_checks(app_handle).await;
+            });
 
             // Clean up old logs on startup (keep only today's log)
             let app_handle_for_logs = app.app_handle().clone();
@@ -1800,29 +1971,33 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         &[("stage", "comprehensive_validation")],
     );
 
-    // Check if any models are downloaded
-    if let Some(whisper_manager) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
-    {
-        let has_models = whisper_manager.read().await.has_downloaded_models();
-
-        log_model_operation(
-            "AVAILABILITY_CHECK",
-            "all",
-            if has_models {
-                "AVAILABLE"
-            } else {
-                "NONE_FOUND"
-            },
-            None,
-        );
-
-        if !has_models {
-            log::warn!("⚠️  No speech recognition models downloaded");
-            // Emit event to frontend to show download prompt
-            let _ = emit_to_window(&app, "main", "no-models-on-startup", ());
+    let availability = recognition_availability_snapshot(&app).await;
+    log_model_operation(
+        "AVAILABILITY_CHECK",
+        "all",
+        if availability.any_available() {
+            "AVAILABLE"
         } else {
-            log::info!("✅ Speech recognition models are available");
+            "NONE_FOUND"
+        },
+        None,
+    );
+
+    if let Err(err) = app.emit("recognition-availability", availability.clone()) {
+        log::warn!("Failed to emit recognition availability event: {}", err);
+    }
+
+    if availability.any_available() {
+        if let Err(e) = auto_select_model_if_needed(&app, &availability).await {
+            log::warn!("Failed to auto-select default model: {}", e);
         }
+    }
+
+    if !availability.any_available() {
+        log::warn!("⚠️  No speech recognition engines are ready");
+        let _ = app.emit("no-models-on-startup", ());
+    } else {
+        log::info!("✅ At least one speech recognition engine is ready");
     }
 
     // Validate AI settings if enabled
@@ -1998,5 +2173,3 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         checks_start.elapsed().as_millis()
     );
 }
-
-

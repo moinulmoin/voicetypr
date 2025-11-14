@@ -342,40 +342,10 @@ fn select_best_fallback_model(
 
 /// Pre-recording validation using the readiness state
 async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> {
-    // Check if any models are downloaded
-    let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
-    let has_whisper_models = whisper_manager.read().await.has_downloaded_models();
-    let parakeet_manager = app.state::<ParakeetManager>();
-    let has_parakeet_models = parakeet_manager
-        .list_models()
-        .into_iter()
-        .any(|m| m.downloaded);
+    let availability = crate::recognition_availability_snapshot(app).await;
 
-    // Consider cloud Soniox as satisfying availability when selected and configured
-    let (is_soniox_selected, soniox_ready) = {
-        match app.store("settings") {
-            Ok(store) => {
-                let engine = store
-                    .get("current_model_engine")
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "whisper".to_string());
-                if engine == "soniox" {
-                    let has_key =
-                        crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
-                    (true, has_key)
-                } else {
-                    (false, false)
-                }
-            }
-            Err(_) => (false, false),
-        }
-    };
-
-    let has_models =
-        has_whisper_models || has_parakeet_models || (is_soniox_selected && soniox_ready);
-
-    if !has_models {
-        log::error!("No models downloaded");
+    if !availability.any_available() {
+        log::error!("No speech recognition engines are ready");
         // Emit error event with guidance
         let _ = emit_to_window(
             app,
@@ -383,15 +353,21 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
             "no-models-error",
             serde_json::json!({
                 "title": "No Speech Recognition Models",
-                "message": if is_soniox_selected { "Please configure your Soniox token in Models before recording." } else { "Please download at least one model from Models before recording." },
+                "message": if availability.soniox_selected && !availability.soniox_ready {
+                    "Please configure your Soniox token in Models before recording."
+                } else {
+                    "Please download at least one model from Models before recording."
+                },
                 "action": "open-settings"
             }),
         );
-        return Err(if is_soniox_selected {
-            "Soniox token missing".to_string()
-        } else {
-            "No speech recognition models installed. Please download a model first.".to_string()
-        });
+        return Err(
+            if availability.soniox_selected && !availability.soniox_ready {
+                "Soniox token missing".to_string()
+            } else {
+                "No speech recognition models installed. Please download a model first.".to_string()
+            },
+        );
     }
 
     // Check license status (with caching to improve performance)
