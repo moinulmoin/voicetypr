@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import type { EnhancementOptions } from "@/types/ai";
 import { fromBackendOptions, toBackendOptions } from "@/types/ai";
 import { hasApiKey, removeApiKey, saveApiKey, getApiKey, keyringSet } from "@/utils/keyring";
+import { getErrorMessage } from "@/utils/error";
 import { useReadinessState } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -248,7 +249,8 @@ export function EnhancementsSection() {
         options: toBackendOptions(newOptions)
       });
     } catch (error) {
-      toast.error(`Failed to save enhancement options: ${error}`);
+      const message = getErrorMessage(error, "Failed to save enhancement options");
+      toast.error(message);
     }
   };
 
@@ -268,7 +270,8 @@ export function EnhancementsSection() {
       setAISettings(prev => ({ ...prev, enabled }));
       toast.success(enabled ? "AI formatting enabled" : "AI formatting disabled");
     } catch (error) {
-      toast.error(`Failed to update settings: ${error}`);
+      const message = getErrorMessage(error, "Failed to update AI settings");
+      toast.error(message);
     }
   };
 
@@ -284,7 +287,8 @@ export function EnhancementsSection() {
 
       // No need for delay - the event listener will handle the reload
     } catch (error) {
-      toast.error(`Failed to save API key: ${error}`);
+      const message = getErrorMessage(error, "Failed to save API key");
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -319,7 +323,8 @@ export function EnhancementsSection() {
 
       toast.success("Model selected");
     } catch (error) {
-      toast.error(`Failed to select model: ${error}`);
+      const message = getErrorMessage(error, "Failed to select model");
+      toast.error(message);
     }
   };
 
@@ -334,7 +339,8 @@ export function EnhancementsSection() {
       toast.success("API key removed");
     } catch (error) {
       console.error(`[AI Settings] Failed to remove API key:`, error);
-      toast.error(`Failed to remove API key: ${error}`);
+      const message = getErrorMessage(error, "Failed to remove API key");
+      toast.error(message);
     }
   };
 
