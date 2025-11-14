@@ -446,6 +446,15 @@ pub struct AppState {
 
     // License cache with 6-hour expiration
     pub license_cache: Arc<tokio::sync::RwLock<Option<crate::commands::license::CachedLicense>>>,
+
+    // Queue for critical events targeting the pill window when it is not available
+    pub pill_event_queue: Arc<Mutex<Vec<QueuedPillEvent>>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct QueuedPillEvent {
+    pub event: String,
+    pub payload: serde_json::Value,
 }
 
 impl AppState {
@@ -464,6 +473,7 @@ impl AppState {
             window_manager: Arc::new(Mutex::new(None)),
             recording_config_cache: Arc::new(tokio::sync::RwLock::new(None)),
             license_cache: Arc::new(tokio::sync::RwLock::new(None)),
+            pill_event_queue: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -529,6 +539,41 @@ impl AppState {
             }
         } else {
             Err("WindowManager not initialized".to_string())
+        }
+    }
+
+    /// Queue a critical event for the pill window when it is not available yet.
+    /// The queue is bounded to avoid unbounded growth.
+    pub fn queue_pill_event(&self, event: &str, payload: serde_json::Value) {
+        const MAX_EVENTS: usize = 50;
+        match self.pill_event_queue.lock() {
+            Ok(mut queue) => {
+                if queue.len() >= MAX_EVENTS {
+                    queue.remove(0);
+                }
+                queue.push(QueuedPillEvent {
+                    event: event.to_string(),
+                    payload,
+                });
+            }
+            Err(e) => {
+                log::error!("Failed to lock pill_event_queue for enqueue: {}", e);
+            }
+        }
+    }
+
+    /// Drain all queued pill events.
+    pub fn drain_queued_pill_events(&self) -> Vec<QueuedPillEvent> {
+        match self.pill_event_queue.lock() {
+            Ok(mut queue) => {
+                let events = queue.clone();
+                queue.clear();
+                events
+            }
+            Err(e) => {
+                log::error!("Failed to lock pill_event_queue for drain: {}", e);
+                Vec::new()
+            }
         }
     }
 }
@@ -802,6 +847,22 @@ pub fn emit_to_all(
 ) -> Result<(), String> {
     app.emit(event, payload)
         .map_err(|e| format!("Failed to emit to all windows: {}", e))
+}
+
+/// Flush any critical events that were queued for the pill window while it was unavailable.
+pub async fn flush_pill_event_queue(app: &tauri::AppHandle) {
+    let app_state = app.state::<AppState>();
+    let events = app_state.drain_queued_pill_events();
+
+    for event in events {
+        if let Err(e) = emit_to_window(app, "pill", &event.event, event.payload.clone()) {
+            log::warn!(
+                "Failed to deliver queued pill event '{}' to pill window: {}",
+                event.event,
+                e
+            );
+        }
+    }
 }
 
 // Show a short error message on the pill window for a brief duration

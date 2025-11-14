@@ -305,16 +305,21 @@ impl WindowManager {
             }),
         );
 
-        // Store the window reference while still holding the lock
+        // Store the window reference
         *pill_guard = Some(pill_window);
-
-        // Lock is automatically released when pill_guard goes out of scope
 
         log::info!(
             "Pill window created and shown at ({}, {})",
             position_x,
             position_y
         );
+
+        // After creating the pill window, flush any queued critical events in the background
+        let app_for_flush = self.app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            crate::flush_pill_event_queue(&app_for_flush).await;
+        });
+
         Ok(())
     }
 
@@ -476,10 +481,18 @@ impl WindowManager {
                 window_id
             );
             // For critical events when window not found, try app-wide emission
-            if matches!(
+            let is_critical = matches!(
                 event,
                 "recording-state-changed" | "transcription-complete" | "transcription-error"
-            ) {
+            );
+
+            // Queue critical pill events so they can be delivered when the pill window is created
+            if is_critical && window_id == "pill" {
+                let app_state = self.app_handle.state::<crate::AppState>();
+                app_state.queue_pill_event(event, payload.clone());
+            }
+
+            if is_critical {
                 if let Err(e) = self.app_handle.emit(event, payload) {
                     log::error!("App-wide emission also failed: {}", e);
                 }
