@@ -36,6 +36,16 @@ export const HotkeyInput = React.memo(function HotkeyInput({
   const [validationError, setValidationError] = useState<string>("");
   const [currentKeysDisplay, setCurrentKeysDisplay] = useState<string>("");
 
+  const handleCancel = useCallback(() => {
+    setPendingHotkey("");
+    setKeys(new Set());
+    setMode("display");
+    setSaveStatus("idle");
+    setValidationError("");
+    setCurrentKeysDisplay("");
+    onEditingChange?.(false);
+  }, [onEditingChange]);
+
   useEffect(() => {
     if (mode !== "edit") return;
 
@@ -245,16 +255,6 @@ export const HotkeyInput = React.memo(function HotkeyInput({
       onEditingChange?.(false); // Notify parent that editing is done
     }
   }, [pendingHotkey, validationError, onChange, onEditingChange]);
-
-  const handleCancel = useCallback(() => {
-    setPendingHotkey("");
-    setKeys(new Set());
-    setMode("display");
-    setSaveStatus("idle");
-    setValidationError("");
-    setCurrentKeysDisplay("");
-    onEditingChange?.(false); // Notify parent that editing is cancelled
-  }, [onEditingChange]);
 
   const handleEdit = useCallback(() => {
     setPendingHotkey("");
