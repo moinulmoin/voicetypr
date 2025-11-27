@@ -1757,14 +1757,47 @@ pub async fn stop_recording(
     Ok(String::new())
 }
 
+/// Get available audio input devices.
+/// Returns empty list if onboarding not completed (to avoid triggering permission prompt).
 #[tauri::command]
-pub async fn get_audio_devices() -> Result<Vec<String>, String> {
+pub async fn get_audio_devices(app: AppHandle) -> Result<Vec<String>, String> {
+    // Check onboarding status - don't enumerate devices until onboarding is complete
+    // This prevents early mic permission prompts from CPAL's input_devices() enumeration
+    let onboarding_done = {
+        use tauri_plugin_store::StoreExt;
+        app.store("settings")
+            .ok()
+            .and_then(|store| store.get("onboarding_completed").and_then(|v| v.as_bool()))
+            .unwrap_or(false)
+    };
+
+    if !onboarding_done {
+        log::debug!("get_audio_devices: onboarding not complete, returning empty list");
+        return Ok(Vec::new());
+    }
+
     Ok(AudioRecorder::get_devices())
 }
 
-/// Get the current default audio input device
+/// Get the current default audio input device.
+/// Returns error if onboarding not completed (to avoid triggering permission prompt).
 #[tauri::command]
-pub async fn get_current_audio_device() -> Result<String, String> {
+pub async fn get_current_audio_device(app: AppHandle) -> Result<String, String> {
+    // Check onboarding status - don't access devices until onboarding is complete
+    // This prevents early mic permission prompts from CPAL's default_input_device() access
+    let onboarding_done = {
+        use tauri_plugin_store::StoreExt;
+        app.store("settings")
+            .ok()
+            .and_then(|store| store.get("onboarding_completed").and_then(|v| v.as_bool()))
+            .unwrap_or(false)
+    };
+
+    if !onboarding_done {
+        log::debug!("get_current_audio_device: onboarding not complete, returning error");
+        return Err("Onboarding not completed".to_string());
+    }
+
     let host = cpal::default_host();
 
     host.default_input_device()

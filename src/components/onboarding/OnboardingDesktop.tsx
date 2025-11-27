@@ -38,12 +38,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
     hasPermission: hasMicPermission,
     checkPermission: checkMicPermission,
     requestPermission: requestMicPermission
-  } = useMicrophonePermission();
+  } = useMicrophonePermission({ checkOnMount: false });
   const {
     hasPermission: hasAccessPermission,
     checkPermission: checkAccessPermission,
     requestPermission: requestAccessPermission
-  } = useAccessibilityPermission();
+  } = useAccessibilityPermission({ checkOnMount: false });
 
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
   const [hotkey, setHotkey] = useState(settings?.hotkey || "CommandOrControl+Shift+Space");

@@ -1,3 +1,4 @@
+use crate::audio::device_watcher::try_start_device_watcher_if_ready;
 use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_combination};
 use crate::parakeet::ParakeetManager;
 use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
@@ -145,7 +146,7 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
 pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
-    // Check if model and recording mode changed
+    // Check if model, recording mode, and onboarding changed
     let old_model = store
         .get("current_model")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -154,6 +155,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         .get("recording_mode")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| Settings::default().recording_mode);
+    let old_onboarding_completed = store
+        .get("onboarding_completed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
@@ -304,6 +309,12 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         if let Err(e) = update_tray_menu(app.clone()).await {
             log::warn!("Failed to update tray menu after mode change: {}", e);
         }
+    }
+
+    // If onboarding just completed, try to start device watcher
+    if !old_onboarding_completed && settings.onboarding_completed {
+        log::info!("Onboarding just completed, checking if device watcher should start");
+        try_start_device_watcher_if_ready(&app).await;
     }
 
     Ok(())

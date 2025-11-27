@@ -2,14 +2,18 @@ import { useAccessibilityPermission } from './useAccessibilityPermission';
 import { useMicrophonePermission } from './useMicrophonePermission';
 import { useModelAvailability } from './useModelAvailability';
 import { useLicenseStatus } from './useLicenseStatus';
+import { useSettings } from '@/contexts/SettingsContext';
 
 /**
  * Computed hook that combines all domain-specific hooks to provide derived readiness values.
  * This hook does NOT manage state - it only computes values based on the domain hooks.
  */
 export function useAppReadiness() {
-  const accessibility = useAccessibilityPermission();
-  const microphone = useMicrophonePermission();
+  const { settings } = useSettings();
+  const onboardingCompleted = settings?.onboarding_completed === true;
+
+  const accessibility = useAccessibilityPermission({ checkOnMount: onboardingCompleted });
+  const microphone = useMicrophonePermission({ checkOnMount: onboardingCompleted });
   const models = useModelAvailability();
   const license = useLicenseStatus();
 

@@ -208,11 +208,17 @@ async fn build_tray_menu<R: tauri::Runtime>(
         None
     };
 
-    // Get available audio devices
-    let available_devices = audio::recorder::AudioRecorder::get_devices();
+    // Get available audio devices - only after onboarding is complete
+    // This prevents early mic permission prompts from CPAL's input_devices() enumeration
+    // before the user has explicitly granted permission in the onboarding flow
+    let available_devices = if onboarding_done {
+        audio::recorder::AudioRecorder::get_devices()
+    } else {
+        Vec::new()
+    };
 
-    // Create microphone submenu
-    let microphone_submenu = if !available_devices.is_empty() {
+    // Create microphone submenu - only show after onboarding is complete
+    let microphone_submenu = if onboarding_done && !available_devices.is_empty() {
         let mut mic_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
         let mut mic_check_items = Vec::new();
 
@@ -1415,8 +1421,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Initialize recorder state (kept separate for backwards compatibility)
             app.manage(RecorderState(Mutex::new(AudioRecorder::new())));
 
-            // Spawn watcher to keep microphone list in sync with system devices
-            app.manage(audio::device_watcher::DeviceWatcher::start(app.app_handle().clone()));
+            // Create device watcher in deferred state - will be started after mic permission granted
+            // This prevents early mic permission prompts from CPAL's input_devices() enumeration
+            app.manage(audio::device_watcher::DeviceWatcher::new(app.app_handle().clone()));
+
+            // For returning users (onboarding already complete + mic permission granted),
+            // start the device watcher automatically
+            let app_handle_for_watcher = app.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                audio::device_watcher::try_start_device_watcher_if_ready(&app_handle_for_watcher).await;
+            });
 
             // Create tray icon
             use tauri::tray::{TrayIconBuilder, TrayIconEvent};

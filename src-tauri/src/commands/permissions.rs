@@ -1,5 +1,7 @@
 use tokio::time::{sleep, Duration};
 
+use crate::audio::device_watcher::try_start_device_watcher_if_ready;
+
 #[tauri::command]
 pub async fn check_accessibility_permission() -> Result<bool, String> {
     #[cfg(target_os = "macos")]
@@ -167,6 +169,9 @@ pub async fn request_microphone_permission(app: tauri::AppHandle) -> Result<bool
             use tauri::Emitter;
             let _ = app.emit("microphone-granted", ());
 
+            // Try to start device watcher if onboarding is complete
+            try_start_device_watcher_if_ready(&app).await;
+
             return Ok(true);
         }
 
@@ -191,6 +196,9 @@ pub async fn request_microphone_permission(app: tauri::AppHandle) -> Result<bool
         use tauri::Emitter;
         if has_permission {
             let _ = app.emit("microphone-granted", ());
+
+            // Try to start device watcher if onboarding is complete
+            try_start_device_watcher_if_ready(&app).await;
         } else {
             let _ = app.emit("microphone-denied", ());
         }
@@ -200,6 +208,8 @@ pub async fn request_microphone_permission(app: tauri::AppHandle) -> Result<bool
 
     #[cfg(not(target_os = "macos"))]
     {
+        // On non-macOS, try to start device watcher (permission always granted)
+        try_start_device_watcher_if_ready(&app).await;
         Ok(true)
     }
 }
