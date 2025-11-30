@@ -20,6 +20,33 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<LicenseStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const getFriendlyLicenseError = (action: 'activate' | 'restore', rawMessage?: string) => {
+    const lower = rawMessage?.toLowerCase() ?? '';
+    const actionLabel = action === 'activate' ? 'activate license' : 'restore license';
+
+    if (lower.includes('network error') || lower.includes('error sending request')) {
+      return `Failed to ${actionLabel}. Please check your connection and try again.`;
+    }
+
+    if (lower.includes('already activated on another device')) {
+      return 'This license is already activated on another device';
+    }
+
+    if (lower.includes('maximum number of devices')) {
+      return 'This license has reached its device activation limit';
+    }
+
+    if (lower.includes('invalid license key')) {
+      return 'Invalid license key';
+    }
+
+    if (action === 'restore' && lower.includes('no license found')) {
+      return 'No license found. Please enter your license key manually.';
+    }
+
+    return rawMessage || `Failed to ${actionLabel}`;
+  };
+
   const checkStatus = async () => {
     try {
       setIsLoading(true);
@@ -44,17 +71,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
     } catch (error: unknown) {
       const message = getErrorMessage(error);
       console.error('Failed to restore license:', error);
-      if (message.includes('No license found')) {
-        toast.error('No license found. Please enter your license key manually.');
-      } else if (message.includes('already activated on another device')) {
-        toast.error('This license is already activated on another device');
-      } else if (message.includes('maximum number of devices')) {
-        toast.error('This license has reached its device activation limit');
-      } else if (message.includes('Invalid license key')) {
-        toast.error('Invalid license key');
-      } else {
-        toast.error(message || 'Failed to restore license');
-      }
+      toast.error(getFriendlyLicenseError('restore', message));
     }
   };
 
@@ -66,15 +83,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
     } catch (error: unknown) {
       const message = getErrorMessage(error);
       console.error('Failed to activate license:', error);
-      if (message.includes('already activated on another device')) {
-        toast.error('This license is already activated on another device');
-      } else if (message.includes('maximum number of devices')) {
-        toast.error('This license has reached its device activation limit');
-      } else if (message.includes('Invalid license key')) {
-        toast.error('Invalid license key');
-      } else {
-        toast.error(message || 'Failed to activate license');
-      }
+      toast.error(getFriendlyLicenseError('activate', message));
     }
   };
 
