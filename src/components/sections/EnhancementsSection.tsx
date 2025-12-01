@@ -279,13 +279,37 @@ export function EnhancementsSection() {
     setIsLoading(true);
     try {
       // Save API key using Stronghold
-      await saveApiKey(selectedProvider, apiKey.trim());
+      const trimmedKey = apiKey.trim();
+      await saveApiKey(selectedProvider, trimmedKey);
 
-      // Close modal first to give feedback
+      // After saving, if this is Gemini, auto-select its model and optionally enable AI
+      if (selectedProvider === 'gemini') {
+        const hadModel = Boolean(aiSettings.model);
+        const nextEnabled = aiSettings.enabled || !hadModel;
+
+        await invoke("update_ai_settings", {
+          enabled: nextEnabled,
+          provider: 'gemini',
+          model: 'gemini-2.5-flash-lite'
+        });
+
+        setAISettings(prev => ({
+          ...prev,
+          enabled: nextEnabled,
+          provider: 'gemini',
+          model: 'gemini-2.5-flash-lite',
+          hasApiKey: true
+        }));
+
+        setProviderApiKeys(prev => ({
+          ...prev,
+          gemini: true
+        }));
+      }
+
+      // Close modal and notify
       setShowApiKeyModal(false);
       toast.success("API key saved securely");
-
-      // No need for delay - the event listener will handle the reload
     } catch (error) {
       const message = getErrorMessage(error, "Failed to save API key");
       toast.error(message);
@@ -503,27 +527,33 @@ export function EnhancementsSection() {
             }
 
             // 3) Persist provider + model selection
-            await invoke('update_ai_settings', { enabled: false, provider: 'openai', model: trimmedModel });
+            const hadModel = Boolean(aiSettings.model);
+            const nextEnabled = aiSettings.enabled || !hadModel;
 
-            // 4) Update local state immediately
+            await invoke('update_ai_settings', { enabled: nextEnabled, provider: 'openai', model: trimmedModel });
+
+            // 4) Update local state immediately - treat a tested+saved config as a valid "key" even in no-auth mode
+            const hasConfig = true;
             setAISettings(prev => ({
               ...prev,
+              enabled: nextEnabled,
               provider: 'openai',
               model: trimmedModel,
-              hasApiKey: !!trimmedKey
+              hasApiKey: hasConfig
             }));
 
             // 5) Update provider API key status
             setProviderApiKeys(prev => ({ 
               ...prev, 
-              'openai': !!trimmedKey 
+              openai: hasConfig 
             }));
 
             toast.success('Configuration saved');
             setShowOpenAIConfig(false);
           } catch (error) {
             console.error('[OpenAI Config] Failed to save configuration:', error);
-            toast.error(`Failed to save configuration: ${error}`);
+            const message = getErrorMessage(error, 'Failed to save configuration');
+            toast.error(message);
           } finally {
             setIsLoading(false);
           }

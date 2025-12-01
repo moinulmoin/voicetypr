@@ -1,6 +1,5 @@
 use crate::ai::{AIEnhancementRequest, AIProviderConfig, AIProviderFactory, EnhancementOptions};
 use once_cell::sync::Lazy;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -44,10 +43,9 @@ pub struct AISettings {
     pub has_api_key: bool,
 }
 
-// Validation patterns
+// Validation pattern for providers
 lazy_static::lazy_static! {
-    static ref PROVIDER_REGEX: Regex = Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
-    static ref MODEL_REGEX: Regex = Regex::new(r"^[a-zA-Z0-9_.-]+$").unwrap();
+    static ref PROVIDER_REGEX: regex::Regex = regex::Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
 }
 
 // Supported AI providers
@@ -67,13 +65,6 @@ fn validate_provider_name(provider: &str) -> Result<(), String> {
         ));
     }
 
-    Ok(())
-}
-
-fn validate_model_name(model: &str) -> Result<(), String> {
-    if !MODEL_REGEX.is_match(model) {
-        return Err("Invalid model name format".to_string());
-    }
     Ok(())
 }
 
@@ -412,11 +403,6 @@ pub async fn update_ai_settings(
         validate_provider_name(&provider)?;
     }
 
-    // Allow empty model (for deselection) but validate if not empty
-    if !model.is_empty() {
-        validate_model_name(&model)?;
-    }
-
     // Don't allow enabling without a model selected
     if enabled && model.is_empty() {
         log::warn!("Attempted to enable AI enhancement without a model selected");
@@ -740,16 +726,5 @@ mod tests {
         assert!(validate_provider_name("test provider").is_err());
         assert!(validate_provider_name("test@provider").is_err());
         assert!(validate_provider_name("").is_err());
-    }
-
-    #[test]
-    fn test_model_validation() {
-        assert!(validate_model_name("llama-3.1-8b-instant").is_ok());
-        assert!(validate_model_name("gpt-4").is_ok());
-        assert!(validate_model_name("model.v1").is_ok());
-
-        assert!(validate_model_name("model with spaces").is_err());
-        assert!(validate_model_name("model@v1").is_err());
-        assert!(validate_model_name("").is_err());
     }
 }

@@ -76,13 +76,19 @@ export function OpenAICompatConfigModal({
     setTestResult(null);
     setTesting(true);
     try {
+      const trimmedBase = baseUrl.trim();
+      const trimmedModel = model.trim();
+      const trimmedKey = apiKey.trim();
+      const noAuth = !trimmedKey;
+
       await invoke("test_openai_endpoint", {
-        baseUrl: baseUrl.trim(),
-        model: model.trim(),
-        apiKey: apiKey.trim() || undefined,
+        baseUrl: trimmedBase,
+        model: trimmedModel,
+        apiKey: trimmedKey || undefined,
+        noAuth,
       });
       setTestResult({ ok: true, message: "Connection successful" });
-      setTestedPayload({ baseUrl: baseUrl.trim(), model: model.trim(), apiKey: apiKey.trim() });
+      setTestedPayload({ baseUrl: trimmedBase, model: trimmedModel, apiKey: trimmedKey });
     } catch (e: any) {
       setTestResult({ ok: false, message: String(e) });
     } finally {

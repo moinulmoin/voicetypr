@@ -96,40 +96,6 @@ export const loadApiKeysToCache = async (): Promise<void> => {
   }
 };
 
-// OpenAI-compatible configuration helpers
-export const setOpenAIConfig = async (baseUrl: string, noAuth: boolean): Promise<void> => {
-  await invoke('set_openai_config', { args: { baseUrl, noAuth } });
-};
-
-export const saveOpenAIKeyWithConfig = async (
-  apiKey: string,
-  baseUrl: string,
-  model: string,
-  noAuth: boolean
-): Promise<void> => {
-  const provider = 'openai';
-  const key = `ai_api_key_${provider}`;
-  if (apiKey) {
-    await keyringSet(key, apiKey);
-  }
-
-  await invoke('validate_and_cache_api_key', {
-    args: {
-      provider,
-      apiKey: apiKey || undefined,
-      baseUrl,
-      model,
-      noAuth,
-    },
-  });
-
-  // Persist provider + model selection
-  await invoke('update_ai_settings', { enabled: false, provider, model });
-
-  console.log(`[Keyring] OpenAI-compatible config saved (noAuth=${noAuth})`);
-  await emit('api-key-saved', { provider });
-};
-
 // STT (Speech-to-Text) cloud provider keys
 // Soniox support
 const STT_SONIOX_KEY = 'stt_api_key_soniox';
