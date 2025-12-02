@@ -335,6 +335,29 @@ export function GeneralSettings() {
                   }
                 />
               </div>
+
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor="sound-on-recording"
+                    className="text-sm font-medium"
+                  >
+                    Sound on Recording
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Play a sound when recording starts
+                  </p>
+                </div>
+                <Switch
+                  id="sound-on-recording"
+                  checked={settings.play_sound_on_recording ?? true}
+                  onCheckedChange={async (checked) =>
+                    await updateSettings({
+                      play_sound_on_recording: checked,
+                    })
+                  }
+                />
+              </div>
             </div>
 
             <div className="px-4 pb-4">

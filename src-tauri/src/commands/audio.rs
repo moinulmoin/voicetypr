@@ -23,6 +23,32 @@ use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_store::StoreExt;
 
+/// Play a system sound to confirm recording start (macOS only)
+#[cfg(target_os = "macos")]
+fn play_recording_start_sound() {
+    std::thread::spawn(|| {
+        let _ = std::process::Command::new("afplay")
+            .arg("/System/Library/Sounds/Tink.aiff")
+            .spawn();
+    });
+}
+
+/// Play a system sound to confirm recording start (Windows)
+#[cfg(target_os = "windows")]
+fn play_recording_start_sound() {
+    std::thread::spawn(|| {
+        // Use PowerShell to play a system sound on Windows
+        let _ = std::process::Command::new("powershell")
+            .args(["-c", "[console]::beep(800, 100)"])
+            .spawn();
+    });
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn play_recording_start_sound() {
+    // No-op on other platforms
+}
+
 /// Cached recording configuration to avoid repeated store access during transcription flow
 /// Cache is invalidated when settings change via update hooks
 #[derive(Clone, Debug)]
@@ -506,6 +532,17 @@ pub async fn start_recording(
         return Err("Cannot start recording in current state".to_string());
     }
 
+    // Play sound on recording start if enabled
+    if let Ok(store) = app.store("settings") {
+        let play_sound = store
+            .get("play_sound_on_recording")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true); // Default to true
+        if play_sound {
+            play_recording_start_sound();
+        }
+    }
+
     // Load recording config once to avoid repeated store access
     let config = get_recording_config(&app).await.map_err(|e| {
         log::error!("Failed to load recording config: {}", e);
@@ -534,8 +571,13 @@ pub async fn start_recording(
         .as_secs();
     let audio_path = recordings_dir.join(format!("recording_{}.wav", timestamp));
 
-    // Store path for later use
+    // Store path for later use and reset any leftover pending-toggle flag
     let app_state = app.state::<AppState>();
+    app_state
+        .pending_stop_after_start
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // Save current recording path
     app_state
         .current_recording_path
         .lock()
@@ -746,11 +788,25 @@ pub async fn start_recording(
     // Now perform async operations after mutex is released
 
     // Clear cancellation flag for new recording
-    let app_state = app.state::<AppState>();
     app_state.clear_cancellation();
 
     // Update state to recording
     update_recording_state(&app, RecordingState::Recording, None);
+
+    // If a toggle-stop was requested while starting, honor it immediately after entering Recording
+    if app_state
+        .pending_stop_after_start
+        .swap(false, std::sync::atomic::Ordering::SeqCst)
+    {
+        log::info!("Toggle: pending stop triggered right after start; stopping now");
+        let app_handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let recorder_state = app_handle.state::<RecorderState>();
+            if let Err(e) = stop_recording(app_handle.clone(), recorder_state).await {
+                log::error!("Toggle: pending stop failed: {}", e);
+            }
+        });
+    }
 
     // Show pill widget if enabled (graceful degradation)
     if config.show_pill_widget {
@@ -972,9 +1028,7 @@ pub async fn stop_recording(
             if let Err(e) = std::fs::remove_file(&audio_path) {
                 log::debug!("Failed to remove empty audio file: {}", e);
             }
-            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-                log::error!("Failed to hide pill window: {}", e);
-            }
+            // Frontend will hide pill after showing feedback
             update_recording_state(&app, RecordingState::Idle, None);
             return Ok("".to_string());
         }
@@ -1195,7 +1249,7 @@ pub async fn stop_recording(
             }
 
             // Determine min duration based on recording mode (PTT vs Toggle) once
-            let (min_duration_s_f32, min_duration_s_i32) = {
+            let (min_duration_s_f32, min_duration_label) = {
                 let app_state = app.state::<AppState>();
                 let mode = app_state
                     .recording_mode
@@ -1204,8 +1258,8 @@ pub async fn stop_recording(
                     .map(|g| *g)
                     .unwrap_or(RecordingMode::Toggle);
                 match mode {
-                    RecordingMode::PushToTalk => (1.0f32, 1i32),
-                    RecordingMode::Toggle => (3.0f32, 3i32),
+                    RecordingMode::PushToTalk => (0.5f32, "0.5".to_string()),
+                    RecordingMode::Toggle => (0.5f32, "0.5".to_string()),
                 }
             };
 
@@ -1236,15 +1290,12 @@ pub async fn stop_recording(
                     &app,
                     "pill",
                     "recording-too-short",
-                    format!("Recording shorter than {} seconds", min_duration_s_i32),
+                    format!("Recording shorter than {} seconds", min_duration_label),
                 );
                 if let Err(e) = std::fs::remove_file(&normalized_path) {
                     log::debug!("Failed to remove short normalized audio: {}", e);
                 }
-                // Hide pill and return to Idle
-                if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-                    log::error!("Failed to hide pill window: {}", e);
-                }
+                // Frontend will hide pill after showing feedback
                 update_recording_state(&app, RecordingState::Idle, None);
                 return Ok("".to_string());
             }

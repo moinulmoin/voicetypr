@@ -30,6 +30,8 @@ pub struct Settings {
     pub use_different_ptt_key: bool,
     pub ptt_hotkey: Option<String>,
     pub keep_transcription_in_clipboard: bool,
+    // Audio feedback
+    pub play_sound_on_recording: bool,
 }
 
 impl Default for Settings {
@@ -52,6 +54,7 @@ impl Default for Settings {
             use_different_ptt_key: false,         // Default to using same key
             ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
             keep_transcription_in_clipboard: false, // Default to restoring clipboard after paste
+            play_sound_on_recording: true,        // Default to playing sound on recording start
         }
     }
 }
@@ -135,6 +138,10 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("keep_transcription_in_clipboard")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().keep_transcription_in_clipboard),
+        play_sound_on_recording: store
+            .get("play_sound_on_recording")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().play_sound_on_recording),
     };
 
     // Pill position is already loaded from store, no need for duplicate state
@@ -198,6 +205,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set(
         "keep_transcription_in_clipboard",
         json!(settings.keep_transcription_in_clipboard),
+    );
+    store.set(
+        "play_sound_on_recording",
+        json!(settings.play_sound_on_recording),
     );
 
     // Save pill position if provided

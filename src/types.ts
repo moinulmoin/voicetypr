@@ -57,6 +57,8 @@ export interface AppSettings {
   ptt_hotkey?: string;
   current_model_engine?: 'whisper' | 'parakeet' | 'soniox';
   keep_transcription_in_clipboard?: boolean;
+  // Audio feedback
+  play_sound_on_recording?: boolean;
 }
 
 export interface TranscriptionHistory {

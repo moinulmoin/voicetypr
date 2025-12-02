@@ -439,6 +439,9 @@ pub struct AppState {
     // Cancellation flag for graceful shutdown
     pub should_cancel_recording: Arc<AtomicBool>,
 
+    // Toggle-mode guard: if user presses hotkey again while starting, stop after start completes
+    pub pending_stop_after_start: Arc<AtomicBool>,
+
     // ESC key handling for recording cancellation
     pub esc_pressed_once: Arc<AtomicBool>,
     pub esc_timeout_handle: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
@@ -455,6 +458,9 @@ pub struct AppState {
 
     // Queue for critical events targeting the pill window when it is not available
     pub pill_event_queue: Arc<Mutex<Vec<QueuedPillEvent>>>,
+
+    // Throttle for Toggle mode hotkey (prevents rapid re-presses)
+    pub last_toggle_press: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -474,12 +480,14 @@ impl AppState {
             ptt_key_held: Arc::new(AtomicBool::new(false)),
             ptt_shortcut: Arc::new(Mutex::new(None)),
             should_cancel_recording: Arc::new(AtomicBool::new(false)),
+            pending_stop_after_start: Arc::new(AtomicBool::new(false)),
             esc_pressed_once: Arc::new(AtomicBool::new(false)),
             esc_timeout_handle: Arc::new(Mutex::new(None)),
             window_manager: Arc::new(Mutex::new(None)),
             recording_config_cache: Arc::new(tokio::sync::RwLock::new(None)),
             license_cache: Arc::new(tokio::sync::RwLock::new(None)),
             pill_event_queue: Arc::new(Mutex::new(Vec::new())),
+            last_toggle_press: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -1072,7 +1080,31 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             RecordingMode::Toggle => {
                                 // Toggle mode - only handle press events
                                 if event.state() == ShortcutState::Pressed {
-                                    match current_state {
+                                    // Throttle: ignore presses within 300ms of last press
+                                    let should_throttle = {
+                                        let mut last_press = app_state.last_toggle_press.lock().unwrap();
+                                        let now = std::time::Instant::now();
+                                        if let Some(last) = *last_press {
+                                            if now.duration_since(last).as_millis() < 300 {
+                                                log::debug!("Toggle: Throttling hotkey press (too fast)");
+                                                true
+                                            } else {
+                                                *last_press = Some(now);
+                                                false
+                                            }
+                                        } else {
+                                            *last_press = Some(now);
+                                            false
+                                        }
+                                    };
+
+                                    if should_throttle {
+                                        // Emit feedback to pill
+                                        if let Some(window) = app.get_webview_window("pill") {
+                                            let _ = window.emit("hotkey-throttled", "Hold on...");
+                                        }
+                                    } else {
+                                        match current_state {
                                         RecordingState::Idle | RecordingState::Error => {
                                             log::info!("Toggle: Starting recording via hotkey");
 
@@ -1092,7 +1124,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                                 }
                                             });
                                         }
-                                        RecordingState::Recording | RecordingState::Starting => {
+                                        RecordingState::Starting => {
+                                            log::info!(
+                                                "Toggle: stop requested while starting; will stop after start completes"
+                                            );
+                                            app_state
+                                                .pending_stop_after_start
+                                                .store(true, Ordering::SeqCst);
+                                        }
+                                        RecordingState::Recording => {
                                             log::info!("Toggle: Stopping recording via hotkey");
 
                                             let app_handle = app.app_handle().clone();
@@ -1105,7 +1145,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                             });
                                         }
                                         _ => log::debug!("Toggle: Ignoring hotkey in state {:?}", current_state),
-                                    }
+                                        }
+                                    } // end else (not throttled)
                                 }
                             }
                             RecordingMode::PushToTalk => {
