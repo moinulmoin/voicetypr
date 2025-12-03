@@ -49,3 +49,4 @@ agent-docs/
 .build/
 
 sidecar/ffmpeg/vendor
+opencodetmp
