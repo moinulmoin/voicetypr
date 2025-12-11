@@ -1936,7 +1936,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let toast_width = 280.0;
                 let toast_height = 32.0;
                 let pill_width = 80.0;
-                let gap = 6.0; // Gap between pill and toast
+                let gap = 8.0; // Gap between pill and toast
 
                 // Center toast above pill
                 let toast_x = pos_x + (pill_width - toast_width) / 2.0;
