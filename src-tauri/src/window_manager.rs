@@ -210,7 +210,7 @@ impl WindowManager {
         .transparent(true)
         .shadow(false) // Disabled to fix Windows transparency issue
         .skip_taskbar(true)
-        .inner_size(350.0, 150.0)
+        .inner_size(80.0, 40.0)
         .position(position_x, position_y)
         .visible(true) // Start visible
         .focused(false); // Don't steal focus
@@ -548,8 +548,8 @@ impl WindowManager {
                 let height = size.height as f64 / scale;
 
                 // Center bottom position with offset
-                let pill_width = 350.0;
-                let pill_height = 150.0;
+                let pill_width = 80.0;
+                let pill_height = 40.0;
                 let bottom_offset = 25.0; // Closer to bottom of screen
 
                 let x = (width - pill_width) / 2.0;
@@ -572,8 +572,8 @@ impl WindowManager {
                     let width = size.width as f64 / scale;
                     let height = size.height as f64 / scale;
 
-                    let pill_width = 300.0;
-                    let pill_height = 150.0;
+                    let pill_width = 80.0;
+                    let pill_height = 40.0;
                     let bottom_offset = 10.0;
 
                     let x = (width - pill_width) / 2.0;
@@ -602,8 +602,8 @@ impl WindowManager {
                 let width = size.width as f64 / scale;
                 let height = size.height as f64 / scale;
 
-                let pill_width = 600.0;
-                let pill_height = 300.0;
+                let pill_width = 80.0;
+                let pill_height = 40.0;
                 let bottom_offset = 20.0;
 
                 let x = (width - pill_width) / 2.0;

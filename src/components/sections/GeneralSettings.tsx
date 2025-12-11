@@ -295,27 +295,6 @@ export function GeneralSettings() {
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label
-                    htmlFor="compact-recording"
-                    className="text-sm font-medium"
-                  >
-                    Compact Status
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Show minimal recording indicator window
-                  </p>
-                </div>
-                <Switch
-                  id="compact-recording"
-                  checked={settings.compact_recording_status !== false}
-                  onCheckedChange={async (checked) =>
-                    await updateSettings({ compact_recording_status: checked })
-                  }
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label
                     htmlFor="clipboard-retain"
                     className="text-sm font-medium"
                   >
@@ -354,6 +333,29 @@ export function GeneralSettings() {
                   onCheckedChange={async (checked) =>
                     await updateSettings({
                       play_sound_on_recording: checked,
+                    })
+                  }
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor="show-pill-indicator"
+                    className="text-sm font-medium"
+                  >
+                    Show Pill Indicator
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Display the pill indicator when idle
+                  </p>
+                </div>
+                <Switch
+                  id="show-pill-indicator"
+                  checked={settings.show_pill_indicator ?? true}
+                  onCheckedChange={async (checked) =>
+                    await updateSettings({
+                      show_pill_indicator: checked,
                     })
                   }
                 />

@@ -1,4 +1,5 @@
 use crate::ai::{AIEnhancementRequest, AIProviderConfig, AIProviderFactory, EnhancementOptions};
+use crate::commands::audio::pill_toast;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -655,8 +656,8 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
         }
         Err(e) => {
             log::error!("AI enhancement failed: {}", e);
-            // Emit to pill window with short message only
-            let _ = crate::emit_to_window(&app, "pill", "formatting-error", "Formatting failed");
+            // Emit formatting error via pill toast
+            pill_toast(&app, "Formatting failed", 1500);
             Err(format!("AI enhancement failed: {}", e))
         }
     }

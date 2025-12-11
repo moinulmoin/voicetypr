@@ -879,25 +879,6 @@ pub async fn flush_pill_event_queue(app: &tauri::AppHandle) {
     }
 }
 
-// Show a short error message on the pill window for a brief duration
-pub async fn show_pill_error_short(
-    app: &tauri::AppHandle,
-    event: &str,
-    payload: &str,
-    millis: u64,
-) {
-    let app_state = app.state::<AppState>();
-    if let Some(window_manager) = app_state.get_window_manager() {
-        // Best-effort: show pill, emit event, keep visible briefly
-        let _ = window_manager.show_pill_window().await;
-        let _ = emit_to_window(app, "pill", event, payload);
-        tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
-    } else {
-        log::error!("WindowManager not initialized; unable to show pill error");
-        let _ = emit_to_window(app, "pill", event, payload);
-    }
-}
-
 // Setup logging with daily rotation
 fn setup_logging() -> tauri_plugin_log::Builder {
     let today = Local::now().format("%Y-%m-%d").to_string();
@@ -1099,10 +1080,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                     };
 
                                     if should_throttle {
-                                        // Emit feedback to pill
-                                        if let Some(window) = app.get_webview_window("pill") {
-                                            let _ = window.emit("hotkey-throttled", "Hold on...");
-                                        }
+                                        // Show pill toast for rapid re-press
+                                        crate::commands::audio::pill_toast(
+                                            &app_handle,
+                                            "Hold on...",
+                                            1000,
+                                        );
                                     } else {
                                         match current_state {
                                         RecordingState::Idle | RecordingState::Error => {
@@ -1234,8 +1217,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 log::info!("First ESC press detected during recording");
                                 app_state.esc_pressed_once.store(true, Ordering::SeqCst);
 
-                                // Emit event to pill for feedback
-                                let _ = emit_to_window(&app_handle, "pill", "esc-first-press", "Press ESC again to stop recording");
+                                // Show pill toast for ESC warning
+                                crate::commands::audio::pill_toast(
+                                    &app_handle,
+                                    "Press ESC again to cancel",
+                                    1200,
+                                );
 
                                 // Set timeout to reset ESC state
                                 let app_for_timeout = app_handle.clone();
@@ -1258,6 +1245,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 // Second ESC press - cancel recording
                                 log::info!("Second ESC press detected, cancelling recording");
+
+                                // Hide toast immediately
+                                if let Some(toast_window) = app_handle.get_webview_window("toast") {
+                                    let _ = toast_window.hide();
+                                }
 
                                 // Cancel timeout
                                 if let Ok(mut timeout_guard) = app_state.esc_timeout_handle.lock() {
@@ -1872,43 +1864,112 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // Create pill window at startup and convert to NSPanel
-            #[cfg(target_os = "macos")]
+            // Create pill (macOS) and toast (all platforms) windows at startup
             {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-                // Create the pill window with extra height for tooltip
-                let pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
-                    .title("Recording")
+                // Calculate center-bottom position for pill/toast
+                let (pos_x, pos_y) = {
+                    let (screen_width, screen_height) = if let Ok(Some(monitor)) = app.primary_monitor() {
+                        let size = monitor.size();
+                        let scale = monitor.scale_factor();
+                        (size.width as f64 / scale, size.height as f64 / scale)
+                    } else {
+                        (1440.0, 900.0) // Fallback
+                    };
+
+                    let pill_width = 80.0;  // Sized for 3-dot pill (active state with padding)
+                    let pill_height = 40.0;
+                    let bottom_offset = 25.0;
+
+                    let x = (screen_width - pill_width) / 2.0;
+                    let y = screen_height - pill_height - bottom_offset;
+                    (x, y)
+                };
+
+                // macOS: create pill window and convert to NSPanel
+                #[cfg(target_os = "macos")]
+                {
+                    // Create the pill window - sized for 3 dots
+                    // Properties aligned with window_manager.rs for consistency
+                    let pill_builder = WebviewWindowBuilder::new(app, "pill", WebviewUrl::App("pill".into()))
+                        .title("Recording")
+                        .resizable(false)
+                        .maximizable(false)
+                        .minimizable(false)
+                        .decorations(false)
+                        .always_on_top(true)
+                        .visible_on_all_workspaces(true)
+                        .content_protected(true)
+                        .skip_taskbar(true)
+                        .transparent(true)
+                        .shadow(false)  // Prevent window shadow on macOS
+                        .inner_size(80.0, 40.0)  // Sized for 3-dot pill (active state with padding)
+                        .position(pos_x, pos_y)
+                        .visible(true)  // Always visible (controlled by show_pill_indicator setting)
+                        .focused(false);  // Don't steal focus
+
+                    // Disable context menu only in production builds
+                    #[cfg(not(debug_assertions))]
+                    let pill_builder = pill_builder.initialization_script("document.addEventListener('contextmenu', e => e.preventDefault());");
+
+                    #[cfg(debug_assertions)]
+                    let pill_builder = pill_builder;
+
+                    let pill_window = pill_builder.build()?;
+
+                    // Convert to NSPanel to prevent focus stealing
+                    use tauri_nspanel::WebviewWindowExt;
+                    pill_window.to_panel().map_err(|e| format!("Failed to convert to NSPanel: {:?}", e))?;
+
+                    // Store the pill window reference in WindowManager
+                    let app_state = app.state::<AppState>();
+                    if let Some(window_manager) = app_state.get_window_manager() {
+                        window_manager.set_pill_window(pill_window);
+                        log::info!("Created pill window as NSPanel and stored in WindowManager");
+                    } else {
+                        log::warn!("Could not store pill window reference - WindowManager not available");
+                    }
+                }
+
+                // Create toast window for feedback messages (positioned above pill) - all platforms
+                let toast_width = 280.0;
+                let toast_height = 32.0;
+                let pill_width = 80.0;
+                let gap = 6.0; // Gap between pill and toast
+
+                // Center toast above pill
+                let toast_x = pos_x + (pill_width - toast_width) / 2.0;
+                let toast_y = pos_y - toast_height - gap;
+                log::info!("Toast window position: ({}, {}) - above pill at ({}, {})", toast_x, toast_y, pos_x, pos_y);
+
+                let toast_builder = WebviewWindowBuilder::new(app, "toast", WebviewUrl::App("toast".into()))
+                    .title("Feedback")
                     .resizable(false)
                     .decorations(false)
                     .always_on_top(true)
                     .skip_taskbar(true)
                     .transparent(true)
-                    .inner_size(350.0, 150.0)  // Match window_manager.rs size
-                    .visible(false); // Start hidden
+                    .inner_size(toast_width, toast_height)
+                    .position(toast_x, toast_y)
+                    .visible(false); // Starts hidden
 
-                // Disable context menu only in production builds
                 #[cfg(not(debug_assertions))]
-                let pill_builder = pill_builder.initialization_script("document.addEventListener('contextmenu', e => e.preventDefault());");
+                let toast_builder = toast_builder.initialization_script("document.addEventListener('contextmenu', e => e.preventDefault());");
 
                 #[cfg(debug_assertions)]
-                let pill_builder = pill_builder;
+                let toast_builder = toast_builder;
 
-                let pill_window = pill_builder.build()?;
+                let toast_window = toast_builder.build()?;
 
-                // Convert to NSPanel to prevent focus stealing
-                use tauri_nspanel::WebviewWindowExt;
-                pill_window.to_panel().map_err(|e| format!("Failed to convert to NSPanel: {:?}", e))?;
-
-                // Store the pill window reference in WindowManager
-                let app_state = app.state::<AppState>();
-                if let Some(window_manager) = app_state.get_window_manager() {
-                    window_manager.set_pill_window(pill_window);
-                    log::info!("Created pill window as NSPanel and stored in WindowManager");
-                } else {
-                    log::warn!("Could not store pill window reference - WindowManager not available");
+                // macOS: Convert toast to NSPanel to match pill behavior
+                #[cfg(target_os = "macos")]
+                {
+                    use tauri_nspanel::WebviewWindowExt;
+                    toast_window.to_panel().map_err(|e| format!("Failed to convert toast to NSPanel: {:?}", e))?;
                 }
+
+                log::info!("Created toast window for feedback");
             }
 
             // Sync autostart state with saved settings
@@ -2005,6 +2066,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,
+            hide_toast_window,
             focus_main_window,
             check_accessibility_permission,
             request_accessibility_permission,

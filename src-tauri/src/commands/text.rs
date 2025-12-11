@@ -3,7 +3,6 @@ use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
-use tauri::Emitter;
 use tauri_plugin_store::StoreExt;
 
 // Import rdev for more reliable keyboard simulation
@@ -157,10 +156,9 @@ fn insert_via_clipboard(
                     }
                     Ok(Err(e)) => {
                         log::warn!("AppleScript paste failed: {}, text remains in clipboard", e);
-                        // Notify user through pill that paste failed but text is in clipboard
+                        // Notify user through pill toast that paste failed but text is in clipboard
                         if let Some(app) = &app_handle {
-                            app.emit("paste-error", "Paste failed - copied to clipboard")
-                                .ok();
+                            crate::commands::audio::pill_toast(app, "Paste failed - copied to clipboard", 1500);
                         }
                         // Don't fail - text is still in clipboard for manual paste
                     }
@@ -169,10 +167,9 @@ fn insert_via_clipboard(
                             "PANIC during paste: {:?}, text remains in clipboard",
                             panic_err
                         );
-                        // Notify user through pill about the failure
+                        // Notify user through pill toast about the failure
                         if let Some(app) = &app_handle {
-                            app.emit("paste-error", "Paste failed - copied to clipboard")
-                                .ok();
+                            crate::commands::audio::pill_toast(app, "Paste failed - copied to clipboard", 1500);
                         }
                         // Don't fail - text is still in clipboard for manual paste
                     }

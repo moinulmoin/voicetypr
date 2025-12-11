@@ -22,7 +22,6 @@ pub struct Settings {
     pub pill_position: Option<(f64, f64)>,
     pub launch_at_startup: bool,
     pub onboarding_completed: bool,
-    pub compact_recording_status: bool,
     pub check_updates_automatically: bool,
     pub selected_microphone: Option<String>,
     // Push-to-talk support
@@ -32,6 +31,8 @@ pub struct Settings {
     pub keep_transcription_in_clipboard: bool,
     // Audio feedback
     pub play_sound_on_recording: bool,
+    // Pill indicator visibility when idle
+    pub show_pill_indicator: bool,
 }
 
 impl Default for Settings {
@@ -47,7 +48,6 @@ impl Default for Settings {
             pill_position: None,              // No saved position initially
             launch_at_startup: false,         // Default to not launching at startup
             onboarding_completed: false,      // Default to not completed
-            compact_recording_status: true,   // Default to compact mode
             check_updates_automatically: true, // Default to automatic updates enabled
             selected_microphone: None,        // Default to system default microphone
             recording_mode: "toggle".to_string(), // Default to toggle mode for backward compatibility
@@ -55,6 +55,7 @@ impl Default for Settings {
             ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
             keep_transcription_in_clipboard: false, // Default to restoring clipboard after paste
             play_sound_on_recording: true,        // Default to playing sound on recording start
+            show_pill_indicator: true,            // Default to showing pill indicator when idle
         }
     }
 }
@@ -112,10 +113,6 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("onboarding_completed")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().onboarding_completed),
-        compact_recording_status: store
-            .get("compact_recording_status")
-            .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| Settings::default().compact_recording_status),
         check_updates_automatically: store
             .get("check_updates_automatically")
             .and_then(|v| v.as_bool())
@@ -142,6 +139,10 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("play_sound_on_recording")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().play_sound_on_recording),
+        show_pill_indicator: store
+            .get("show_pill_indicator")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().show_pill_indicator),
     };
 
     // Pill position is already loaded from store, no need for duplicate state
@@ -184,10 +185,6 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set("launch_at_startup", json!(settings.launch_at_startup));
     store.set("onboarding_completed", json!(settings.onboarding_completed));
     store.set(
-        "compact_recording_status",
-        json!(settings.compact_recording_status),
-    );
-    store.set(
         "check_updates_automatically",
         json!(settings.check_updates_automatically),
     );
@@ -209,6 +206,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set(
         "play_sound_on_recording",
         json!(settings.play_sound_on_recording),
+    );
+    store.set(
+        "show_pill_indicator",
+        json!(settings.show_pill_indicator),
     );
 
     // Save pill position if provided
