@@ -64,7 +64,6 @@ export function RecordingPill() {
       { name: "enhancing-started", handler: () => isMounted && setIsFormatting(true) },
       { name: "enhancing-completed", handler: () => isMounted && setIsFormatting(false) },
       { name: "enhancing-failed", handler: () => isMounted && setIsFormatting(false) },
-      { name: "formatting-error", handler: () => isMounted && setIsFormatting(false) },
     ];
 
     events.forEach(({ name, handler }) => {

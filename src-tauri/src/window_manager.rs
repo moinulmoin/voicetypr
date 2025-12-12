@@ -425,10 +425,7 @@ impl WindowManager {
         payload: serde_json::Value,
     ) -> Result<(), String> {
         // Only log critical events
-        if matches!(
-            event,
-            "recording-state-changed" | "transcription-complete" | "transcription-error"
-        ) {
+        if matches!(event, "recording-state-changed" | "transcription-complete") {
             log::debug!("emit_to_window: window='{}', event='{}'", window_id, event);
         }
 
@@ -442,10 +439,8 @@ impl WindowManager {
             // Skip visibility check for performance
 
             // Check if window is visible or if it's a critical event
-            let is_critical = matches!(
-                event,
-                "recording-state-changed" | "transcription-complete" | "transcription-error"
-            );
+            let is_critical =
+                matches!(event, "recording-state-changed" | "transcription-complete");
 
             // Check if window is visible or if it's a critical event
 
@@ -481,10 +476,8 @@ impl WindowManager {
                 window_id
             );
             // For critical events when window not found, try app-wide emission
-            let is_critical = matches!(
-                event,
-                "recording-state-changed" | "transcription-complete" | "transcription-error"
-            );
+            let is_critical =
+                matches!(event, "recording-state-changed" | "transcription-complete");
 
             // Queue critical pill events so they can be delivered when the pill window is created
             if is_critical && window_id == "pill" {

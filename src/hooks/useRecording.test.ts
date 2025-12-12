@@ -67,7 +67,7 @@ describe('useRecording', () => {
     });
 
     act(() => {
-      emitMockEvent('recording-error', 'Test error message');
+      emitMockEvent('recording-state-changed', { state: 'error', error: 'Test error message' });
     });
 
     expect(result.current.state).toBe('error');

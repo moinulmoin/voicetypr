@@ -776,8 +776,6 @@ pub async fn start_recording(
 
                     // Emit user-friendly error via pill toast
                     pill_toast(&app, "Microphone access failed", 1500);
-                    // Also emit domain event for main window
-                    let _ = emit_to_window(&app, "main", "recording-error", "Microphone access failed");
 
                     return Err("Failed to start recording".to_string());
                 } else {
@@ -827,8 +825,6 @@ pub async fn start_recording(
                 };
 
                 pill_toast(&app, user_message, 1500);
-                // Also emit domain event for main window
-                let _ = emit_to_window(&app, "main", "recording-error", user_message);
 
                 return Err(e);
             }
@@ -1471,7 +1467,6 @@ pub async fn stop_recording(
                                     .await;
                             }
                             pill_toast(&app_for_task, &e, 1500);
-                            let _ = emit_to_window(&app_for_task, "main", "transcription-error", &e);
                             return;
                         }
                     }
@@ -1538,7 +1533,6 @@ pub async fn stop_recording(
                         Some(message.clone()),
                     );
                     pill_toast(&app_for_task, &message, 1500);
-                    let _ = emit_to_window(&app_for_task, "main", "transcription-error", &message);
                     return;
                 }
 
@@ -1668,6 +1662,9 @@ pub async fn stop_recording(
                                 }
                                 Err(e) => {
                                     log::warn!("AI enhancement failed, using original text: {}", e);
+
+                                    // Emit enhancing failed to reset pill state
+                                    let _ = app_for_process.emit("enhancing-failed", ());
 
                                     // Check error type and create appropriate message
                                     let error_message = e.to_string();
@@ -1836,7 +1833,6 @@ pub async fn stop_recording(
 
                     // Emit error via pill toast
                     pill_toast(&app_for_task, &e, 1500);
-                    let _ = emit_to_window(&app_for_task, "main", "transcription-error", &e);
 
                     // Transition back to Idle after a delay
                     // This ensures we don't get stuck in Error state
