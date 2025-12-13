@@ -173,15 +173,7 @@ pub async fn cache_ai_api_key(_app: tauri::AppHandle, args: CacheApiKeyArgs) -> 
     let key_name = format!("ai_api_key_{}", provider);
     cache.insert(key_name.clone(), api_key.clone());
 
-    log::info!(
-        "API key cached for provider: {} (key: {}...)",
-        provider,
-        if api_key.len() > 8 {
-            &api_key[..8]
-        } else {
-            &api_key
-        }
-    );
+    log::info!("API key cached for provider: {}", provider);
 
     // Verify the key was actually stored
     if cache.contains_key(&key_name) {

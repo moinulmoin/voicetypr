@@ -81,6 +81,7 @@ export function OpenAICompatConfigModal({
       const trimmedKey = apiKey.trim();
       const noAuth = !trimmedKey;
 
+      // Note: Tauri's JS invoke supports camelCase keys and maps them to the Rust command args (snake_case).
       await invoke("test_openai_endpoint", {
         baseUrl: trimmedBase,
         model: trimmedModel,
