@@ -42,6 +42,7 @@ export function EnhancementsSection() {
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [showOpenAIConfig, setShowOpenAIConfig] = useState(false);
+  const [openAIDefaultBaseUrl, setOpenAIDefaultBaseUrl] = useState("https://api.openai.com/v1");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [providerApiKeys, setProviderApiKeys] = useState<Record<string, boolean>>({});
@@ -318,9 +319,15 @@ export function EnhancementsSection() {
     }
   };
 
-  const handleSetupApiKey = (provider: string) => {
+  const handleSetupApiKey = async (provider: string) => {
     setSelectedProvider(provider);
     if (provider === 'openai') {
+      try {
+        const savedConfig = await invoke<{ baseUrl: string }>('get_openai_config');
+        setOpenAIDefaultBaseUrl(savedConfig.baseUrl || "https://api.openai.com/v1");
+      } catch (error) {
+        console.error('Failed to load OpenAI config:', error);
+      }
       setShowOpenAIConfig(true);
     } else {
       setShowApiKeyModal(true);
@@ -497,8 +504,8 @@ export function EnhancementsSection() {
       />
       <OpenAICompatConfigModal
         isOpen={showOpenAIConfig}
-        defaultBaseUrl="https://api.openai.com/v1"
-        defaultModel={aiSettings.model}
+        defaultBaseUrl={openAIDefaultBaseUrl}
+        defaultModel={aiSettings.provider === 'openai' ? aiSettings.model : ''}
         onClose={() => setShowOpenAIConfig(false)}
         onSubmit={async ({ baseUrl, model, apiKey }) => {
           try {

@@ -55,24 +55,38 @@ export function EnhancementModelCard({
         </div>
 
         {hasApiKey ? (
-          <Button
-            onClick={async (e) => {
-              e.stopPropagation();
-              const confirmed = await ask(
-                `Remove API key for ${provider.name}?`,
-                { title: 'Remove API Key', kind: 'warning' }
-              );
-              if (confirmed) {
-                onRemoveApiKey();
-              }
-            }}
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-destructive"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            Remove Key
-          </Button>
+          model.provider === 'openai' ? (
+            <Button
+              onClick={(e) => {
+                e.stopPropagation();
+                onSetupApiKey();
+              }}
+              variant="outline"
+              size="sm"
+            >
+              <Key className="w-3.5 h-3.5" />
+              Update
+            </Button>
+          ) : (
+            <Button
+              onClick={async (e) => {
+                e.stopPropagation();
+                const confirmed = await ask(
+                  `Remove API key for ${provider.name}?`,
+                  { title: 'Remove API Key', kind: 'warning' }
+                );
+                if (confirmed) {
+                  onRemoveApiKey();
+                }
+              }}
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Remove Key
+            </Button>
+          )
         ) : (
           <Button
             onClick={(e) => {
