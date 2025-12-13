@@ -174,6 +174,7 @@ fn get_windows_uuid_with_runner(runner: &dyn WindowsCommandRunner) -> Result<Str
             let output_str = String::from_utf8_lossy(&output.stdout);
             for line in output_str.lines().skip(1) {
                 if let Some(uuid) = normalize_uuid(line) {
+                    log::info!("[DeviceID] Source: wmic (csproduct UUID)");
                     return Ok(uuid);
                 }
             }
@@ -181,6 +182,7 @@ fn get_windows_uuid_with_runner(runner: &dyn WindowsCommandRunner) -> Result<Str
     }
 
     // Modern Windows: query CIM via PowerShell.
+    log::debug!("[DeviceID] wmic failed or unavailable, trying PowerShell CIM...");
     if let Ok(output) = runner.run(
         "powershell",
         &[
@@ -196,6 +198,7 @@ fn get_windows_uuid_with_runner(runner: &dyn WindowsCommandRunner) -> Result<Str
             let output_str = String::from_utf8_lossy(&output.stdout);
             for line in output_str.lines() {
                 if let Some(uuid) = normalize_uuid(line) {
+                    log::info!("[DeviceID] Source: PowerShell (Get-CimInstance)");
                     return Ok(uuid);
                 }
             }
@@ -203,6 +206,7 @@ fn get_windows_uuid_with_runner(runner: &dyn WindowsCommandRunner) -> Result<Str
     }
 
     // Final fallback: MachineGuid from registry.
+    log::debug!("[DeviceID] PowerShell failed or unavailable, trying registry MachineGuid...");
     if let Ok(output) = runner.run(
         "reg",
         &[
@@ -222,6 +226,7 @@ fn get_windows_uuid_with_runner(runner: &dyn WindowsCommandRunner) -> Result<Str
 
                 if let Some(rest) = line.split("REG_SZ").nth(1) {
                     if let Some(uuid) = normalize_uuid(rest) {
+                        log::info!("[DeviceID] Source: Registry (MachineGuid)");
                         return Ok(uuid);
                     }
                 }
@@ -229,6 +234,7 @@ fn get_windows_uuid_with_runner(runner: &dyn WindowsCommandRunner) -> Result<Str
         }
     }
 
+    log::error!("[DeviceID] All sources failed: wmic, PowerShell, and registry");
     Err("Could not determine machine UUID".to_string())
 }
 
