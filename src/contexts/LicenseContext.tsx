@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { LicenseStatus } from '@/types';
 import { toast } from 'sonner';
@@ -19,6 +19,23 @@ const LicenseContext = createContext<LicenseContextValue | undefined>(undefined)
 export function LicenseProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<LicenseStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const latestCheckStatusId = useRef(0);
+
+  const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error('License status check timed out')),
+        timeoutMs
+      );
+    });
+
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+  };
 
   const getFriendlyLicenseError = (action: 'activate' | 'restore', rawMessage?: string) => {
     const lower = rawMessage?.toLowerCase() ?? '';
@@ -48,18 +65,36 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
   };
 
   const checkStatus = async () => {
+    const checkId = ++latestCheckStatusId.current;
     try {
       setIsLoading(true);
       console.log(`[${new Date().toISOString()}] Frontend: Checking license status...`);
-      const licenseStatus = await invoke<LicenseStatus>('check_license_status');
+
+      const invokePromise = invoke<LicenseStatus>('check_license_status');
+      invokePromise.catch(() => {
+        // Prevent unhandled rejections if we time out and ignore the result.
+      });
+
+      const licenseStatus = await withTimeout(invokePromise, 10_000);
+
+      if (checkId !== latestCheckStatusId.current) return;
       console.log(`[${new Date().toISOString()}] Frontend: License status received:`, licenseStatus);
       setStatus(licenseStatus);
     } catch (error) {
+      if (checkId !== latestCheckStatusId.current) return;
+
+      if (error instanceof Error && error.message.toLowerCase().includes('timed out')) {
+        toast.error('License status check timed out. Please try again.');
+        return;
+      }
+
       const message = getErrorMessage(error, 'Failed to check license status');
       console.error('Failed to check license status:', error);
       toast.error(message);
     } finally {
-      setIsLoading(false);
+      if (checkId === latestCheckStatusId.current) {
+        setIsLoading(false);
+      }
     }
   };
 
