@@ -395,6 +395,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 audio::device_watcher::try_start_device_watcher_if_ready(&app_handle_for_watcher).await;
             });
 
+            // Create display watcher to reposition pill/toast on monitor changes
+            let display_watcher = utils::display_watcher::DisplayWatcher::new(app.app_handle().clone());
+            display_watcher.start();
+            app.manage(display_watcher);
+
             // Create tray icon
             use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 
@@ -810,7 +815,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
                     let pill_width = 80.0;  // Sized for 3-dot pill (active state with padding)
                     let pill_height = 40.0;
-                    let bottom_offset = 25.0;
+                    let bottom_offset = 10.0;  // Distance from bottom of screen
 
                     let x = (screen_width - pill_width) / 2.0;
                     let y = screen_height - pill_height - bottom_offset;

@@ -543,7 +543,7 @@ impl WindowManager {
                 // Center bottom position with offset
                 let pill_width = 80.0;
                 let pill_height = 40.0;
-                let bottom_offset = 25.0; // Closer to bottom of screen
+                let bottom_offset = 10.0; // Distance from bottom of screen
 
                 let x = (width - pill_width) / 2.0;
                 let y = height - pill_height - bottom_offset;
@@ -597,7 +597,7 @@ impl WindowManager {
 
                 let pill_width = 80.0;
                 let pill_height = 40.0;
-                let bottom_offset = 20.0;
+                let bottom_offset = 10.0;
 
                 let x = (width - pill_width) / 2.0;
                 let y = height - pill_height - bottom_offset;
@@ -613,6 +613,39 @@ impl WindowManager {
             } else {
                 log::error!("Could not get any monitor info, using safe defaults");
                 (100.0, 400.0)
+            }
+        }
+    }
+
+    /// Reposition pill and toast windows to current monitor center-bottom.
+    /// Called when monitor configuration changes (display connect/disconnect, resolution change).
+    pub fn reposition_floating_windows(&self) {
+        use tauri::LogicalPosition;
+
+        let (pill_x, pill_y) = self.calculate_center_position();
+
+        // Reposition pill window
+        if let Some(pill) = self.get_pill_window() {
+            if let Err(e) = pill.set_position(LogicalPosition::new(pill_x, pill_y)) {
+                log::warn!("Failed to reposition pill window: {}", e);
+            } else {
+                log::info!("Repositioned pill window to ({}, {})", pill_x, pill_y);
+            }
+        }
+
+        // Reposition toast window (above pill)
+        if let Some(toast) = self.app_handle.get_webview_window("toast") {
+            let toast_width = 280.0;
+            let toast_height = 32.0;
+            let pill_width = 80.0;
+            let gap = 8.0;
+            let toast_x = pill_x + (pill_width - toast_width) / 2.0;
+            let toast_y = pill_y - toast_height - gap;
+
+            if let Err(e) = toast.set_position(LogicalPosition::new(toast_x, toast_y)) {
+                log::warn!("Failed to reposition toast window: {}", e);
+            } else {
+                log::info!("Repositioned toast window to ({}, {})", toast_x, toast_y);
             }
         }
     }

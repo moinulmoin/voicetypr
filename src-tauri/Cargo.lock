@@ -7511,6 +7511,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clipboard-rs",
+ "core-graphics 0.24.0",
  "cpal 0.16.0",
  "dirs 5.0.1",
  "dotenv",
