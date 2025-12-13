@@ -83,7 +83,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       if (checkId !== latestCheckStatusId.current) return;
 
-      if (error instanceof Error && error.message.toLowerCase().includes('timed out')) {
+      if (error instanceof Error && error.message === 'License status check timed out') {
         toast.error('License status check timed out. Please try again.');
         return;
       }
