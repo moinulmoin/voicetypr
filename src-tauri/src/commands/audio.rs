@@ -1661,7 +1661,7 @@ pub async fn stop_recording(
                                     enhanced
                                 }
                                 Err(e) => {
-                                    log::warn!("AI enhancement failed, using original text: {}", e);
+                                    log::warn!("Formatting failed, using original text: {}", e);
 
                                     // Emit enhancing failed to reset pill state
                                     let _ = app_for_process.emit("enhancing-failed", ());
@@ -1671,23 +1671,23 @@ pub async fn stop_recording(
                                     let user_message = if error_message.contains("400")
                                         || error_message.contains("Bad Request")
                                     {
-                                        "Enhancement failed: Missing or invalid API key"
+                                        "Formatting failed: API key missing or invalid"
                                     } else if error_message.contains("401")
                                         || error_message.contains("Unauthorized")
                                     {
-                                        "Enhancement failed: Invalid API key"
+                                        "Formatting failed: API key unauthorized"
                                     } else if error_message.contains("429") {
-                                        "Enhancement failed: Rate limit exceeded"
+                                        "Formatting failed: Rate limit exceeded"
                                     } else if error_message.contains("network")
                                         || error_message.contains("connection")
                                     {
-                                        "Enhancement failed: Network error"
+                                        "Formatting failed: Network error"
                                     } else {
-                                        "Enhancement failed: Using original text"
+                                        "Formatting failed: Service unavailable"
                                     };
 
-                                    // Show pill toast for enhancement failure
-                                    log::warn!("Enhancement failed; showing pill toast");
+                                    // Show pill toast for formatting failure
+                                    log::warn!("Formatting failed; showing pill toast");
                                     pill_toast(&app_for_process, user_message, 1500);
 
                                     // Also notify main window for settings update if needed

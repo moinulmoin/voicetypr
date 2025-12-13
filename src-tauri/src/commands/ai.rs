@@ -647,10 +647,10 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
             Ok(response.enhanced_text)
         }
         Err(e) => {
-            log::error!("AI enhancement failed: {}", e);
+            log::error!("AI formatting failed: {}", e);
             // Emit formatting error via pill toast
             pill_toast(&app, "Formatting failed", 1500);
-            Err(format!("AI enhancement failed: {}", e))
+            Err(format!("AI formatting failed: {}", e))
         }
     }
 }
