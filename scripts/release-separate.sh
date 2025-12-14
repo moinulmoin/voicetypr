@@ -167,6 +167,10 @@ echo -e "${GREEN}Current version: ${CURRENT_VERSION}${NC}"
 
 # Use release-it to handle version bump, changelog, tag, and draft release
 echo -e "${YELLOW}Running release-it...${NC}"
+# Ensure GITHUB_TOKEN is set for release-it (get from gh CLI if not set)
+if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+    export GITHUB_TOKEN=$(gh auth token)
+fi
 pnpm -s release "$RELEASE_TYPE" --ci
 
 # Get new version
