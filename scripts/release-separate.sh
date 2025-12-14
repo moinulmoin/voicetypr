@@ -181,6 +181,11 @@ pnpm -s release "$RELEASE_TYPE" --ci
 NEW_VERSION=$(node -p "require('./package.json').version")
 echo -e "${GREEN}New version: ${NEW_VERSION}${NC}"
 
+# Create draft GitHub release using gh CLI (release-it only does version bump, changelog, tag, push)
+echo -e "${YELLOW}Creating draft GitHub release...${NC}"
+gh release create "v${NEW_VERSION}" --draft --title "VoiceTypr v${NEW_VERSION}" --generate-notes
+echo -e "${GREEN}✓ Draft release created${NC}"
+
 # Install required Rust targets if not already installed
 echo -e "${YELLOW}Checking Rust targets...${NC}"
 rustup target add aarch64-apple-darwin 2>/dev/null || true
