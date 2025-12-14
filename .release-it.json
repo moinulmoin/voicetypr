@@ -9,7 +9,8 @@
     "release": true,
     "draft": true,
     "releaseName": "VoiceTypr v${version}",
-    "autoGenerate": true
+    "autoGenerate": true,
+    "skipChecks": true
   },
   "npm": {
     "publish": false
