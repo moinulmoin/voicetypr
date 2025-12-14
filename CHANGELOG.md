@@ -1,3 +1,43 @@
+## [1.11.1](https://github.com/moinulmoin/voicetypr/compare/v1.10.0...v1.11.1) (2025-12-14)
+
+
+### Bug Fixes
+
+* add debug output and explicit GITHUB_TOKEN export ([340ebc9](https://github.com/moinulmoin/voicetypr/commit/340ebc949a3bfa883055345e374e615842df2178))
+* add missing typecheck and requireCommits check from release-it ([a4cbd35](https://github.com/moinulmoin/voicetypr/commit/a4cbd354ce23e2f470aa0220eea6acea42a87707))
+* add skipChecks to bypass release-it token validation ([72e5e64](https://github.com/moinulmoin/voicetypr/commit/72e5e6462bc8db754c7dc238a0c60a2f25d15129))
+* add toast window to capabilities and increase pill-toast gap ([138c902](https://github.com/moinulmoin/voicetypr/commit/138c902cd530140a0ea62f409231e1049c35a2d7))
+* align OpenAI config flow ([#34](https://github.com/moinulmoin/voicetypr/issues/34)) ([80c2cb6](https://github.com/moinulmoin/voicetypr/commit/80c2cb6a981bf14dcda95a878446e84244f0db67))
+* auto-set GITHUB_TOKEN from gh CLI for release-it ([9469a0e](https://github.com/moinulmoin/voicetypr/commit/9469a0e2142ac92652b6ffbc342b2f97b606928d))
+* avoid double log extension ([820bb1e](https://github.com/moinulmoin/voicetypr/commit/820bb1e4ad5e1966caa3721849eae1508e301993))
+* defer mic permission prompts until onboarding complete ([a51b379](https://github.com/moinulmoin/voicetypr/commit/a51b379d1c137d08cf641d3075674defdfc04246))
+* ensure audio device listeners clean up ([51d5e3f](https://github.com/moinulmoin/voicetypr/commit/51d5e3f2d5510376a2ed32d85623e0ea9cfb1f60))
+* improve AI config auto-selection ([311c61e](https://github.com/moinulmoin/voicetypr/commit/311c61eeb7c176ec42797aeb47b2209988e7b58e))
+* improve OpenAI config UX with Update button and better switch visibility ([0a0fa64](https://github.com/moinulmoin/voicetypr/commit/0a0fa6401191d0f1de9c447df7e3750dacf51d61))
+* improve recording feedback with sound, throttle, and duration gates ([a0627c1](https://github.com/moinulmoin/voicetypr/commit/a0627c199939d086e366e4fbd8c255a3fa5cad43))
+* improve toast notification with dynamic width and better error messages ([04f90f1](https://github.com/moinulmoin/voicetypr/commit/04f90f18cb41e5e4827f660c84a7d11b06b6023b))
+* license errors, app reset, and tauri config ([70238af](https://github.com/moinulmoin/voicetypr/commit/70238afa71865a12f3976f14bc4b6398431e7b60))
+* redact API key logging ([e0ceb8d](https://github.com/moinulmoin/voicetypr/commit/e0ceb8d52cc72970396b78ca7c5e955847649e0d))
+* remove unnecessary hooks and additional directories from AI config ([ade912b](https://github.com/moinulmoin/voicetypr/commit/ade912b57dbd8e245c646e220d0dff9f028874e3))
+* route recording errors via pill toast ([3fba56f](https://github.com/moinulmoin/voicetypr/commit/3fba56f75103e1589998e615f94eece75af887a1))
+* sync microphone list with system ([6de9eaa](https://github.com/moinulmoin/voicetypr/commit/6de9eaa7da0ed279cb49ea3ccd383b0f04820e61))
+* treat only watchdog timeout as timeout ([edc260e](https://github.com/moinulmoin/voicetypr/commit/edc260e3efb1ba7dbc8bedd547a61f14bb638dff))
+* use gh CLI for GitHub releases instead of release-it ([89a4d8f](https://github.com/moinulmoin/voicetypr/commit/89a4d8fac24ba0e7d5a8157fc891893a580a0f1f))
+* Windows device ID fallback + license status timeout ([27ab86d](https://github.com/moinulmoin/voicetypr/commit/27ab86d9393a2a32a201f9db00b05bd942d9b6d3))
+
+
+### Features
+
+* add --build-only flag to release script for resuming builds ([7328a35](https://github.com/moinulmoin/voicetypr/commit/7328a3593d5f14ff9f1c6f32669e62fec908f2bb))
+* add --dry-run flag to release script ([6778622](https://github.com/moinulmoin/voicetypr/commit/67786227bc43a043a5b11b370755121bf7efbba5))
+* add clipboard retention preference ([ba80d62](https://github.com/moinulmoin/voicetypr/commit/ba80d62ca92902861d9b412495c2f6938df1161f))
+* improve AI model availability and auto-selection ([a44bdd9](https://github.com/moinulmoin/voicetypr/commit/a44bdd9b83a30d7239356e5a6ab277460fd98a76))
+* move pill/toast lower and auto-reposition on monitor change ([39ab78b](https://github.com/moinulmoin/voicetypr/commit/39ab78b12d2300bf94a87da2e2670df30878350e))
+* queue critical pill events for reliable delivery ([2799928](https://github.com/moinulmoin/voicetypr/commit/2799928b95287eb4e6257feb90bf56b5b51684b8))
+* simplify pill UI to minimal 3-dot indicator with separate toast window ([defc907](https://github.com/moinulmoin/voicetypr/commit/defc90753145f00f2018968d67b15542bd6e13e8))
+
+
+
 # Changelog
 
 # [1.11.0](https://github.com/moinulmoin/voicetypr/compare/v1.10.0...v1.11.0) (2025-12-14)
