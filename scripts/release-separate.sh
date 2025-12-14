@@ -165,26 +165,32 @@ pnpm test:backend
 CURRENT_VERSION=$(node -p "require('./package.json').version")
 echo -e "${GREEN}Current version: ${CURRENT_VERSION}${NC}"
 
-# Use release-it to handle version bump, changelog, tag, and draft release
-echo -e "${YELLOW}Running release-it...${NC}"
-# Ensure GITHUB_TOKEN is set for release-it (get from gh CLI if not set)
-if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-    echo -e "${YELLOW}GITHUB_TOKEN not in env, getting from gh CLI...${NC}"
-    export GITHUB_TOKEN=$(gh auth token)
-else
-    echo -e "${GREEN}✓ GITHUB_TOKEN found (${GITHUB_TOKEN:0:10}...)${NC}"
-fi
-export GITHUB_TOKEN
-pnpm -s release "$RELEASE_TYPE" --ci
-
-# Get new version
+# Bump version
+echo -e "${YELLOW}Bumping version (${RELEASE_TYPE})...${NC}"
+npm version "$RELEASE_TYPE" --no-git-tag-version
 NEW_VERSION=$(node -p "require('./package.json').version")
 echo -e "${GREEN}New version: ${NEW_VERSION}${NC}"
 
-# Create draft GitHub release using gh CLI (release-it only does version bump, changelog, tag, push)
+# Update Cargo.toml
+echo -e "${YELLOW}Updating Cargo.toml...${NC}"
+sed -i '' "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" src-tauri/Cargo.toml
+
+# Generate changelog
+echo -e "${YELLOW}Generating changelog...${NC}"
+npx conventional-changelog -p angular -i CHANGELOG.md -s
+
+# Commit, tag, push
+echo -e "${YELLOW}Committing and tagging...${NC}"
+git add package.json src-tauri/Cargo.toml CHANGELOG.md
+git commit -m "chore: release v${NEW_VERSION}"
+git tag "v${NEW_VERSION}"
+git push origin main
+git push origin "v${NEW_VERSION}"
+
+# Create draft GitHub release
 echo -e "${YELLOW}Creating draft GitHub release...${NC}"
 gh release create "v${NEW_VERSION}" --draft --title "VoiceTypr v${NEW_VERSION}" --generate-notes
-echo -e "${GREEN}✓ Draft release created${NC}"
+echo -e "${GREEN}✓ Draft release v${NEW_VERSION} created${NC}"
 
 # Install required Rust targets if not already installed
 echo -e "${YELLOW}Checking Rust targets...${NC}"
