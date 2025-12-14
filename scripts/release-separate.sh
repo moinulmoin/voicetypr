@@ -2,8 +2,9 @@
 
 # Release script for VoiceTypr with Separate Architecture Binaries and Built-in Tauri Notarization
 # Usage: 
-#   ./scripts/release-separate.sh [patch|minor|major]  - Full release
-#   ./scripts/release-separate.sh --build-only         - Build & upload only (skip version bump)
+#   ./scripts/release-separate.sh [patch|minor|major]            - Full release
+#   ./scripts/release-separate.sh [patch|minor|major] --dry-run  - Preview what would happen
+#   ./scripts/release-separate.sh --build-only                   - Build & upload only (skip version bump)
 
 set -euo pipefail
 
@@ -16,15 +17,36 @@ NC='\033[0m' # No Color
 
 # Parse arguments
 BUILD_ONLY=false
+DRY_RUN=false
 RELEASE_TYPE=""
 
-if [[ "${1:-}" == "--build-only" ]]; then
-    BUILD_ONLY=true
-elif [[ "${1:-}" =~ ^(patch|minor|major)$ ]]; then
-    RELEASE_TYPE="$1"
-else
-    echo -e "${RED}Usage: $0 [patch|minor|major|--build-only]${NC}"
+# Parse all arguments
+for arg in "$@"; do
+    case "$arg" in
+        --build-only)
+            BUILD_ONLY=true
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            ;;
+        patch|minor|major)
+            RELEASE_TYPE="$arg"
+            ;;
+        *)
+            echo -e "${RED}Usage: $0 [patch|minor|major|--build-only] [--dry-run]${NC}"
+            exit 1
+            ;;
+    esac
+done
+
+# Validate arguments
+if [[ "$BUILD_ONLY" == false && -z "$RELEASE_TYPE" ]]; then
+    echo -e "${RED}Usage: $0 [patch|minor|major|--build-only] [--dry-run]${NC}"
     exit 1
+fi
+
+if [[ "$DRY_RUN" == true ]]; then
+    echo -e "${BLUE}=== DRY RUN MODE - No changes will be made ===${NC}"
 fi
 
 # Trap to ensure cleanup happens even on error
@@ -160,14 +182,23 @@ fi
 
 # Check for uncommitted changes
 if [[ -n $(git status -s) ]]; then
-    echo -e "${RED}Error: You have uncommitted changes${NC}"
-    git status -s
-    exit 1
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "${YELLOW}Warning: You have uncommitted changes (ignored for dry-run)${NC}"
+        git status -s
+    else
+        echo -e "${RED}Error: You have uncommitted changes${NC}"
+        git status -s
+        exit 1
+    fi
 fi
 
-# Pull latest changes
-echo -e "${YELLOW}Pulling latest changes...${NC}"
-git pull --ff-only origin main
+# Pull latest changes (skip for dry-run)
+if [[ "$DRY_RUN" == true ]]; then
+    echo -e "${BLUE}[DRY RUN] Would pull latest changes${NC}"
+else
+    echo -e "${YELLOW}Pulling latest changes...${NC}"
+    git pull --ff-only origin main
+fi
 
 if [[ "$BUILD_ONLY" == true ]]; then
     # BUILD-ONLY MODE: Get version and verify tag/release exist
@@ -213,11 +244,32 @@ else
     CURRENT_VERSION=$(node -p "require('./package.json').version")
     echo -e "${GREEN}Current version: ${CURRENT_VERSION}${NC}"
 
+    # Calculate new version
+    IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+    case "$RELEASE_TYPE" in
+        major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
+        minor) NEW_VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+        patch) NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+    esac
+    echo -e "${GREEN}New version: ${NEW_VERSION}${NC}"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "${BLUE}[DRY RUN] Would bump version: ${CURRENT_VERSION} → ${NEW_VERSION}${NC}"
+        echo -e "${BLUE}[DRY RUN] Would update: package.json, Cargo.toml, CHANGELOG.md${NC}"
+        echo -e "${BLUE}[DRY RUN] Would commit: 'chore: release v${NEW_VERSION}'${NC}"
+        echo -e "${BLUE}[DRY RUN] Would create tag: v${NEW_VERSION}${NC}"
+        echo -e "${BLUE}[DRY RUN] Would push to origin/main${NC}"
+        echo -e "${BLUE}[DRY RUN] Would create draft GitHub release: v${NEW_VERSION}${NC}"
+        echo -e "${BLUE}[DRY RUN] Would build aarch64-apple-darwin (notarized)${NC}"
+        echo -e "${BLUE}[DRY RUN] Would sign and upload artifacts${NC}"
+        echo ""
+        echo -e "${GREEN}=== DRY RUN COMPLETE - No changes made ===${NC}"
+        exit 0
+    fi
+
     # Bump version
     echo -e "${YELLOW}Bumping version (${RELEASE_TYPE})...${NC}"
     npm version "$RELEASE_TYPE" --no-git-tag-version
-    NEW_VERSION=$(node -p "require('./package.json').version")
-    echo -e "${GREEN}New version: ${NEW_VERSION}${NC}"
 
     # Update Cargo.toml
     echo -e "${YELLOW}Updating Cargo.toml...${NC}"
