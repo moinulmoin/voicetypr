@@ -169,8 +169,12 @@ echo -e "${GREEN}Current version: ${CURRENT_VERSION}${NC}"
 echo -e "${YELLOW}Running release-it...${NC}"
 # Ensure GITHUB_TOKEN is set for release-it (get from gh CLI if not set)
 if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+    echo -e "${YELLOW}GITHUB_TOKEN not in env, getting from gh CLI...${NC}"
     export GITHUB_TOKEN=$(gh auth token)
+else
+    echo -e "${GREEN}✓ GITHUB_TOKEN found (${GITHUB_TOKEN:0:10}...)${NC}"
 fi
+export GITHUB_TOKEN
 pnpm -s release "$RELEASE_TYPE" --ci
 
 # Get new version
