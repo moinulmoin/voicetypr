@@ -137,9 +137,9 @@ if (-not $SkipBuild) {
         $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
         
         if ($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
-            & cargo tauri signer sign -f $keyPath -p $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD $installerPath
+            & pnpm tauri signer sign -f $keyPath -p $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD $installerPath
         } else {
-            & cargo tauri signer sign -f $keyPath -p "" $installerPath
+            & pnpm tauri signer sign -f $keyPath -p "" $installerPath
         }
         
         if (Test-Path "$installerPath.sig") {
