@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # Release script for VoiceTypr with Separate Architecture Binaries and Built-in Tauri Notarization
-# Usage: ./scripts/release-separate.sh [patch|minor|major]
+# Usage: 
+#   ./scripts/release-separate.sh [patch|minor|major]  - Full release
+#   ./scripts/release-separate.sh --build-only         - Build & upload only (skip version bump)
 
 set -euo pipefail
 
@@ -12,10 +14,16 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Check if release type is provided
-RELEASE_TYPE=${1:-patch}
-if [[ ! "$RELEASE_TYPE" =~ ^(patch|minor|major)$ ]]; then
-    echo -e "${RED}Error: Invalid release type. Use: patch, minor, or major${NC}"
+# Parse arguments
+BUILD_ONLY=false
+RELEASE_TYPE=""
+
+if [[ "${1:-}" == "--build-only" ]]; then
+    BUILD_ONLY=true
+elif [[ "${1:-}" =~ ^(patch|minor|major)$ ]]; then
+    RELEASE_TYPE="$1"
+else
+    echo -e "${RED}Usage: $0 [patch|minor|major|--build-only]${NC}"
     exit 1
 fi
 
@@ -129,7 +137,11 @@ fi
 # Set CI mode for non-interactive operation
 export CI=true
 
-echo -e "${GREEN}🚀 Starting VoiceTypr separate architecture release process (${RELEASE_TYPE})${NC}"
+if [[ "$BUILD_ONLY" == true ]]; then
+    echo -e "${GREEN}🔨 Starting VoiceTypr BUILD-ONLY mode${NC}"
+else
+    echo -e "${GREEN}🚀 Starting VoiceTypr release process (${RELEASE_TYPE})${NC}"
+fi
 
 require_cmd git
 require_cmd pnpm
@@ -157,55 +169,77 @@ fi
 echo -e "${YELLOW}Pulling latest changes...${NC}"
 git pull --ff-only origin main
 
-# Run typecheck first (was in release-it before:init)
-echo -e "${YELLOW}Running typecheck...${NC}"
-pnpm typecheck
-
-# Run backend tests
-echo -e "${YELLOW}Running backend tests...${NC}"
-pnpm test:backend
-
-# Check there are commits since last tag (was requireCommits in release-it)
-LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-if [[ -n "$LAST_TAG" ]]; then
-    COMMIT_COUNT=$(git rev-list "${LAST_TAG}..HEAD" --count)
-    if [[ "$COMMIT_COUNT" -eq 0 ]]; then
-        echo -e "${RED}Error: No commits since last tag ${LAST_TAG}${NC}"
+if [[ "$BUILD_ONLY" == true ]]; then
+    # BUILD-ONLY MODE: Get version and verify tag/release exist
+    NEW_VERSION=$(node -p "require('./package.json').version")
+    echo -e "${GREEN}Using existing version: ${NEW_VERSION}${NC}"
+    
+    # Verify tag exists
+    if ! git tag -l "v${NEW_VERSION}" | grep -q "v${NEW_VERSION}"; then
+        echo -e "${RED}Error: Tag v${NEW_VERSION} does not exist${NC}"
         exit 1
     fi
-    echo -e "${GREEN}✓ Found ${COMMIT_COUNT} commits since ${LAST_TAG}${NC}"
+    echo -e "${GREEN}✓ Tag v${NEW_VERSION} exists${NC}"
+    
+    # Verify draft release exists
+    if ! gh release view "v${NEW_VERSION}" &>/dev/null; then
+        echo -e "${RED}Error: GitHub release v${NEW_VERSION} does not exist${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Draft release v${NEW_VERSION} exists${NC}"
+else
+    # FULL RELEASE MODE: Bump version, tag, create release
+    
+    # Run typecheck first (was in release-it before:init)
+    echo -e "${YELLOW}Running typecheck...${NC}"
+    pnpm typecheck
+
+    # Run backend tests
+    echo -e "${YELLOW}Running backend tests...${NC}"
+    pnpm test:backend
+
+    # Check there are commits since last tag (was requireCommits in release-it)
+    LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+    if [[ -n "$LAST_TAG" ]]; then
+        COMMIT_COUNT=$(git rev-list "${LAST_TAG}..HEAD" --count)
+        if [[ "$COMMIT_COUNT" -eq 0 ]]; then
+            echo -e "${RED}Error: No commits since last tag ${LAST_TAG}${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✓ Found ${COMMIT_COUNT} commits since ${LAST_TAG}${NC}"
+    fi
+
+    # Get current version
+    CURRENT_VERSION=$(node -p "require('./package.json').version")
+    echo -e "${GREEN}Current version: ${CURRENT_VERSION}${NC}"
+
+    # Bump version
+    echo -e "${YELLOW}Bumping version (${RELEASE_TYPE})...${NC}"
+    npm version "$RELEASE_TYPE" --no-git-tag-version
+    NEW_VERSION=$(node -p "require('./package.json').version")
+    echo -e "${GREEN}New version: ${NEW_VERSION}${NC}"
+
+    # Update Cargo.toml
+    echo -e "${YELLOW}Updating Cargo.toml...${NC}"
+    sed -i '' "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" src-tauri/Cargo.toml
+
+    # Generate changelog
+    echo -e "${YELLOW}Generating changelog...${NC}"
+    npx conventional-changelog -p angular -i CHANGELOG.md -s
+
+    # Commit, tag, push
+    echo -e "${YELLOW}Committing and tagging...${NC}"
+    git add package.json src-tauri/Cargo.toml CHANGELOG.md
+    git commit -m "chore: release v${NEW_VERSION}"
+    git tag "v${NEW_VERSION}"
+    git push origin main
+    git push origin "v${NEW_VERSION}"
+
+    # Create draft GitHub release
+    echo -e "${YELLOW}Creating draft GitHub release...${NC}"
+    gh release create "v${NEW_VERSION}" --draft --title "VoiceTypr v${NEW_VERSION}" --generate-notes
+    echo -e "${GREEN}✓ Draft release v${NEW_VERSION} created${NC}"
 fi
-
-# Get current version
-CURRENT_VERSION=$(node -p "require('./package.json').version")
-echo -e "${GREEN}Current version: ${CURRENT_VERSION}${NC}"
-
-# Bump version
-echo -e "${YELLOW}Bumping version (${RELEASE_TYPE})...${NC}"
-npm version "$RELEASE_TYPE" --no-git-tag-version
-NEW_VERSION=$(node -p "require('./package.json').version")
-echo -e "${GREEN}New version: ${NEW_VERSION}${NC}"
-
-# Update Cargo.toml
-echo -e "${YELLOW}Updating Cargo.toml...${NC}"
-sed -i '' "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" src-tauri/Cargo.toml
-
-# Generate changelog
-echo -e "${YELLOW}Generating changelog...${NC}"
-npx conventional-changelog -p angular -i CHANGELOG.md -s
-
-# Commit, tag, push
-echo -e "${YELLOW}Committing and tagging...${NC}"
-git add package.json src-tauri/Cargo.toml CHANGELOG.md
-git commit -m "chore: release v${NEW_VERSION}"
-git tag "v${NEW_VERSION}"
-git push origin main
-git push origin "v${NEW_VERSION}"
-
-# Create draft GitHub release
-echo -e "${YELLOW}Creating draft GitHub release...${NC}"
-gh release create "v${NEW_VERSION}" --draft --title "VoiceTypr v${NEW_VERSION}" --generate-notes
-echo -e "${GREEN}✓ Draft release v${NEW_VERSION} created${NC}"
 
 # Install required Rust targets if not already installed
 echo -e "${YELLOW}Checking Rust targets...${NC}"
