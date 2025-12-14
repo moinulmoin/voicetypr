@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
-import { toast } from "sonner";
 import { RecentRecordings } from "../sections/RecentRecordings";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
@@ -53,26 +52,6 @@ export function RecordingsTab() {
         registerEvent("history-updated", async () => {
           console.log("[RecordingsTab] Full reload (delete/clear operation)");
           await loadHistory();
-        });
-
-        // Listen for recording errors
-        registerEvent<string>("recording-error", (errorMessage) => {
-          console.error("Recording error:", errorMessage);
-          
-          toast.error('Recording Failed', {
-            description: errorMessage || 'An error occurred during recording. Please try again.',
-            duration: 6000
-          });
-        });
-
-        // Listen for transcription errors
-        registerEvent<string>("transcription-error", (errorMessage) => {
-          console.error("Transcription error:", errorMessage);
-          
-          toast.error('Transcription Failed', {
-            description: errorMessage || 'An error occurred during transcription. Please try again.',
-            duration: 6000
-          });
         });
       } catch (error) {
         console.error("Failed to initialize recordings tab:", error);

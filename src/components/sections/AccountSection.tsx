@@ -15,7 +15,7 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 
 export function AccountSection() {
-  const { status, isLoading, activateLicense, deactivateLicense, openPurchasePage } = useLicense();
+  const { status, isLoading, checkStatus, activateLicense, deactivateLicense, openPurchasePage } = useLicense();
   const [licenseKey, setLicenseKey] = useState('');
   const [isActivating, setIsActivating] = useState(false);
 
@@ -54,7 +54,7 @@ export function AccountSection() {
   };
 
   const formatLicenseStatus = () => {
-    if (!status) return 'Loading...';
+    if (!status) return 'Unknown';
 
     switch (status.status) {
       case 'licensed':
@@ -128,6 +128,17 @@ export function AccountSection() {
                 </Badge>
               </div>
 
+              {!isLoading && !status && (
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground">
+                    Couldn’t load license status.
+                  </p>
+                  <Button onClick={checkStatus} variant="outline" size="sm">
+                    Retry
+                  </Button>
+                </div>
+              )}
+
               {/* Licensed user info */}
               {status && status.status === 'licensed' && (
                 <div className="space-y-4">
@@ -164,10 +175,10 @@ export function AccountSection() {
               )}
 
               {/* Actions for unlicensed/expired users */}
-              {status && (status.status === 'expired' || status.status === 'none' || status.status === 'trial') && (
+              {(!isLoading && (!status || status.status === 'expired' || status.status === 'none' || status.status === 'trial')) && (
                 <div className="space-y-4">
                   {/* Trial/Expired Notice */}
-                  {(status.status === 'trial' || status.status === 'expired') && (
+                  {status && (status.status === 'trial' || status.status === 'expired') && (
                     <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4">
                       <div className="flex items-start gap-3">
                         <div className="p-1.5 rounded-md bg-amber-500/10">

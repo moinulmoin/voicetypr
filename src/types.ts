@@ -48,7 +48,6 @@ export interface AppSettings {
   transcription_cleanup_days?: number | null;
   launch_at_startup?: boolean;
   onboarding_completed?: boolean;
-  compact_recording_status?: boolean;
   check_updates_automatically?: boolean;
   selected_microphone?: string | null;
   // Push-to-talk support
@@ -56,6 +55,11 @@ export interface AppSettings {
   use_different_ptt_key?: boolean;
   ptt_hotkey?: string;
   current_model_engine?: 'whisper' | 'parakeet' | 'soniox';
+  keep_transcription_in_clipboard?: boolean;
+  // Audio feedback
+  play_sound_on_recording?: boolean;
+  // Pill indicator visibility
+  show_pill_indicator?: boolean;
 }
 
 export interface TranscriptionHistory {

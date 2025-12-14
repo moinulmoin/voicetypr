@@ -298,21 +298,6 @@ mod event_emission_tests {
                     "severity": "warning"
                 }),
             ),
-            (
-                "recording-error",
-                json!({
-                    "type": "recording-error",
-                    "message": "Test error message",
-                    "error_code": "E001",
-                    "recoverable": true,
-                    "action": {
-                        "type": "retry",
-                        "label": "Try Again"
-                    },
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                    "severity": "error"
-                }),
-            ),
         ];
 
         for (event_name, payload) in required_events {
@@ -332,7 +317,7 @@ mod event_emission_tests {
         }
 
         let events = collector.get_events();
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 2);
 
         log::info!("✅ All event payloads contain required fields");
     }

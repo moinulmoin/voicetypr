@@ -1,3 +1,4 @@
+use crate::audio::device_watcher::try_start_device_watcher_if_ready;
 use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_combination};
 use crate::parakeet::ParakeetManager;
 use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
@@ -21,13 +22,17 @@ pub struct Settings {
     pub pill_position: Option<(f64, f64)>,
     pub launch_at_startup: bool,
     pub onboarding_completed: bool,
-    pub compact_recording_status: bool,
     pub check_updates_automatically: bool,
     pub selected_microphone: Option<String>,
     // Push-to-talk support
     pub recording_mode: String, // "toggle" or "push_to_talk"
     pub use_different_ptt_key: bool,
     pub ptt_hotkey: Option<String>,
+    pub keep_transcription_in_clipboard: bool,
+    // Audio feedback
+    pub play_sound_on_recording: bool,
+    // Pill indicator visibility when idle
+    pub show_pill_indicator: bool,
 }
 
 impl Default for Settings {
@@ -43,12 +48,14 @@ impl Default for Settings {
             pill_position: None,              // No saved position initially
             launch_at_startup: false,         // Default to not launching at startup
             onboarding_completed: false,      // Default to not completed
-            compact_recording_status: true,   // Default to compact mode
             check_updates_automatically: true, // Default to automatic updates enabled
             selected_microphone: None,        // Default to system default microphone
             recording_mode: "toggle".to_string(), // Default to toggle mode for backward compatibility
             use_different_ptt_key: false,         // Default to using same key
             ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
+            keep_transcription_in_clipboard: false, // Default to restoring clipboard after paste
+            play_sound_on_recording: true,        // Default to playing sound on recording start
+            show_pill_indicator: true,            // Default to showing pill indicator when idle
         }
     }
 }
@@ -106,10 +113,6 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("onboarding_completed")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().onboarding_completed),
-        compact_recording_status: store
-            .get("compact_recording_status")
-            .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| Settings::default().compact_recording_status),
         check_updates_automatically: store
             .get("check_updates_automatically")
             .and_then(|v| v.as_bool())
@@ -128,6 +131,18 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
         ptt_hotkey: store
             .get("ptt_hotkey")
             .and_then(|v| v.as_str().map(|s| s.to_string())),
+        keep_transcription_in_clipboard: store
+            .get("keep_transcription_in_clipboard")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().keep_transcription_in_clipboard),
+        play_sound_on_recording: store
+            .get("play_sound_on_recording")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().play_sound_on_recording),
+        show_pill_indicator: store
+            .get("show_pill_indicator")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().show_pill_indicator),
     };
 
     // Pill position is already loaded from store, no need for duplicate state
@@ -139,7 +154,7 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
 pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
-    // Check if model and recording mode changed
+    // Check if model, recording mode, and onboarding changed
     let old_model = store
         .get("current_model")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -148,6 +163,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         .get("recording_mode")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| Settings::default().recording_mode);
+    let old_onboarding_completed = store
+        .get("onboarding_completed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
@@ -166,10 +185,6 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set("launch_at_startup", json!(settings.launch_at_startup));
     store.set("onboarding_completed", json!(settings.onboarding_completed));
     store.set(
-        "compact_recording_status",
-        json!(settings.compact_recording_status),
-    );
-    store.set(
         "check_updates_automatically",
         json!(settings.check_updates_automatically),
     );
@@ -184,6 +199,18 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     if let Some(ref ptt_hotkey) = settings.ptt_hotkey {
         store.set("ptt_hotkey", json!(ptt_hotkey));
     }
+    store.set(
+        "keep_transcription_in_clipboard",
+        json!(settings.keep_transcription_in_clipboard),
+    );
+    store.set(
+        "play_sound_on_recording",
+        json!(settings.play_sound_on_recording),
+    );
+    store.set(
+        "show_pill_indicator",
+        json!(settings.show_pill_indicator),
+    );
 
     // Save pill position if provided
     if let Some((x, y)) = settings.pill_position {
@@ -294,6 +321,12 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         if let Err(e) = update_tray_menu(app.clone()).await {
             log::warn!("Failed to update tray menu after mode change: {}", e);
         }
+    }
+
+    // If onboarding just completed, try to start device watcher
+    if !old_onboarding_completed && settings.onboarding_completed {
+        log::info!("Onboarding just completed, checking if device watcher should start");
+        try_start_device_watcher_if_ready(&app).await;
     }
 
     Ok(())

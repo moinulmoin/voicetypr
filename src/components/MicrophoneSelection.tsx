@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils"
 import { Check, ChevronsUpDown, Mic } from "lucide-react"
 import * as React from "react"
 import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 import { toast } from "sonner"
 
 interface MicrophoneSelectionProps {
@@ -32,6 +33,7 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
 
   // Fetch audio devices on mount
   React.useEffect(() => {
+
     const fetchDevices = async () => {
       try {
         setLoading(true)
@@ -47,6 +49,25 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
     }
 
     fetchDevices()
+
+    const listenerPromise = listen<string[]>("audio-devices-updated", ({ payload }) => {
+      console.log("Audio devices updated:", payload)
+      setDevices(Array.isArray(payload) ? payload : [])
+    })
+      .catch((error) => {
+        console.warn("Failed to listen for audio device updates:", error)
+        return () => {}
+      })
+
+    return () => {
+      listenerPromise
+        ?.then((dispose) => {
+          dispose()
+        })
+        .catch((error) => {
+          console.warn("Failed to unsubscribe from audio device updates:", error)
+        })
+    }
   }, [])
 
   // Check if selected device is available when devices list changes

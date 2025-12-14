@@ -295,20 +295,68 @@ export function GeneralSettings() {
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label
-                    htmlFor="compact-recording"
+                    htmlFor="clipboard-retain"
                     className="text-sm font-medium"
                   >
-                    Compact Status
+                    Keep Transcript in Clipboard
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    Show minimal recording indicator window
+                    Leave transcribed text available for manual pastes
                   </p>
                 </div>
                 <Switch
-                  id="compact-recording"
-                  checked={settings.compact_recording_status !== false}
+                  id="clipboard-retain"
+                  checked={settings.keep_transcription_in_clipboard ?? false}
                   onCheckedChange={async (checked) =>
-                    await updateSettings({ compact_recording_status: checked })
+                    await updateSettings({
+                      keep_transcription_in_clipboard: checked,
+                    })
+                  }
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor="sound-on-recording"
+                    className="text-sm font-medium"
+                  >
+                    Sound on Recording
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Play a sound when recording starts
+                  </p>
+                </div>
+                <Switch
+                  id="sound-on-recording"
+                  checked={settings.play_sound_on_recording ?? true}
+                  onCheckedChange={async (checked) =>
+                    await updateSettings({
+                      play_sound_on_recording: checked,
+                    })
+                  }
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor="show-pill-indicator"
+                    className="text-sm font-medium"
+                  >
+                    Show Pill Indicator
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Display the pill indicator when idle
+                  </p>
+                </div>
+                <Switch
+                  id="show-pill-indicator"
+                  checked={settings.show_pill_indicator ?? true}
+                  onCheckedChange={async (checked) =>
+                    await updateSettings({
+                      show_pill_indicator: checked,
+                    })
                   }
                 />
               </div>

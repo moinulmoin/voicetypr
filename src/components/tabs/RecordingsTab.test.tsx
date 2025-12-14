@@ -146,23 +146,4 @@ describe('RecordingsTab', () => {
     });
   });
 
-  it('ignores recording error event in main window (pill handles toasts)', async () => {
-    const { toast } = await import('sonner');
-    
-    render(<RecordingsTab />);
-    
-    await act(async () => { await emit('recording-error', 'Microphone not available'); });
-    // Routed to pill window; main should not show toast
-    expect(toast.error).not.toHaveBeenCalled();
-  });
-
-  it('ignores transcription error event in main window (pill handles toasts)', async () => {
-    const { toast } = await import('sonner');
-    
-    render(<RecordingsTab />);
-    
-    await act(async () => { await emit('transcription-error', 'Model not loaded'); });
-    // Routed to pill window; main should not show toast
-    expect(toast.error).not.toHaveBeenCalled();
-  });
 });

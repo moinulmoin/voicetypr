@@ -1,6 +1,6 @@
 use crate::ai::{AIEnhancementRequest, AIProviderConfig, AIProviderFactory, EnhancementOptions};
+use crate::commands::audio::pill_toast;
 use once_cell::sync::Lazy;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -20,20 +20,17 @@ fn check_has_api_key<R: tauri::Runtime>(
     cache: &HashMap<String, String>,
 ) -> bool {
     if provider == "openai" {
-        let no_auth = store
-            .get("ai_openai_no_auth")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        no_auth || cache.contains_key(&format!("ai_api_key_{}", provider))
+        let configured_base = store.get("ai_openai_base_url").is_some();
+        configured_base || cache.contains_key(&format!("ai_api_key_{}", provider))
     } else {
         cache.contains_key(&format!("ai_api_key_{}", provider))
     }
 }
 
-// Normalize base URL to a Chat Completions endpoint. Accepts base with or without /v1 or /openai/v1.
+// Normalize base URL to a Chat Completions endpoint. Base should include version (e.g., .../v1).
 fn normalize_chat_completions_url(base: &str) -> String {
     let b = base.trim_end_matches('/');
-    format!("{}/v1/chat/completions", b)
+    format!("{}/chat/completions", b)
 }
 
 // removed unused validate_api_key helper
@@ -47,10 +44,9 @@ pub struct AISettings {
     pub has_api_key: bool,
 }
 
-// Validation patterns
+// Validation pattern for providers
 lazy_static::lazy_static! {
-    static ref PROVIDER_REGEX: Regex = Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
-    static ref MODEL_REGEX: Regex = Regex::new(r"^[a-zA-Z0-9_.-]+$").unwrap();
+    static ref PROVIDER_REGEX: regex::Regex = regex::Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
 }
 
 // Supported AI providers
@@ -70,13 +66,6 @@ fn validate_provider_name(provider: &str) -> Result<(), String> {
         ));
     }
 
-    Ok(())
-}
-
-fn validate_model_name(model: &str) -> Result<(), String> {
-    if !MODEL_REGEX.is_match(model) {
-        return Err("Invalid model name format".to_string());
-    }
     Ok(())
 }
 
@@ -152,15 +141,23 @@ pub async fn get_ai_settings_for_provider(
 
 // Frontend is responsible for saving API keys to Stronghold
 // This command caches the key for backend use
+#[derive(Deserialize)]
+pub struct CacheApiKeyArgs {
+    pub provider: String,
+    #[serde(alias = "apiKey", alias = "api_key")]
+    pub api_key: String,
+}
+
 #[tauri::command]
-pub async fn cache_ai_api_key(
-    _app: tauri::AppHandle,
-    provider: String,
-    api_key: String,
-) -> Result<(), String> {
+pub async fn cache_ai_api_key(_app: tauri::AppHandle, args: CacheApiKeyArgs) -> Result<(), String> {
+    let CacheApiKeyArgs { provider, api_key } = args;
     validate_provider_name(&provider)?;
 
     if api_key.trim().is_empty() {
+        log::warn!(
+            "Attempted to cache empty API key for provider: {}",
+            provider
+        );
         return Err("API key cannot be empty".to_string());
     }
 
@@ -168,26 +165,55 @@ pub async fn cache_ai_api_key(
     // Validation happens when saving new keys in a separate command
 
     // Store API key in memory cache
-    let mut cache = API_KEY_CACHE
-        .lock()
-        .map_err(|_| "Failed to access cache".to_string())?;
-    cache.insert(format!("ai_api_key_{}", provider), api_key);
+    let mut cache = API_KEY_CACHE.lock().map_err(|e| {
+        log::error!("Failed to acquire API key cache lock: {}", e);
+        "Failed to access cache".to_string()
+    })?;
+
+    let key_name = format!("ai_api_key_{}", provider);
+    cache.insert(key_name.clone(), api_key.clone());
 
     log::info!("API key cached for provider: {}", provider);
+
+    // Verify the key was actually stored
+    if cache.contains_key(&key_name) {
+        log::debug!("Verified API key is in cache for provider: {}", provider);
+    } else {
+        log::error!(
+            "Failed to store API key in cache for provider: {}",
+            provider
+        );
+        return Err("Failed to store API key in cache".to_string());
+    }
 
     Ok(())
 }
 
 // Validate and save a new API key
+#[derive(Deserialize)]
+pub struct ValidateAndCacheApiKeyArgs {
+    pub provider: String,
+    #[serde(alias = "apiKey", alias = "api_key")]
+    pub api_key: Option<String>,
+    #[serde(alias = "baseUrl", alias = "base_url")]
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+    #[serde(alias = "noAuth", alias = "no_auth")]
+    pub no_auth: Option<bool>,
+}
+
 #[tauri::command]
 pub async fn validate_and_cache_api_key(
     app: tauri::AppHandle,
-    provider: String,
-    api_key: Option<String>,
-    base_url: Option<String>,
-    model: Option<String>,
-    no_auth: Option<bool>,
+    args: ValidateAndCacheApiKeyArgs,
 ) -> Result<(), String> {
+    let ValidateAndCacheApiKeyArgs {
+        provider,
+        api_key,
+        base_url,
+        model,
+        no_auth,
+    } = args;
     validate_provider_name(&provider)?;
 
     let provided_key = api_key.clone().unwrap_or_default();
@@ -213,7 +239,7 @@ pub async fn validate_and_cache_api_key(
     if provider == "openai" {
         let base = base_url
             .clone()
-            .unwrap_or_else(|| "https://api.openai.com".to_string());
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
         let validate_url = normalize_chat_completions_url(&base);
 
         let client = reqwest::Client::new();
@@ -370,33 +396,38 @@ pub async fn update_ai_settings(
         validate_provider_name(&provider)?;
     }
 
-    // Allow empty model (for deselection) but validate if not empty
-    if !model.is_empty() {
-        validate_model_name(&model)?;
-    }
-
     // Don't allow enabling without a model selected
     if enabled && model.is_empty() {
         log::warn!("Attempted to enable AI enhancement without a model selected");
         return Err("Please select a model before enabling AI enhancement".to_string());
     }
 
-    // Check if API key exists when enabling (skip if no_auth is true)
+    // Check if API key exists when enabling
     if enabled {
-        let store = app.store("settings").map_err(|e| e.to_string())?;
-        let no_auth = store
-            .get("ai_openai_no_auth")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        if !no_auth {
+        if provider == "openai" {
+            let store = app.store("settings").map_err(|e| e.to_string())?;
             let cache_has_key = {
                 let cache = API_KEY_CACHE
                     .lock()
                     .map_err(|_| "Failed to access cache".to_string())?;
                 cache.contains_key(&format!("ai_api_key_{}", provider))
             };
+            let configured_base = store.get("ai_openai_base_url").is_some();
 
+            if !(cache_has_key || configured_base) {
+                log::warn!(
+                    "Attempted to enable AI enhancement without cached API key or configured base URL for provider: {}",
+                    provider
+                );
+                return Err("API key not found. Please add an API key first.".to_string());
+            }
+        } else {
+            let cache_has_key = {
+                let cache = API_KEY_CACHE
+                    .lock()
+                    .map_err(|_| "Failed to access cache".to_string())?;
+                cache.contains_key(&format!("ai_api_key_{}", provider))
+            };
             if !cache_has_key {
                 log::warn!(
                     "Attempted to enable AI enhancement without cached API key for provider: {}",
@@ -527,33 +558,33 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
         let base_url = store
             .get("ai_openai_base_url")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| "https://api.openai.com".to_string());
-        let no_auth = store
-            .get("ai_openai_no_auth")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
-        let api_key = if no_auth {
-            "".to_string()
+        // Send Authorization only if a key is cached
+        let cache = API_KEY_CACHE.lock().map_err(|e| {
+            log::error!("Failed to access API key cache: {}", e);
+            "Failed to access cache".to_string()
+        })?;
+        let key_name = format!("ai_api_key_{}", provider);
+        let cached = cache.get(&key_name).cloned();
+
+        // Log detailed information about API key lookup
+        if cached.is_some() {
+            log::info!("Using cached API key for OpenAI provider");
         } else {
-            let cache = API_KEY_CACHE
-                .lock()
-                .map_err(|_| "Failed to access cache".to_string())?;
-            let key_name = format!("ai_api_key_{}", provider);
-            cache.get(&key_name).cloned().ok_or_else(|| {
-                log::error!(
-                    "API key not found in cache for provider: {}. Cache keys: {:?}",
-                    provider,
-                    cache.keys().collect::<Vec<_>>()
-                );
-                "API key not found in cache".to_string()
-            })?
-        };
+            log::warn!("No cached API key found for OpenAI provider, using no-auth mode");
+            log::debug!(
+                "Available cache keys: {:?}",
+                cache.keys().collect::<Vec<_>>()
+            );
+        }
+        drop(cache);
 
         let mut opts = std::collections::HashMap::new();
         opts.insert("base_url".into(), serde_json::Value::String(base_url));
-        opts.insert("no_auth".into(), serde_json::Value::Bool(no_auth));
-        (api_key, opts)
+        opts.insert("no_auth".into(), serde_json::Value::Bool(cached.is_none()));
+
+        (cached.unwrap_or_default(), opts)
     } else if provider == "groq" || provider == "gemini" {
         // Require API key from in-memory cache
         let cache = API_KEY_CACHE
@@ -616,10 +647,10 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
             Ok(response.enhanced_text)
         }
         Err(e) => {
-            log::error!("AI enhancement failed: {}", e);
-            // Emit to pill window with short message only
-            let _ = crate::emit_to_window(&app, "pill", "formatting-error", "Formatting failed");
-            Err(format!("AI enhancement failed: {}", e))
+            log::error!("AI formatting failed: {}", e);
+            // Emit formatting error via pill toast
+            pill_toast(&app, "Formatting failed", 1500);
+            Err(format!("AI formatting failed: {}", e))
         }
     }
 }
@@ -637,7 +668,7 @@ pub struct SetOpenAIConfigArgs {
     #[serde(alias = "baseUrl", alias = "base_url")]
     pub base_url: String,
     #[serde(alias = "noAuth", alias = "no_auth")]
-    pub no_auth: bool,
+    pub no_auth: Option<bool>,
 }
 
 #[tauri::command]
@@ -650,7 +681,10 @@ pub async fn set_openai_config(
         "ai_openai_base_url",
         serde_json::Value::String(args.base_url),
     );
-    store.set("ai_openai_no_auth", serde_json::Value::Bool(args.no_auth));
+    if let Some(no_auth) = args.no_auth {
+        // Backward-compatibility: accept but not required
+        store.set("ai_openai_no_auth", serde_json::Value::Bool(no_auth));
+    }
     store
         .save()
         .map_err(|e| format!("Failed to save AI settings: {}", e))?;
@@ -663,7 +697,7 @@ pub async fn get_openai_config(app: tauri::AppHandle) -> Result<OpenAIConfig, St
     let base_url = store
         .get("ai_openai_base_url")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "https://api.openai.com".to_string());
+        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
     let no_auth = store
         .get("ai_openai_no_auth")
         .and_then(|v| v.as_bool())
@@ -685,16 +719,5 @@ mod tests {
         assert!(validate_provider_name("test provider").is_err());
         assert!(validate_provider_name("test@provider").is_err());
         assert!(validate_provider_name("").is_err());
-    }
-
-    #[test]
-    fn test_model_validation() {
-        assert!(validate_model_name("llama-3.1-8b-instant").is_ok());
-        assert!(validate_model_name("gpt-4").is_ok());
-        assert!(validate_model_name("model.v1").is_ok());
-
-        assert!(validate_model_name("model with spaces").is_err());
-        assert!(validate_model_name("model@v1").is_err());
-        assert!(validate_model_name("").is_err());
     }
 }

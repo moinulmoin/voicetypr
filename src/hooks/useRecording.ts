@@ -72,18 +72,10 @@ export function useRecording(): UseRecordingReturn {
       // NOTE: We don't listen to transcription-complete here anymore
       // The state will be set to idle by recording-state-changed event
       // after the pill finishes processing and calls transcription_processed
-
-      unsubscribers.push(await listen<string>('transcription-error', (event) => {
-        console.error('[Recording Hook] Transcription error:', event.payload);
-        setError(event.payload);
-        setState('error');
-      }));
-
-      unsubscribers.push(await listen<string>('recording-error', (event) => {
-        console.error('[Recording Hook] Recording error:', event.payload);
-        setError(event.payload);
-        setState('error');
-      }));
+      
+      // NOTE: Error events (transcription-error, recording-error) are handled
+      // via pill_toast() in the backend and shown in FeedbackToast window.
+      // State errors come through recording-state-changed event.
     };
 
     setupListeners();

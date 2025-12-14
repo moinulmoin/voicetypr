@@ -42,13 +42,13 @@ impl OpenAIProvider {
             .build()
             .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
-        // Resolve base URL: always map base to /v1/chat/completions
+        // Resolve base URL: expect versioned base (e.g., https://api.openai.com/v1) and append only /chat/completions
         let base_root = options
             .get("base_url")
             .and_then(|v| v.as_str())
-            .unwrap_or("https://api.openai.com");
+            .unwrap_or("https://api.openai.com/v1");
         let base_trim = base_root.trim_end_matches('/');
-        let base_url = format!("{}/v1/chat/completions", base_trim);
+        let base_url = format!("{}/chat/completions", base_trim);
 
         // Ensure the normalized values are kept in options for downstream if needed
         options.insert(

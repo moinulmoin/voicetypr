@@ -2,7 +2,13 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-export function useAccessibilityPermission() {
+interface AccessibilityPermissionOptions {
+  // When false, skip the automatic check on mount and rely on explicit calls.
+  checkOnMount?: boolean;
+}
+
+export function useAccessibilityPermission(options?: AccessibilityPermissionOptions) {
+  const { checkOnMount = true } = options || {};
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [isChecking, setIsChecking] = useState(false);
 
@@ -32,10 +38,11 @@ export function useAccessibilityPermission() {
     }
   }, []);
 
-  // Check permission on mount
+  // Optionally check permission on mount
   useEffect(() => {
+    if (!checkOnMount) return;
     checkPermission();
-  }, [checkPermission]);
+  }, [checkPermission, checkOnMount]);
 
   // Listen for permission changes
   useEffect(() => {

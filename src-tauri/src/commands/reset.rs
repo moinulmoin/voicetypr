@@ -16,6 +16,10 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
     let mut errors = Vec::new();
     let mut cleared_items = Vec::new();
 
+    // Use the current bundle identifier so dev vs prod apps
+    // clear their own OS-level data independently.
+    let app_identifier = app.config().identifier.clone();
+
     // 1. Clear all stores and delete the store files
     // Clear settings store
     if let Ok(store) = app.store("settings") {
@@ -149,7 +153,8 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
 
         // macOS defaults system
         match std::process::Command::new("defaults")
-            .args(&["delete", "com.ideaplexa.voicetypr"])
+            .arg("delete")
+            .arg(&app_identifier)
             .output()
         {
             Ok(output) => {
@@ -167,7 +172,7 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
             let prefs_path = home_dir
                 .join("Library")
                 .join("Preferences")
-                .join("com.ideaplexa.voicetypr.plist");
+                .join(format!("{}.plist", app_identifier));
             if prefs_path.exists() {
                 if let Err(e) = fs::remove_file(&prefs_path) {
                     errors.push(format!("Failed to remove preferences file: {}", e));
@@ -182,7 +187,7 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
     {
         // Windows Registry cleanup
         match std::process::Command::new("reg")
-            .args(&["delete", "HKCU\\Software\\com.ideaplexa.voicetypr", "/f"])
+            .args(&["delete", &format!("HKCU\\\\Software\\\\{}", app_identifier), "/f"])
             .output()
         {
             Ok(output) => {
@@ -204,7 +209,7 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
             let saved_state_path = home_dir
                 .join("Library")
                 .join("Saved Application State")
-                .join("com.ideaplexa.voicetypr.savedState");
+                .join(format!("{}.savedState", app_identifier));
             if saved_state_path.exists() {
                 if let Err(e) = fs::remove_dir_all(&saved_state_path) {
                     errors.push(format!("Failed to clear saved state: {}", e));
@@ -217,7 +222,7 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
             let logs_path = home_dir
                 .join("Library")
                 .join("Logs")
-                .join("com.ideaplexa.voicetypr");
+                .join(&app_identifier);
             if logs_path.exists() {
                 if let Err(e) = fs::remove_dir_all(&logs_path) {
                     errors.push(format!("Failed to clear logs: {}", e));
@@ -230,7 +235,7 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
             let webkit_path = home_dir
                 .join("Library")
                 .join("WebKit")
-                .join("com.ideaplexa.voicetypr");
+                .join(&app_identifier);
             if webkit_path.exists() {
                 if let Err(e) = fs::remove_dir_all(&webkit_path) {
                     errors.push(format!("Failed to clear WebKit data: {}", e));
@@ -245,7 +250,7 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
                 .join("Caches")
                 .join("com.apple.nsurlsessiond")
                 .join("Downloads")
-                .join("com.ideaplexa.voicetypr");
+                .join(&app_identifier);
             if nsurlsession_path.exists() {
                 if let Err(e) = fs::remove_dir_all(&nsurlsession_path) {
                     errors.push(format!("Failed to clear download cache: {}", e));
@@ -273,7 +278,7 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
 
         // Clear Windows WebView2 cache
         if let Ok(temp_dir) = app.path().temp_dir() {
-            let webview_cache = temp_dir.join("com.ideaplexa.voicetypr.WebView2");
+            let webview_cache = temp_dir.join(format!("{}.WebView2", app_identifier));
             if webview_cache.exists() {
                 if let Err(e) = fs::remove_dir_all(&webview_cache) {
                     errors.push(format!("Failed to clear WebView2 cache: {}", e));
@@ -287,7 +292,10 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
     // 7. Reset system permissions
     #[cfg(target_os = "macos")]
     {
-        let reset_script = r#"do shell script "tccutil reset All com.ideaplexa.voicetypr" with administrator privileges"#;
+        let reset_script = format!(
+            "do shell script \"tccutil reset All {}\" with administrator privileges",
+            app_identifier
+        );
 
         match tokio::process::Command::new("osascript")
             .arg("-e")

@@ -13,6 +13,7 @@ edition = "2021"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "voicetypr_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+doctest = false
 
 [features]
 default = []
@@ -66,6 +67,7 @@ whisper-rs = { version = "0.14.3", features = ["metal"] }
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 tauri-plugin-macos-permissions = "2"
+core-graphics = "0.24"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 whisper-rs = { version = "0.14.3", features = ["vulkan"] }

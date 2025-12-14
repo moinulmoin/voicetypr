@@ -16,6 +16,10 @@
   },
   "hooks": {
     "before:init": ["pnpm typecheck"],
+    "after:bump": [
+      "sed -i '' 's/^version = \".*\"/version = \"'${version}'\"/' src-tauri/Cargo.toml",
+      "git add src-tauri/Cargo.toml"
+    ],
     "after:release": "echo 'Release draft created for v${version}'"
   },
   "plugins": {

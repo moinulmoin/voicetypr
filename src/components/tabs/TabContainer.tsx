@@ -42,7 +42,11 @@ export function TabContainer({ activeSection }: TabContainerProps) {
 
   // Load history on mount and listen for updates
   useEffect(() => {
-    loadHistory();
+    const run = async () => {
+      await loadHistory();
+    };
+
+    void run();
     
     // Listen for new transcriptions (append-only for efficiency)
     registerEvent<{text: string; model: string; timestamp: string}>("transcription-added", (data) => {

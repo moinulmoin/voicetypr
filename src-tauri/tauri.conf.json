@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "VoiceTypr",
-  "version": "1.10.0",
+  "productName": "Voicetypr",
   "identifier": "com.ideaplexa.voicetypr",
   "build": {
     "beforeDevCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm dev",
@@ -12,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "VoiceTypr",
+        "title": "Voicetypr",
         "label": "main",
         "width": 800,
         "height": 600,
@@ -62,7 +61,7 @@
       "minimumSystemVersion": "13.0",
       "entitlements": "./entitlements.plist",
       "hardenedRuntime": true,
-      "signingIdentity": "Developer ID Application: Ideaplexa LLC (53P98M92V7)"
+      "signingIdentity": "-"
     },
     "windows": {
       "allowDowngrades": false,

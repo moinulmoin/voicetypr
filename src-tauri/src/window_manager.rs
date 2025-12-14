@@ -210,7 +210,7 @@ impl WindowManager {
         .transparent(true)
         .shadow(false) // Disabled to fix Windows transparency issue
         .skip_taskbar(true)
-        .inner_size(350.0, 150.0)
+        .inner_size(80.0, 40.0)
         .position(position_x, position_y)
         .visible(true) // Start visible
         .focused(false); // Don't steal focus
@@ -305,16 +305,21 @@ impl WindowManager {
             }),
         );
 
-        // Store the window reference while still holding the lock
+        // Store the window reference
         *pill_guard = Some(pill_window);
-
-        // Lock is automatically released when pill_guard goes out of scope
 
         log::info!(
             "Pill window created and shown at ({}, {})",
             position_x,
             position_y
         );
+
+        // After creating the pill window, flush any queued critical events in the background
+        let app_for_flush = self.app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            crate::flush_pill_event_queue(&app_for_flush).await;
+        });
+
         Ok(())
     }
 
@@ -420,10 +425,7 @@ impl WindowManager {
         payload: serde_json::Value,
     ) -> Result<(), String> {
         // Only log critical events
-        if matches!(
-            event,
-            "recording-state-changed" | "transcription-complete" | "transcription-error"
-        ) {
+        if matches!(event, "recording-state-changed" | "transcription-complete") {
             log::debug!("emit_to_window: window='{}', event='{}'", window_id, event);
         }
 
@@ -437,10 +439,8 @@ impl WindowManager {
             // Skip visibility check for performance
 
             // Check if window is visible or if it's a critical event
-            let is_critical = matches!(
-                event,
-                "recording-state-changed" | "transcription-complete" | "transcription-error"
-            );
+            let is_critical =
+                matches!(event, "recording-state-changed" | "transcription-complete");
 
             // Check if window is visible or if it's a critical event
 
@@ -476,10 +476,16 @@ impl WindowManager {
                 window_id
             );
             // For critical events when window not found, try app-wide emission
-            if matches!(
-                event,
-                "recording-state-changed" | "transcription-complete" | "transcription-error"
-            ) {
+            let is_critical =
+                matches!(event, "recording-state-changed" | "transcription-complete");
+
+            // Queue critical pill events so they can be delivered when the pill window is created
+            if is_critical && window_id == "pill" {
+                let app_state = self.app_handle.state::<crate::AppState>();
+                app_state.queue_pill_event(event, payload.clone());
+            }
+
+            if is_critical {
                 if let Err(e) = self.app_handle.emit(event, payload) {
                     log::error!("App-wide emission also failed: {}", e);
                 }
@@ -535,9 +541,9 @@ impl WindowManager {
                 let height = size.height as f64 / scale;
 
                 // Center bottom position with offset
-                let pill_width = 350.0;
-                let pill_height = 150.0;
-                let bottom_offset = 25.0; // Closer to bottom of screen
+                let pill_width = 80.0;
+                let pill_height = 40.0;
+                let bottom_offset = 10.0; // Distance from bottom of screen
 
                 let x = (width - pill_width) / 2.0;
                 let y = height - pill_height - bottom_offset;
@@ -559,8 +565,8 @@ impl WindowManager {
                     let width = size.width as f64 / scale;
                     let height = size.height as f64 / scale;
 
-                    let pill_width = 300.0;
-                    let pill_height = 150.0;
+                    let pill_width = 80.0;
+                    let pill_height = 40.0;
                     let bottom_offset = 10.0;
 
                     let x = (width - pill_width) / 2.0;
@@ -589,9 +595,9 @@ impl WindowManager {
                 let width = size.width as f64 / scale;
                 let height = size.height as f64 / scale;
 
-                let pill_width = 600.0;
-                let pill_height = 300.0;
-                let bottom_offset = 20.0;
+                let pill_width = 80.0;
+                let pill_height = 40.0;
+                let bottom_offset = 10.0;
 
                 let x = (width - pill_width) / 2.0;
                 let y = height - pill_height - bottom_offset;
@@ -607,6 +613,39 @@ impl WindowManager {
             } else {
                 log::error!("Could not get any monitor info, using safe defaults");
                 (100.0, 400.0)
+            }
+        }
+    }
+
+    /// Reposition pill and toast windows to current monitor center-bottom.
+    /// Called when monitor configuration changes (display connect/disconnect, resolution change).
+    pub fn reposition_floating_windows(&self) {
+        use tauri::LogicalPosition;
+
+        let (pill_x, pill_y) = self.calculate_center_position();
+
+        // Reposition pill window
+        if let Some(pill) = self.get_pill_window() {
+            if let Err(e) = pill.set_position(LogicalPosition::new(pill_x, pill_y)) {
+                log::warn!("Failed to reposition pill window: {}", e);
+            } else {
+                log::info!("Repositioned pill window to ({}, {})", pill_x, pill_y);
+            }
+        }
+
+        // Reposition toast window (above pill)
+        if let Some(toast) = self.app_handle.get_webview_window("toast") {
+            let toast_width = 400.0;
+            let toast_height = 80.0;
+            let pill_width = 80.0;
+            let gap = 8.0;
+            let toast_x = pill_x + (pill_width - toast_width) / 2.0;
+            let toast_y = pill_y - toast_height - gap;
+
+            if let Err(e) = toast.set_position(LogicalPosition::new(toast_x, toast_y)) {
+                log::warn!("Failed to reposition toast window: {}", e);
+            } else {
+                log::info!("Repositioned toast window to ({}, {})", toast_x, toast_y);
             }
         }
     }

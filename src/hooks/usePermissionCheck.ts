@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
 interface PermissionState {
@@ -19,11 +19,7 @@ export function usePermissionCheck() {
     isChecking: true,
   });
 
-  useEffect(() => {
-    checkAllPermissions();
-  }, []);
-
-  const checkAllPermissions = async () => {
+  const checkAllPermissions = useCallback(async () => {
     try {
       const [mic, accessibility] = await Promise.all([
         invoke<boolean>('check_microphone_permission'),
@@ -42,7 +38,13 @@ export function usePermissionCheck() {
       console.error('Failed to check permissions:', error);
       setPermissions(prev => ({ ...prev, isChecking: false }));
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      await checkAllPermissions();
+    })();
+  }, [checkAllPermissions]);
 
   return { ...permissions, recheckPermissions: checkAllPermissions };
 }

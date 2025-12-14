@@ -1,53 +1,110 @@
-# AGENTS.md — AI Agent Guide for VoiceTypr
+# VoiceTypr
 
-## Purpose & Scope
-Guidance for AI coding agents and contributors working in this repository. Keep changes minimal, correct, and aligned with existing patterns. For deeper context, read:
-- `agent-docs/ARCHITECTURE.md`
-- `agent-docs/README.md`
-- `agent-reports/` (analysis reports)
-- `CLAUDE.md` (coding assistant ground rules)
+macOS desktop app for offline voice transcription using Whisper AI. Built with Tauri v2 (Rust backend) and React 19 (TypeScript frontend). Features system-wide hotkey recording, automatic text insertion at cursor, and local model management.
 
-## Repository Overview
-- Frontend (React + TypeScript): `src/`
-  - `components/`, `components/ui/`, `components/tabs/`, `components/sections/`
-  - `contexts/`, `hooks/`, `lib/`, `utils/`
-  - `assets/`, `globals.css`, `test/`
-- Backend (Rust + Tauri v2): `src-tauri/src/`
-  - `ai/`, `audio/`, `commands/`, `state/`, `utils/`, `whisper/`, `tests/`
-- Shared/other: `public/`, `scripts/`, `agent-docs/`, `agent-reports/`
-- Path alias: `@/*` → `./src/*` (see `tsconfig.json`)
+## Core Commands
 
-## Toolchain & Commands
-- Dev: `pnpm dev` (frontend), `pnpm tauri dev` (full app)
-- Build: `pnpm build`
-- Quality: `pnpm lint`, `pnpm typecheck`, `pnpm format`, `pnpm quality-gate`
-- Tests: `pnpm test`, `pnpm test:watch`, `pnpm test:backend` (Cargo)
+```bash
+# Development
+pnpm dev              # Frontend only (Vite)
+pnpm tauri dev        # Full Tauri app (frontend + Rust)
 
-## Coding Conventions
-- Frontend
-  - React 19 with function components + hooks; strict TypeScript (see `tsconfig.json`)
-  - Tailwind CSS v4 utilities; shadcn/ui components in `src/components/ui/`
-  - Keep logic in hooks/lib; small, focused components; no unnecessary comments
-- Backend
-  - Rust 2021+, modules under `src-tauri/src/*`; run `cargo fmt`/`clippy` locally
-  - Tauri v2 commands in `src-tauri/src/commands`; audio/whisper modules encapsulate native work
+# Quality checks (run before commits)
+pnpm lint             # ESLint
+pnpm typecheck        # TypeScript compiler
+pnpm test             # Vitest frontend tests
+pnpm test:backend     # Rust tests (cd src-tauri && cargo test)
+pnpm quality-gate     # All checks in one script
 
-## Testing Strategy
-- Frontend: Vitest + React Testing Library; component tests near components (e.g. `__tests__`) and integration in `src/test/`
-- Backend: Rust unit/integration tests in `src-tauri/src/tests`; run with `pnpm test:backend`
+# Build
+pnpm build            # Frontend build
+pnpm tauri build      # Native .app bundle
+```
 
-## Agent Workflow & Guardrails
-1. Understand first: prefer `functions.Read`, `Grep`, `Glob`, `LS` for exploration; use absolute paths.
-2. Spec-first when asked “how to approach”: propose a concise plan before edits; await approval.
-3. Follow existing patterns/libraries; do not introduce new deps without necessity.
-4. Before completion: run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `cd src-tauri && cargo test` unless explicitly waived.
-5. Git safety: `git status` → review diffs → commit; never include secrets; don’t push unless asked.
+## Project Layout
 
-## Commit & PR Guidelines
-- Conventional Commits (e.g., `feat:`, `fix:`, `docs:`); keep scopes tight and messages concise.
-- Run `pnpm quality-gate` before opening PRs; document capability changes (Tauri) in the PR.
+```
+src/                          # React frontend
+├── components/               # UI components
+│   ├── ui/                   # shadcn/ui primitives
+│   ├── tabs/                 # Tab panel components
+│   └── sections/             # Page sections
+├── contexts/                 # React context providers
+├── hooks/                    # Custom React hooks
+├── lib/                      # Shared utilities
+├── utils/                    # Helper functions
+├── services/                 # External service integrations
+├── state/                    # State management (Zustand)
+└── test/                     # Integration tests
+
+src-tauri/src/                # Rust backend
+├── commands/                 # Tauri command handlers
+├── audio/                    # CoreAudio recording
+├── whisper/                  # Transcription engine
+├── ai/                       # AI model management
+├── parakeet/                 # Parakeet sidecar integration
+├── state/                    # Backend state management
+├── utils/                    # Rust utilities
+└── tests/                    # Rust unit tests
+```
+
+## Development Patterns
+
+### Frontend
+- **Framework**: React 19 with function components + hooks
+- **Styling**: Tailwind CSS v4; use `@/*` path alias for imports
+- **Components**: shadcn/ui in `src/components/ui/`; extend, don't modify
+- **State**: React hooks + Zustand + Tauri events
+- **Types**: Strict TypeScript; avoid `any`
+- **Tests**: Vitest + React Testing Library; test user behavior, not implementation
+
+### Backend
+- **Language**: Rust 2021 edition
+- **Framework**: Tauri v2 with async commands
+- **Modules**: Commands in `commands/`; domain logic in dedicated modules
+- **Style**: Run `cargo fmt` and `cargo clippy` before commits
+- **Tests**: Unit tests in `tests/` directory; use `#[tokio::test]` for async
+
+### Communication
+- Frontend calls backend via `invoke()` from `@tauri-apps/api`
+- Backend emits events via `app.emit()` or `window.emit()`
+- Event coordination handled by `EventCoordinator` class
+
+## Git Workflow
+
+- **Commits**: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`)
+- **Pre-commit**: Run `pnpm quality-gate` or individual checks
+- **Branches**: Feature branches off `main`
+- **Never push** without explicit user instruction
+
+```bash
+git status                    # Always check first
+git diff                      # Review changes
+git add -A && git commit -m "feat: description"
+```
+
+## Gotchas
+
+1. **macOS only**: Parakeet models use Apple Neural Engine; Whisper uses Metal GPU
+2. **Path alias**: Use `@/` not `./src/` for imports (e.g., `@/components/ui/button`)
+3. **NSPanel focus**: Pill window uses NSPanel to avoid focus stealing; test carefully
+4. **Clipboard**: Text insertion preserves user clipboard; restored after 500ms
+5. **Model preloading**: Models preload on startup; don't assume instant availability
+6. **Tauri capabilities**: Permission changes require edits in `src-tauri/capabilities/`
+7. **Large lib.rs**: Main Rust entry point at 96KB; navigate via module imports
+8. **Sidecar builds**: Parakeet Swift sidecar built via `build.rs` during `tauri build`
+
+## Key Files
+
+- `src-tauri/src/lib.rs` — Main Rust entry, command registration
+- `src-tauri/src/commands/` — All Tauri command implementations
+- `src/hooks/` — React hooks for Tauri integration
+- `src/components/tabs/` — Main UI tab components
+- `src-tauri/capabilities/` — Tauri permission definitions
 
 ## References
-- `agent-docs/ARCHITECTURE.md`, `agent-docs/EVENT-FLOW-ANALYSIS.md`, security docs in `agent-docs/` and `agent-reports/`
-- `README.md` for product overview and repo structure
-- `CLAUDE.md` for assistant rules and commands
+
+- `agent-docs/ARCHITECTURE.md` — Detailed architecture diagrams
+- `agent-docs/EVENT-FLOW-ANALYSIS.md` — Event system documentation
+- `CLAUDE.md` — Coding assistant guidelines
+- `README.md` — Product overview

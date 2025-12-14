@@ -1,4 +1,5 @@
-use tauri::{AppHandle, Manager, State};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
 use crate::commands::license::check_license_status_internal;
@@ -22,6 +23,99 @@ use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_store::StoreExt;
+
+/// Atomic counter for toast IDs to prevent race conditions
+static TOAST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Payload for pill toast messages
+#[derive(serde::Serialize, Clone)]
+pub struct PillToastPayload {
+    pub id: u64,
+    pub message: String,
+    pub duration_ms: u64,
+}
+
+/// Show a toast message on the pill's toast window (above the pill)
+/// This is the single unified API for pill feedback messages.
+/// Uses atomic counter to prevent race conditions with overlapping toasts.
+pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) {
+    let id = TOAST_ID_COUNTER.fetch_add(1, AtomicOrdering::SeqCst).wrapping_add(1);
+
+    // Show toast window
+    if let Some(toast_window) = app.get_webview_window("toast") {
+        let _ = toast_window.show();
+
+        // Backend controls hide timing - only hide if this is still the latest toast
+        let app_clone = app.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(duration_ms)).await;
+            // Only hide if we're still the latest toast
+            if TOAST_ID_COUNTER.load(AtomicOrdering::SeqCst) == id {
+                if let Some(tw) = app_clone.get_webview_window("toast") {
+                    let _ = tw.hide();
+                }
+            }
+        });
+    } else {
+        log::warn!("pill_toast: toast window not found, message not shown: {}", message);
+    }
+
+    // Build and emit unified payload
+    let payload = PillToastPayload {
+        id,
+        message: message.to_string(),
+        duration_ms,
+    };
+
+    let _ = app.emit("toast", payload);
+}
+
+/// Check if pill should be hidden based on show_pill_indicator setting.
+/// Returns true if pill should be hidden, false if it should stay visible.
+/// When show_pill_indicator is true, the pill should remain visible in idle state.
+/// Fails open: on error, returns false (keep pill visible) for safer UX.
+pub async fn should_hide_pill(app: &AppHandle) -> bool {
+    let store = match app.store("settings") {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("Failed to load settings for pill visibility: {}", e);
+            return false; // Fail open: keep pill visible on error
+        }
+    };
+
+    let show_pill_indicator = store
+        .get("show_pill_indicator")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true); // Default to true (show indicator)
+
+    !show_pill_indicator // Hide only if show_pill_indicator is false
+}
+
+/// Play a system sound to confirm recording start (macOS only)
+#[cfg(target_os = "macos")]
+fn play_recording_start_sound() {
+    std::thread::spawn(|| {
+        let _ = std::process::Command::new("afplay")
+            .arg("/System/Library/Sounds/Tink.aiff")
+            .spawn();
+    });
+}
+
+/// Play a system sound to confirm recording start (Windows)
+#[cfg(target_os = "windows")]
+fn play_recording_start_sound() {
+    std::thread::spawn(|| {
+        // Use PowerShell to play a system sound on Windows
+        let _ = std::process::Command::new("powershell")
+            .args(["-c", "[console]::beep(800, 100)"])
+            .spawn();
+    });
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn play_recording_start_sound() {
+    // No-op on other platforms
+}
 
 /// Cached recording configuration to avoid repeated store access during transcription flow
 /// Cache is invalidated when settings change via update hooks
@@ -144,9 +238,13 @@ async fn abort_due_to_missing_model(
         log::warn!("Failed to remove audio file: {}", e);
     }
 
+    // Show pill toast for no models error
+    pill_toast(app, user_message, 2000);
+
+    // Also emit domain event for main window
     let _ = emit_to_window(
         app,
-        "pill",
+        "main",
         "no-models-error",
         serde_json::json!({
             "title": "No Models Installed",
@@ -155,8 +253,10 @@ async fn abort_due_to_missing_model(
         }),
     );
 
-    if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-        log::error!("Failed to hide pill window: {}", e);
+    if should_hide_pill(app).await {
+        if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+            log::error!("Failed to hide pill window: {}", e);
+        }
     }
 
     update_recording_state(app, RecordingState::Idle, None);
@@ -342,40 +442,10 @@ fn select_best_fallback_model(
 
 /// Pre-recording validation using the readiness state
 async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> {
-    // Check if any models are downloaded
-    let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
-    let has_whisper_models = whisper_manager.read().await.has_downloaded_models();
-    let parakeet_manager = app.state::<ParakeetManager>();
-    let has_parakeet_models = parakeet_manager
-        .list_models()
-        .into_iter()
-        .any(|m| m.downloaded);
+    let availability = crate::recognition_availability_snapshot(app).await;
 
-    // Consider cloud Soniox as satisfying availability when selected and configured
-    let (is_soniox_selected, soniox_ready) = {
-        match app.store("settings") {
-            Ok(store) => {
-                let engine = store
-                    .get("current_model_engine")
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_else(|| "whisper".to_string());
-                if engine == "soniox" {
-                    let has_key =
-                        crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
-                    (true, has_key)
-                } else {
-                    (false, false)
-                }
-            }
-            Err(_) => (false, false),
-        }
-    };
-
-    let has_models =
-        has_whisper_models || has_parakeet_models || (is_soniox_selected && soniox_ready);
-
-    if !has_models {
-        log::error!("No models downloaded");
+    if !availability.any_available() {
+        log::error!("No speech recognition engines are ready");
         // Emit error event with guidance
         let _ = emit_to_window(
             app,
@@ -383,15 +453,21 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
             "no-models-error",
             serde_json::json!({
                 "title": "No Speech Recognition Models",
-                "message": if is_soniox_selected { "Please configure your Soniox token in Models before recording." } else { "Please download at least one model from Models before recording." },
+                "message": if availability.soniox_selected && !availability.soniox_ready {
+                    "Please configure your Soniox token in Models before recording."
+                } else {
+                    "Please download at least one model from Models before recording."
+                },
                 "action": "open-settings"
             }),
         );
-        return Err(if is_soniox_selected {
-            "Soniox token missing".to_string()
-        } else {
-            "No speech recognition models installed. Please download a model first.".to_string()
-        });
+        return Err(
+            if availability.soniox_selected && !availability.soniox_ready {
+                "Soniox token missing".to_string()
+            } else {
+                "No speech recognition models installed. Please download a model first.".to_string()
+            },
+        );
     }
 
     // Check license status (with caching to improve performance)
@@ -530,6 +606,17 @@ pub async fn start_recording(
         return Err("Cannot start recording in current state".to_string());
     }
 
+    // Play sound on recording start if enabled
+    if let Ok(store) = app.store("settings") {
+        let play_sound = store
+            .get("play_sound_on_recording")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true); // Default to true
+        if play_sound {
+            play_recording_start_sound();
+        }
+    }
+
     // Load recording config once to avoid repeated store access
     let config = get_recording_config(&app).await.map_err(|e| {
         log::error!("Failed to load recording config: {}", e);
@@ -558,8 +645,13 @@ pub async fn start_recording(
         .as_secs();
     let audio_path = recordings_dir.join(format!("recording_{}.wav", timestamp));
 
-    // Store path for later use
+    // Store path for later use and reset any leftover pending-toggle flag
     let app_state = app.state::<AppState>();
+    app_state
+        .pending_stop_after_start
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // Save current recording path
     app_state
         .current_recording_path
         .lock()
@@ -682,9 +774,8 @@ pub async fn start_recording(
                         Some("Microphone initialization failed".to_string()),
                     );
 
-                    // Emit user-friendly error
-                    let _ =
-                        emit_to_window(&app, "pill", "recording-error", "Microphone access failed");
+                    // Emit user-friendly error via pill toast
+                    pill_toast(&app, "Microphone access failed", 1500);
 
                     return Err("Failed to start recording".to_string());
                 } else {
@@ -733,7 +824,7 @@ pub async fn start_recording(
                     "Recording failed"
                 };
 
-                let _ = emit_to_window(&app, "pill", "recording-error", user_message);
+                pill_toast(&app, user_message, 1500);
 
                 return Err(e);
             }
@@ -770,11 +861,25 @@ pub async fn start_recording(
     // Now perform async operations after mutex is released
 
     // Clear cancellation flag for new recording
-    let app_state = app.state::<AppState>();
     app_state.clear_cancellation();
 
     // Update state to recording
     update_recording_state(&app, RecordingState::Recording, None);
+
+    // If a toggle-stop was requested while starting, honor it immediately after entering Recording
+    if app_state
+        .pending_stop_after_start
+        .swap(false, std::sync::atomic::Ordering::SeqCst)
+    {
+        log::info!("Toggle: pending stop triggered right after start; stopping now");
+        let app_handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let recorder_state = app_handle.state::<RecorderState>();
+            if let Err(e) = stop_recording(app_handle.clone(), recorder_state).await {
+                log::error!("Toggle: pending stop failed: {}", e);
+            }
+        });
+    }
 
     // Show pill widget if enabled (graceful degradation)
     if config.show_pill_widget {
@@ -899,9 +1004,9 @@ pub async fn stop_recording(
             stop_start.elapsed().as_millis() as u64,
         );
 
-        // Emit event if recording was stopped due to silence
+        // Emit pill toast if recording was stopped due to silence
         if stop_message.contains("silence") {
-            let _ = emit_to_window(&app, "pill", "recording-stopped-silence", ());
+            pill_toast(&app, "No sound detected", 1000);
         }
     } // MutexGuard dropped here BEFORE any await
 
@@ -951,9 +1056,11 @@ pub async fn stop_recording(
             }
         }
 
-        // Hide pill window
-        if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-            log::error!("Failed to hide pill window: {}", e);
+        // Hide pill window (only if show_pill_indicator is false)
+        if should_hide_pill(&app).await {
+            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                log::error!("Failed to hide pill window: {}", e);
+            }
         }
 
         // Transition to idle
@@ -992,13 +1099,11 @@ pub async fn stop_recording(
     if let Ok(meta) = std::fs::metadata(&audio_path) {
         // A valid WAV header is typically 44 bytes; <= 44 implies no audio samples were written
         if meta.len() <= 44 {
-            let _ = emit_to_window(&app, "pill", "recording-too-short", "No audio captured");
+            pill_toast(&app, "No audio captured", 1000);
             if let Err(e) = std::fs::remove_file(&audio_path) {
                 log::debug!("Failed to remove empty audio file: {}", e);
             }
-            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-                log::error!("Failed to hide pill window: {}", e);
-            }
+            // Frontend will hide pill after showing feedback
             update_recording_state(&app, RecordingState::Idle, None);
             return Ok("".to_string());
         }
@@ -1219,7 +1324,7 @@ pub async fn stop_recording(
             }
 
             // Determine min duration based on recording mode (PTT vs Toggle) once
-            let (min_duration_s_f32, min_duration_s_i32) = {
+            let (min_duration_s_f32, min_duration_label) = {
                 let app_state = app.state::<AppState>();
                 let mode = app_state
                     .recording_mode
@@ -1228,8 +1333,8 @@ pub async fn stop_recording(
                     .map(|g| *g)
                     .unwrap_or(RecordingMode::Toggle);
                 match mode {
-                    RecordingMode::PushToTalk => (1.0f32, 1i32),
-                    RecordingMode::Toggle => (3.0f32, 3i32),
+                    RecordingMode::PushToTalk => (0.5f32, "0.5".to_string()),
+                    RecordingMode::Toggle => (0.5f32, "0.5".to_string()),
                 }
             };
 
@@ -1260,15 +1365,12 @@ pub async fn stop_recording(
                     &app,
                     "pill",
                     "recording-too-short",
-                    format!("Recording shorter than {} seconds", min_duration_s_i32),
+                    format!("Recording shorter than {} seconds", min_duration_label),
                 );
                 if let Err(e) = std::fs::remove_file(&normalized_path) {
                     log::debug!("Failed to remove short normalized audio: {}", e);
                 }
-                // Hide pill and return to Idle
-                if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-                    log::error!("Failed to hide pill window: {}", e);
-                }
+                // Frontend will hide pill after showing feedback
                 update_recording_state(&app, RecordingState::Idle, None);
                 return Ok("".to_string());
             }
@@ -1336,9 +1438,11 @@ pub async fn stop_recording(
         if app_state.is_cancellation_requested() {
             log::info!("Transcription cancelled before model loading");
 
-            // Hide pill window since we're cancelling
-            if let Err(e) = crate::commands::window::hide_pill_widget(app_for_task.clone()).await {
-                log::error!("Failed to hide pill window on cancellation: {}", e);
+            // Hide pill window since we're cancelling (only if show_pill_indicator is false)
+            if should_hide_pill(&app_for_task).await {
+                if let Err(e) = crate::commands::window::hide_pill_widget(app_for_task.clone()).await {
+                    log::error!("Failed to hide pill window on cancellation: {}", e);
+                }
             }
 
             update_recording_state(&app_for_task, RecordingState::Idle, None);
@@ -1358,9 +1462,11 @@ pub async fn stop_recording(
                                 RecordingState::Error,
                                 Some(e.clone()),
                             );
-                            let _ = crate::commands::window::hide_pill_widget(app_for_task.clone())
-                                .await;
-                            let _ = emit_to_window(&app_for_task, "pill", "transcription-error", e);
+                            if should_hide_pill(&app_for_task).await {
+                                let _ = crate::commands::window::hide_pill_widget(app_for_task.clone())
+                                    .await;
+                            }
+                            pill_toast(&app_for_task, &e, 1500);
                             return;
                         }
                     }
@@ -1426,7 +1532,7 @@ pub async fn stop_recording(
                         RecordingState::Error,
                         Some(message.clone()),
                     );
-                    let _ = emit_to_window(&app_for_task, "pill", "transcription-error", message);
+                    pill_toast(&app_for_task, &message, 1500);
                     return;
                 }
 
@@ -1473,11 +1579,13 @@ pub async fn stop_recording(
                 if app_state.is_cancellation_requested() {
                     log::info!("Transcription completed but was cancelled, discarding result");
 
-                    // Hide pill window since we're cancelling
-                    if let Err(e) =
-                        crate::commands::window::hide_pill_widget(app_for_task.clone()).await
-                    {
-                        log::error!("Failed to hide pill window on cancellation: {}", e);
+                    // Hide pill window since we're cancelling (only if show_pill_indicator is false)
+                    if should_hide_pill(&app_for_task).await {
+                        if let Err(e) =
+                            crate::commands::window::hide_pill_widget(app_for_task.clone()).await
+                        {
+                            log::error!("Failed to hide pill window on cancellation: {}", e);
+                        }
                     }
 
                     update_recording_state(&app_for_task, RecordingState::Idle, None);
@@ -1490,12 +1598,11 @@ pub async fn stop_recording(
                 if text.is_empty() || text.trim().is_empty() || text == "[BLANK_AUDIO]" {
                     log::info!("Whisper returned empty transcription - no speech detected");
 
-                    // Emit graceful feedback to user
-                    let _ = emit_to_window(
+                    // Emit graceful feedback to user via pill toast
+                    pill_toast(
                         &app_for_task,
-                        "pill",
-                        "transcription-empty",
                         "No speech detected - try speaking closer to the microphone",
+                        1500,
                     );
 
                     // Wait for feedback to show before hiding pill
@@ -1503,11 +1610,13 @@ pub async fn stop_recording(
                     tokio::spawn(async move {
                         tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
 
-                        // Hide pill window
-                        if let Err(e) =
-                            crate::commands::window::hide_pill_widget(app_for_hide.clone()).await
-                        {
-                            log::error!("Failed to hide pill window: {}", e);
+                        // Hide pill window (only if show_pill_indicator is false)
+                        if should_hide_pill(&app_for_hide).await {
+                            if let Err(e) =
+                                crate::commands::window::hide_pill_widget(app_for_hide.clone()).await
+                            {
+                                log::error!("Failed to hide pill window: {}", e);
+                            }
                         }
 
                         // Transition back to Idle
@@ -1522,7 +1631,7 @@ pub async fn stop_recording(
 
                 // If AI is enabled, emit enhancing event NOW while pill is still visible
                 if ai_enabled {
-                    let _ = emit_to_window(&app_for_task, "pill", "enhancing-started", ());
+                    let _ = app_for_task.emit("enhancing-started", ());
                 }
 
                 // Backend handles the complete flow
@@ -1543,13 +1652,8 @@ pub async fn stop_recording(
                             .await
                             {
                                 Ok(enhanced) => {
-                                    // Emit enhancing completed event
-                                    let _ = emit_to_window(
-                                        &app_for_process,
-                                        "pill",
-                                        "enhancing-completed",
-                                        (),
-                                    );
+                                    // Emit enhancing completed event (global)
+                                    let _ = app_for_process.emit("enhancing-completed", ());
 
                                     if enhanced != text_for_process {
                                         log::info!("AI enhancement applied successfully");
@@ -1557,39 +1661,34 @@ pub async fn stop_recording(
                                     enhanced
                                 }
                                 Err(e) => {
-                                    log::warn!("AI enhancement failed, using original text: {}", e);
+                                    log::warn!("Formatting failed, using original text: {}", e);
+
+                                    // Emit enhancing failed to reset pill state
+                                    let _ = app_for_process.emit("enhancing-failed", ());
 
                                     // Check error type and create appropriate message
                                     let error_message = e.to_string();
                                     let user_message = if error_message.contains("400")
                                         || error_message.contains("Bad Request")
                                     {
-                                        "Enhancement failed: Missing or invalid API key"
+                                        "Formatting failed: API key missing or invalid"
                                     } else if error_message.contains("401")
                                         || error_message.contains("Unauthorized")
                                     {
-                                        "Enhancement failed: Invalid API key"
+                                        "Formatting failed: API key unauthorized"
                                     } else if error_message.contains("429") {
-                                        "Enhancement failed: Rate limit exceeded"
+                                        "Formatting failed: Rate limit exceeded"
                                     } else if error_message.contains("network")
                                         || error_message.contains("connection")
                                     {
-                                        "Enhancement failed: Network error"
+                                        "Formatting failed: Network error"
                                     } else {
-                                        "Enhancement failed: Using original text"
+                                        "Formatting failed: Service unavailable"
                                     };
 
-                                    // Show short error on pill for visibility, then continue
-                                    log::warn!(
-                                        "Enhancement failed; showing pill error for 2s before hide"
-                                    );
-                                    crate::show_pill_error_short(
-                                        &app_for_process,
-                                        "enhancing-failed",
-                                        user_message,
-                                        2000,
-                                    )
-                                    .await;
+                                    // Show pill toast for formatting failure
+                                    log::warn!("Formatting failed; showing pill toast");
+                                    pill_toast(&app_for_process, user_message, 1500);
 
                                     // Also notify main window for settings update if needed
                                     if error_message.contains("400")
@@ -1617,13 +1716,15 @@ pub async fn stop_recording(
                     // 2. Hide pill window first, then insert text with reduced delay
                     let app_state = app_for_process.state::<AppState>();
 
-                    // Hide pill window first to avoid UI race conditions
-                    if let Some(window_manager) = app_state.get_window_manager() {
-                        if let Err(e) = window_manager.hide_pill_window().await {
-                            log::error!("Failed to hide pill window: {}", e);
+                    // Hide pill window first (only if show_pill_indicator is false)
+                    if should_hide_pill(&app_for_process).await {
+                        if let Some(window_manager) = app_state.get_window_manager() {
+                            if let Err(e) = window_manager.hide_pill_window().await {
+                                log::error!("Failed to hide pill window: {}", e);
+                            }
+                        } else {
+                            log::error!("WindowManager not initialized");
                         }
-                    } else {
-                        log::error!("WindowManager not initialized");
                     }
 
                     // Reduced delay to ensure UI is stable (was 100ms, now 50ms)
@@ -1642,33 +1743,18 @@ pub async fn stop_recording(
 
                             // Check if it's an accessibility permission issue
                             if e.contains("accessibility") || e.contains("permission") {
-                                // Show the pill window again to notify user
-                                if let Some(window_manager) = app_state.get_window_manager() {
-                                    let _ = window_manager.show_pill_window().await;
-                                }
-
-                                // Emit error to pill widget
-                                let _ = emit_to_window(
+                                // Show pill toast for accessibility permission error
+                                pill_toast(
                                     &app_for_process,
-                                    "pill",
-                                    "paste-error",
                                     "Text copied - grant permission to auto-paste",
+                                    1500,
                                 );
-
-                                // Keep pill visible for 3 seconds with error
-                                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-                                // Then hide it
-                                if let Some(window_manager) = app_state.get_window_manager() {
-                                    let _ = window_manager.hide_pill_window().await;
-                                }
                             } else {
                                 // Generic paste error
-                                let _ = emit_to_window(
+                                pill_toast(
                                     &app_for_process,
-                                    "main",
-                                    "paste-error",
-                                    format!("Paste failed - text in clipboard"),
+                                    "Paste failed - text in clipboard",
+                                    1500,
                                 );
                             }
                         }
@@ -1704,11 +1790,13 @@ pub async fn stop_recording(
                 // Check if this is a cancellation error
                 if e.contains("cancelled") {
                     log::info!("Handling transcription cancellation");
-                    // For cancellation, hide pill immediately and go to Idle
-                    if let Err(hide_err) =
-                        crate::commands::window::hide_pill_widget(app_for_task.clone()).await
-                    {
-                        log::error!("Failed to hide pill window on cancellation: {}", hide_err);
+                    // For cancellation, hide pill (only if show_pill_indicator is false) and go to Idle
+                    if should_hide_pill(&app_for_task).await {
+                        if let Err(hide_err) =
+                            crate::commands::window::hide_pill_widget(app_for_task.clone()).await
+                        {
+                            log::error!("Failed to hide pill window on cancellation: {}", hide_err);
+                        }
                     }
                     update_recording_state(&app_for_task, RecordingState::Idle, None);
                 } else if e.contains("too short") {
@@ -1720,18 +1808,21 @@ pub async fn stop_recording(
                         log::warn!("Failed to remove short audio file: {}", cleanup_err);
                     }
 
-                    // Emit specific feedback to pill window
-                    let _ = emit_to_window(&app_for_task, "pill", "transcription-empty", &e);
+                    // Emit specific feedback via pill toast
+                    pill_toast(&app_for_task, &e, 1000);
 
                     // Hide pill after showing feedback
                     let app_for_reset = app_for_task.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
 
-                        if let Err(e) =
-                            crate::commands::window::hide_pill_widget(app_for_reset.clone()).await
-                        {
-                            log::error!("Failed to hide pill window: {}", e);
+                        // Only hide if show_pill_indicator is false
+                        if should_hide_pill(&app_for_reset).await {
+                            if let Err(e) =
+                                crate::commands::window::hide_pill_widget(app_for_reset.clone()).await
+                            {
+                                log::error!("Failed to hide pill window: {}", e);
+                            }
                         }
 
                         update_recording_state(&app_for_reset, RecordingState::Idle, None);
@@ -1740,8 +1831,8 @@ pub async fn stop_recording(
                     // For other errors, show error state briefly
                     update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
 
-                    // Also emit legacy event to pill window
-                    let _ = emit_to_window(&app_for_task, "pill", "transcription-error", e);
+                    // Emit error via pill toast
+                    pill_toast(&app_for_task, &e, 1500);
 
                     // Transition back to Idle after a delay
                     // This ensures we don't get stuck in Error state
@@ -1752,11 +1843,13 @@ pub async fn stop_recording(
                             "Resetting from Error to Idle state after transcription failure"
                         );
 
-                        // Hide pill window when transitioning to Idle
-                        if let Err(e) =
-                            crate::commands::window::hide_pill_widget(app_for_reset.clone()).await
-                        {
-                            log::error!("Failed to hide pill window: {}", e);
+                        // Hide pill window when transitioning to Idle (only if show_pill_indicator is false)
+                        if should_hide_pill(&app_for_reset).await {
+                            if let Err(e) =
+                                crate::commands::window::hide_pill_widget(app_for_reset.clone()).await
+                            {
+                                log::error!("Failed to hide pill window: {}", e);
+                            }
                         }
 
                         update_recording_state(&app_for_reset, RecordingState::Idle, None);
@@ -1781,14 +1874,47 @@ pub async fn stop_recording(
     Ok(String::new())
 }
 
+/// Get available audio input devices.
+/// Returns empty list if onboarding not completed (to avoid triggering permission prompt).
 #[tauri::command]
-pub async fn get_audio_devices() -> Result<Vec<String>, String> {
+pub async fn get_audio_devices(app: AppHandle) -> Result<Vec<String>, String> {
+    // Check onboarding status - don't enumerate devices until onboarding is complete
+    // This prevents early mic permission prompts from CPAL's input_devices() enumeration
+    let onboarding_done = {
+        use tauri_plugin_store::StoreExt;
+        app.store("settings")
+            .ok()
+            .and_then(|store| store.get("onboarding_completed").and_then(|v| v.as_bool()))
+            .unwrap_or(false)
+    };
+
+    if !onboarding_done {
+        log::debug!("get_audio_devices: onboarding not complete, returning empty list");
+        return Ok(Vec::new());
+    }
+
     Ok(AudioRecorder::get_devices())
 }
 
-/// Get the current default audio input device
+/// Get the current default audio input device.
+/// Returns error if onboarding not completed (to avoid triggering permission prompt).
 #[tauri::command]
-pub async fn get_current_audio_device() -> Result<String, String> {
+pub async fn get_current_audio_device(app: AppHandle) -> Result<String, String> {
+    // Check onboarding status - don't access devices until onboarding is complete
+    // This prevents early mic permission prompts from CPAL's default_input_device() access
+    let onboarding_done = {
+        use tauri_plugin_store::StoreExt;
+        app.store("settings")
+            .ok()
+            .and_then(|store| store.get("onboarding_completed").and_then(|v| v.as_bool()))
+            .unwrap_or(false)
+    };
+
+    if !onboarding_done {
+        log::debug!("get_current_audio_device: onboarding not complete, returning error");
+        return Err("Onboarding not completed".to_string());
+    }
+
     let host = cpal::default_host();
 
     host.default_input_device()
@@ -2425,9 +2551,11 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
         }
     }
 
-    // Hide pill window immediately
-    if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-        log::error!("Failed to hide pill window: {}", e);
+    // Hide pill window immediately (only if show_pill_indicator is false)
+    if should_hide_pill(&app).await {
+        if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+            log::error!("Failed to hide pill window: {}", e);
+        }
     }
 
     // Properly transition through states based on current state

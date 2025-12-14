@@ -1,7 +1,8 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { LicenseStatus } from '@/types';
 import { toast } from 'sonner';
+import { getErrorMessage } from '@/utils/error';
 
 interface LicenseContextValue {
   status: LicenseStatus | null;
@@ -18,19 +19,82 @@ const LicenseContext = createContext<LicenseContextValue | undefined>(undefined)
 export function LicenseProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<LicenseStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const latestCheckStatusId = useRef(0);
+
+  const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error('License status check timed out')),
+        timeoutMs
+      );
+    });
+
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+  };
+
+  const getFriendlyLicenseError = (action: 'activate' | 'restore', rawMessage?: string) => {
+    const lower = rawMessage?.toLowerCase() ?? '';
+    const actionLabel = action === 'activate' ? 'activate license' : 'restore license';
+
+    if (lower.includes('network error') || lower.includes('error sending request')) {
+      return `Failed to ${actionLabel}. Please check your connection and try again.`;
+    }
+
+    if (lower.includes('already activated on another device')) {
+      return 'This license is already activated on another device';
+    }
+
+    if (lower.includes('maximum number of devices')) {
+      return 'This license has reached its device activation limit';
+    }
+
+    if (lower.includes('invalid license key')) {
+      return 'Invalid license key';
+    }
+
+    if (action === 'restore' && lower.includes('no license found')) {
+      return 'No license found. Please enter your license key manually.';
+    }
+
+    return rawMessage || `Failed to ${actionLabel}`;
+  };
 
   const checkStatus = async () => {
+    const checkId = ++latestCheckStatusId.current;
     try {
       setIsLoading(true);
       console.log(`[${new Date().toISOString()}] Frontend: Checking license status...`);
-      const licenseStatus = await invoke<LicenseStatus>('check_license_status');
+
+      const invokePromise = invoke<LicenseStatus>('check_license_status');
+      invokePromise.catch(() => {
+        // Prevent unhandled rejections if we time out and ignore the result.
+      });
+
+      const licenseStatus = await withTimeout(invokePromise, 10_000);
+
+      if (checkId !== latestCheckStatusId.current) return;
       console.log(`[${new Date().toISOString()}] Frontend: License status received:`, licenseStatus);
       setStatus(licenseStatus);
     } catch (error) {
+      if (checkId !== latestCheckStatusId.current) return;
+
+      if (error instanceof Error && error.message === 'License status check timed out') {
+        toast.error('License status check timed out. Please try again.');
+        return;
+      }
+
+      const message = getErrorMessage(error, 'Failed to check license status');
       console.error('Failed to check license status:', error);
-      toast.error('Failed to check license status');
+      toast.error(message);
     } finally {
-      setIsLoading(false);
+      if (checkId === latestCheckStatusId.current) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -39,19 +103,10 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       const licenseStatus = await invoke<LicenseStatus>('restore_license');
       setStatus(licenseStatus);
       toast.success('License restored successfully');
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
       console.error('Failed to restore license:', error);
-      if (error.includes('No license found')) {
-        toast.error('No license found. Please enter your license key manually.');
-      } else if (error.includes('already activated on another device')) {
-        toast.error('This license is already activated on another device');
-      } else if (error.includes('maximum number of devices')) {
-        toast.error('This license has reached its device activation limit');
-      } else if (error.includes('Invalid license key')) {
-        toast.error('Invalid license key');
-      } else {
-        toast.error(error || 'Failed to restore license');
-      }
+      toast.error(getFriendlyLicenseError('restore', message));
     }
   };
 
@@ -60,17 +115,10 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       const licenseStatus = await invoke<LicenseStatus>('activate_license', { licenseKey: key });
       setStatus(licenseStatus);
       toast.success('License activated successfully');
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
       console.error('Failed to activate license:', error);
-      if (error.includes('already activated on another device')) {
-        toast.error('This license is already activated on another device');
-      } else if (error.includes('maximum number of devices')) {
-        toast.error('This license has reached its device activation limit');
-      } else if (error.includes('Invalid license key')) {
-        toast.error('Invalid license key');
-      } else {
-        toast.error(error || 'Failed to activate license');
-      }
+      toast.error(getFriendlyLicenseError('activate', message));
     }
   };
 
@@ -80,9 +128,10 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       // Re-check status after deactivation
       await checkStatus();
       toast.success('License deactivated successfully');
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = getErrorMessage(error, 'Failed to deactivate license');
       console.error('Failed to deactivate license:', error);
-      toast.error(error || 'Failed to deactivate license');
+      toast.error(message);
     }
   };
 

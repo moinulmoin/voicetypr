@@ -156,9 +156,8 @@ export class EventCoordinator {
       "download-cancelled": "all",
       "download-error": "all",
       
-      // Error events go to pill window (where recording UI is shown)
-      "transcription-error": "pill",
-      "recording-error": "pill",
+      // Recording/transcription errors now use pill_toast() → FeedbackToast directly,
+      // not as routed events. Only domain-specific main window errors are listed here.
       "parakeet-unavailable": "main",
       
       // Debug events

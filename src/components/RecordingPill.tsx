@@ -1,254 +1,111 @@
-import { AudioWaveAnimation } from "@/components/AudioWaveAnimation";
-import IOSSpinner from "@/components/ios-spinner";
-import { Button } from "@/components/ui/button";
+import { AudioDots } from "@/components/AudioDots";
 import { useSetting } from "@/contexts/SettingsContext";
 import { useRecording } from "@/hooks/useRecording";
 import { listen } from "@tauri-apps/api/event";
-import { AlertCircle, Sparkles } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
+
+type PillState = "idle" | "listening" | "transcribing" | "formatting";
 
 export function RecordingPill() {
   const recording = useRecording();
   const [audioLevel, setAudioLevel] = useState(0);
-  const [feedbackMessage, setFeedbackMessage] = useState<string>("");
-  const [isCompact, setIsCompact] = useState(true);
-  const [isEnhancing, setIsEnhancing] = useState(false);
-  const [, forceUpdate] = useState({});
+  const [isFormatting, setIsFormatting] = useState(false);
 
-  // Track timer IDs for cleanup
-  const feedbackTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const mountedRef = useRef(true);
-  const feedbackMessageRef = useRef<string>("");
+  // Setting: show pill indicator when idle (default: true)
+  const showPillIndicator = useSetting("show_pill_indicator") ?? true;
 
-  // Debug re-renders
-  useEffect(() => {
-    console.log("RecordingPill: Component re-rendered, feedbackMessage:", feedbackMessage, "ref:", feedbackMessageRef.current);
-  });
-
-  const isRecording = recording.state === "recording";
-  const isTranscribing = recording.state === "transcribing";
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-      if (feedbackTimerRef.current) {
-        clearTimeout(feedbackTimerRef.current);
-      }
-    };
-  }, []);
-
-  // Helper function to set feedback message with auto-hide
-  const setFeedbackWithTimeout = (message: string, timeout: number) => {
-    console.log("RecordingPill: Setting feedback message:", message, "for", timeout, "ms", "mountedRef:", mountedRef.current);
-
-    // Clear any existing timer
-    if (feedbackTimerRef.current) {
-      clearTimeout(feedbackTimerRef.current);
-    }
-
-    // Remove the mounted check - just set the state directly
-    // Update ref
-    feedbackMessageRef.current = message;
-
-    // Force a fresh state update
-    setFeedbackMessage(message);
-    // Also force update to ensure re-render
-    forceUpdate({});
-
-    console.log("RecordingPill: Updated state and ref to:", message);
-
-    // Set new timer
-    feedbackTimerRef.current = setTimeout(() => {
-      console.log("RecordingPill: Clearing feedback message");
-      feedbackMessageRef.current = "";
-      setFeedbackMessage("");
-      forceUpdate({});
-      feedbackTimerRef.current = null;
-    }, timeout);
+  // Determine pill state
+  const getPillState = (): PillState => {
+    if (isFormatting) return "formatting";
+    if (recording.state === "recording") return "listening";
+    if (recording.state === "transcribing" || recording.state === "stopping")
+      return "transcribing";
+    return "idle";
   };
 
-  // Use settings from context
-  const compactRecordingStatus = useSetting('compact_recording_status');
-  const recordingMode = useSetting('recording_mode');
-  const isPushToTalk = recordingMode === 'push_to_talk';
-
-  useEffect(() => {
-    setIsCompact(compactRecordingStatus !== false);
-  }, [compactRecordingStatus]);
+  const pillState = getPillState();
+  const isListening = pillState === "listening";
+  const isActive = pillState !== "idle";
 
   // Listen for audio level events
   useEffect(() => {
-    if (!isRecording) {
-      setAudioLevel(0);
-      return;
-    }
+    if (isListening) {
+      let isMounted = true;
+      let unlistenFn: (() => void) | undefined;
 
-    const unlisten = listen<number>("audio-level", (event) => {
-      setAudioLevel(event.payload);
+      listen<number>("audio-level", (event) => {
+        if (isMounted) setAudioLevel(event.payload);
+      }).then((unlisten) => {
+        if (!isMounted) {
+          unlisten();
+          return;
+        }
+        unlistenFn = unlisten;
+      });
+
+      return () => {
+        isMounted = false;
+        if (unlistenFn) unlistenFn();
+        setAudioLevel(0);
+      };
+    } else {
+      const timeoutId = setTimeout(() => setAudioLevel(0), 0);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [isListening]);
+
+  // Listen for formatting/enhancement events (global events from backend)
+  useEffect(() => {
+    let isMounted = true;
+    const unlistenFns: (() => void)[] = [];
+
+    const events = [
+      { name: "enhancing-started", handler: () => isMounted && setIsFormatting(true) },
+      { name: "enhancing-completed", handler: () => isMounted && setIsFormatting(false) },
+      { name: "enhancing-failed", handler: () => isMounted && setIsFormatting(false) },
+    ];
+
+    events.forEach(({ name, handler }) => {
+      listen(name, handler).then((unlisten) => {
+        if (!isMounted) {
+          unlisten();
+          return;
+        }
+        unlistenFns.push(unlisten);
+      });
     });
 
     return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [isRecording]);
-
-  // Listen for feedback events
-  useEffect(() => {
-    const unlisteners: Promise<() => void>[] = [];
-
-    // Listen for empty transcription
-    unlisteners.push(
-      listen<string>("transcription-empty", (event) => {
-        console.log("RecordingPill: Received transcription-empty event", event.payload);
-        setFeedbackWithTimeout(event.payload, 2000);
-      })
-    );
-
-    // Listen for recording stopped due to silence
-    unlisteners.push(
-      listen("recording-stopped-silence", () => {
-        console.log("RecordingPill: Received recording-stopped-silence event");
-        setFeedbackWithTimeout("No sound detected", 2000);
-      })
-    );
-
-    // Listen for ESC first press from backend
-    unlisteners.push(
-      listen<string>("esc-first-press", (event) => {
-        console.log("RecordingPill: Received esc-first-press event", event.payload);
-        setFeedbackWithTimeout(event.payload, 3000);
-      })
-    );
-
-    // Listen for recording errors
-    unlisteners.push(
-      listen<string>("recording-error", (event) => {
-        setFeedbackWithTimeout(event.payload || "Recording error occurred", 3000);
-      })
-    );
-
-    // Listen for transcription errors
-    unlisteners.push(
-      listen<string>("transcription-error", (event) => {
-        setFeedbackWithTimeout(event.payload || "Transcription error occurred", 3000);
-      })
-    );
-
-    // Listen for no models error
-    unlisteners.push(
-      listen<{ title: string; message: string; action: string }>("no-models-error", (event) => {
-        setFeedbackWithTimeout(event.payload.message, 4000);
-      })
-    );
-
-    // Listen for enhancing events
-    unlisteners.push(
-      listen("enhancing-started", () => {
-        console.log("RecordingPill: Received enhancing-started event");
-        setIsEnhancing(true);
-      })
-    );
-
-    unlisteners.push(
-      listen("enhancing-completed", () => {
-        console.log("RecordingPill: Received enhancing-completed event");
-        setIsEnhancing(false);
-      })
-    );
-
-    unlisteners.push(
-      listen<string>("enhancing-failed", (event) => {
-        console.log("RecordingPill: Received enhancing-failed event", event.payload);
-        setIsEnhancing(false);
-        // Show short message only
-        setFeedbackWithTimeout("Formatting failed", 2000);
-      })
-    );
-
-    // Listen for generic formatting error event and show short message
-    unlisteners.push(
-      listen<string>("formatting-error", (event) => {
-        console.log("RecordingPill: Received formatting-error event", event.payload);
-        setIsEnhancing(false);
-        setFeedbackWithTimeout("Formatting failed", 2000);
-      })
-    );
-
-    // Listen for paste errors (accessibility permission)
-    unlisteners.push(
-      listen<string>("paste-error", (event) => {
-        console.log("RecordingPill: Received paste-error event", event.payload);
-        setFeedbackWithTimeout(event.payload, 4000);
-      })
-    );
-
-    return () => {
-      unlisteners.forEach((unlisten) => unlisten.then((fn) => fn()));
+      isMounted = false;
+      unlistenFns.forEach((fn) => fn());
     };
   }, []);
 
-
-  // Handle click to stop recording
-  // const handleClick = async () => {
-  //   if (isRecording) {
-  //     await invoke("stop_recording");
-  //   }
-  // };
-
-  // Only show pill when recording, transcribing, enhancing, or showing feedback
-  if (!isRecording && !isTranscribing && !isEnhancing && !feedbackMessage) {
+  // Visibility logic: hide in idle state if setting is false
+  if (pillState === "idle" && !showPillIndicator) {
     return null;
   }
 
   return (
-    <div className="fixed inset-0 flex items-end justify-center pointer-events-none">
-      <div className="relative pb-4">
-
-        {/* Feedback message as overlay */}
-        {feedbackMessage && (
-          <div className="absolute inset-x-0 bottom-full mb-2 flex justify-center pointer-events-none z-50">
-            <div className="bg-gray-900 text-white text-sm px-4 py-2 rounded-md shadow-lg whitespace-nowrap flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-400" />
-              <span>{feedbackMessage}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Show button if actively recording/transcribing/enhancing, or invisible placeholder for feedback */}
-        {(isRecording || isTranscribing || isEnhancing) ? (
-          <Button
-            // onClick={handleClick}
-            variant="default"
-            className={`${
-              isCompact
-                ? "rounded-full !p-1 w-10 h-10 shadow-none"
-                : "rounded-xl !p-4 gap-2"
-            } flex items-center justify-center`}
-            // aria-readonly={isTranscribing}
-          >
-            {isEnhancing ? (
-              <>
-                <Sparkles size={isCompact ? 20 : 16} className="animate-pulse" />
-                {!isCompact && "Enhancing"}
-              </>
-            ) : isTranscribing ? (
-              <>
-                <IOSSpinner size={isCompact ? 20 : 16} />
-                {!isCompact && "Transcribing"}
-              </>
-            ) : (
-              <>
-                <AudioWaveAnimation audioLevel={audioLevel} className={isCompact ? "scale-80" : ""} />
-                {!isCompact && (isPushToTalk ? "Release to stop" : "Listening")}
-              </>
-            )}
-          </Button>
-        ) : (
-          /* Invisible placeholder to maintain position for feedback messages */
-          <div className={`${isCompact ? "w-10 h-10" : "h-14"} invisible bg-transparent`} />
-        )}
-      </div>
+    <div className="fixed inset-0 flex items-center justify-center">
+      {/* Solid black pill - grows when active */}
+      <motion.div
+        className="flex items-center justify-center rounded-full select-none bg-black shadow-lg"
+        animate={{
+          // ~1.4x growth from idle to active
+          paddingLeft: isActive ? 14 : 10,
+          paddingRight: isActive ? 14 : 10,
+          paddingTop: isActive ? 7 : 5,
+          paddingBottom: isActive ? 7 : 5,
+        }}
+        transition={{
+          duration: 0.25,
+          ease: "easeOut",
+        }}
+      >
+        <AudioDots state={pillState} audioLevel={audioLevel} />
+      </motion.div>
     </div>
   );
 }

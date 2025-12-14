@@ -1,0 +1,83 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Voicetypr",
+  "version": "1.10.0",
+  "identifier": "com.ideaplexa.voicetypr.dev",
+  "build": {
+    "beforeDevCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Voicetypr",
+        "label": "main",
+        "width": 800,
+        "height": 600,
+        "resizable": false,
+        "center": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": false,
+        "minimizable": false,
+        "maximizable": false
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self' customprotocol: asset:",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' asset: data:",
+        "font-src": "'self'",
+        "connect-src": "'self' ipc: https://voicetypr.com https://api.voicetypr.com https://github.com asset:",
+        "media-src": "'self'"
+      }
+    }
+  },
+  "bundle": {
+    "publisher": "Ideaplexa LLC",
+    "active": true,
+    "targets": [
+      "nsis",
+      "app",
+      "dmg"
+    ],
+    "externalBin": [
+      "../sidecar/ffmpeg/dist/ffmpeg",
+      "../sidecar/ffmpeg/dist/ffprobe"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "entitlements": "./entitlements.plist",
+      "hardenedRuntime": true,
+      "signingIdentity": "-"
+    },
+    "windows": {
+      "allowDowngrades": false,
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "./windows/smart-installer-hooks.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": true,
+      "endpoints": [
+        "https://github.com/moinulmoin/voicetypr/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE2Q0M5NTZENjAwM0YyNDkKUldSSjhnTmdiWlhNRm0wdHQ1YmxNSzBWS2tiZlcyZ3FJZG5FajZ3MFBzTUZmRDgvZys5R1J6c2cK"
+    }
+  }
+}

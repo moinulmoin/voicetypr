@@ -29,13 +29,15 @@ mod tests {
             pill_position: Some((100.0, 200.0)),
             launch_at_startup: false,
             onboarding_completed: true,
-            compact_recording_status: true,
             translate_to_english: false,
             check_updates_automatically: true,
             selected_microphone: None,
             recording_mode: "toggle".to_string(),
             use_different_ptt_key: false,
             ptt_hotkey: Some("Alt+Space".to_string()),
+            keep_transcription_in_clipboard: false,
+            play_sound_on_recording: true,
+            show_pill_indicator: true,
         };
 
         // Test serialization
@@ -86,13 +88,15 @@ mod tests {
             pill_position: None,
             launch_at_startup: true,
             onboarding_completed: false,
-            compact_recording_status: false,
             translate_to_english: true,
             check_updates_automatically: true,
             selected_microphone: Some("USB Microphone".to_string()),
             recording_mode: "push_to_talk".to_string(),
             use_different_ptt_key: true,
             ptt_hotkey: Some("CommandOrControl+Space".to_string()),
+            keep_transcription_in_clipboard: true,
+            play_sound_on_recording: false,
+            show_pill_indicator: false,
         };
 
         let cloned = settings.clone();

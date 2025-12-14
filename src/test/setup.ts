@@ -31,7 +31,8 @@ const defaultIpcHandler = (cmd: string) => {
         auto_launch: true,
         microphone_device: null,
         ai_provider: 'groq',
-        ai_enhancement_enabled: false
+        ai_enhancement_enabled: false,
+        play_sound_on_recording: true
       };
 
     case 'save_settings':

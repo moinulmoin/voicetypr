@@ -21,19 +21,6 @@ export function ModelsTab() {
     sortedModels
   } = useModelManagementContext();
 
-  // Handle deleting a model with settings update
-  const handleDeleteModel = useCallback(
-    async (modelName: string) => {
-      await deleteModel(modelName);
-
-      // If deleted model was the current one, clear selection in settings
-      if (settings?.current_model === modelName) {
-        await saveSettings({ current_model: "", current_model_engine: 'whisper' });
-      }
-    },
-    [deleteModel, settings]
-  );
-
   // Save settings
   const saveSettings = useCallback(
     async (updates: Partial<AppSettings>) => {
@@ -44,6 +31,19 @@ export function ModelsTab() {
       }
     },
     [updateSettings]
+  );
+
+  // Handle deleting a model with settings update
+  const handleDeleteModel = useCallback(
+    async (modelName: string) => {
+      await deleteModel(modelName);
+
+      // If deleted model was the current one, clear selection in settings
+      if (settings?.current_model === modelName) {
+        await saveSettings({ current_model: "", current_model_engine: 'whisper' });
+      }
+    },
+    [deleteModel, settings, saveSettings]
   );
 
   // Initialize models tab

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -18,12 +18,12 @@ interface OpenAICompatConfigModalProps {
   defaultBaseUrl?: string;
   defaultModel?: string;
   onClose: () => void;
-  onSubmit: (args: { baseUrl: string; model: string; apiKey?: string; noAuth?: boolean }) => void;
+  onSubmit: (args: { baseUrl: string; model: string; apiKey?: string }) => void;
 }
 
 export function OpenAICompatConfigModal({
   isOpen,
-  defaultBaseUrl = "https://api.openai.com",
+  defaultBaseUrl = "https://api.openai.com/v1",
   defaultModel = "",
   onClose,
   onSubmit,
@@ -34,15 +34,29 @@ export function OpenAICompatConfigModal({
   const [submitting, setSubmitting] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<null | { ok: boolean; message: string }>(null);
+  const [testedPayload, setTestedPayload] = useState<null | { baseUrl: string; model: string; apiKey: string }>(null);
+  const testOk = useMemo(() => testResult?.ok === true, [testResult]);
+  const inputsMatchTest = useMemo(() => {
+    if (!testedPayload) return false;
+    return (
+      testedPayload.baseUrl === baseUrl.trim() &&
+      testedPayload.model === model.trim() &&
+      testedPayload.apiKey === apiKey.trim()
+    );
+  }, [testedPayload, baseUrl, model, apiKey]);
 
   useEffect(() => {
-    if (!isOpen) {
+    if (isOpen) {
       setBaseUrl(defaultBaseUrl);
       setModel(defaultModel);
+      setTestedPayload(null);
+      setTestResult(null);
+    } else {
       setApiKey("");
       setSubmitting(false);
       setTesting(false);
       setTestResult(null);
+      setTestedPayload(null);
     }
   }, [isOpen, defaultBaseUrl, defaultModel]);
 
@@ -51,8 +65,7 @@ export function OpenAICompatConfigModal({
     if (!baseUrl.trim() || !model.trim()) return;
     try {
       setSubmitting(true);
-      const computedNoAuth = apiKey.trim() === "";
-      onSubmit({ baseUrl, model, apiKey: computedNoAuth ? undefined : apiKey, noAuth: computedNoAuth });
+      onSubmit({ baseUrl: baseUrl.trim(), model: model.trim(), apiKey: apiKey.trim() || undefined });
     } finally {
       // Keep spinner controlled by parent isLoading if needed; here we reset
       setSubmitting(false);
@@ -63,21 +76,31 @@ export function OpenAICompatConfigModal({
     setTestResult(null);
     setTesting(true);
     try {
-      const computedNoAuth = apiKey.trim() === "";
+      const trimmedBase = baseUrl.trim();
+      const trimmedModel = model.trim();
+      const trimmedKey = apiKey.trim();
+      const noAuth = !trimmedKey;
+
+      // Note: Tauri's JS invoke supports camelCase keys and maps them to the Rust command args (snake_case).
       await invoke("test_openai_endpoint", {
-        // Standardize to snake_case for Tauri command args
-        base_url: baseUrl.trim(),
-        model: model.trim(),
-        api_key: computedNoAuth ? undefined : apiKey.trim(),
-        no_auth: computedNoAuth,
+        baseUrl: trimmedBase,
+        model: trimmedModel,
+        apiKey: trimmedKey || undefined,
+        noAuth,
       });
       setTestResult({ ok: true, message: "Connection successful" });
+      setTestedPayload({ baseUrl: trimmedBase, model: trimmedModel, apiKey: trimmedKey });
     } catch (e: any) {
       setTestResult({ ok: false, message: String(e) });
     } finally {
       setTesting(false);
     }
   };
+
+  // Reset test status when inputs change
+  useEffect(() => {
+    setTestResult(null);
+  }, [baseUrl, model, apiKey]);
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -95,12 +118,12 @@ export function OpenAICompatConfigModal({
               <Label htmlFor="baseUrl">API Base URL</Label>
               <Input
                 id="baseUrl"
-                placeholder="https://api.openai.com"
+                placeholder="https://api.openai.com/v1"
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Examples: https://api.openai.com, http://localhost:11434
+                Examples: https://api.openai.com/v1, http://localhost:11434/v1
               </p>
             </div>
 
@@ -145,7 +168,11 @@ export function OpenAICompatConfigModal({
                 "Test"
               )}
             </Button>
-            <Button type="submit" disabled={!baseUrl.trim() || !model.trim() || submitting}>
+            <Button
+              type="submit"
+              disabled={!baseUrl.trim() || !model.trim() || submitting || !testOk || !inputsMatchTest}
+              title={!testOk || !inputsMatchTest ? "Run Test and pass before saving" : undefined}
+            >
               {submitting ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
