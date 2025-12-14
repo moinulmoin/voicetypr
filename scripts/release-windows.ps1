@@ -13,6 +13,20 @@ function Write-Error($Message) { Write-Host "[ERROR] $Message" -ForegroundColor 
 function Write-Info($Message) { Write-Host "[INFO] $Message" -ForegroundColor Cyan }
 function Write-Step($Message) { Write-Host "`n==> $Message" -ForegroundColor Magenta }
 
+function Require-Command($Command) {
+    if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+        Write-Error "$Command not found in PATH"
+        exit 1
+    }
+}
+
+function Require-File($Path) {
+    if (-not (Test-Path $Path)) {
+        Write-Error "Required file not found: $Path"
+        exit 1
+    }
+}
+
 if ($Help) {
     Write-Host @"
 Windows Release Script
@@ -43,9 +57,6 @@ Write-Step "VoiceTypr Windows Release v$Version"
 $ReleaseTag = "v$Version"
 $OutputDir = "release-windows-$Version"
 
-# Save original config at the start to avoid race condition
-## Redundant now: Windows NSIS config lives in src-tauri\tauri.conf.json
-
 # Create output directory
 if (-not (Test-Path $OutputDir)) {
     Write-Info "Creating output directory: $OutputDir"
@@ -57,6 +68,14 @@ if (-not (Test-Path $OutputDir)) {
     Write-Success "Output directory created"
 } else {
     Write-Info "Output directory already exists: $OutputDir"
+}
+
+Require-Command cargo
+Require-Command pnpm
+Require-File "package.json"
+
+if (-not $SkipPublish) {
+    Require-Command gh
 }
 
 # Build single smart installer
@@ -75,7 +94,8 @@ if (-not $SkipBuild) {
     
     # Build with Vulkan enabled by default
     Write-Info "Building with Vulkan support enabled..."
-    pnpm tauri build
+    # Version comes from Cargo.toml, no override needed
+    pnpm tauri build --ci
     
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Build failed!"
@@ -83,7 +103,9 @@ if (-not $SkipBuild) {
     }
     
     # Copy installer
-    $installer = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" | Select-Object -First 1
+    $installer = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
     if (-not $installer) {
         Write-Error "No installer found in src-tauri\target\release\bundle\nsis\"
         exit 1
@@ -114,7 +136,11 @@ if (-not $SkipBuild) {
         Write-Info "Signing installer for updates..."
         $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
         
-        & pnpm tauri signer sign -f $keyPath $installerPath
+        if ($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
+            & cargo tauri signer sign -f $keyPath -p $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD $installerPath
+        } else {
+            & cargo tauri signer sign -f $keyPath -p "" $installerPath
+        }
         
         if (Test-Path "$installerPath.sig") {
             Write-Success "Installer signed"
@@ -124,12 +150,12 @@ if (-not $SkipBuild) {
             $signature = $signature -replace "`r`n", "" -replace "`n", ""
             Write-Info "Signature captured: $($signature.Substring(0, [Math]::Min(50, $signature.Length)))..."
         } else {
-            Write-Warning "Failed to sign installer"
-            $signature = ""
+            Write-Error "Failed to sign installer (missing .sig file)"
+            exit 1
         }
     } else {
-        Write-Warning "No signing key found - updates won't have signatures"
-        $signature = ""
+        Write-Error "No signing key found at $keyPath (required for auto-updates)"
+        exit 1
     }
     
     # Update latest.json with Windows platform
@@ -140,23 +166,8 @@ if (-not $SkipBuild) {
     # Try to download existing latest.json from GitHub release
     Write-Info "Checking for existing latest.json in release..."
     try {
-        # Download latest.json if it exists in the release
-        $downloadOutput = gh release download $ReleaseTag -p "latest.json" -D $OutputDir --clobber 2>&1
-        if ($LASTEXITCODE -eq 0 -and (Test-Path $latestJsonPath)) {
-            Write-Success "Downloaded existing latest.json from release"
-        } else {
-            Write-Info "No existing latest.json found in release - will check draft"
-            # Try to get from draft release
-            $draftReleases = gh release list --json isDraft,tagName,uploadUrl | ConvertFrom-Json
-            $draftRelease = $draftReleases | Where-Object { $_.tagName -eq $ReleaseTag -and $_.isDraft -eq $true }
-            if ($draftRelease) {
-                Write-Info "Found draft release, attempting to download latest.json..."
-                $downloadOutput = gh release download $ReleaseTag -p "latest.json" -D $OutputDir --clobber 2>&1
-                if ($LASTEXITCODE -eq 0 -and (Test-Path $latestJsonPath)) {
-                    Write-Success "Downloaded existing latest.json from draft release"
-                }
-            }
-        }
+        gh release download $ReleaseTag -p "latest.json" -D $OutputDir --clobber 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $latestJsonPath)) { Write-Success "Downloaded existing latest.json" }
     } catch {
         Write-Info "Error checking for latest.json: $_"
     }
@@ -202,6 +213,10 @@ if (-not $SkipBuild) {
 
 # If we skipped build, try to read signature from existing .sig file
 if ($SkipBuild) {
+    if (-not (Test-Path $OutputDir)) {
+        Write-Error "Output directory not found: $OutputDir"
+        exit 1
+    }
     $sigPath = "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.sig"
     if (Test-Path $sigPath) {
         Write-Info "Reading signature from existing .sig file..."
@@ -209,8 +224,8 @@ if ($SkipBuild) {
         $signature = $signature -replace "`r`n", "" -replace "`n", ""
         Write-Success "Signature loaded from file"
     } else {
-        Write-Warning "No signature file found at $sigPath"
-        $signature = ""
+        Write-Error "No signature file found at $sigPath (required for auto-updates)"
+        exit 1
     }
 }
 
@@ -219,10 +234,9 @@ if (-not $SkipPublish) {
     Write-Step "Uploading to GitHub..."
     
     # Check if release exists
-    try {
-        gh release view $ReleaseTag | Out-Null
-    } catch {
-        Write-Error "Release $ReleaseTag not found. Create it first."
+    gh release view $ReleaseTag 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Release $ReleaseTag not found. Run macOS release first to create the draft."
         exit 1
     }
     

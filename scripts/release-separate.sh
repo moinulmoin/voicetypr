@@ -3,7 +3,7 @@
 # Release script for VoiceTypr with Separate Architecture Binaries and Built-in Tauri Notarization
 # Usage: ./scripts/release-separate.sh [patch|minor|major]
 
-set -e
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -22,22 +22,65 @@ fi
 # Trap to ensure cleanup happens even on error
 trap 'echo -e "${RED}Script failed! Check the error above.${NC}"' ERR
 
+require_cmd() {
+    local cmd="$1"
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo -e "${RED}Error: Required command not found: $cmd${NC}"
+        exit 1
+    fi
+}
+
+require_file() {
+    local path="$1"
+    if [[ ! -f "$path" ]]; then
+        echo -e "${RED}Error: Required file not found: $path${NC}"
+        exit 1
+    fi
+}
+
+# Load .env file FIRST if it exists
+if [ -f .env ]; then
+    echo -e "${YELLOW}Loading environment variables from .env...${NC}"
+    set -a
+    source .env
+    set +a
+    echo -e "${GREEN}✓ Environment variables loaded${NC}"
+fi
+
 # Check for required environment variables
 echo -e "${YELLOW}Checking environment variables...${NC}"
 
 # Check Apple signing/notarization credentials
 MISSING_VARS=()
-if [[ -z "$APPLE_SIGNING_IDENTITY" ]]; then
+if [[ -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     MISSING_VARS+=("APPLE_SIGNING_IDENTITY")
 fi
 
 # Check for notarization credentials (API key method preferred)
-if [[ -n "$APPLE_API_KEY" && -n "$APPLE_API_ISSUER" ]]; then
+if [[ -n "${APPLE_API_KEY:-}" && -n "${APPLE_API_ISSUER:-}" ]]; then
     echo -e "${GREEN}✓ Using API key authentication${NC}"
-    if [[ -z "$APPLE_API_KEY_PATH" ]]; then
-        echo -e "${YELLOW}Warning: APPLE_API_KEY_PATH not set, will search default locations${NC}"
+    if [[ -z "${APPLE_API_KEY_PATH:-}" ]]; then
+        # Try common locations for AuthKey_XXXX.p8
+        CANDIDATES=(
+            "$HOME/.private_keys/AuthKey_${APPLE_API_KEY}.p8"
+            "$HOME/private_keys/AuthKey_${APPLE_API_KEY}.p8"
+            "$HOME/Downloads/AuthKey_${APPLE_API_KEY}.p8"
+            "$PWD/AuthKey_${APPLE_API_KEY}.p8"
+        )
+        for candidate in "${CANDIDATES[@]}"; do
+            if [[ -f "$candidate" ]]; then
+                export APPLE_API_KEY_PATH="$candidate"
+                echo -e "${GREEN}✓ Found APPLE_API_KEY_PATH at $APPLE_API_KEY_PATH${NC}"
+                break
+            fi
+        done
     fi
-elif [[ -n "$APPLE_ID" && -n "$APPLE_PASSWORD" && -n "$APPLE_TEAM_ID" ]]; then
+
+    if [[ -z "${APPLE_API_KEY_PATH:-}" ]]; then
+        echo -e "${RED}Error: APPLE_API_KEY_PATH not set and AuthKey file not found${NC}"
+        MISSING_VARS+=("APPLE_API_KEY_PATH")
+    fi
+elif [[ -n "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
     echo -e "${GREEN}✓ Using Apple ID authentication${NC}"
 else
     echo -e "${RED}Error: Missing notarization credentials${NC}"
@@ -55,18 +98,16 @@ fi
 
 # Check for Tauri signing credentials - also check common path
 TAURI_KEY_PATH="$HOME/.tauri/voicetypr.key"
-if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" ]] && [[ -z "$TAURI_SIGNING_PRIVATE_KEY_PATH" ]] && [[ ! -f "$TAURI_KEY_PATH" ]]; then
-    echo -e "${YELLOW}Warning: Tauri signing key not configured${NC}"
-    echo "Tauri update signatures will not be generated"
-    echo ""
-    echo "To set up signing:"
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]] && [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]] && [[ ! -f "$TAURI_KEY_PATH" ]]; then
+    echo -e "${RED}Error: Tauri signing key not configured${NC}"
+    echo "Update signatures are required for auto-updates. Configure one of:"
     echo "1. Generate keys: cargo tauri signer generate -w ~/.tauri/voicetypr.key"
     echo "2. Set one of:"
     echo "   export TAURI_SIGNING_PRIVATE_KEY_PATH=\"$HOME/.tauri/voicetypr.key\""
     echo "   export TAURI_SIGNING_PRIVATE_KEY=\"\$(cat ~/.tauri/voicetypr.key)\""
     echo "3. If key has password: export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=\"your-password\""
-    echo "4. Update tauri.conf.json with the public key from ~/.tauri/voicetypr.key.pub"
-elif [[ -f "$TAURI_KEY_PATH" ]] && [[ -z "$TAURI_SIGNING_PRIVATE_KEY_PATH" ]]; then
+    MISSING_VARS+=("TAURI signing key")
+elif [[ -f "$TAURI_KEY_PATH" ]] && [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
     # Auto-detect key at common location
     export TAURI_SIGNING_PRIVATE_KEY_PATH="$TAURI_KEY_PATH"
     echo -e "${GREEN}✓ Tauri signing key found at $TAURI_KEY_PATH${NC}"
@@ -81,37 +122,28 @@ fi
 
 echo -e "${GREEN}✓ Environment variables configured${NC}"
 echo -e "  Signing Identity: ${APPLE_SIGNING_IDENTITY}"
-if [[ -n "$APPLE_TEAM_ID" ]]; then
+if [[ -n "${APPLE_TEAM_ID:-}" ]]; then
     echo -e "  Team ID: ${APPLE_TEAM_ID}"
 fi
 
 # Set CI mode for non-interactive operation
 export CI=true
 
-# Load .env file if it exists to get env vars
-if [ -f .env ]; then
-    echo -e "${YELLOW}Loading environment variables from .env...${NC}"
-    # Export all non-comment lines from .env
-    set -a
-    source .env
-    set +a
-    echo -e "${GREEN}✓ Environment variables loaded${NC}"
-fi
-
 echo -e "${GREEN}🚀 Starting VoiceTypr separate architecture release process (${RELEASE_TYPE})${NC}"
+
+require_cmd git
+require_cmd pnpm
+require_cmd jq
+require_cmd cargo
+require_cmd gh
+require_file package.json
+require_file src-tauri/Cargo.toml
 
 # Check if we're on main branch
 CURRENT_BRANCH=$(git branch --show-current)
 if [[ "$CURRENT_BRANCH" != "main" ]]; then
-    echo -e "${YELLOW}Warning: Not on main branch (currently on ${CURRENT_BRANCH})${NC}"
-    # Only prompt if not in CI mode
-    if [[ "$CI" != "true" ]]; then
-        read -p "Continue anyway? (y/n) " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1
-        fi
-    fi
+    echo -e "${RED}Error: Must run releases from main branch (currently on ${CURRENT_BRANCH})${NC}"
+    exit 1
 fi
 
 # Check for uncommitted changes
@@ -123,59 +155,23 @@ fi
 
 # Pull latest changes
 echo -e "${YELLOW}Pulling latest changes...${NC}"
-git pull origin main
+git pull --ff-only origin main
 
 # Run tests first
 echo -e "${YELLOW}Running tests...${NC}"
-# pnpm test || {
-#     echo -e "${RED}Frontend tests failed!${NC}"
-#     exit 1
-# }
-cd src-tauri && cargo test && cd .. || {
-    echo -e "${RED}Backend tests failed!${NC}"
-    exit 1
-}
+pnpm test:backend
 
 # Get current version
 CURRENT_VERSION=$(node -p "require('./package.json').version")
 echo -e "${GREEN}Current version: ${CURRENT_VERSION}${NC}"
 
-# Use release-it to handle version bump and changelog
+# Use release-it to handle version bump, changelog, tag, and draft release
 echo -e "${YELLOW}Running release-it...${NC}"
-npx release-it $RELEASE_TYPE --ci
+pnpm -s release "$RELEASE_TYPE" --ci
 
 # Get new version
 NEW_VERSION=$(node -p "require('./package.json').version")
 echo -e "${GREEN}New version: ${NEW_VERSION}${NC}"
-
-# Update version in tauri.conf.json
-echo -e "${YELLOW}Updating tauri.conf.json...${NC}"
-# Update version
-jq --arg version "$NEW_VERSION" '.version = $version' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
-# Update signingIdentity (remove ad-hoc signing)
-jq --arg identity "$APPLE_SIGNING_IDENTITY" '.bundle.macOS.signingIdentity = $identity' src-tauri/tauri.conf.json.tmp > src-tauri/tauri.conf.json
-rm src-tauri/tauri.conf.json.tmp
-
-# Update version in Cargo.toml
-echo -e "${YELLOW}Updating Cargo.toml...${NC}"
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" src-tauri/Cargo.toml
-else
-    sed -i "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" src-tauri/Cargo.toml
-fi
-
-# Update Cargo.lock to reflect the new version
-echo -e "${YELLOW}Updating Cargo.lock...${NC}"
-cd src-tauri && cargo update -p voicetypr && cd ..
-
-# Commit the tauri.conf.json and Cargo.toml changes
-git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
-git commit -m "chore: update tauri.conf.json and Cargo.toml version to ${NEW_VERSION}"
-
-# Push changes and tags
-echo -e "${YELLOW}Pushing to GitHub...${NC}"
-git push origin main
-git push origin "v${NEW_VERSION}"
 
 # Install required Rust targets if not already installed
 echo -e "${YELLOW}Checking Rust targets...${NC}"
@@ -189,25 +185,21 @@ mkdir -p "$OUTPUT_DIR"
 sign_update_artifact() {
     local FILE_PATH="$1"
     
-    if [[ -n "$TAURI_SIGNING_PRIVATE_KEY" ]] || [[ -n "$TAURI_SIGNING_PRIVATE_KEY_PATH" ]]; then
+    if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]] || [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
         echo -e "${YELLOW}Signing $(basename "$FILE_PATH")...${NC}"
         
         # Determine if we have a key path or key content
-        if [[ -f "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
-            # It's a file path
-            KEY_PATH="$TAURI_SIGNING_PRIVATE_KEY"
-        elif [[ -n "$TAURI_SIGNING_PRIVATE_KEY_PATH" ]]; then
-            # Use the explicit path variable
+        if [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
             KEY_PATH="$TAURI_SIGNING_PRIVATE_KEY_PATH"
         else
             # It's key content - write to temp file
             TEMP_KEY=$(mktemp)
-            echo "$TAURI_SIGNING_PRIVATE_KEY" > "$TEMP_KEY"
+            echo "${TAURI_SIGNING_PRIVATE_KEY}" > "$TEMP_KEY"
             KEY_PATH="$TEMP_KEY"
         fi
         
         # Sign with proper flags
-        if [[ -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]]; then
+        if [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
             cargo tauri signer sign -f "$KEY_PATH" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$FILE_PATH"
         else
             # Try with empty password
@@ -227,7 +219,7 @@ sign_update_artifact() {
             return 1
         fi
     else
-        echo -e "${YELLOW}Skipping signature for $(basename "$FILE_PATH") (no signing key)${NC}"
+        echo -e "${RED}Error: Missing Tauri signing key; cannot sign update artifacts${NC}"
         return 1
     fi
 }
@@ -318,9 +310,9 @@ ensure_ffmpeg_sidecar
 echo -e "${GREEN}🔨 Building aarch64 binary with notarization...${NC}"
 echo -e "${BLUE}This will take some time as it includes notarization...${NC}"
 
-cd src-tauri
-cargo tauri build --target aarch64-apple-darwin --bundles app,dmg --config tauri.macos.conf.json
-cd ..
+# Build with an override config for signing identity (version comes from Cargo.toml)
+TAURI_CONFIG_OVERRIDE=$(jq -nc --arg identity "$APPLE_SIGNING_IDENTITY" '{bundle:{macOS:{signingIdentity:$identity}}}')
+pnpm -s tauri build --target aarch64-apple-darwin --bundles app,dmg --config "$TAURI_CONFIG_OVERRIDE" --ci
 
 # Find aarch64 build artifacts
 AARCH64_DMG=$(find "src-tauri/target/aarch64-apple-darwin/release/bundle/dmg" -name "*.dmg" | head -n 1)
@@ -328,9 +320,11 @@ AARCH64_APP_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
 
 # Create app.tar.gz for aarch64
 echo -e "${YELLOW}Creating aarch64 updater archive...${NC}"
-if [[ -d "$AARCH64_APP_DIR/voicetypr.app" ]]; then
+APP_BUNDLE_PATH=$(find "$AARCH64_APP_DIR" -maxdepth 1 -name "*.app" | head -n 1)
+if [[ -n "${APP_BUNDLE_PATH}" && -d "$APP_BUNDLE_PATH" ]]; then
     cd "$AARCH64_APP_DIR"
-    COPYFILE_DISABLE=1 tar -czf "VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz" --exclude='._*' --exclude='.DS_Store' voicetypr.app
+    APP_BUNDLE_NAME=$(basename "$APP_BUNDLE_PATH")
+    COPYFILE_DISABLE=1 tar -czf "VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz" --exclude='._*' --exclude='.DS_Store' "$APP_BUNDLE_NAME"
     cd - > /dev/null
     AARCH64_APP_TAR="$AARCH64_APP_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz"
 else
@@ -348,7 +342,10 @@ cp "$AARCH64_DMG" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.dmg"
 cp "$AARCH64_APP_TAR" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz"
 
 # Sign aarch64 update artifact
-sign_update_artifact "$AARCH64_APP_TAR"
+sign_update_artifact "$AARCH64_APP_TAR" || {
+    echo -e "${RED}Error: Failed to sign update artifact${NC}"
+    exit 1
+}
 if [[ -f "${AARCH64_APP_TAR}.sig" ]]; then
     cp "${AARCH64_APP_TAR}.sig" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig"
 fi
@@ -360,8 +357,8 @@ echo -e "${YELLOW}Creating latest.json...${NC}"
 if [[ -f "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig" ]]; then
     AARCH64_SIGNATURE=$(cat "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig" | tr -d '\n')
 else
-    AARCH64_SIGNATURE="SIGNATURE_PLACEHOLDER"
-    echo -e "${YELLOW}Warning: No aarch64 signature file found${NC}"
+    echo -e "${RED}Error: No aarch64 signature file found${NC}"
+    exit 1
 fi
 
 # Create latest.json with Apple Silicon only
@@ -381,58 +378,22 @@ printf '{
 echo -e "${BLUE}✅ Verifying notarization...${NC}"
 
 # Check aarch64 app bundle
-if [[ -d "$AARCH64_APP_DIR/voicetypr.app" ]]; then
-    spctl -a -t exec -vv "$AARCH64_APP_DIR/voicetypr.app" 2>&1 | grep -q "accepted" && {
+if [[ -n "${APP_BUNDLE_PATH}" && -d "$APP_BUNDLE_PATH" ]]; then
+    spctl -a -t exec -vv "$APP_BUNDLE_PATH" 2>&1 | grep -q "accepted" && {
         echo -e "${GREEN}✓ aarch64 app bundle is properly notarized${NC}"
     } || {
         echo -e "${YELLOW}Warning: aarch64 app bundle notarization check failed${NC}"
     }
 fi
 
-# Create GitHub release using gh CLI
-echo -e "${YELLOW}Creating GitHub release draft...${NC}"
-if command -v gh &> /dev/null; then
-    # Extract changelog content for this version
-    if [[ -f "CHANGELOG.md" ]]; then
-        # Look for the version header with square brackets and get content until next version or end
-        # Handle both # [x.x.x] and ## [x.x.x] formats
-        CHANGELOG_CONTENT=$(awk -v ver="${NEW_VERSION}" '
-            $0 ~ "^#+ \\[" ver "\\]" {flag=1; next}
-            /^#+ \[[0-9]+\.[0-9]+\.[0-9]+\]/ && flag {exit}
-            flag {print}
-        ' CHANGELOG.md)
-        
-        if [[ -z "$CHANGELOG_CONTENT" ]]; then
-            CHANGELOG_CONTENT="See the full changelog at https://github.com/moinulmoin/voicetypr/blob/main/CHANGELOG.md"
-        fi
-    else
-        CHANGELOG_CONTENT="Initial release"
-    fi
-    
-    gh release create "v${NEW_VERSION}" \
-        --draft \
-        --title "VoiceTypr v${NEW_VERSION}" \
-        --notes "$CHANGELOG_CONTENT"
-    
-    echo -e "${GREEN}✅ Draft release created!${NC}"
-    echo -e "${YELLOW}Uploading artifacts...${NC}"
-    
-    # Upload all artifacts
-    for file in "$OUTPUT_DIR"/*; do
-        echo -e "  Uploading: $(basename "$file")"
-        gh release upload "v${NEW_VERSION}" "$file" --clobber
-    done
-    
-    echo -e "${GREEN}✓ All artifacts uploaded successfully${NC}"
-else
-    echo -e "${YELLOW}GitHub CLI not found. Please install it with: brew install gh${NC}"
-    echo -e "${YELLOW}Or manually create release at: https://github.com/moinulmoin/voicetypr/releases/new${NC}"
-fi
-
-# Restore ad-hoc signing for development
-echo -e "${YELLOW}Restoring development configuration...${NC}"
-jq '.bundle.macOS.signingIdentity = "-"' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
-mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
+# Upload artifacts to the draft GitHub release created by release-it
+echo -e "${YELLOW}Uploading artifacts to GitHub release v${NEW_VERSION}...${NC}"
+gh release view "v${NEW_VERSION}" >/dev/null
+for file in "$OUTPUT_DIR"/*; do
+    echo -e "  Uploading: $(basename "$file")"
+    gh release upload "v${NEW_VERSION}" "$file" --clobber
+done
+echo -e "${GREEN}✓ All artifacts uploaded successfully${NC}"
 
 echo -e "${GREEN}✅ Release process complete!${NC}"
 echo -e "${GREEN}📁 Notarized artifacts saved in: ${OUTPUT_DIR}/${NC}"
