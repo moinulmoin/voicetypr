@@ -320,10 +320,10 @@ sign_update_artifact() {
         
         # Sign with proper flags (use pnpm tauri, not cargo tauri)
         if [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
-            pnpm tauri signer sign -k "$KEY_PATH" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$FILE_PATH"
+            pnpm tauri signer sign -f "$KEY_PATH" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$FILE_PATH"
         else
             # Try with empty password
-            pnpm tauri signer sign -k "$KEY_PATH" -p "" "$FILE_PATH"
+            pnpm tauri signer sign -f "$KEY_PATH" -p "" "$FILE_PATH"
         fi
         
         # Clean up temp file if created
