@@ -157,9 +157,24 @@ fi
 echo -e "${YELLOW}Pulling latest changes...${NC}"
 git pull --ff-only origin main
 
-# Run tests first
-echo -e "${YELLOW}Running tests...${NC}"
+# Run typecheck first (was in release-it before:init)
+echo -e "${YELLOW}Running typecheck...${NC}"
+pnpm typecheck
+
+# Run backend tests
+echo -e "${YELLOW}Running backend tests...${NC}"
 pnpm test:backend
+
+# Check there are commits since last tag (was requireCommits in release-it)
+LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+if [[ -n "$LAST_TAG" ]]; then
+    COMMIT_COUNT=$(git rev-list "${LAST_TAG}..HEAD" --count)
+    if [[ "$COMMIT_COUNT" -eq 0 ]]; then
+        echo -e "${RED}Error: No commits since last tag ${LAST_TAG}${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Found ${COMMIT_COUNT} commits since ${LAST_TAG}${NC}"
+fi
 
 # Get current version
 CURRENT_VERSION=$(node -p "require('./package.json').version")
