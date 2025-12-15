@@ -136,10 +136,14 @@ if (-not $SkipBuild) {
         Write-Info "Signing installer for updates..."
         $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
         
-        if ($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
+        # NOTE: PowerShell may drop empty-string arguments when invoking native executables,
+        # which would shift args and make the installer path get treated as the password.
+        if (-not [string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
             & pnpm tauri signer sign -f $keyPath -p $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD $installerPath
         } else {
-            & pnpm tauri signer sign -f $keyPath -p "" $installerPath
+            # Force a non-interactive run (avoid prompting for password) while still passing an
+            # explicit empty value in a single token that PowerShell won't drop.
+            & pnpm tauri signer sign -f $keyPath --password= $installerPath
         }
         
         if (Test-Path "$installerPath.sig") {
