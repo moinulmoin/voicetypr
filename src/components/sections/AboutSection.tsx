@@ -1,7 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { check } from '@tauri-apps/plugin-updater';
 import { open } from '@tauri-apps/plugin-shell';
 import { getVersion } from '@tauri-apps/api/app';
 import { 
@@ -13,6 +12,7 @@ import {
 import XIcon from "@/components/icons/XIcon";
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { updateService } from '@/services/updateService';
 
 export function AboutSection() {
   const [appVersion, setAppVersion] = useState<string>('');
@@ -34,19 +34,8 @@ export function AboutSection() {
 
   const handleCheckUpdate = async () => {
     setIsCheckingUpdate(true);
-    try {
-      const update = await check();
-      if (update?.available) {
-        toast.info(`Update available: v${update.version}`);
-      } else {
-        toast.success('You are on the latest version');
-      }
-    } catch (error) {
-      console.error('Failed to check for updates:', error);
-      toast.error('Failed to check for updates');
-    } finally {
-      setIsCheckingUpdate(false);
-    }
+    await updateService.checkForUpdatesManually();
+    setIsCheckingUpdate(false);
   };
 
   const openExternalLink = async (url: string) => {

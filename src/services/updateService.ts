@@ -43,8 +43,9 @@ export class UpdateService {
   }
 
   /**
-   * Check for updates in the background (silent check)
-   * Only shows notification if an update is available
+   * Check for updates in the background and auto-install if available.
+   * Shows progress toasts during download/install, then relaunches the app.
+   * Runs on startup and daily when automatic updates are enabled.
    */
   async checkForUpdatesInBackground(): Promise<void> {
     if (this.checkInProgress) {
@@ -118,14 +119,48 @@ export class UpdateService {
    * Handle when an update is available
    */
   private async handleUpdateAvailable(update: Update, isBackgroundCheck: boolean): Promise<void> {
-    // For background checks, use a toast notification first
     if (isBackgroundCheck) {
-      toast.info(`Update ${update.version} is available!`, {
-        duration: 10000,
-      });
+      // For background checks, auto-install silently
+      await this.autoInstallUpdate(update);
     } else {
-      // For manual checks, show dialog immediately
+      // For manual checks, show dialog to let user decide
       await this.showUpdateDialog(update);
+    }
+  }
+
+  /**
+   * Auto-install update silently with progress feedback
+   */
+  private async autoInstallUpdate(update: Update): Promise<void> {
+    const toastId = 'update-progress';
+    
+    try {
+      toast.info(`Downloading update ${update.version}...`, { 
+        id: toastId,
+        duration: Infinity 
+      });
+
+      await update.downloadAndInstall((event) => {
+        if (event.event === 'Started' && event.data.contentLength) {
+          toast.info(`Downloading update ${update.version}...`, { 
+            id: toastId,
+            duration: Infinity 
+          });
+        } else if (event.event === 'Finished') {
+          toast.info('Installing update, app will restart...', { 
+            id: toastId,
+            duration: Infinity 
+          });
+        }
+      });
+
+      await relaunch();
+    } catch (error) {
+      console.error('Auto-update failed:', error);
+      toast.error('Update failed. You can try again from Settings > About.', { 
+        id: toastId,
+        duration: 5000 
+      });
     }
   }
 
