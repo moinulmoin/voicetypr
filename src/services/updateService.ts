@@ -1,18 +1,70 @@
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { ask } from '@tauri-apps/plugin-dialog';
+import { sendNotification, isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
+import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import type { AppSettings } from '@/types';
 
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const LAST_UPDATE_CHECK_KEY = 'last_update_check';
+const JUST_UPDATED_KEY = 'just_updated_version';
 
 export class UpdateService {
   private static instance: UpdateService;
   private checkInProgress = false;
   private updateCheckTimer: number | null = null;
+  private isSessionActive = false;
+  private pendingRelaunch = false;
 
   private constructor() {}
+
+  /**
+   * Set whether user is in an active session (recording/transcribing)
+   * Auto-updates are skipped when session is active
+   * When session ends, pending relaunch will be triggered
+   */
+  setSessionActive(active: boolean): void {
+    this.isSessionActive = active;
+    
+    // If session ended and we have a pending relaunch, do it now
+    if (!active && this.pendingRelaunch) {
+      this.pendingRelaunch = false;
+      this.performRelaunch();
+    }
+  }
+
+  /**
+   * Perform relaunch with backend verification and error handling
+   */
+  private async performRelaunch(): Promise<void> {
+    // Final safety check: verify with backend that no session is active
+    try {
+      const currentState = await invoke<{ state: string }>('get_current_recording_state');
+      const isActive = currentState.state !== 'idle' && currentState.state !== 'error';
+      if (isActive) {
+        console.log('Backend still in active session, deferring relaunch');
+        this.pendingRelaunch = true;
+        return;
+      }
+    } catch (error) {
+      console.error('Failed to check recording state, proceeding with relaunch:', error);
+    }
+
+    // Mark that we're about to relaunch after update
+    localStorage.setItem(JUST_UPDATED_KEY, 'true');
+
+    try {
+      await relaunch();
+    } catch (error) {
+      // Rollback: remove flag since relaunch failed
+      localStorage.removeItem(JUST_UPDATED_KEY);
+      console.error('Relaunch failed:', error);
+      toast.error('Update installed. Please restart the app manually.', { 
+        duration: 10000 
+      });
+    }
+  }
 
   static getInstance(): UpdateService {
     if (!UpdateService.instance) {
@@ -23,10 +75,14 @@ export class UpdateService {
 
   /**
    * Initialize the update service
+   * - Shows "Updated" toast if app was just updated
    * - Checks for updates on startup if enabled
    * - Sets up daily update checks
    */
   async initialize(settings: AppSettings): Promise<void> {
+    // Check if app was just updated and show toast
+    await this.showJustUpdatedToast();
+
     // Check if automatic updates are enabled (default to true if not set)
     const autoUpdateEnabled = settings.check_updates_automatically ?? true;
     
@@ -40,6 +96,69 @@ export class UpdateService {
 
     // Set up daily checks
     this.setupDailyUpdateCheck();
+  }
+
+  /**
+   * Show toast if app was just updated, with window focus
+   */
+  private async showJustUpdatedToast(): Promise<void> {
+    const justUpdated = localStorage.getItem(JUST_UPDATED_KEY);
+    if (justUpdated) {
+      localStorage.removeItem(JUST_UPDATED_KEY);
+      
+      try {
+        await invoke('focus_main_window');
+        // Small delay to ensure window is focused before toast appears
+        setTimeout(() => {
+          toast.success('Updated to latest version', { duration: 5000 });
+        }, 200);
+      } catch {
+        // If focus fails, still show the toast
+        toast.success('Updated to latest version', { duration: 5000 });
+      }
+    }
+  }
+
+  /**
+   * Request notification permission (call after onboarding)
+   */
+  async requestNotificationPermission(): Promise<boolean> {
+    try {
+      let permitted = await isPermissionGranted();
+      if (!permitted) {
+        const permission = await requestPermission();
+        permitted = permission === 'granted';
+      }
+      // Send a welcome notification so user sees what they're allowing
+      if (permitted) {
+        sendNotification({ 
+          title: 'Notifications Enabled', 
+          body: "You'll be notified about app updates" 
+        });
+      }
+      return permitted;
+    } catch (error) {
+      console.error('Failed to request notification permission:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Send a system notification (macOS notification center)
+   */
+  private async sendSystemNotification(title: string, body: string): Promise<void> {
+    try {
+      let permitted = await isPermissionGranted();
+      if (!permitted) {
+        const permission = await requestPermission();
+        permitted = permission === 'granted';
+      }
+      if (permitted) {
+        sendNotification({ title, body });
+      }
+    } catch (error) {
+      console.error('Failed to send system notification:', error);
+    }
   }
 
   /**
@@ -131,37 +250,56 @@ export class UpdateService {
   /**
    * Auto-install update silently with progress feedback
    */
-  private async autoInstallUpdate(update: Update): Promise<void> {
+  private async autoInstallUpdate(update: Update, retryCount = 0): Promise<void> {
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 30000; // 30 seconds
+
+    // Defer auto-update if user is in active session (recording/transcribing)
+    if (this.isSessionActive) {
+      if (retryCount < MAX_RETRIES) {
+        console.log(`Deferring auto-update - session active (retry ${retryCount + 1}/${MAX_RETRIES} in 30s)`);
+        setTimeout(() => this.autoInstallUpdate(update, retryCount + 1), RETRY_DELAY);
+        return;
+      }
+      console.log('Skipping auto-update - session still active after max retries');
+      return;
+    }
+
     const toastId = 'update-progress';
     
     try {
-      toast.info(`Downloading update ${update.version}...`, { 
-        id: toastId,
-        duration: Infinity 
-      });
-
       await update.downloadAndInstall((event) => {
-        if (event.event === 'Started' && event.data.contentLength) {
+        if (event.event === 'Started') {
           toast.info(`Downloading update ${update.version}...`, { 
             id: toastId,
             duration: Infinity 
           });
         } else if (event.event === 'Finished') {
-          toast.info('Installing update, app will restart...', { 
+          toast.success('Update ready, restarting...', { 
             id: toastId,
             duration: Infinity 
           });
         }
       });
-
-      await relaunch();
     } catch (error) {
       console.error('Auto-update failed:', error);
       toast.error('Update failed. You can try again from Settings > About.', { 
         id: toastId,
         duration: 5000 
       });
+      return;
     }
+
+    // Re-check session state before relaunch (user may have started recording during download)
+    if (this.isSessionActive) {
+      console.log('Update downloaded but session active - will relaunch when session ends');
+      this.pendingRelaunch = true;
+      toast.dismiss(toastId);
+      await this.sendSystemNotification('Update Ready', 'VoiceTypr will restart when recording ends');
+      return;
+    }
+
+    await this.performRelaunch();
   }
 
   /**
@@ -182,11 +320,12 @@ export class UpdateService {
       toast.info('Downloading update...');
       
       try {
-        // Download and install
         await update.downloadAndInstall();
-        
-        // Relaunch the app
-        await relaunch();
+        // Notify if relaunch will be deferred due to active session
+        if (this.isSessionActive) {
+          await this.sendSystemNotification('Update Ready', 'VoiceTypr will restart when recording ends');
+        }
+        await this.performRelaunch();
       } catch (error) {
         console.error('Update installation failed:', error);
         toast.error('Failed to install update');

@@ -161,6 +161,9 @@ export function AppContainer() {
       Promise.all([checkAccessibilityPermission(), checkMicrophonePermission()]).then(() => {
         console.log("Permissions refreshed after onboarding completion");
       });
+
+      // Request notification permission for update notifications
+      updateService.requestNotificationPermission();
     }
   }, [
     showOnboarding,
