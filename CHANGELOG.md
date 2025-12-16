@@ -1,3 +1,22 @@
+## [1.11.2](https://github.com/moinulmoin/voicetypr/compare/v1.11.1...v1.11.2) (2025-12-16)
+
+
+### Bug Fixes
+
+* auto-install updates in background and use updateService in AboutSection ([76ec247](https://github.com/moinulmoin/voicetypr/commit/76ec247deaf80d3ef5cab56437eab7d10dc892aa))
+* avoid dropping empty password in Windows signing ([f60cd8b](https://github.com/moinulmoin/voicetypr/commit/f60cd8b5628fa0d6f68d4817719164d41fd3e4fa))
+* use -f flag for private key file path in signer ([93811c5](https://github.com/moinulmoin/voicetypr/commit/93811c5609bf1fa8016cd3530232b6dd78e419a8))
+* use pnpm tauri signer in Windows script ([a4e6e65](https://github.com/moinulmoin/voicetypr/commit/a4e6e65c826b457da5e822feac8634af7a853250))
+* use pnpm tauri signer instead of cargo tauri ([cf5d085](https://github.com/moinulmoin/voicetypr/commit/cf5d085f7fc315fe7afc8e4bb03db6f0057d03d3))
+
+
+### Features
+
+* **macos:** toggle dock icon based on main window visibility ([0854459](https://github.com/moinulmoin/voicetypr/commit/08544590cb4c667aa2682d02e99a442845a48525))
+* session-aware auto-updates with notification support ([cdd7d89](https://github.com/moinulmoin/voicetypr/commit/cdd7d89e3290dccd1690a3f7ef7391b7a01b7b52))
+
+
+
 ## [1.11.1](https://github.com/moinulmoin/voicetypr/compare/v1.10.0...v1.11.1) (2025-12-14)
 
 
