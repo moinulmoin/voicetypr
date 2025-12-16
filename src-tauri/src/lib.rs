@@ -34,6 +34,19 @@ mod window_manager;
 #[cfg(test)]
 mod tests;
 
+// Helper functions for macOS dock icon visibility
+#[cfg(target_os = "macos")]
+pub fn show_dock_icon(app: &tauri::AppHandle) {
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    log::debug!("Dock icon shown (ActivationPolicy::Regular)");
+}
+
+#[cfg(target_os = "macos")]
+pub fn hide_dock_icon(app: &tauri::AppHandle) {
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    log::debug!("Dock icon hidden (ActivationPolicy::Accessory)");
+}
+
 use audio::recorder::AudioRecorder;
 use commands::{
     ai::{
@@ -566,6 +579,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
+                            // Show dock icon when main window is shown via tray icon
+                            #[cfg(target_os = "macos")]
+                            show_dock_icon(app);
                         }
                     }
                 })
@@ -957,8 +973,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = window.hide();
                     log::info!("Main window hidden - menubar mode active");
                 }
+                // Keep dock icon hidden when main window is hidden
+                #[cfg(target_os = "macos")]
+                hide_dock_icon(&app.app_handle());
             } else {
                 log::info!("👋 First launch or no model configured - keeping main window visible");
+                // Show dock icon when main window is visible
+                #[cfg(target_os = "macos")]
+                show_dock_icon(&app.app_handle());
             }
 
             // Log setup completion
@@ -1052,22 +1074,38 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             log::error!("Failed to hide main window: {}", e);
                         } else {
                             log::info!("Main window hidden instead of closed");
+                            // Hide dock icon when main window is hidden
+                            #[cfg(target_os = "macos")]
+                            hide_dock_icon(&window.app_handle());
                         }
                     }
                 }
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .map_err(|e| -> Box<dyn std::error::Error> {
-            log_failed("APPLICATION_RUN", &format!("Critical error running Tauri application: {}", e));
-            log_with_context(log::Level::Error, "Application run failed", &[
-                ("stage", "application_run"),
+            log_failed("APPLICATION_BUILD", &format!("Critical error building Tauri application: {}", e));
+            log_with_context(log::Level::Error, "Application build failed", &[
+                ("stage", "application_build"),
                 ("total_startup_time_ms", &app_start.elapsed().as_millis().to_string().as_str())
             ]);
             eprintln!("VoiceTypr failed to start: {}", e);
             Box::new(e)
-        })?;
+        })?
+        .run(|app_handle, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
+                if !has_visible_windows {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        // Show dock icon when main window is shown
+                        show_dock_icon(app_handle);
+                    }
+                }
+            }
+        });
 
     // Log successful application startup
     log_lifecycle_event("APPLICATION_READY", Some(app_version), None);
