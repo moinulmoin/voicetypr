@@ -36,6 +36,7 @@
     "updater:allow-download-and-install",
     "process:allow-restart",
     "process:allow-exit",
-    "os:default"
+    "os:default",
+    "notification:default"
   ]
 }
