@@ -104,10 +104,14 @@ fn play_recording_start_sound() {
 /// Play a system sound to confirm recording start (Windows)
 #[cfg(target_os = "windows")]
 fn play_recording_start_sound() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
     std::thread::spawn(|| {
-        // Use PowerShell to play a system sound on Windows
+        // Use PowerShell to play a system sound on Windows (hidden console)
         let _ = std::process::Command::new("powershell")
             .args(["-c", "[console]::beep(800, 100)"])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn();
     });
 }
