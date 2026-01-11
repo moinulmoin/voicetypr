@@ -13,7 +13,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { isMacOS } from "@/lib/platform";
-import { PillIndicatorMode } from "@/types";
+import { PillIndicatorMode, PillIndicatorPosition } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import {
@@ -352,7 +352,7 @@ export function GeneralSettings() {
                     htmlFor="pill-indicator-mode"
                     className="text-sm font-medium"
                   >
-                    When to Display the Pill Indicator
+                    Recording Indicator Visibility
                   </Label>
                   <p className="text-xs text-muted-foreground">
                     Control when the recording indicator is visible
@@ -376,6 +376,40 @@ export function GeneralSettings() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {/* Only show position selector when indicator is visible (not "never") */}
+              {settings.pill_indicator_mode !== "never" && (
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label
+                      htmlFor="pill-indicator-position"
+                      className="text-sm font-medium"
+                    >
+                      Indicator Position
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Where to display the recording indicator on screen
+                    </p>
+                  </div>
+                  <Select
+                    value={settings.pill_indicator_position ?? "bottom"}
+                    onValueChange={async (value: PillIndicatorPosition) => {
+                      await updateSettings({
+                        pill_indicator_position: value,
+                      });
+                    }}
+                  >
+                    <SelectTrigger className="w-[160px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="top">Top</SelectItem>
+                      <SelectItem value="center">Center</SelectItem>
+                      <SelectItem value="bottom">Bottom</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
 
             <div className="px-4 pb-4">

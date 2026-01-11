@@ -38,11 +38,17 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    const updatedSettings = { ...settings, ...updates };
+    const previousSettings = settings;
+
+    // Optimistic update - update state immediately so UI responds instantly
+    setSettings(updatedSettings);
+
     try {
-      const updatedSettings = { ...settings, ...updates };
       await invoke('save_settings', { settings: updatedSettings });
-      setSettings(updatedSettings);
     } catch (err) {
+      // Rollback on error
+      setSettings(previousSettings);
       console.error('[SettingsContext] Failed to update settings:', err);
       throw err;
     }
@@ -54,6 +60,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   }, [loadSettings]);
 
   // Listen for settings changes from other sources (e.g., tray menu)
+  // Note: We don't listen to 'settings-changed' here because it causes race conditions
+  // with the optimistic updates in updateSettings. The frontend already updates state
+  // after save_settings completes, so we don't need to reload.
   useEffect(() => {
     const unlistenModel = listen('model-changed', () => {
       loadSettings();
@@ -67,12 +76,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       loadSettings();
     });
 
-    const unlistenSettings = listen('settings-changed', () => {
-      loadSettings();
-    });
-
     return () => {
-      Promise.all([unlistenModel, unlistenLanguage, unlistenAudioDevice, unlistenSettings]).then(unsubs => {
+      Promise.all([unlistenModel, unlistenLanguage, unlistenAudioDevice]).then(unsubs => {
         unsubs.forEach(unsub => unsub());
       });
     };

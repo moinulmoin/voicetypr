@@ -9,6 +9,21 @@ pub struct WindowManager {
     pill_window: Arc<Mutex<Option<WebviewWindow>>>,
 }
 
+fn calculate_pill_position(position: &str, screen_width: f64, screen_height: f64) -> (f64, f64) {
+    let pill_width = 80.0;
+    let pill_height = 40.0;
+    let edge_offset = 60.0; // Distance from top/bottom edge
+
+    let x = (screen_width - pill_width) / 2.0;
+    let y = match position {
+        "top" => edge_offset,
+        "center" => (screen_height - pill_height) / 2.0,
+        "bottom" | _ => screen_height - pill_height - edge_offset,
+    };
+
+    (x, y)
+}
+
 impl WindowManager {
     pub fn new(app_handle: AppHandle) -> Self {
         log_with_context(
@@ -78,6 +93,15 @@ impl WindowManager {
                 // Window is no longer valid, clear the reference
                 log::debug!("Pill window reference is stale, clearing");
                 *pill_guard = None;
+            }
+        }
+
+        // Fallback: Check if pill window exists in Tauri but not in our cache
+        if let Some(window) = self.app_handle.get_webview_window("pill") {
+            if window.is_closable().is_ok() {
+                log::debug!("Found pill window via app_handle fallback, caching it");
+                *pill_guard = Some(window.clone());
+                return Some(window);
             }
         }
 
@@ -543,91 +567,64 @@ impl WindowManager {
         }
     }
 
-    /// Calculate center bottom position for pill window
-    fn calculate_center_position(&self) -> (f64, f64) {
+    /// Get the current pill indicator position from settings
+    fn get_pill_position_setting(&self) -> String {
+        use tauri_plugin_store::StoreExt;
+        if let Ok(store) = self.app_handle.store("settings") {
+            store
+                .get("pill_indicator_position")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "bottom".to_string())
+        } else {
+            "bottom".to_string()
+        }
+    }
+
+    /// Calculate position for pill window based on position setting
+    /// position: "top", "center", or "bottom"
+    fn calculate_position_for(&self, position: &str) -> (f64, f64) {
+        // Get screen dimensions
+        let (screen_width, screen_height) = self.get_screen_dimensions();
+        let (x, y) = calculate_pill_position(position, screen_width, screen_height);
+
+        log::info!(
+            "Calculated pill position: ({}, {}) for '{}' on {}x{} screen",
+            x,
+            y,
+            position,
+            screen_width,
+            screen_height
+        );
+        (x, y)
+    }
+
+    /// Get screen dimensions from available monitors
+    fn get_screen_dimensions(&self) -> (f64, f64) {
         // Try to get monitor from main window
         if let Some(main_window) = self.get_main_window() {
             if let Ok(Some(monitor)) = main_window.current_monitor() {
                 let size = monitor.size();
                 let scale = monitor.scale_factor();
-                let width = size.width as f64 / scale;
-                let height = size.height as f64 / scale;
-
-                // Center bottom position with offset
-                let pill_width = 80.0;
-                let pill_height = 40.0;
-                let bottom_offset = 60.0; // Distance from bottom of screen (above taskbar)
-
-                let x = (width - pill_width) / 2.0;
-                let y = height - pill_height - bottom_offset;
-
-                log::info!(
-                    "Calculated pill position: ({}, {}) on {}x{} screen",
-                    x,
-                    y,
-                    width,
-                    height
-                );
-                (x, y)
-            } else {
-                log::warn!("Could not get monitor from main window, trying primary monitor");
-                // Try to get primary monitor
-                if let Ok(Some(monitor)) = self.app_handle.primary_monitor() {
-                    let size = monitor.size();
-                    let scale = monitor.scale_factor();
-                    let width = size.width as f64 / scale;
-                    let height = size.height as f64 / scale;
-
-                    let pill_width = 80.0;
-                    let pill_height = 40.0;
-                    let bottom_offset = 60.0; // Above taskbar
-
-                    let x = (width - pill_width) / 2.0;
-                    let y = height - pill_height - bottom_offset;
-
-                    log::info!(
-                        "Using primary monitor: ({}, {}) on {}x{} screen",
-                        x,
-                        y,
-                        width,
-                        height
-                    );
-                    (x, y)
-                } else {
-                    log::error!("Could not get any monitor, using safe defaults");
-                    // Safe default: try to center on common screen sizes
-                    (100.0, 400.0)
-                }
-            }
-        } else {
-            log::warn!("Main window not available, using app handle to get primary monitor");
-            // Try to get primary monitor directly
-            if let Ok(Some(monitor)) = self.app_handle.primary_monitor() {
-                let size = monitor.size();
-                let scale = monitor.scale_factor();
-                let width = size.width as f64 / scale;
-                let height = size.height as f64 / scale;
-
-                let pill_width = 80.0;
-                let pill_height = 40.0;
-                let bottom_offset = 60.0; // Above taskbar
-
-                let x = (width - pill_width) / 2.0;
-                let y = height - pill_height - bottom_offset;
-
-                log::info!(
-                    "Using primary monitor (no main window): ({}, {}) on {}x{} screen",
-                    x,
-                    y,
-                    width,
-                    height
-                );
-                (x, y)
-            } else {
-                log::error!("Could not get any monitor info, using safe defaults");
-                (100.0, 400.0)
+                return (size.width as f64 / scale, size.height as f64 / scale);
             }
         }
+
+        // Fallback to primary monitor
+        if let Ok(Some(monitor)) = self.app_handle.primary_monitor() {
+            let size = monitor.size();
+            let scale = monitor.scale_factor();
+            return (size.width as f64 / scale, size.height as f64 / scale);
+        }
+
+        // Safe default for common screen sizes
+        log::error!("Could not get any monitor info, using safe defaults");
+        (1920.0, 1080.0)
+    }
+
+    /// Calculate center position for pill window using current settings
+    fn calculate_center_position(&self) -> (f64, f64) {
+        let position = self.get_pill_position_setting();
+        self.calculate_position_for(&position)
     }
 
     /// Reposition pill and toast windows to current monitor center-bottom.
@@ -661,5 +658,76 @@ impl WindowManager {
                 log::info!("Repositioned toast window to ({}, {})", toast_x, toast_y);
             }
         }
+    }
+
+    /// Reposition pill and toast windows to a specific position.
+    /// Called when the pill_indicator_position setting changes.
+    pub fn reposition_floating_windows_with_position(&self, position: &str) {
+        use tauri::LogicalPosition;
+
+        let (pill_x, pill_y) = self.calculate_position_for(position);
+
+        // Reposition pill window
+        if let Some(pill) = self.get_pill_window() {
+            if let Err(e) = pill.set_position(LogicalPosition::new(pill_x, pill_y)) {
+                log::warn!("Failed to reposition pill window: {}", e);
+            } else {
+                log::info!("Repositioned pill window to ({}, {}) for position '{}'", pill_x, pill_y, position);
+            }
+        }
+
+        // Reposition toast window (above or below pill depending on position)
+        if let Some(toast) = self.app_handle.get_webview_window("toast") {
+            let toast_width = 400.0;
+            let toast_height = 80.0;
+            let pill_width = 80.0;
+            let gap = 8.0;
+            let toast_x = pill_x + (pill_width - toast_width) / 2.0;
+            // If pill is at top, put toast below; otherwise put toast above
+            let toast_y = if position == "top" {
+                pill_y + 40.0 + gap // Below pill
+            } else {
+                pill_y - toast_height - gap // Above pill
+            };
+
+            if let Err(e) = toast.set_position(LogicalPosition::new(toast_x, toast_y)) {
+                log::warn!("Failed to reposition toast window: {}", e);
+            } else {
+                log::info!("Repositioned toast window to ({}, {})", toast_x, toast_y);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::calculate_pill_position;
+
+    #[test]
+    fn calculate_pill_position_top() {
+        let (x, y) = calculate_pill_position("top", 1920.0, 1080.0);
+        assert_eq!(x, 920.0);
+        assert_eq!(y, 60.0);
+    }
+
+    #[test]
+    fn calculate_pill_position_center() {
+        let (x, y) = calculate_pill_position("center", 1920.0, 1080.0);
+        assert_eq!(x, 920.0);
+        assert_eq!(y, 520.0);
+    }
+
+    #[test]
+    fn calculate_pill_position_bottom() {
+        let (x, y) = calculate_pill_position("bottom", 1920.0, 1080.0);
+        assert_eq!(x, 920.0);
+        assert_eq!(y, 980.0);
+    }
+
+    #[test]
+    fn calculate_pill_position_defaults_to_bottom() {
+        let (x, y) = calculate_pill_position("unknown", 1920.0, 1080.0);
+        assert_eq!(x, 920.0);
+        assert_eq!(y, 980.0);
     }
 }

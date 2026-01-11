@@ -38,6 +38,7 @@ mod tests {
             keep_transcription_in_clipboard: false,
             play_sound_on_recording: true,
             pill_indicator_mode: "when_recording".to_string(),
+            pill_indicator_position: "bottom".to_string(),
         };
 
         // Test serialization
@@ -97,6 +98,7 @@ mod tests {
             keep_transcription_in_clipboard: true,
             play_sound_on_recording: false,
             pill_indicator_mode: "never".to_string(),
+            pill_indicator_position: "top".to_string(),
         };
 
         let cloned = settings.clone();

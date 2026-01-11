@@ -70,6 +70,10 @@ pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) {
     let _ = app.emit("toast", payload);
 }
 
+fn should_hide_pill_when_idle(mode: &str) -> bool {
+    mode != "always"
+}
+
 /// Check if pill should be hidden based on pill_indicator_mode setting.
 /// Returns true if pill should be hidden, false if it should stay visible.
 /// Called when transitioning to idle state (after recording ends).
@@ -92,7 +96,27 @@ pub async fn should_hide_pill(app: &AppHandle) -> bool {
         .unwrap_or_else(|| "when_recording".to_string());
 
     // Only keep pill visible if mode is "always"
-    pill_indicator_mode != "always"
+    should_hide_pill_when_idle(&pill_indicator_mode)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_hide_pill_when_idle;
+
+    #[test]
+    fn should_hide_pill_when_idle_for_never() {
+        assert!(should_hide_pill_when_idle("never"));
+    }
+
+    #[test]
+    fn should_hide_pill_when_idle_for_when_recording() {
+        assert!(should_hide_pill_when_idle("when_recording"));
+    }
+
+    #[test]
+    fn should_hide_pill_when_idle_for_always() {
+        assert!(!should_hide_pill_when_idle("always"));
+    }
 }
 
 /// Play a system sound to confirm recording start (macOS only)
