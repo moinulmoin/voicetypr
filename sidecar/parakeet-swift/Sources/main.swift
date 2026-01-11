@@ -7,6 +7,25 @@ func log(_ message: String) {
     fflush(stderr)
 }
 
+// Get system architecture info
+func getArchitectureInfo() -> String {
+    #if arch(arm64)
+    return "arm64 (Apple Silicon)"
+    #elseif arch(x86_64)
+    return "x86_64 (Intel)"
+    #else
+    return "unknown"
+    #endif
+}
+
+// Log system information for debugging
+func logSystemInfo() {
+    log("🦜 Parakeet sidecar started")
+    log("   Architecture: \(getArchitectureInfo())")
+    log("   macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)")
+    log("   PID: \(ProcessInfo.processInfo.processIdentifier)")
+}
+
 // JSON message structures for communication with Tauri
 struct TranscriptionResponse: Encodable {
     let type: String = "transcription"
@@ -75,6 +94,8 @@ var downloadedVersions = Set<SupportedModelVersion>()
 @main
 struct ParakeetSidecar {
     static func main() async {
+        logSystemInfo()
+
         // Set up JSON encoder
         // IMPORTANT: Do NOT use .prettyPrinted - Rust parses line-by-line
         // Multi-line JSON will cause "EOF while parsing" errors
@@ -164,6 +185,28 @@ struct ParakeetSidecar {
     }
 
     static func loadModel(version: SupportedModelVersion = .v3, forceDownload: Bool = false, emitStatus: Bool = true, encoder: JSONEncoder) async {
+        log("───────────────────────────────────────────────────────")
+        log("🔄 LOAD MODEL REQUEST")
+        log("───────────────────────────────────────────────────────")
+        log("📦 Requested version: \(version.rawValue.uppercased()) (\(version.modelIdentifier))")
+        log("📁 Repo folder: \(version.repoFolderName)")
+        log("🔄 Force download: \(forceDownload)")
+        log("📐 Running on: \(getArchitectureInfo())")
+
+        // Check expected cache path
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let expectedPath = home
+            .appendingPathComponent("Library/Application Support/FluidAudio/Models")
+            .appendingPathComponent(version.repoFolderName)
+        log("📍 Expected cache path: \(expectedPath.path)")
+        log("📂 Path exists: \(FileManager.default.fileExists(atPath: expectedPath.path))")
+
+        if FileManager.default.fileExists(atPath: expectedPath.path) {
+            if let contents = try? FileManager.default.contentsOfDirectory(atPath: expectedPath.path) {
+                log("📄 Cache contents: \(contents.joined(separator: ", "))")
+            }
+        }
+
         if isModelLoaded, let loadedVersion = loadedModelVersion, loadedVersion == version {
             log("⚡ Model already loaded: \(loadedVersion.modelIdentifier)")
             if emitStatus {
@@ -180,6 +223,7 @@ struct ParakeetSidecar {
                 log("🌐 This will download ~500MB. Please wait...")
                 models = try await AsrModels.downloadAndLoad(version: version.asrVersion)
                 downloadedVersions.insert(version)
+                log("✅ Download complete for \(version.rawValue.uppercased())")
             } else {
                 log("🔍 Attempting to load Parakeet \(version.rawValue.uppercased()) from cache...")
                 do {
@@ -187,25 +231,36 @@ struct ParakeetSidecar {
                     downloadedVersions.insert(version)
                     log("✅ Loaded Parakeet \(version.rawValue.uppercased()) from cache")
                 } catch {
-                    log("❌ Failed to load from cache: \(error)")
-                    sendError("model_not_downloaded", message: "Parakeet \(version.rawValue.uppercased()) is not downloaded. Please download it first.", encoder: encoder)
+                    log("❌ Failed to load \(version.rawValue.uppercased()) from cache")
+                    log("❌ Error type: \(type(of: error))")
+                    log("❌ Error details: \(error)")
+                    log("❌ Localized: \(error.localizedDescription)")
+                    sendError("model_not_downloaded", message: "Parakeet \(version.rawValue.uppercased()) is not downloaded. Please download it first. Error: \(error.localizedDescription)", encoder: encoder)
                     return
                 }
             }
 
+            log("🔧 Initializing AsrManager...")
             let manager = AsrManager(config: .default)
+            log("🔧 Calling manager.initialize(models:)...")
             try await manager.initialize(models: models)
+            log("✅ AsrManager initialized successfully")
             asrManager = manager
 
             isModelLoaded = true
             loadedModelVersion = version
+            log("✅ Model load complete: \(version.modelIdentifier)")
             if emitStatus {
                 sendResponse(StatusResponse(loadedModel: version.modelIdentifier, modelVersion: version.rawValue), encoder: encoder)
             }
         } catch {
-            log("❌ Failed to load model: \(error)")
-            sendError("model_load_error", message: "Failed to load model: \(error)", encoder: encoder)
+            log("❌ FATAL: Failed to load model \(version.rawValue.uppercased())")
+            log("❌ Error type: \(type(of: error))")
+            log("❌ Error details: \(error)")
+            log("❌ Localized: \(error.localizedDescription)")
+            sendError("model_load_error", message: "Failed to load model: \(error.localizedDescription)", encoder: encoder)
         }
+        log("───────────────────────────────────────────────────────")
     }
 
     static func unloadModel() {
@@ -248,8 +303,18 @@ struct ParakeetSidecar {
     }
 
     static func transcribeFile(_ audioPath: String, language: String? = nil, translateToEnglish: Bool = false, encoder: JSONEncoder) async {
+        log("───────────────────────────────────────────────────────")
+        log("🎤 TRANSCRIBE REQUEST")
+        log("───────────────────────────────────────────────────────")
+        log("📄 Audio path: \(audioPath)")
+        log("🌐 Language: \(language ?? "auto-detect")")
+        log("🔄 Translate to English: \(translateToEnglish)")
+        log("📦 Loaded model: \(loadedModelVersion?.modelIdentifier ?? "none")")
+        log("📐 Running on: \(getArchitectureInfo())")
+
         // Check if model is loaded - DO NOT auto-download
         guard isModelLoaded else {
+            log("❌ No model loaded!")
             sendError("model_not_loaded", message: "Parakeet model not loaded. Please download it first from Settings.", encoder: encoder)
             return
         }
@@ -258,18 +323,34 @@ struct ParakeetSidecar {
 
         // Check if file exists
         guard FileManager.default.fileExists(atPath: audioPath) else {
+            log("❌ Audio file not found: \(audioPath)")
             sendError("file_not_found", message: "Audio file not found: \(audioPath)", encoder: encoder)
             return
         }
 
+        // Log file info
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: audioPath) {
+            let size = attrs[.size] as? Int64 ?? 0
+            log("📊 File size: \(size) bytes (\(size / 1024) KB)")
+        }
+
         guard let manager = asrManager else {
+            log("❌ AsrManager is nil even though isModelLoaded=true!")
             sendError("model_not_loaded", message: "Parakeet engine is not initialized", encoder: encoder)
             return
         }
 
         do {
+            log("🎙️ Starting transcription...")
+            let startTime = Date()
+
             // Transcribe the audio file (returns ASRResult)
             let result = try await manager.transcribe(fileURL)
+
+            let elapsed = Date().timeIntervalSince(startTime)
+            log("✅ Transcription complete in \(String(format: "%.2f", elapsed))s")
+            log("📝 Result text length: \(result.text.count) chars")
+            log("⏱️ Audio duration: \(result.duration)s")
 
             // Send transcription response
             let response = TranscriptionResponse(
@@ -280,9 +361,14 @@ struct ParakeetSidecar {
             )
             sendResponse(response, encoder: encoder)
         } catch {
+            log("❌ TRANSCRIPTION FAILED")
+            log("❌ Error type: \(type(of: error))")
+            log("❌ Error details: \(error)")
+            log("❌ Localized: \(error.localizedDescription)")
             // Send error response instead of transcription with error
-            sendError("transcription_failed", message: "Transcription failed: \(error)", encoder: encoder)
+            sendError("transcription_failed", message: "Transcription failed: \(error.localizedDescription)", encoder: encoder)
         }
+        log("───────────────────────────────────────────────────────")
     }
 
     static func sendResponse<T: Encodable>(_ response: T, encoder: JSONEncoder) {

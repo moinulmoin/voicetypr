@@ -17,6 +17,36 @@ pub struct ParakeetModelDefinition {
     pub accuracy_score: u8,
     pub files: &'static [ParakeetModelFile],
     pub estimated_size: u64,
+    /// If true, this model only works on Apple Silicon (aarch64), not Intel Macs
+    pub apple_silicon_only: bool,
+}
+
+/// Check if running on Apple Silicon (aarch64)
+pub fn is_apple_silicon() -> bool {
+    std::env::consts::ARCH == "aarch64"
+}
+
+/// Get available models for the current architecture.
+/// Filters out Apple Silicon-only models when running on Intel Macs.
+pub fn get_available_models() -> Vec<&'static ParakeetModelDefinition> {
+    let is_arm = is_apple_silicon();
+    let arch = std::env::consts::ARCH;
+
+    AVAILABLE_MODELS
+        .iter()
+        .filter(|m| {
+            if m.apple_silicon_only && !is_arm {
+                log::info!(
+                    "🚫 Filtering out Parakeet model '{}' - requires Apple Silicon (current arch: {})",
+                    m.id,
+                    arch
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .collect()
 }
 
 // Parakeet models using Swift/FluidAudio sidecar
@@ -53,6 +83,7 @@ pub static AVAILABLE_MODELS: Lazy<Vec<ParakeetModelDefinition>> = Lazy::new(|| {
                 },
             ],
             estimated_size: 500_000_000, // FluidAudio CoreML model is ~500MB
+            apple_silicon_only: false,   // Works on both Intel and Apple Silicon
         },
         ParakeetModelDefinition {
             id: "parakeet-tdt-0.6b-v2",
@@ -81,6 +112,7 @@ pub static AVAILABLE_MODELS: Lazy<Vec<ParakeetModelDefinition>> = Lazy::new(|| {
                 },
             ],
             estimated_size: 480_000_000,
+            apple_silicon_only: true, // V2 CoreML model crashes on Intel Macs (SIGFPE in Espresso)
         },
     ]
 });
