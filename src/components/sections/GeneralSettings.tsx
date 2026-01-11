@@ -341,6 +341,29 @@ export function GeneralSettings() {
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label
+                    htmlFor="sound-on-recording-end"
+                    className="text-sm font-medium"
+                  >
+                    Sound on Recording End
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Play a sound when recording stops
+                  </p>
+                </div>
+                <Switch
+                  id="sound-on-recording-end"
+                  checked={settings.play_sound_on_recording_end ?? true}
+                  onCheckedChange={async (checked) =>
+                    await updateSettings({
+                      play_sound_on_recording_end: checked,
+                    })
+                  }
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label
                     htmlFor="show-pill-indicator"
                     className="text-sm font-medium"
                   >

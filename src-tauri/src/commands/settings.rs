@@ -31,6 +31,7 @@ pub struct Settings {
     pub keep_transcription_in_clipboard: bool,
     // Audio feedback
     pub play_sound_on_recording: bool,
+    pub play_sound_on_recording_end: bool,
     // Pill indicator visibility when idle
     pub show_pill_indicator: bool,
 }
@@ -55,6 +56,7 @@ impl Default for Settings {
             ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
             keep_transcription_in_clipboard: false, // Default to restoring clipboard after paste
             play_sound_on_recording: true,        // Default to playing sound on recording start
+            play_sound_on_recording_end: true,    // Default to playing sound on recording end
             show_pill_indicator: true,            // Default to showing pill indicator when idle
         }
     }
@@ -139,6 +141,10 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("play_sound_on_recording")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().play_sound_on_recording),
+        play_sound_on_recording_end: store
+            .get("play_sound_on_recording_end")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().play_sound_on_recording_end),
         show_pill_indicator: store
             .get("show_pill_indicator")
             .and_then(|v| v.as_bool())
@@ -206,6 +212,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set(
         "play_sound_on_recording",
         json!(settings.play_sound_on_recording),
+    );
+    store.set(
+        "play_sound_on_recording_end",
+        json!(settings.play_sound_on_recording_end),
     );
     store.set(
         "show_pill_indicator",
