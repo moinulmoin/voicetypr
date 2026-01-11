@@ -22,7 +22,8 @@ function download(url, outFile) {
   // Use curl if available
   try {
     // -sS: silent but show errors; -L: follow redirects; -f: fail on HTTP errors
-    run('curl', ['-sS', '-L', '-f', '-o', outFile, url]);
+    // --http1.1: force HTTP/1.1 to avoid HTTP/2 protocol errors on some servers
+    run('curl', ['--http1.1', '-sS', '-L', '-f', '-o', outFile, url]);
     return;
   } catch (e) {
     // Fallback to powershell on Windows
@@ -101,15 +102,50 @@ function verifyChecksum(file, expected, label) {
 
   if (isMac) {
     if (process.arch !== 'arm64') {
-      console.warn('[ensure-ffmpeg-sidecar] Non-arm64 mac detected; this project targets Apple Silicon.');
+      console.log('[ensure-ffmpeg-sidecar] Intel Mac detected - will download binaries for both architectures.');
     }
     const ffmpegDst = path.join(distDir, 'ffmpeg');
     const ffprobeDst = path.join(distDir, 'ffprobe');
-    if (fs.existsSync(ffmpegDst) && fs.existsSync(ffprobeDst)) {
-      // Ensure arch-specific symlinks even if binaries already present
+    const ffmpegX64Dst = path.join(distDir, 'ffmpeg-x86_64-apple-darwin');
+    const ffprobeX64Dst = path.join(distDir, 'ffprobe-x86_64-apple-darwin');
+
+    // Check if ARM64 binaries exist
+    const arm64Present = fs.existsSync(ffmpegDst) && fs.existsSync(ffprobeDst);
+    // Check if x86_64 binaries exist
+    const x64Present = fs.existsSync(ffmpegX64Dst) && fs.existsSync(ffprobeX64Dst);
+
+    if (arm64Present && x64Present) {
+      // Both architectures present - ensure symlinks and exit
       ensureSymlink(ffmpegDst, path.join(distDir, 'ffmpeg-aarch64-apple-darwin'));
       ensureSymlink(ffprobeDst, path.join(distDir, 'ffprobe-aarch64-apple-darwin'));
-      console.log('[ensure-ffmpeg-sidecar] ffmpeg/ffprobe sidecars present. Symlinks ensured.');
+      console.log('[ensure-ffmpeg-sidecar] ffmpeg/ffprobe sidecars present for both architectures.');
+      return;
+    }
+
+    if (arm64Present && !x64Present) {
+      // ARM64 present but x86_64 missing - download x86_64 only
+      ensureSymlink(ffmpegDst, path.join(distDir, 'ffmpeg-aarch64-apple-darwin'));
+      ensureSymlink(ffprobeDst, path.join(distDir, 'ffprobe-aarch64-apple-darwin'));
+      console.log('[ensure-ffmpeg-sidecar] ARM64 binaries present, downloading x86_64...');
+
+      const ffmpegX64Url = process.env.FFMPEG_MAC_X64_URL || 'https://evermeet.cx/ffmpeg/getrelease/zip';
+      const ffprobeX64Url = process.env.FFPROBE_MAC_X64_URL || 'https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip';
+      const tmpX64 = fs.mkdtempSync(path.join(os.tmpdir(), 'fftools-x64-'));
+
+      try {
+        download(ffmpegX64Url, path.join(tmpX64, 'ffmpeg.zip'));
+        download(ffprobeX64Url, path.join(tmpX64, 'ffprobe.zip'));
+        unzip(path.join(tmpX64, 'ffmpeg.zip'), tmpX64);
+        unzip(path.join(tmpX64, 'ffprobe.zip'), tmpX64);
+
+        if (fs.existsSync(path.join(tmpX64, 'ffmpeg')) && fs.existsSync(path.join(tmpX64, 'ffprobe'))) {
+          fs.copyFileSync(path.join(tmpX64, 'ffmpeg'), ffmpegX64Dst); chmodx(ffmpegX64Dst);
+          fs.copyFileSync(path.join(tmpX64, 'ffprobe'), ffprobeX64Dst); chmodx(ffprobeX64Dst);
+          console.log('[ensure-ffmpeg-sidecar] Installed x86_64 binaries for Intel Mac support.');
+        }
+      } catch (err) {
+        console.warn(`[ensure-ffmpeg-sidecar] Failed to download x86_64: ${err.message}`);
+      }
       return;
     }
 
@@ -141,7 +177,43 @@ function verifyChecksum(file, expected, label) {
 
     ensureSymlink(ffmpegDst, path.join(distDir, 'ffmpeg-aarch64-apple-darwin'));
     ensureSymlink(ffprobeDst, path.join(distDir, 'ffprobe-aarch64-apple-darwin'));
-    console.log('[ensure-ffmpeg-sidecar] Installed macOS sidecar binaries by download.');
+    console.log('[ensure-ffmpeg-sidecar] Installed macOS ARM64 sidecar binaries by download.');
+
+    // Also download Intel x86_64 binaries for universal build support
+    // Using evermeet.cx (trusted source for Intel Mac ffmpeg builds)
+    if (!fs.existsSync(ffmpegX64Dst) || !fs.existsSync(ffprobeX64Dst)) {
+      console.log('[ensure-ffmpeg-sidecar] Downloading Intel x86_64 binaries for universal support...');
+      const ffmpegX64Url = process.env.FFMPEG_MAC_X64_URL || 'https://evermeet.cx/ffmpeg/getrelease/zip';
+      const ffprobeX64Url = process.env.FFPROBE_MAC_X64_URL || 'https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip';
+
+      const tmpX64 = fs.mkdtempSync(path.join(os.tmpdir(), 'fftools-x64-'));
+      const ffmpegX64Zip = path.join(tmpX64, 'ffmpeg.zip');
+      const ffprobeX64Zip = path.join(tmpX64, 'ffprobe.zip');
+
+      try {
+        download(ffmpegX64Url, ffmpegX64Zip);
+        download(ffprobeX64Url, ffprobeX64Zip);
+        unzip(ffmpegX64Zip, tmpX64);
+        unzip(ffprobeX64Zip, tmpX64);
+
+        const outFfmpegX64 = path.join(tmpX64, 'ffmpeg');
+        const outFfprobeX64 = path.join(tmpX64, 'ffprobe');
+
+        if (fs.existsSync(outFfmpegX64) && fs.existsSync(outFfprobeX64)) {
+          fs.copyFileSync(outFfmpegX64, ffmpegX64Dst); chmodx(ffmpegX64Dst);
+          fs.copyFileSync(outFfprobeX64, ffprobeX64Dst); chmodx(ffprobeX64Dst);
+          console.log('[ensure-ffmpeg-sidecar] Installed macOS x86_64 sidecar binaries for Intel Mac support.');
+        } else {
+          console.warn('[ensure-ffmpeg-sidecar] Could not extract x86_64 binaries; Intel Mac builds may fail.');
+        }
+      } catch (err) {
+        console.warn(`[ensure-ffmpeg-sidecar] Failed to download x86_64 binaries: ${err.message}`);
+        console.warn('[ensure-ffmpeg-sidecar] Intel Mac builds may fail. ARM64 binaries are still available.');
+      }
+    } else {
+      console.log('[ensure-ffmpeg-sidecar] x86_64 binaries already present.');
+    }
+
     return;
   }
 
