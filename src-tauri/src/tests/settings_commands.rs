@@ -37,6 +37,7 @@ mod tests {
             ptt_hotkey: Some("Alt+Space".to_string()),
             keep_transcription_in_clipboard: false,
             play_sound_on_recording: true,
+            play_sound_on_recording_end: true,
             show_pill_indicator: true,
         };
 
@@ -96,6 +97,7 @@ mod tests {
             ptt_hotkey: Some("CommandOrControl+Space".to_string()),
             keep_transcription_in_clipboard: true,
             play_sound_on_recording: false,
+            play_sound_on_recording_end: false,
             show_pill_indicator: false,
         };
 
