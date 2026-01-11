@@ -386,16 +386,40 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Check if pill_indicator_mode setting is "always"
                 let pill_mode = if let Ok(store) = app_handle_for_pill.store("settings") {
-                    store
+                    let stored_mode = store
                         .get("pill_indicator_mode")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .unwrap_or_else(|| "when_recording".to_string())
+                        .and_then(|v| v.as_str().map(|s| s.to_string()));
+                    let legacy_show = store.get("show_pill_indicator").and_then(|v| v.as_bool());
+                    let resolved = crate::commands::settings::resolve_pill_indicator_mode(
+                        stored_mode.clone(),
+                        legacy_show,
+                        crate::commands::settings::Settings::default().pill_indicator_mode,
+                    );
+                    log::info!(
+                        "Startup: pill_indicator_mode resolved='{}' stored={:?} legacy_show={:?}",
+                        resolved,
+                        stored_mode,
+                        legacy_show
+                    );
+                    resolved
                 } else {
-                    "when_recording".to_string()
+                    let default_mode = crate::commands::settings::Settings::default().pill_indicator_mode;
+                    log::info!(
+                        "Startup: pill_indicator_mode using default='{}' (settings store unavailable)",
+                        default_mode
+                    );
+                    default_mode
                 };
+
+                log::info!(
+                    "Startup: pill_indicator_mode='{}', will show pill={}",
+                    pill_mode,
+                    pill_mode == "always"
+                );
 
                 // Only show pill on startup if mode is "always"
                 if pill_mode == "always" {
+                    log::info!("Startup: Showing pill because mode is 'always'");
                     if let Err(e) = crate::commands::window::show_pill_widget(app_handle_for_pill).await {
                         log::warn!("Failed to show pill on startup: {}", e);
                     }
