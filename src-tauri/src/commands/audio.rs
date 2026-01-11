@@ -3,7 +3,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
 use crate::commands::license::check_license_status_internal;
-use crate::commands::settings::get_settings;
+use crate::commands::settings::{get_settings, resolve_pill_indicator_mode, Settings};
 use crate::license::LicenseState;
 use crate::parakeet::messages::ParakeetResponse;
 use crate::parakeet::ParakeetManager;
@@ -81,6 +81,7 @@ fn should_hide_pill_when_idle(mode: &str) -> bool {
 /// - "always" → never hide (return false)
 /// - "when_recording" → hide when idle (return true)
 /// Fails open: on error, returns true (default to when_recording behavior).
+#[track_caller]
 pub async fn should_hide_pill(app: &AppHandle) -> bool {
     let store = match app.store("settings") {
         Ok(s) => s,
@@ -90,13 +91,32 @@ pub async fn should_hide_pill(app: &AppHandle) -> bool {
         }
     };
 
-    let pill_indicator_mode = store
+    let stored_mode = store
         .get("pill_indicator_mode")
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "when_recording".to_string());
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let legacy_show = store.get("show_pill_indicator").and_then(|v| v.as_bool());
+    let pill_indicator_mode = resolve_pill_indicator_mode(
+        stored_mode.clone(),
+        legacy_show,
+        Settings::default().pill_indicator_mode,
+    );
+    let caller = std::panic::Location::caller();
+    log::debug!(
+        "pill_visibility: should_hide_pill caller={} stored={:?} legacy_show={:?} resolved='{}'",
+        caller,
+        stored_mode,
+        legacy_show,
+        pill_indicator_mode
+    );
 
-    // Only keep pill visible if mode is "always"
-    should_hide_pill_when_idle(&pill_indicator_mode)
+    let result = should_hide_pill_when_idle(&pill_indicator_mode);
+    log::debug!(
+        "should_hide_pill: pill_indicator_mode='{}', should_hide={}",
+        pill_indicator_mode,
+        result
+    );
+
+    result
 }
 
 #[cfg(test)]
@@ -171,15 +191,30 @@ impl RecordingConfig {
     pub async fn load_from_store(app: &AppHandle) -> Result<Self, String> {
         let store = app.store("settings").map_err(|e| e.to_string())?;
 
+        let show_pill_widget = store
+            .get("show_pill_widget")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let stored_mode = store
+            .get("pill_indicator_mode")
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let legacy_show = store.get("show_pill_indicator").and_then(|v| v.as_bool());
+        let pill_indicator_mode = resolve_pill_indicator_mode(
+            stored_mode.clone(),
+            legacy_show,
+            Settings::default().pill_indicator_mode,
+        );
+        log::debug!(
+            "pill_visibility: recording config loaded show_pill_widget={} pill_indicator_mode='{}' stored={:?} legacy_show={:?}",
+            show_pill_widget,
+            pill_indicator_mode,
+            stored_mode,
+            legacy_show
+        );
+
         Ok(Self {
-            show_pill_widget: store
-                .get("show_pill_widget")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
-            pill_indicator_mode: store
-                .get("pill_indicator_mode")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| "when_recording".to_string()),
+            show_pill_widget,
+            pill_indicator_mode,
             ai_enabled: store
                 .get("ai_enabled")
                 .and_then(|v| v.as_bool())
@@ -656,8 +691,9 @@ pub async fn start_recording(
         format!("Configuration error: {}", e)
     })?;
     log::debug!(
-        "Using recording config: show_pill={}, ai_enabled={}, model={}",
+        "Using recording config: show_pill={} pill_indicator_mode='{}' ai_enabled={} model={}",
         config.show_pill_widget,
+        config.pill_indicator_mode,
         config.ai_enabled,
         config.current_model
     );
@@ -916,6 +952,12 @@ pub async fn start_recording(
 
     // Show pill widget if enabled and mode is not "never" (graceful degradation)
     let should_show_pill = config.show_pill_widget && config.pill_indicator_mode != "never";
+    log::info!(
+        "pill_visibility: start_recording show_pill_widget={} pill_indicator_mode='{}' should_show={}",
+        config.show_pill_widget,
+        config.pill_indicator_mode,
+        should_show_pill
+    );
     if should_show_pill {
         match crate::commands::window::show_pill_widget(app.clone()).await {
             Ok(_) => log::debug!("Pill widget shown successfully"),

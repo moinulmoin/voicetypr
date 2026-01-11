@@ -69,7 +69,7 @@ pub async fn frontend_log(message: String) {
     log::info!("[FRONTEND] {}", message);
 }
 
-fn resolve_pill_indicator_mode(
+pub(crate) fn resolve_pill_indicator_mode(
     stored_mode: Option<String>,
     legacy_show_pill: Option<bool>,
     default_mode: String,
@@ -380,6 +380,12 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         let app_state = app.state::<crate::AppState>();
         let current_state = app_state.get_current_state();
         let is_idle = matches!(current_state, crate::RecordingState::Idle);
+        log::info!(
+            "pill_visibility: mode change '{}' -> '{}' (state={:?})",
+            old_pill_indicator_mode,
+            settings.pill_indicator_mode,
+            current_state
+        );
 
         // Determine if pill should be visible based on new mode and current state
         let should_show = match settings.pill_indicator_mode.as_str() {
@@ -388,6 +394,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             "when_recording" => !is_idle, // Show only when recording
             _ => !is_idle, // Default to when_recording behavior
         };
+        log::info!(
+            "pill_visibility: mode change computed should_show={}",
+            should_show
+        );
 
         if should_show {
             if let Err(e) = crate::commands::window::show_pill_widget(app.clone()).await {
