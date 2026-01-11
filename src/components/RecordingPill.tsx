@@ -1,6 +1,7 @@
 import { AudioDots } from "@/components/AudioDots";
 import { useSetting } from "@/contexts/SettingsContext";
 import { useRecording } from "@/hooks/useRecording";
+import { PillIndicatorMode } from "@/types";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
@@ -12,8 +13,8 @@ export function RecordingPill() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [isFormatting, setIsFormatting] = useState(false);
 
-  // Setting: show pill indicator when idle (default: true)
-  const showPillIndicator = useSetting("show_pill_indicator") ?? true;
+  // Setting: pill indicator mode (default: "when_recording")
+  const pillIndicatorMode: PillIndicatorMode = useSetting("pill_indicator_mode") ?? "when_recording";
 
   // Determine pill state
   const getPillState = (): PillState => {
@@ -61,9 +62,15 @@ export function RecordingPill() {
     const unlistenFns: (() => void)[] = [];
 
     const events = [
-      { name: "enhancing-started", handler: () => isMounted && setIsFormatting(true) },
-      { name: "enhancing-completed", handler: () => isMounted && setIsFormatting(false) },
-      { name: "enhancing-failed", handler: () => isMounted && setIsFormatting(false) },
+      { name: "enhancing-started", handler: () => {
+        isMounted && setIsFormatting(true);
+      }},
+      { name: "enhancing-completed", handler: () => {
+        isMounted && setIsFormatting(false);
+      }},
+      { name: "enhancing-failed", handler: () => {
+        isMounted && setIsFormatting(false);
+      }},
     ];
 
     events.forEach(({ name, handler }) => {
@@ -82,8 +89,15 @@ export function RecordingPill() {
     };
   }, []);
 
-  // Visibility logic: hide in idle state if setting is false
-  if (pillState === "idle" && !showPillIndicator) {
+  // Determine if pill should be hidden based on mode and state
+  // "never" → always hide
+  // "always" → never hide (always show)
+  // "when_recording" → hide when idle
+  const shouldHide =
+    pillIndicatorMode === "never" ||
+    (pillIndicatorMode === "when_recording" && pillState === "idle");
+
+  if (shouldHide) {
     return null;
   }
 
@@ -91,7 +105,7 @@ export function RecordingPill() {
     <div className="fixed inset-0 flex items-center justify-center">
       {/* Solid black pill - grows when active */}
       <motion.div
-        className="flex items-center justify-center rounded-full select-none bg-black shadow-lg"
+        className="flex items-center justify-center rounded-full select-none bg-black shadow-lg ring-1 ring-white/30"
         animate={{
           // ~1.4x growth from idle to active
           paddingLeft: isActive ? 14 : 10,

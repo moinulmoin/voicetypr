@@ -38,6 +38,7 @@ export const isLocalModel = (model: ModelInfo): model is LocalModelInfo =>
   model.kind === 'local';
 
 export type RecordingMode = 'toggle' | 'push_to_talk';
+export type PillIndicatorMode = 'never' | 'always' | 'when_recording';
 
 export interface AppSettings {
   hotkey: string;
@@ -58,8 +59,8 @@ export interface AppSettings {
   keep_transcription_in_clipboard?: boolean;
   // Audio feedback
   play_sound_on_recording?: boolean;
-  // Pill indicator visibility
-  show_pill_indicator?: boolean;
+  // Pill indicator visibility mode
+  pill_indicator_mode?: PillIndicatorMode;
 }
 
 export interface TranscriptionHistory {

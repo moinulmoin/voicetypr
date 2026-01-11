@@ -31,8 +31,8 @@ pub struct Settings {
     pub keep_transcription_in_clipboard: bool,
     // Audio feedback
     pub play_sound_on_recording: bool,
-    // Pill indicator visibility when idle
-    pub show_pill_indicator: bool,
+    // Pill indicator visibility mode: "never", "always", or "when_recording"
+    pub pill_indicator_mode: String,
 }
 
 impl Default for Settings {
@@ -55,13 +55,21 @@ impl Default for Settings {
             ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
             keep_transcription_in_clipboard: false, // Default to restoring clipboard after paste
             play_sound_on_recording: true,        // Default to playing sound on recording start
-            show_pill_indicator: true,            // Default to showing pill indicator when idle
+            pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
         }
     }
 }
 
+/// Log a message from the frontend to the backend logs
+#[tauri::command]
+pub async fn frontend_log(message: String) {
+    log::info!("[FRONTEND] {}", message);
+}
+
 #[tauri::command]
 pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
+    log::info!("[get_settings] === CALLED ===");
+
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
     let settings = Settings {
@@ -139,13 +147,20 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("play_sound_on_recording")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().play_sound_on_recording),
-        show_pill_indicator: store
-            .get("show_pill_indicator")
-            .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| Settings::default().show_pill_indicator),
+        // Migration: check for new pill_indicator_mode first, then fall back to old show_pill_indicator
+        pill_indicator_mode: store
+            .get("pill_indicator_mode")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| {
+                // Migrate from old show_pill_indicator boolean if it exists
+                if let Some(old_value) = store.get("show_pill_indicator").and_then(|v| v.as_bool()) {
+                    // true = show when idle = "always", false = hide when idle = "when_recording"
+                    if old_value { "always".to_string() } else { "when_recording".to_string() }
+                } else {
+                    Settings::default().pill_indicator_mode
+                }
+            }),
     };
-
-    // Pill position is already loaded from store, no need for duplicate state
 
     Ok(settings)
 }
@@ -154,7 +169,7 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
 pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
-    // Check if model, recording mode, and onboarding changed
+    // Check if model, recording mode, onboarding, and pill indicator mode changed
     let old_model = store
         .get("current_model")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -167,6 +182,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         .get("onboarding_completed")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let old_pill_indicator_mode = store
+        .get("pill_indicator_mode")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| Settings::default().pill_indicator_mode);
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
@@ -208,8 +227,8 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         json!(settings.play_sound_on_recording),
     );
     store.set(
-        "show_pill_indicator",
-        json!(settings.show_pill_indicator),
+        "pill_indicator_mode",
+        json!(settings.pill_indicator_mode),
     );
 
     // Save pill position if provided
@@ -327,6 +346,36 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     if !old_onboarding_completed && settings.onboarding_completed {
         log::info!("Onboarding just completed, checking if device watcher should start");
         try_start_device_watcher_if_ready(&app).await;
+    }
+
+    // Handle pill window visibility when pill_indicator_mode setting changes
+    if old_pill_indicator_mode != settings.pill_indicator_mode {
+        let app_state = app.state::<crate::AppState>();
+        let current_state = app_state.get_current_state();
+        let is_idle = matches!(current_state, crate::RecordingState::Idle);
+
+        // Determine if pill should be visible based on new mode and current state
+        let should_show = match settings.pill_indicator_mode.as_str() {
+            "never" => false,
+            "always" => true,
+            "when_recording" => !is_idle, // Show only when recording
+            _ => !is_idle, // Default to when_recording behavior
+        };
+
+        if should_show {
+            if let Err(e) = crate::commands::window::show_pill_widget(app.clone()).await {
+                log::warn!("Failed to show pill window: {}", e);
+            }
+        } else {
+            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                log::warn!("Failed to hide pill window: {}", e);
+            }
+        }
+    }
+
+    // Emit settings-changed event so all windows (including pill) can refresh their settings
+    if let Err(e) = app.emit("settings-changed", ()) {
+        log::warn!("Failed to emit settings-changed event: {}", e);
     }
 
     Ok(())

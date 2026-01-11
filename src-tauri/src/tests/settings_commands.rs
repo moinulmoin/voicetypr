@@ -37,7 +37,7 @@ mod tests {
             ptt_hotkey: Some("Alt+Space".to_string()),
             keep_transcription_in_clipboard: false,
             play_sound_on_recording: true,
-            show_pill_indicator: true,
+            pill_indicator_mode: "when_recording".to_string(),
         };
 
         // Test serialization
@@ -96,7 +96,7 @@ mod tests {
             ptt_hotkey: Some("CommandOrControl+Space".to_string()),
             keep_transcription_in_clipboard: true,
             play_sound_on_recording: false,
-            show_pill_indicator: false,
+            pill_indicator_mode: "never".to_string(),
         };
 
         let cloned = settings.clone();

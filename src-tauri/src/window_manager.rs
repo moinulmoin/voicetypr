@@ -133,57 +133,61 @@ impl WindowManager {
 
     /// Internal implementation of show_pill_window
     async fn show_pill_window_internal(&self) -> Result<(), String> {
-        // Hold the lock for the entire operation to prevent race conditions
-        let mut pill_guard = match self.pill_window.lock() {
-            Ok(guard) => guard,
-            Err(e) => {
-                let msg = format!("Pill window mutex is poisoned: {}", e);
-                log::error!("{}", msg);
-                return Err(msg);
-            }
-        };
+        // First, check if we have a valid existing window (hold lock briefly)
+        {
+            let mut pill_guard = match self.pill_window.lock() {
+                Ok(guard) => guard,
+                Err(e) => {
+                    let msg = format!("Pill window mutex is poisoned: {}", e);
+                    log::error!("{}", msg);
+                    return Err(msg);
+                }
+            };
 
-        // First check if we have a cached reference and if it's still valid
-        if let Some(ref existing_window) = *pill_guard {
-            // Verify the window still exists and is not closed
-            if existing_window.is_closable().is_ok() {
-                // Window is still valid, show it
-                existing_window.show().map_err(|e| e.to_string())?;
-
-                // Always position at center-bottom
-                use tauri::LogicalPosition;
-                let (x, y) = self.calculate_center_position();
-                let _ = existing_window.set_position(LogicalPosition::new(x, y));
-
-                log::debug!("Showing existing pill window from cache");
-                return Ok(());
+            // Check if we have an existing valid pill window
+            let existing_valid = if let Some(ref existing_window) = *pill_guard {
+                existing_window.is_closable().is_ok()
+            } else if let Some(existing_window) = self.app_handle.get_webview_window("pill") {
+                if existing_window.is_closable().is_ok() {
+                    *pill_guard = Some(existing_window);
+                    true
+                } else {
+                    false
+                }
             } else {
-                // Window reference is stale, clear it
-                log::debug!("Cached pill window reference is stale, clearing");
-                *pill_guard = None;
+                false
+            };
+
+            if existing_valid {
+                if let Some(ref existing_window) = *pill_guard {
+                    // Window exists and is valid - just show it and reposition
+                    existing_window.show().map_err(|e| e.to_string())?;
+
+                    // Always position at center-bottom
+                    use tauri::LogicalPosition;
+                    let (x, y) = self.calculate_center_position();
+                    let _ = existing_window.set_position(LogicalPosition::new(x, y));
+
+                    log::debug!("Showing existing pill window");
+                    return Ok(());
+                }
             }
+
+            // Clear stale reference if any
+            *pill_guard = None;
+            // Guard is dropped here at end of block
         }
 
-        // Check if Tauri has a window with the "pill" label
-        if let Some(existing_window) = self.app_handle.get_webview_window("pill") {
-            // Verify this window is valid before using it
-            if existing_window.is_closable().is_ok() {
-                // Window exists in Tauri and is valid, update our reference
-                *pill_guard = Some(existing_window.clone());
-
-                existing_window.show().map_err(|e| e.to_string())?;
-
-                // Always position at center-bottom
-                use tauri::LogicalPosition;
-                let (x, y) = self.calculate_center_position();
-                let _ = existing_window.set_position(LogicalPosition::new(x, y));
-
-                log::debug!("Found and showing existing pill window from Tauri");
-                return Ok(());
-            }
+        // Close any orphaned pill window that might exist in Tauri but not in our cache
+        // (This is outside the lock so the await is safe)
+        if let Some(orphan) = self.app_handle.get_webview_window("pill") {
+            log::debug!("Closing orphaned pill window before creating new one");
+            let _ = orphan.close();
+            // Small delay to ensure window is fully closed
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
-        // No window exists, create new one
+        // Create new window
         log::info!("Creating new pill window (lazy-loaded on recording start)");
 
         // Always use fixed center-bottom position
@@ -305,8 +309,17 @@ impl WindowManager {
             }),
         );
 
-        // Store the window reference
-        *pill_guard = Some(pill_window);
+        // Store the window reference (re-acquire lock)
+        {
+            match self.pill_window.lock() {
+                Ok(mut pill_guard) => {
+                    *pill_guard = Some(pill_window);
+                }
+                Err(e) => {
+                    log::error!("Pill window mutex poisoned while storing window: {}", e);
+                }
+            }
+        }
 
         log::info!(
             "Pill window created and shown at ({}, {})",
@@ -543,7 +556,7 @@ impl WindowManager {
                 // Center bottom position with offset
                 let pill_width = 80.0;
                 let pill_height = 40.0;
-                let bottom_offset = 10.0; // Distance from bottom of screen
+                let bottom_offset = 60.0; // Distance from bottom of screen (above taskbar)
 
                 let x = (width - pill_width) / 2.0;
                 let y = height - pill_height - bottom_offset;
@@ -567,7 +580,7 @@ impl WindowManager {
 
                     let pill_width = 80.0;
                     let pill_height = 40.0;
-                    let bottom_offset = 10.0;
+                    let bottom_offset = 60.0; // Above taskbar
 
                     let x = (width - pill_width) / 2.0;
                     let y = height - pill_height - bottom_offset;
@@ -597,7 +610,7 @@ impl WindowManager {
 
                 let pill_width = 80.0;
                 let pill_height = 40.0;
-                let bottom_offset = 10.0;
+                let bottom_offset = 60.0; // Above taskbar
 
                 let x = (width - pill_width) / 2.0;
                 let y = height - pill_height - bottom_offset;
