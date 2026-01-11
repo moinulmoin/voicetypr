@@ -682,6 +682,9 @@ pub async fn start_recording(
             .unwrap_or(true); // Default to true
         if play_sound {
             play_recording_start_sound();
+            // Delay to let sound complete before microphone initialization
+            // This helps with Bluetooth headsets (e.g., AirPods) that switch audio modes
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
     }
 
