@@ -378,6 +378,30 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 perform_startup_checks(app_handle).await;
             });
 
+            // Show pill on startup if pill_indicator_mode is "always"
+            let app_handle_for_pill = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // Wait for frontend to be ready (Vite in dev mode, bundled files in prod)
+                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+                // Check if pill_indicator_mode setting is "always"
+                let pill_mode = if let Ok(store) = app_handle_for_pill.store("settings") {
+                    store
+                        .get("pill_indicator_mode")
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "when_recording".to_string())
+                } else {
+                    "when_recording".to_string()
+                };
+
+                // Only show pill on startup if mode is "always"
+                if pill_mode == "always" {
+                    if let Err(e) = crate::commands::window::show_pill_widget(app_handle_for_pill).await {
+                        log::warn!("Failed to show pill on startup: {}", e);
+                    }
+                }
+            });
+
             // Clean up old logs on startup (keep only today's log)
             let app_handle_for_logs = app.app_handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -832,7 +856,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
                     let pill_width = 80.0;  // Sized for 3-dot pill (active state with padding)
                     let pill_height = 40.0;
-                    let bottom_offset = 10.0;  // Distance from bottom of screen
+                    let bottom_offset = 60.0;  // Distance from bottom of screen (above taskbar)
 
                     let x = (screen_width - pill_width) / 2.0;
                     let y = screen_height - pill_height - bottom_offset;

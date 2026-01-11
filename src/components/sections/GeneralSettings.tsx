@@ -1,11 +1,19 @@
 import { HotkeyInput } from "@/components/HotkeyInput";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { isMacOS } from "@/lib/platform";
+import { PillIndicatorMode, PillIndicatorPosition } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import {
@@ -364,25 +372,67 @@ export function GeneralSettings() {
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label
-                    htmlFor="show-pill-indicator"
+                    htmlFor="pill-indicator-mode"
                     className="text-sm font-medium"
                   >
-                    Show Pill Indicator
+                    Recording Indicator Visibility
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    Display the pill indicator when idle
+                    Control when the recording indicator is visible
                   </p>
                 </div>
-                <Switch
-                  id="show-pill-indicator"
-                  checked={settings.show_pill_indicator ?? true}
-                  onCheckedChange={async (checked) =>
+                <Select
+                  value={settings.pill_indicator_mode ?? "when_recording"}
+                  onValueChange={async (value: PillIndicatorMode) => {
                     await updateSettings({
-                      show_pill_indicator: checked,
-                    })
-                  }
-                />
+                      pill_indicator_mode: value,
+                    });
+                  }}
+                >
+                  <SelectTrigger className="w-[160px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="never">Never</SelectItem>
+                    <SelectItem value="always">Always</SelectItem>
+                    <SelectItem value="when_recording">When Recording</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
+
+              {/* Only show position selector when indicator is visible (not "never") */}
+              {settings.pill_indicator_mode !== "never" && (
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label
+                      htmlFor="pill-indicator-position"
+                      className="text-sm font-medium"
+                    >
+                      Indicator Position
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Where to display the recording indicator on screen
+                    </p>
+                  </div>
+                  <Select
+                    value={settings.pill_indicator_position ?? "bottom"}
+                    onValueChange={async (value: PillIndicatorPosition) => {
+                      await updateSettings({
+                        pill_indicator_position: value,
+                      });
+                    }}
+                  >
+                    <SelectTrigger className="w-[160px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="top">Top</SelectItem>
+                      <SelectItem value="center">Center</SelectItem>
+                      <SelectItem value="bottom">Bottom</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
 
             <div className="px-4 pb-4">
