@@ -121,6 +121,37 @@ fn play_recording_start_sound() {
     // No-op on other platforms
 }
 
+/// Play a system sound to confirm recording end (macOS only)
+#[cfg(target_os = "macos")]
+fn play_recording_end_sound() {
+    std::thread::spawn(|| {
+        // Use a different sound for recording end - Pop sound
+        let _ = std::process::Command::new("afplay")
+            .arg("/System/Library/Sounds/Pop.aiff")
+            .spawn();
+    });
+}
+
+/// Play a system sound to confirm recording end (Windows)
+#[cfg(target_os = "windows")]
+fn play_recording_end_sound() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    std::thread::spawn(|| {
+        // Use PowerShell with a lower frequency tone for recording end (hidden console)
+        let _ = std::process::Command::new("powershell")
+            .args(["-c", "[console]::beep(600, 100)"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
+    });
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn play_recording_end_sound() {
+    // No-op on other platforms
+}
+
 /// Cached recording configuration to avoid repeated store access during transcription flow
 /// Cache is invalidated when settings change via update hooks
 #[derive(Clone, Debug)]
@@ -1000,6 +1031,17 @@ pub async fn stop_recording(
             .stop_recording()
             .map_err(|e| format!("Failed to stop recording: {}", e))?;
         log::info!("{}", stop_message);
+
+        // Play sound on recording end if enabled
+        if let Ok(store) = app.store("settings") {
+            let play_sound = store
+                .get("play_sound_on_recording_end")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true); // Default to true
+            if play_sound {
+                play_recording_end_sound();
+            }
+        }
 
         // Monitor system resources after recording stop
         #[cfg(debug_assertions)]
