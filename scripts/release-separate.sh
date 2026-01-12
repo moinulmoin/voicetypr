@@ -261,7 +261,8 @@ else
         echo -e "${BLUE}[DRY RUN] Would push to origin/main${NC}"
         echo -e "${BLUE}[DRY RUN] Would create draft GitHub release: v${NEW_VERSION}${NC}"
         echo -e "${BLUE}[DRY RUN] Would build aarch64-apple-darwin (notarized)${NC}"
-        echo -e "${BLUE}[DRY RUN] Would sign and upload artifacts${NC}"
+        echo -e "${BLUE}[DRY RUN] Would build x86_64-apple-darwin (notarized)${NC}"
+        echo -e "${BLUE}[DRY RUN] Would sign and upload artifacts for both architectures${NC}"
         echo ""
         echo -e "${GREEN}=== DRY RUN COMPLETE - No changes made ===${NC}"
         exit 0
@@ -296,6 +297,7 @@ fi
 # Install required Rust targets if not already installed
 echo -e "${YELLOW}Checking Rust targets...${NC}"
 rustup target add aarch64-apple-darwin 2>/dev/null || true
+rustup target add x86_64-apple-darwin 2>/dev/null || true
 
 # Create output directory
 OUTPUT_DIR="release-${NEW_VERSION}"
@@ -420,9 +422,10 @@ ensure_ffmpeg_sidecar() {
 
     echo -e "${GREEN}✓ ffmpeg sidecar binaries present${NC}"
 }
-# Intel (x86_64) build removed – Apple Silicon only
 
 ## Ensure sidecar is built and available for bundling
+# Note: Parakeet sidecar is Apple Silicon only (FluidAudio requires Apple Neural Engine)
+# Intel Mac users will only have Whisper available (CPU-only mode)
 build_parakeet_sidecar
 ensure_ffmpeg_sidecar
 
@@ -470,7 +473,50 @@ if [[ -f "${AARCH64_APP_TAR}.sig" ]]; then
     cp "${AARCH64_APP_TAR}.sig" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig"
 fi
 
-# Create latest.json for updater (Apple Silicon only)
+# Build x86_64 (Intel Mac) binary with automatic notarization
+# Note: Intel Mac only gets Whisper (CPU mode) - Parakeet requires Apple Silicon
+echo -e "${GREEN}🔨 Building x86_64 (Intel Mac) binary with notarization...${NC}"
+echo -e "${BLUE}This will take some time as it includes notarization...${NC}"
+
+pnpm -s tauri build --target x86_64-apple-darwin --bundles app,dmg --config "$TAURI_CONFIG_OVERRIDE" --ci
+
+# Find x86_64 build artifacts
+X86_64_DMG=$(find "src-tauri/target/x86_64-apple-darwin/release/bundle/dmg" -name "*.dmg" | head -n 1)
+X86_64_APP_DIR="src-tauri/target/x86_64-apple-darwin/release/bundle/macos"
+
+# Create app.tar.gz for x86_64
+echo -e "${YELLOW}Creating x86_64 updater archive...${NC}"
+X86_64_APP_BUNDLE_PATH=$(find "$X86_64_APP_DIR" -maxdepth 1 -name "*.app" | head -n 1)
+if [[ -n "${X86_64_APP_BUNDLE_PATH}" && -d "$X86_64_APP_BUNDLE_PATH" ]]; then
+    cd "$X86_64_APP_DIR"
+    X86_64_APP_BUNDLE_NAME=$(basename "$X86_64_APP_BUNDLE_PATH")
+    COPYFILE_DISABLE=1 tar -czf "VoiceTypr_${NEW_VERSION}_x86_64.app.tar.gz" --exclude='._*' --exclude='.DS_Store' "$X86_64_APP_BUNDLE_NAME"
+    cd - > /dev/null
+    X86_64_APP_TAR="$X86_64_APP_DIR/VoiceTypr_${NEW_VERSION}_x86_64.app.tar.gz"
+else
+    echo -e "${RED}Error: x86_64 app bundle not found${NC}"
+    exit 1
+fi
+
+if [[ -z "$X86_64_DMG" ]]; then
+    echo -e "${RED}Error: x86_64 DMG not found${NC}"
+    exit 1
+fi
+
+# Copy x86_64 artifacts
+cp "$X86_64_DMG" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x86_64.dmg"
+cp "$X86_64_APP_TAR" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x86_64.app.tar.gz"
+
+# Sign x86_64 update artifact
+sign_update_artifact "$X86_64_APP_TAR" || {
+    echo -e "${RED}Error: Failed to sign x86_64 update artifact${NC}"
+    exit 1
+}
+if [[ -f "${X86_64_APP_TAR}.sig" ]]; then
+    cp "${X86_64_APP_TAR}.sig" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x86_64.app.tar.gz.sig"
+fi
+
+# Create latest.json for updater (both architectures)
 echo -e "${YELLOW}Creating latest.json...${NC}"
 
 # Get aarch64 signature from the sig file if it exists
@@ -481,7 +527,15 @@ else
     exit 1
 fi
 
-# Create latest.json with Apple Silicon only
+# Get x86_64 signature from the sig file if it exists
+if [[ -f "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x86_64.app.tar.gz.sig" ]]; then
+    X86_64_SIGNATURE=$(cat "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x86_64.app.tar.gz.sig" | tr -d '\n')
+else
+    echo -e "${RED}Error: No x86_64 signature file found${NC}"
+    exit 1
+fi
+
+# Create latest.json with both architectures (Apple Silicon + Intel Mac)
 printf '{
   "version": "v%s",
   "notes": "See the release notes for v%s",
@@ -490,9 +544,13 @@ printf '{
     "darwin-aarch64": {
       "signature": "%s",
       "url": "https://github.com/moinulmoin/voicetypr/releases/download/v%s/VoiceTypr_%s_aarch64.app.tar.gz"
+    },
+    "darwin-x86_64": {
+      "signature": "%s",
+      "url": "https://github.com/moinulmoin/voicetypr/releases/download/v%s/VoiceTypr_%s_x86_64.app.tar.gz"
     }
   }
-}\n' "$NEW_VERSION" "$NEW_VERSION" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$AARCH64_SIGNATURE" "$NEW_VERSION" "$NEW_VERSION" > "$OUTPUT_DIR/latest.json"
+}\n' "$NEW_VERSION" "$NEW_VERSION" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$AARCH64_SIGNATURE" "$NEW_VERSION" "$NEW_VERSION" "$X86_64_SIGNATURE" "$NEW_VERSION" "$NEW_VERSION" > "$OUTPUT_DIR/latest.json"
 
 # Verify notarization
 echo -e "${BLUE}✅ Verifying notarization...${NC}"
@@ -503,6 +561,15 @@ if [[ -n "${APP_BUNDLE_PATH}" && -d "$APP_BUNDLE_PATH" ]]; then
         echo -e "${GREEN}✓ aarch64 app bundle is properly notarized${NC}"
     } || {
         echo -e "${YELLOW}Warning: aarch64 app bundle notarization check failed${NC}"
+    }
+fi
+
+# Check x86_64 app bundle
+if [[ -n "${X86_64_APP_BUNDLE_PATH}" && -d "$X86_64_APP_BUNDLE_PATH" ]]; then
+    spctl -a -t exec -vv "$X86_64_APP_BUNDLE_PATH" 2>&1 | grep -q "accepted" && {
+        echo -e "${GREEN}✓ x86_64 app bundle is properly notarized${NC}"
+    } || {
+        echo -e "${YELLOW}Warning: x86_64 app bundle notarization check failed${NC}"
     }
 fi
 
@@ -525,9 +592,14 @@ done
 echo ""
 echo -e "${YELLOW}📋 Next steps:${NC}"
 echo "1. Review the draft release on GitHub"
-echo "2. Test the notarized DMG (Apple Silicon)"
-echo "3. Verify auto-updater works with the new signatures"
-echo "4. Publish the release when ready"
+echo "2. Test the notarized DMG (Apple Silicon aarch64)"
+echo "3. Test the notarized DMG (Intel Mac x86_64)"
+echo "4. Verify auto-updater works with the new signatures"
+echo "5. Publish the release when ready"
+echo ""
+echo -e "${YELLOW}📝 Intel Mac Notes:${NC}"
+echo "   - Parakeet models are NOT available (requires Apple Neural Engine)"
+echo "   - Intel Mac users can only use Whisper (CPU-only mode)"
 echo ""
 echo -e "${GREEN}🔗 Release URL: https://github.com/moinulmoin/voicetypr/releases/tag/v${NEW_VERSION}${NC}"
-echo -e "${GREEN}🎉 Your Apple Silicon app is now fully notarized and ready for distribution!${NC}"
+echo -e "${GREEN}🎉 Both Apple Silicon and Intel Mac apps are now fully notarized and ready for distribution!${NC}"
