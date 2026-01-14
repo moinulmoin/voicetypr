@@ -56,3 +56,6 @@ opencodetmp
 
 # beads issue tracker (local project management)
 .beads/
+
+# Git worktrees for parallel development
+.worktrees/
