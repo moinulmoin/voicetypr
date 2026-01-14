@@ -29,6 +29,17 @@ mod test_data_helpers;
 mod logging_performance_tests;
 
 #[cfg(test)]
+mod remote_server_tests;
+
+#[cfg(test)]
+mod remote_client_tests;
+
+#[cfg(test)]
+mod remote_settings_tests;
+
+#[cfg(test)]
+mod remote_http_tests;
+
 #[cfg(test)]
 mod integration_tests {
     use crate::whisper::manager::{ModelSize, WhisperManager};

@@ -30,6 +30,7 @@ mod state_machine;
 mod utils;
 mod whisper;
 mod window_manager;
+mod remote;
 
 #[cfg(test)]
 mod tests;
