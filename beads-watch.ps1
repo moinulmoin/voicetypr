@@ -21,7 +21,8 @@ while ($true) {
         Write-Host "[$timestamp] Sync needed: DB has $dbCount, JSONL has $jsonlCount"
 
         # Export database to JSONL (force UTF-8 without BOM)
-        bd export | Out-File -FilePath .beads/issues.jsonl -Encoding utf8
+        $content = bd export | Out-String
+        [System.IO.File]::WriteAllText(".beads/issues.jsonl", $content.Trim(), [System.Text.UTF8Encoding]::new($false))
         Write-Host "  -> Exported $dbCount issues to JSONL"
 
         # Regenerate bv pages
