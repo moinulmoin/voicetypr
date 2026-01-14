@@ -9,3 +9,6 @@ pub mod lifecycle;
 pub mod server;
 pub mod settings;
 pub mod transcription;
+
+#[cfg(test)]
+mod integration_tests;
