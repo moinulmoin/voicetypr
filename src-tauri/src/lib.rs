@@ -72,6 +72,11 @@ use commands::{
         request_accessibility_permission, request_microphone_permission,
         test_automation_permission,
     },
+    remote::{
+        add_remote_server, get_active_remote_server, get_sharing_status, list_remote_servers,
+        remove_remote_server, set_active_remote_server, start_sharing, stop_sharing,
+        test_remote_server, transcribe_remote,
+    },
     reset::reset_app_data,
     settings::*,
     stt::{clear_soniox_key_cache, validate_and_cache_soniox_key},
@@ -79,6 +84,8 @@ use commands::{
     utils::export_transcriptions,
     window::*,
 };
+use remote::lifecycle::RemoteServerManager;
+use remote::settings::RemoteSettings;
 use state::unified_state::UnifiedRecordingState;
 use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem, Submenu};
 use whisper::cache::TranscriberCache;
@@ -363,6 +370,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Cache size is 1: only the current model (1-3GB RAM)
             // When user switches models, old one is unloaded immediately
             app.manage(AsyncMutex::new(TranscriberCache::new()));
+
+            // Initialize remote transcription state
+            app.manage(AsyncMutex::new(RemoteServerManager::new()));
+            app.manage(AsyncMutex::new(RemoteSettings::default()));
+            log::info!("🌐 Remote transcription state initialized");
 
             // Initialize unified application state
             app.manage(AppState::new());
@@ -1112,6 +1124,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_log_directory,
             open_logs_folder,
             get_device_id,
+            // Remote transcription commands
+            start_sharing,
+            stop_sharing,
+            get_sharing_status,
+            add_remote_server,
+            remove_remote_server,
+            list_remote_servers,
+            test_remote_server,
+            set_active_remote_server,
+            get_active_remote_server,
+            transcribe_remote,
         ])
         .on_window_event(|window, event| {
             match event {
