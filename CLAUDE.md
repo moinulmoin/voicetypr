@@ -165,3 +165,41 @@ git worktree add .worktrees/<name> -b <branch>  # Create new worktree
 2. Each active issue should have its own worktree/branch
 3. Check `bd list --status=in_progress` to see what others are working on
 4. Don't modify files in another agent's worktree
+
+### Creating Beads Issues
+
+When creating beads issues (especially subtasks), include enough detail for an independent AI agent to complete the work without additional context:
+
+**Required information:**
+- **Files to modify** - List specific file paths
+- **Implementation details** - What code to add/change
+- **Acceptance criteria** - How to verify completion
+- **Worktree** - Which worktree/branch to work in
+
+**Example format:**
+```
+bd create --title="Backend: Add foo setting" --type=task --priority=2 --description="
+FILES TO MODIFY:
+- src-tauri/src/commands/settings.rs
+- src/types.ts
+
+IMPLEMENTATION:
+1. Add foo field to Settings struct (default: bar)
+2. Update get_settings() to read from store
+3. Update save_settings() to persist
+4. Add to AppSettings TypeScript interface
+
+ACCEPTANCE CRITERIA:
+- Setting persists across restarts
+- TypeScript compiles: pnpm typecheck
+- Rust compiles: cargo check
+
+WORKTREE: .worktrees/feature-name (branch: feature/feature-name)
+"
+```
+
+**For complex features:**
+1. Create a design document in `docs/plans/YYYY-MM-DD-feature-design.md`
+2. Create parent issue (feature/epic)
+3. Create subtasks with dependencies: `bd dep add <parent> <subtask>`
+4. Each subtask should be completable in one session
