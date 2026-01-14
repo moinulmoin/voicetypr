@@ -83,6 +83,46 @@ git diff                      # Review changes
 git add -A && git commit -m "feat: description"
 ```
 
+## Beads Issue Tracking (Multi-Agent)
+
+This project uses **Beads** for issue tracking across multiple Claude Code agents.
+
+### Session Startup (REQUIRED)
+
+```bash
+# macOS/Linux:
+./beads-watch.sh &
+bv --preview-pages bv-site &
+
+# Windows (PowerShell):
+powershell -ExecutionPolicy Bypass -File beads-watch.ps1 &
+bv --preview-pages bv-site &
+```
+
+Dashboard at: http://127.0.0.1:9001
+
+### Essential Commands
+
+```bash
+bd ready                          # Find available work (no blockers)
+bd list --status=in_progress      # See what others are working on
+bd update <id> --status=in_progress  # Claim work before starting
+bd close <id> --reason="..."      # Mark complete when done
+
+# Force sync if stale:
+# macOS/Linux: bd export > .beads/issues.jsonl
+# Windows:     bd export | Out-File .beads/issues.jsonl -Encoding utf8
+```
+
+### Why the Watch Daemon?
+
+- `bd` stores data in SQLite (fast queries)
+- `bv` reads from JSONL (git-friendly format)
+- Without the daemon, dashboard shows stale data
+- The watch script syncs them every 30 seconds
+
+See `CLAUDE.md` → Multi-Agent Collaboration for full details.
+
 ## Gotchas
 
 1. **macOS only**: Parakeet models use Apple Neural Engine; Whisper uses Metal GPU

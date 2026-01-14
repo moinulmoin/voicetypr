@@ -147,6 +147,38 @@ bd comments add <id> "..."    # Add progress notes
 1. Close the issue with `bd close <id> --reason="..."`
 2. Commit your changes
 
+### Beads Dashboard (IMPORTANT)
+
+**At session start**, launch the beads monitoring daemon and dashboard:
+
+```bash
+# macOS/Linux:
+./beads-watch.sh &
+bv --preview-pages bv-site &
+
+# Windows (PowerShell):
+powershell -ExecutionPolicy Bypass -File beads-watch.ps1 &
+bv --preview-pages bv-site &
+```
+
+Dashboard available at: http://127.0.0.1:9001
+
+**Why this matters:**
+- `bd` stores data in SQLite, but `bv` reads from JSONL
+- The watch script ensures they stay in sync
+- Without it, the dashboard shows stale data
+
+**If data looks wrong:**
+```bash
+# macOS/Linux:
+bd export > .beads/issues.jsonl
+bv --export-pages bv-site
+
+# Windows (PowerShell - must use Out-File for UTF-8):
+bd export | Out-File -FilePath .beads/issues.jsonl -Encoding utf8
+bv --export-pages bv-site
+```
+
 ### Git Worktrees for Parallel Development
 
 Multiple agents can work simultaneously using separate worktrees:
