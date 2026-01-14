@@ -183,8 +183,27 @@ impl AudioRecorder {
             let writer = Arc::new(Mutex::new(Some(
                 hound::WavWriter::create(&output_path, spec).map_err(|e| e.to_string())?,
             )));
-            let err_fn = |err| log::error!("Stream error: {}", err);
+            // Error callback that triggers stop on device errors (e.g., disconnection)
+            let stop_tx_for_error = stop_tx_clone.clone();
             let error_occurred = Arc::new(Mutex::new(None::<String>));
+            let error_occurred_for_callback = error_occurred.clone();
+            let err_fn = move |err: cpal::StreamError| {
+                // Detailed logging for audio device errors
+                log::error!("═══════════════════════════════════════════════════════");
+                log::error!("🔴 AUDIO DEVICE ERROR DETECTED");
+                log::error!("═══════════════════════════════════════════════════════");
+                log::error!("Error type: {:?}", err);
+                log::error!("Error message: {}", err);
+                log::error!("Action: Triggering graceful recording stop");
+                log::error!("═══════════════════════════════════════════════════════");
+
+                // Store the error
+                if let Ok(mut guard) = error_occurred_for_callback.lock() {
+                    *guard = Some(format!("Audio device error: {}", err));
+                }
+                // Signal the recording thread to stop
+                let _ = stop_tx_for_error.send(RecorderCommand::Stop);
+            };
 
             // Shared state for size tracking
             let bytes_written = Arc::new(Mutex::new(0u64));
@@ -329,8 +348,39 @@ impl AudioRecorder {
             // Wait for stop signal
             let stop_reason = stop_rx.recv().ok();
 
-            // Stop and finalize
-            drop(stream);
+            // Stop and finalize - use timeout to prevent hanging on problematic audio devices
+            // Some audio devices (especially USB/wireless like Astro A50) can hang indefinitely
+            // during stream cleanup on Windows. We wrap drop(stream) in a timeout thread.
+            // Using 1 second timeout - normal cleanup is <100ms, anything longer indicates a problem.
+            let stream_drop_timeout = Duration::from_secs(1);
+            let stream_drop_handle = std::thread::spawn(move || {
+                drop(stream);
+            });
+
+            // Wait for stream drop with timeout
+            let drop_start = std::time::Instant::now();
+            while drop_start.elapsed() < stream_drop_timeout {
+                if stream_drop_handle.is_finished() {
+                    let _ = stream_drop_handle.join();
+                    log::info!("Audio stream dropped successfully");
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+
+            if drop_start.elapsed() >= stream_drop_timeout {
+                // Stream drop timed out - abandon the thread and continue
+                // The OS will clean up the resources when the process exits
+                log::warn!("═══════════════════════════════════════════════════════");
+                log::warn!("⚠️ AUDIO STREAM DROP TIMEOUT");
+                log::warn!("═══════════════════════════════════════════════════════");
+                log::warn!("Timeout: {}ms", stream_drop_timeout.as_millis());
+                log::warn!("Elapsed: {}ms", drop_start.elapsed().as_millis());
+                log::warn!("Cause: Audio device driver not responding to cleanup");
+                log::warn!("Impact: Recording will continue, orphaned thread abandoned");
+                log::warn!("Resolution: Device may need to be unplugged/replugged");
+                log::warn!("═══════════════════════════════════════════════════════");
+            }
 
             // Check if any errors occurred during recording
             if let Ok(guard) = error_occurred.lock() {
