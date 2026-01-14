@@ -130,6 +130,7 @@ export function NetworkSharingCard() {
             <div className="flex-1 px-3 py-2 rounded-md bg-muted/50 border border-border/50 font-mono text-sm">
               {localIp || "..."}:{port}
             </div>
+<<<<<<< HEAD
             <button
               onClick={copyAddress}
               className="p-2 rounded-md hover:bg-muted transition-colors"
@@ -137,6 +138,90 @@ export function NetworkSharingCard() {
             >
               <Copy className="h-4 w-4" />
             </button>
+=======
+          )}
+
+          {/* Connection Info Section */}
+          <div className="space-y-2">
+            <Label className="text-sm font-medium">Connect Using</Label>
+            <div className="space-y-1">
+              {localIps.length === 0 ? (
+                <div className="px-3 py-2 rounded-md bg-muted/50 border border-border/50 font-mono text-sm text-muted-foreground">
+                  Detecting IP addresses...
+                </div>
+              ) : (
+                localIps.map((ip, index) => {
+                  const justIp = ip.split(" ")[0];
+                  const interfaceName = ip.includes("(") ? ip.split("(")[1]?.replace(")", "") : "";
+                  return (
+                    <div key={index} className="flex items-center gap-2">
+                      <div className="flex-1 px-3 py-2 rounded-md bg-muted/50 border border-border/50 font-mono text-sm">
+                        <span className="font-semibold">{justIp}:{port}</span>
+                        {interfaceName && (
+                          <span className="text-muted-foreground ml-2 text-xs">({interfaceName})</span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => copyAddress(ip)}
+                        className="p-2 rounded-md hover:bg-muted transition-colors"
+                        title="Copy address"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Other VoiceTypr instances can connect using any of these addresses
+            </p>
+          </div>
+
+          {/* Server Configuration Section */}
+          <div className="rounded-lg border border-border/50 bg-muted/30 p-3 space-y-3">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Server Configuration
+            </p>
+
+            {/* Port Setting */}
+            <div className="space-y-1.5">
+              <Label htmlFor="sharing-port" className="text-sm">
+                Port
+              </Label>
+              <Input
+                id="sharing-port"
+                type="number"
+                value={port}
+                onChange={(e) => setPort(e.target.value)}
+                placeholder="47842"
+                disabled={status.enabled}
+                className="font-mono h-9"
+              />
+              <p className="text-xs text-muted-foreground">
+                Default: 47842. Change requires restart.
+              </p>
+            </div>
+
+            {/* Password Setting */}
+            <div className="space-y-1.5">
+              <Label htmlFor="sharing-password" className="text-sm">
+                Password (Optional)
+              </Label>
+              <Input
+                id="sharing-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Leave empty for no authentication"
+                disabled={status.enabled}
+                className="h-9"
+              />
+              <p className="text-xs text-muted-foreground">
+                Require password for connections.
+              </p>
+            </div>
+>>>>>>> ec0ad13 (feat(ui): improve Network Sharing visual grouping and update beads)
           </div>
           <p className="text-xs text-muted-foreground">
             Other VoiceTypr instances can connect to this address

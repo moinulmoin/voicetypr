@@ -68,6 +68,10 @@ vi.mock('@/components/MicrophoneSelection', () => ({
   MicrophoneSelection: () => <div data-testid="microphone-selection" />
 }));
 
+vi.mock('../NetworkSharingCard', () => ({
+  NetworkSharingCard: () => <div data-testid="network-sharing-card" />
+}));
+
 describe('GeneralSettings recording indicator', () => {
   beforeEach(() => {
     mockSettings = { ...baseSettings };
