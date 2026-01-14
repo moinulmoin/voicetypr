@@ -6,7 +6,6 @@
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::client::RemoteServerConnection;
 use super::server::RemoteServerConfig;
 
 /// A saved connection with metadata
@@ -14,12 +13,25 @@ use super::server::RemoteServerConfig;
 pub struct SavedConnection {
     /// Unique identifier for this connection
     pub id: String,
-    /// The connection details
-    pub connection: RemoteServerConnection,
+    /// Hostname or IP address
+    pub host: String,
+    /// Port number
+    pub port: u16,
+    /// Optional password for authentication
+    pub password: Option<String>,
     /// Optional friendly name
     pub name: Option<String>,
     /// Timestamp when this connection was added (unix timestamp ms)
     pub created_at: u64,
+}
+
+impl SavedConnection {
+    /// Get a display name for this connection
+    pub fn display_name(&self) -> String {
+        self.name
+            .clone()
+            .unwrap_or_else(|| format!("{}:{}", self.host, self.port))
+    }
 }
 
 /// All remote transcription settings
@@ -44,39 +56,45 @@ impl Default for RemoteSettings {
 }
 
 impl RemoteSettings {
-    /// Add a new connection and return its ID
+    /// Add a new connection and return it
     pub fn add_connection(
         &mut self,
-        connection: RemoteServerConnection,
+        host: String,
+        port: u16,
+        password: Option<String>,
         name: Option<String>,
-    ) -> String {
+    ) -> SavedConnection {
         let id = generate_id();
         let created_at = current_timestamp();
 
         let saved = SavedConnection {
-            id: id.clone(),
-            connection,
+            id,
+            host,
+            port,
+            password,
             name,
             created_at,
         };
 
-        self.saved_connections.push(saved);
-        id
+        self.saved_connections.push(saved.clone());
+        saved
     }
 
-    /// Remove a connection by ID, returns true if removed
-    pub fn remove_connection(&mut self, id: &str) -> bool {
+    /// Remove a connection by ID
+    pub fn remove_connection(&mut self, id: &str) -> Result<(), String> {
         let initial_len = self.saved_connections.len();
         self.saved_connections.retain(|c| c.id != id);
 
-        let removed = self.saved_connections.len() < initial_len;
+        if self.saved_connections.len() == initial_len {
+            return Err(format!("Connection '{}' not found", id));
+        }
 
         // Clear active connection if it was the removed one
-        if removed && self.active_connection_id.as_deref() == Some(id) {
+        if self.active_connection_id.as_deref() == Some(id) {
             self.active_connection_id = None;
         }
 
-        removed
+        Ok(())
     }
 
     /// Get a connection by ID
@@ -85,8 +103,15 @@ impl RemoteSettings {
     }
 
     /// Set the active connection ID
-    pub fn set_active_connection(&mut self, id: Option<String>) {
+    pub fn set_active_connection(&mut self, id: Option<String>) -> Result<(), String> {
+        // Validate the ID exists if provided
+        if let Some(ref conn_id) = id {
+            if self.get_connection(conn_id).is_none() {
+                return Err(format!("Connection '{}' not found", conn_id));
+            }
+        }
         self.active_connection_id = id;
+        Ok(())
     }
 
     /// Get the currently active connection
@@ -97,8 +122,8 @@ impl RemoteSettings {
     }
 
     /// List all saved connections
-    pub fn list_connections(&self) -> &[SavedConnection] {
-        &self.saved_connections
+    pub fn list_connections(&self) -> Vec<SavedConnection> {
+        self.saved_connections.clone()
     }
 }
 

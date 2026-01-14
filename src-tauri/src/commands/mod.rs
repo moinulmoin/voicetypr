@@ -9,6 +9,7 @@ pub mod license;
 pub mod logs;
 pub mod model;
 pub mod permissions;
+pub mod remote;
 pub mod reset;
 pub mod settings;
 pub mod stt;

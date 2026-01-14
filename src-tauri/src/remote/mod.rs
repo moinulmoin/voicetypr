@@ -5,5 +5,7 @@
 
 pub mod client;
 pub mod http;
+pub mod lifecycle;
 pub mod server;
 pub mod settings;
+pub mod transcription;

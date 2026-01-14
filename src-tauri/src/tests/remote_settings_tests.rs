@@ -3,9 +3,7 @@
 //! These tests verify that remote server configurations and connections
 //! can be properly stored and retrieved.
 
-use crate::remote::client::RemoteServerConnection;
-use crate::remote::server::RemoteServerConfig;
-use crate::remote::settings::{RemoteSettings, SavedConnection};
+use crate::remote::settings::RemoteSettings;
 
 /// Test creating default remote settings
 #[test]
@@ -24,16 +22,14 @@ fn test_remote_settings_default() {
 fn test_add_connection() {
     let mut settings = RemoteSettings::default();
 
-    let conn = RemoteServerConnection::new("192.168.1.100".to_string(), 47842, None);
-
-    let id = settings.add_connection(conn.clone(), None);
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
 
     assert_eq!(settings.saved_connections.len(), 1);
-    assert!(settings.get_connection(&id).is_some());
+    assert!(settings.get_connection(&saved.id).is_some());
 
-    let saved = settings.get_connection(&id).unwrap();
-    assert_eq!(saved.connection.host, "192.168.1.100");
-    assert_eq!(saved.connection.port, 47842);
+    let retrieved = settings.get_connection(&saved.id).unwrap();
+    assert_eq!(retrieved.host, "192.168.1.100");
+    assert_eq!(retrieved.port, 47842);
 }
 
 /// Test adding a connection with a custom name
@@ -41,12 +37,15 @@ fn test_add_connection() {
 fn test_add_connection_with_name() {
     let mut settings = RemoteSettings::default();
 
-    let conn = RemoteServerConnection::new("192.168.1.100".to_string(), 47842, None);
+    let saved = settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        None,
+        Some("Living Room Desktop".to_string()),
+    );
 
-    let id = settings.add_connection(conn, Some("Living Room Desktop".to_string()));
-
-    let saved = settings.get_connection(&id).unwrap();
     assert_eq!(saved.name, Some("Living Room Desktop".to_string()));
+    assert_eq!(saved.display_name(), "Living Room Desktop");
 }
 
 /// Test removing a connection
@@ -54,13 +53,12 @@ fn test_add_connection_with_name() {
 fn test_remove_connection() {
     let mut settings = RemoteSettings::default();
 
-    let conn = RemoteServerConnection::new("192.168.1.100".to_string(), 47842, None);
-    let id = settings.add_connection(conn, None);
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
 
     assert_eq!(settings.saved_connections.len(), 1);
 
-    let removed = settings.remove_connection(&id);
-    assert!(removed);
+    let result = settings.remove_connection(&saved.id);
+    assert!(result.is_ok());
     assert!(settings.saved_connections.is_empty());
 }
 
@@ -69,8 +67,8 @@ fn test_remove_connection() {
 fn test_remove_nonexistent_connection() {
     let mut settings = RemoteSettings::default();
 
-    let removed = settings.remove_connection("nonexistent-id");
-    assert!(!removed);
+    let result = settings.remove_connection("nonexistent-id");
+    assert!(result.is_err());
 }
 
 /// Test removing the active connection clears active_connection_id
@@ -78,13 +76,12 @@ fn test_remove_nonexistent_connection() {
 fn test_remove_active_connection_clears_active() {
     let mut settings = RemoteSettings::default();
 
-    let conn = RemoteServerConnection::new("192.168.1.100".to_string(), 47842, None);
-    let id = settings.add_connection(conn, None);
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
 
-    settings.set_active_connection(Some(id.clone()));
-    assert_eq!(settings.active_connection_id, Some(id.clone()));
+    settings.set_active_connection(Some(saved.id.clone())).unwrap();
+    assert_eq!(settings.active_connection_id, Some(saved.id.clone()));
 
-    settings.remove_connection(&id);
+    settings.remove_connection(&saved.id).unwrap();
     assert!(settings.active_connection_id.is_none());
 }
 
@@ -93,19 +90,16 @@ fn test_remove_active_connection_clears_active() {
 fn test_set_active_connection() {
     let mut settings = RemoteSettings::default();
 
-    let conn1 = RemoteServerConnection::new("192.168.1.100".to_string(), 47842, None);
-    let conn2 = RemoteServerConnection::new("192.168.1.101".to_string(), 47842, None);
+    let saved1 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
+    let saved2 = settings.add_connection("192.168.1.101".to_string(), 47842, None, None);
 
-    let id1 = settings.add_connection(conn1, None);
-    let id2 = settings.add_connection(conn2, None);
+    settings.set_active_connection(Some(saved1.id.clone())).unwrap();
+    assert_eq!(settings.active_connection_id, Some(saved1.id.clone()));
 
-    settings.set_active_connection(Some(id1.clone()));
-    assert_eq!(settings.active_connection_id, Some(id1));
+    settings.set_active_connection(Some(saved2.id.clone())).unwrap();
+    assert_eq!(settings.active_connection_id, Some(saved2.id));
 
-    settings.set_active_connection(Some(id2.clone()));
-    assert_eq!(settings.active_connection_id, Some(id2));
-
-    settings.set_active_connection(None);
+    settings.set_active_connection(None).unwrap();
     assert!(settings.active_connection_id.is_none());
 }
 
@@ -117,14 +111,13 @@ fn test_get_active_connection() {
     // No active connection
     assert!(settings.get_active_connection().is_none());
 
-    let conn = RemoteServerConnection::new("192.168.1.100".to_string(), 47842, None);
-    let id = settings.add_connection(conn, None);
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
 
-    settings.set_active_connection(Some(id.clone()));
+    settings.set_active_connection(Some(saved.id.clone())).unwrap();
 
     let active = settings.get_active_connection();
     assert!(active.is_some());
-    assert_eq!(active.unwrap().connection.host, "192.168.1.100");
+    assert_eq!(active.unwrap().host, "192.168.1.100");
 }
 
 /// Test serializing and deserializing settings
@@ -138,17 +131,20 @@ fn test_remote_settings_serialization() {
     settings.server_config.password = Some("secret123".to_string());
 
     // Add connections
-    let conn1 = RemoteServerConnection::new("192.168.1.100".to_string(), 47842, None);
-    let conn2 = RemoteServerConnection::new(
+    let saved1 = settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        None,
+        Some("Desktop".to_string()),
+    );
+    let _saved2 = settings.add_connection(
         "192.168.1.101".to_string(),
         47842,
         Some("pass".to_string()),
+        None,
     );
 
-    let id1 = settings.add_connection(conn1, Some("Desktop".to_string()));
-    let _id2 = settings.add_connection(conn2, None);
-
-    settings.set_active_connection(Some(id1.clone()));
+    settings.set_active_connection(Some(saved1.id.clone())).unwrap();
 
     // Serialize and deserialize
     let json = serde_json::to_string(&settings).unwrap();
@@ -159,7 +155,7 @@ fn test_remote_settings_serialization() {
     assert_eq!(restored.server_config.port, 8080);
     assert_eq!(restored.server_config.password, Some("secret123".to_string()));
     assert_eq!(restored.saved_connections.len(), 2);
-    assert_eq!(restored.active_connection_id, Some(id1));
+    assert_eq!(restored.active_connection_id, Some(saved1.id));
 }
 
 /// Test SavedConnection includes timestamp
@@ -167,10 +163,7 @@ fn test_remote_settings_serialization() {
 fn test_saved_connection_has_timestamp() {
     let mut settings = RemoteSettings::default();
 
-    let conn = RemoteServerConnection::new("192.168.1.100".to_string(), 47842, None);
-    let id = settings.add_connection(conn, None);
-
-    let saved = settings.get_connection(&id).unwrap();
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
 
     // Timestamp should be set to a reasonable recent value
     assert!(saved.created_at > 0);
@@ -181,13 +174,9 @@ fn test_saved_connection_has_timestamp() {
 fn test_list_connections() {
     let mut settings = RemoteSettings::default();
 
-    let conn1 = RemoteServerConnection::new("192.168.1.100".to_string(), 47842, None);
-    let conn2 = RemoteServerConnection::new("192.168.1.101".to_string(), 47842, None);
-    let conn3 = RemoteServerConnection::new("192.168.1.102".to_string(), 47842, None);
-
-    settings.add_connection(conn1, Some("A".to_string()));
-    settings.add_connection(conn2, Some("B".to_string()));
-    settings.add_connection(conn3, Some("C".to_string()));
+    settings.add_connection("192.168.1.100".to_string(), 47842, None, Some("A".to_string()));
+    settings.add_connection("192.168.1.101".to_string(), 47842, None, Some("B".to_string()));
+    settings.add_connection("192.168.1.102".to_string(), 47842, None, Some("C".to_string()));
 
     let all = settings.list_connections();
     assert_eq!(all.len(), 3);
@@ -198,11 +187,41 @@ fn test_list_connections() {
 fn test_connection_ids_are_unique() {
     let mut settings = RemoteSettings::default();
 
-    let conn1 = RemoteServerConnection::new("192.168.1.100".to_string(), 47842, None);
-    let conn2 = RemoteServerConnection::new("192.168.1.100".to_string(), 47842, None);
+    let saved1 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
+    let saved2 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
 
-    let id1 = settings.add_connection(conn1, None);
-    let id2 = settings.add_connection(conn2, None);
+    assert_ne!(saved1.id, saved2.id);
+}
 
-    assert_ne!(id1, id2);
+/// Test SavedConnection display_name
+#[test]
+fn test_saved_connection_display_name() {
+    let mut settings = RemoteSettings::default();
+
+    // With custom name
+    let saved1 = settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        None,
+        Some("My Desktop".to_string()),
+    );
+    assert_eq!(saved1.display_name(), "My Desktop");
+
+    // Without custom name - should use host:port
+    let saved2 = settings.add_connection("192.168.1.101".to_string(), 8080, None, None);
+    assert_eq!(saved2.display_name(), "192.168.1.101:8080");
+}
+
+/// Test set_active_connection validates connection exists
+#[test]
+fn test_set_active_connection_validates() {
+    let mut settings = RemoteSettings::default();
+
+    // Try to set non-existent connection as active
+    let result = settings.set_active_connection(Some("nonexistent".to_string()));
+    assert!(result.is_err());
+
+    // Setting None should always work
+    let result = settings.set_active_connection(None);
+    assert!(result.is_ok());
 }

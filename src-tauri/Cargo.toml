@@ -64,6 +64,8 @@ sysinfo = "0.36.1"
 tauri-plugin-notification = "2.3.3"
 warp = "0.3"
 bytes = "1"
+tempfile = "3.10"
+hostname = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.14.3", features = ["metal"] }
