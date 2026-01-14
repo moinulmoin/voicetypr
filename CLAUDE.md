@@ -119,3 +119,49 @@ pnpm typecheck    # Run TypeScript compiler
 IMPORTANT: Read `agent-docs` for more details on the project before making any changes.
 IMPORTANT: Read `agent-reports` to understand whats going on
 IMPORTANT: Read `CLAUDE.local.md` for any local changes.
+
+## Multi-Agent Collaboration
+
+This project uses **Beads** (git-backed issue tracker) and **Git Worktrees** for parallel async development by multiple Claude Code agents.
+
+### Beads Issue Tracking
+
+Beads tracks work across sessions with dependencies. Use `bd` commands:
+
+```bash
+bd list                    # See all issues
+bd ready                   # Find work with no blockers
+bd show <id>               # View issue details
+bd create --title="..." --type=task --priority=2  # Create issue
+bd update <id> --status=in_progress  # Claim work
+bd close <id> --reason="..."  # Complete work
+bd comments add <id> "..."    # Add progress notes
+```
+
+**Before starting work:**
+1. Run `bd ready` to find available issues
+2. Check if another agent is already working on it (`in_progress` status)
+3. Update status to `in_progress` before starting
+
+**After completing work:**
+1. Close the issue with `bd close <id> --reason="..."`
+2. Commit your changes
+
+### Git Worktrees for Parallel Development
+
+Multiple agents can work simultaneously using separate worktrees:
+
+```bash
+git worktree list                           # See all worktrees
+git worktree add .worktrees/<name> -b <branch>  # Create new worktree
+```
+
+**Worktree locations:**
+- `.worktrees/` - Contains isolated workspaces for each feature branch
+- Each agent works in their own worktree to avoid conflicts
+
+**Coordination rules:**
+1. Each agent claims ONE issue at a time via beads
+2. Each active issue should have its own worktree/branch
+3. Check `bd list --status=in_progress` to see what others are working on
+4. Don't modify files in another agent's worktree
