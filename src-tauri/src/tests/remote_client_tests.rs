@@ -17,12 +17,12 @@ fn test_timeout_calculation_live_30s() {
     assert_eq!(timeout, 90_000);
 }
 
-/// Test timeout calculation for live recordings (60 seconds)
+/// Test timeout calculation for live recordings (60 seconds) - hits cap
 #[test]
 fn test_timeout_calculation_live_60s() {
     let timeout = calculate_timeout_ms(60_000, TranscriptionSource::LiveRecording);
-    // 30_000 + 2 * 60_000 = 150_000ms = 2.5 minutes
-    assert_eq!(timeout, 150_000);
+    // 30_000 + 2 * 60_000 = 150_000ms, but capped at 2 minutes (120_000ms)
+    assert_eq!(timeout, 120_000);
 }
 
 /// Test timeout calculation for live recordings caps at 2 minutes

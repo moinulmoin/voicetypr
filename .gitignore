@@ -50,3 +50,9 @@ agent-docs/
 
 sidecar/ffmpeg/vendor
 opencodetmp
+
+# bv (beads viewer) local config and caches
+.bv/
+
+# beads issue tracker (local project management)
+.beads/
