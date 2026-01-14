@@ -1,6 +1,10 @@
 import { ApiKeyModal } from "@/components/ApiKeyModal";
 import { LanguageSelection } from "@/components/LanguageSelection";
 import { ModelCard } from "@/components/ModelCard";
+import {
+  RemoteServerCard,
+  SavedConnection,
+} from "@/components/RemoteServerCard";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -8,11 +12,21 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { getCloudProviderByModel } from "@/lib/cloudProviders";
 import { cn } from "@/lib/utils";
 import { ModelInfo, isCloudModel, isLocalModel } from "@/types";
-import { Bot, CheckCircle, Download, HardDrive, Star, Zap } from "lucide-react";
+import {
+  Bot,
+  CheckCircle,
+  Download,
+  HardDrive,
+  Plus,
+  Server,
+  Star,
+  Zap,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Label } from "../ui/label";
 import { invoke } from "@tauri-apps/api/core";
+import { AddServerModal } from "./AddServerModal";
 
 interface ModelsSectionProps {
   models: [string, ModelInfo][];
@@ -47,6 +61,11 @@ export function ModelsSection({
   const { settings, updateSettings } = useSettings();
   const [cloudModal, setCloudModal] = useState<CloudModalState | null>(null);
   const [cloudModalLoading, setCloudModalLoading] = useState(false);
+  const [remoteServers, setRemoteServers] = useState<SavedConnection[]>([]);
+  const [activeRemoteServer, setActiveRemoteServer] = useState<string | null>(
+    null
+  );
+  const [addServerModalOpen, setAddServerModalOpen] = useState(false);
 
   const { availableToUse, availableToSetup } = useMemo(() => {
     const useList: [string, ModelInfo][] = [];
@@ -103,6 +122,76 @@ export function ModelsSection({
       }
     },
     [updateSettings],
+  );
+
+  // Remote servers management
+  const fetchRemoteServers = useCallback(async () => {
+    try {
+      const servers = await invoke<SavedConnection[]>("list_remote_servers");
+      setRemoteServers(servers);
+    } catch (error) {
+      console.error("Failed to fetch remote servers:", error);
+    }
+  }, []);
+
+  const fetchActiveRemoteServer = useCallback(async () => {
+    try {
+      const activeId = await invoke<string | null>("get_active_remote_server");
+      setActiveRemoteServer(activeId);
+    } catch (error) {
+      console.error("Failed to fetch active remote server:", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchRemoteServers();
+    fetchActiveRemoteServer();
+  }, [fetchRemoteServers, fetchActiveRemoteServer]);
+
+  const handleSelectRemoteServer = useCallback(
+    async (serverId: string) => {
+      try {
+        await invoke("set_active_remote_server", {
+          serverId: serverId === activeRemoteServer ? null : serverId,
+        });
+        setActiveRemoteServer(
+          serverId === activeRemoteServer ? null : serverId
+        );
+        toast.success(
+          serverId === activeRemoteServer
+            ? "Remote server deselected"
+            : "Remote server selected"
+        );
+      } catch (error) {
+        console.error("Failed to set active remote server:", error);
+        toast.error("Failed to select remote server");
+      }
+    },
+    [activeRemoteServer]
+  );
+
+  const handleRemoveRemoteServer = useCallback(
+    async (serverId: string) => {
+      try {
+        await invoke("remove_remote_server", { serverId });
+        setRemoteServers((prev) => prev.filter((s) => s.id !== serverId));
+        if (activeRemoteServer === serverId) {
+          setActiveRemoteServer(null);
+        }
+        toast.success("Server removed");
+      } catch (error) {
+        console.error("Failed to remove remote server:", error);
+        toast.error("Failed to remove server");
+      }
+    },
+    [activeRemoteServer]
+  );
+
+  const handleServerAdded = useCallback(
+    (server: SavedConnection) => {
+      setRemoteServers((prev) => [...prev, server]);
+    },
+    []
   );
 
   const activeModelLabel = useMemo(() => {
@@ -413,19 +502,62 @@ export function ModelsSection({
               </div>
             )}
 
-            {availableToUse.length === 0 && availableToSetup.length === 0 && (
-              <div className="flex-1 flex items-center justify-center py-12">
-                <div className="text-center">
-                  <Bot className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
-                  <p className="text-sm text-muted-foreground">
-                    No models available
-                  </p>
-                  <p className="text-xs text-muted-foreground/70 mt-2">
-                    Models will appear here when they become available.
-                  </p>
-                </div>
+            {/* Remote Servers Section */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                  <Server className="h-4 w-4" />
+                  Remote Servers ({remoteServers.length})
+                </h2>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setAddServerModalOpen(true)}
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Server
+                </Button>
               </div>
-            )}
+              {remoteServers.length > 0 ? (
+                <div className="grid gap-3">
+                  {remoteServers.map((server) => (
+                    <RemoteServerCard
+                      key={server.id}
+                      server={server}
+                      isActive={activeRemoteServer === server.id}
+                      onSelect={handleSelectRemoteServer}
+                      onRemove={handleRemoveRemoteServer}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <Card className="px-4 py-6 border-border/50 border-dashed">
+                  <div className="text-center text-muted-foreground">
+                    <Server className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p className="text-sm">No remote servers configured</p>
+                    <p className="text-xs mt-1 opacity-75">
+                      Connect to another VoiceTypr to use its transcription
+                    </p>
+                  </div>
+                </Card>
+              )}
+            </div>
+
+            {availableToUse.length === 0 &&
+              availableToSetup.length === 0 &&
+              remoteServers.length === 0 && (
+                <div className="flex-1 flex items-center justify-center py-12">
+                  <div className="text-center">
+                    <Bot className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
+                    <p className="text-sm text-muted-foreground">
+                      No models available
+                    </p>
+                    <p className="text-xs text-muted-foreground/70 mt-2">
+                      Models will appear here when they become available.
+                    </p>
+                  </div>
+                </div>
+              )}
           </div>
         </ScrollArea>
       </div>
@@ -453,6 +585,12 @@ export function ModelsSection({
           docsUrl={activeProvider.docsUrl}
         />
       )}
+
+      <AddServerModal
+        open={addServerModalOpen}
+        onOpenChange={setAddServerModalOpen}
+        onServerAdded={handleServerAdded}
+      />
     </div>
   );
 }
