@@ -348,38 +348,50 @@ impl AudioRecorder {
             // Wait for stop signal
             let stop_reason = stop_rx.recv().ok();
 
-            // Stop and finalize - use timeout to prevent hanging on problematic audio devices
-            // Some audio devices (especially USB/wireless like Astro A50) can hang indefinitely
-            // during stream cleanup on Windows. We wrap drop(stream) in a timeout thread.
-            // Using 1 second timeout - normal cleanup is <100ms, anything longer indicates a problem.
-            let stream_drop_timeout = Duration::from_secs(1);
-            let stream_drop_handle = std::thread::spawn(move || {
-                drop(stream);
-            });
+            // Stop and finalize - platform-specific handling for audio stream cleanup
+            // On Windows, some audio devices (especially USB/wireless like Astro A50) can hang
+            // indefinitely during stream cleanup. On macOS, cpal::Stream isn't Send-safe
+            // so we can't use threaded timeout - but macOS CoreAudio is generally more reliable.
+            #[cfg(target_os = "windows")]
+            {
+                // Windows: Use timeout to prevent hanging on problematic audio devices
+                let stream_drop_timeout = Duration::from_secs(1);
+                let stream_drop_handle = std::thread::spawn(move || {
+                    drop(stream);
+                });
 
-            // Wait for stream drop with timeout
-            let drop_start = std::time::Instant::now();
-            while drop_start.elapsed() < stream_drop_timeout {
-                if stream_drop_handle.is_finished() {
-                    let _ = stream_drop_handle.join();
-                    log::info!("Audio stream dropped successfully");
-                    break;
+                // Wait for stream drop with timeout
+                let drop_start = std::time::Instant::now();
+                while drop_start.elapsed() < stream_drop_timeout {
+                    if stream_drop_handle.is_finished() {
+                        let _ = stream_drop_handle.join();
+                        log::info!("Audio stream dropped successfully");
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
                 }
-                std::thread::sleep(Duration::from_millis(50));
+
+                if drop_start.elapsed() >= stream_drop_timeout {
+                    // Stream drop timed out - abandon the thread and continue
+                    // The OS will clean up the resources when the process exits
+                    log::warn!("═══════════════════════════════════════════════════════");
+                    log::warn!("⚠️ AUDIO STREAM DROP TIMEOUT");
+                    log::warn!("═══════════════════════════════════════════════════════");
+                    log::warn!("Timeout: {}ms", stream_drop_timeout.as_millis());
+                    log::warn!("Elapsed: {}ms", drop_start.elapsed().as_millis());
+                    log::warn!("Cause: Audio device driver not responding to cleanup");
+                    log::warn!("Impact: Recording will continue, orphaned thread abandoned");
+                    log::warn!("Resolution: Device may need to be unplugged/replugged");
+                    log::warn!("═══════════════════════════════════════════════════════");
+                }
             }
 
-            if drop_start.elapsed() >= stream_drop_timeout {
-                // Stream drop timed out - abandon the thread and continue
-                // The OS will clean up the resources when the process exits
-                log::warn!("═══════════════════════════════════════════════════════");
-                log::warn!("⚠️ AUDIO STREAM DROP TIMEOUT");
-                log::warn!("═══════════════════════════════════════════════════════");
-                log::warn!("Timeout: {}ms", stream_drop_timeout.as_millis());
-                log::warn!("Elapsed: {}ms", drop_start.elapsed().as_millis());
-                log::warn!("Cause: Audio device driver not responding to cleanup");
-                log::warn!("Impact: Recording will continue, orphaned thread abandoned");
-                log::warn!("Resolution: Device may need to be unplugged/replugged");
-                log::warn!("═══════════════════════════════════════════════════════");
+            #[cfg(not(target_os = "windows"))]
+            {
+                // macOS/Linux: Drop stream directly - CoreAudio/ALSA are generally reliable
+                // and cpal::Stream isn't Send-safe on macOS anyway
+                drop(stream);
+                log::info!("Audio stream dropped successfully");
             }
 
             // Check if any errors occurred during recording
