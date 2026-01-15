@@ -47,19 +47,29 @@ export const ModelCard = function ModelCard({
 
   return (
     <Card
-      className={`px-4 py-3 transition-all hover:shadow-sm ${
-        isUsable ? 'cursor-pointer hover:border-border' : ''
+      className={`px-4 py-3 border transition-all hover:shadow-sm ${
+        isUsable ? 'cursor-pointer' : ''
       } ${
-        isSelected ? 'bg-primary/5 border-border/50' : 'border-border/50'
+        isSelected
+          ? 'bg-primary/15 border-primary ring-2 ring-primary/30'
+          : 'border-border/50 hover:border-border'
       }`}
       onClick={() => isUsable && showSelectButton && onSelect(name)}
     >
       <div className="flex items-center justify-between gap-3">
         {/* Model Name */}
         <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
-          <h3 className="font-medium text-sm">{model.display_name || name}</h3>
+          <h3 className={`font-medium text-sm ${isSelected ? 'text-primary' : ''}`}>
+            {model.display_name || name}
+          </h3>
           {model.recommended && (
             <Star className="w-3.5 h-3.5 fill-yellow-500 text-yellow-500" aria-label="Recommended model" />
+          )}
+          {isSelected && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/20 text-primary text-xs font-medium flex-shrink-0">
+              <CheckCircle className="h-3 w-3" />
+              Active
+            </span>
           )}
         </div>
 
