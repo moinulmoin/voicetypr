@@ -1,9 +1,12 @@
 use crate::audio::device_watcher::try_start_device_watcher_if_ready;
 use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_combination};
+use crate::commands::remote::save_remote_settings;
 use crate::parakeet::ParakeetManager;
+use crate::remote::settings::RemoteSettings;
 use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
 use crate::whisper::manager::WhisperManager;
 use crate::AppState;
+use tauri::async_runtime::Mutex as AsyncMutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
@@ -605,6 +608,46 @@ pub async fn get_supported_languages() -> Result<Vec<LanguageInfo>, String> {
 
 #[tauri::command]
 pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(), String> {
+    // Check if this is a remote server selection
+    if let Some(connection_id) = model_name.strip_prefix("remote_") {
+        log::info!("Setting active remote server from tray: {}", connection_id);
+
+        // Set the remote server as active
+        let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+        {
+            let mut settings = remote_state.lock().await;
+            settings.set_active_connection(Some(connection_id.to_string()))?;
+            save_remote_settings(&app, &settings)?;
+        }
+
+        // Update the tray menu to reflect the new selection
+        update_tray_menu(app.clone()).await?;
+
+        // Emit event to update UI
+        if let Err(e) = app.emit(
+            "model-changed",
+            json!({
+                "model": model_name,
+                "engine": "remote"
+            }),
+        ) {
+            log::warn!("Failed to emit model-changed event: {}", e);
+        }
+
+        return Ok(());
+    }
+
+    // Clear any active remote server when selecting a local model
+    {
+        let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+        let mut settings = remote_state.lock().await;
+        if settings.active_connection_id.is_some() {
+            log::info!("Clearing active remote server - switching to local model");
+            settings.set_active_connection(None)?;
+            save_remote_settings(&app, &settings)?;
+        }
+    }
+
     // Get current settings
     let mut settings = get_settings(app.clone()).await?;
 

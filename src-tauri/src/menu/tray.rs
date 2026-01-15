@@ -1,9 +1,10 @@
-use tauri::async_runtime::RwLock as AsyncRwLock;
+use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 
 use crate::audio;
+use crate::remote::settings::RemoteSettings;
 use crate::whisper;
 
 /// Determines if a model should appear as selected in the tray given onboarding status
@@ -53,6 +54,23 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         }
     };
 
+    // Get remote server info (active connection and saved connections)
+    let (active_remote_id, active_remote_display, remote_connections) = {
+        if let Some(remote_state) = app.try_state::<AsyncMutex<RemoteSettings>>() {
+            let settings = remote_state.lock().await;
+            let active_id = settings.active_connection_id.clone();
+            let active_display = settings.get_active_connection().map(|c| c.display_name());
+            let connections: Vec<(String, String)> = settings
+                .saved_connections
+                .iter()
+                .map(|c| (c.id.clone(), c.display_name()))
+                .collect();
+            (active_id, active_display, connections)
+        } else {
+            (None, None, Vec::new())
+        }
+    };
+
     let (available_models, whisper_models_info) = {
         let mut models: Vec<(String, String)> = Vec::new();
         let mut whisper_all = std::collections::HashMap::new();
@@ -86,6 +104,14 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             models.push(("soniox".to_string(), "Soniox (Cloud)".to_string()));
         }
 
+        // Add remote servers
+        for (conn_id, conn_display) in &remote_connections {
+            // Use "remote_<id>" as the model name to distinguish from local models
+            let model_id = format!("remote_{}", conn_id);
+            let display = format!("🌐 {}", conn_display);
+            models.push((model_id, display));
+        }
+
         (models, whisper_all)
     };
 
@@ -94,8 +120,18 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         let mut model_check_items = Vec::new();
 
         for (model_name, display_name) in available_models {
-            let is_selected =
-                should_mark_model_selected(onboarding_done, &model_name, &current_model);
+            // Determine selection:
+            // - Remote models: selected if active_remote_id matches
+            // - Local models: selected if no remote active AND current_model matches
+            let is_selected = if let Some(conn_id) = model_name.strip_prefix("remote_") {
+                // This is a remote server
+                active_remote_id.as_deref() == Some(conn_id)
+            } else {
+                // Local model - only selected if no remote is active
+                active_remote_id.is_none()
+                    && should_mark_model_selected(onboarding_done, &model_name, &current_model)
+            };
+
             let model_item = CheckMenuItem::with_id(
                 app,
                 &format!("model_{}", model_name),
@@ -111,8 +147,12 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             model_items.push(item);
         }
 
-        let resolved_display_name = if onboarding_done && !current_model.is_empty() {
-            if let Some(info) = whisper_models_info.get(&current_model) {
+        // Resolve display name - prioritize active remote server
+        let (effective_model, resolved_display_name) = if let Some(ref remote_display) = active_remote_display {
+            // Remote server is active - show it as the current model
+            ("remote".to_string(), Some(format!("🌐 {}", remote_display)))
+        } else if onboarding_done && !current_model.is_empty() {
+            let display = if let Some(info) = whisper_models_info.get(&current_model) {
                 Some(info.display_name.clone())
             } else if let Some(parakeet_manager) =
                 app.try_state::<crate::parakeet::ParakeetManager>()
@@ -132,13 +172,14 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
                 Some("Soniox (Cloud)".to_string())
             } else {
                 Some(current_model.clone())
-            }
+            };
+            (current_model.clone(), display)
         } else {
-            None
+            (String::new(), None)
         };
 
         let current_model_display =
-            format_tray_model_label(onboarding_done, &current_model, resolved_display_name);
+            format_tray_model_label(onboarding_done || active_remote_id.is_some(), &effective_model, resolved_display_name);
 
         Some(Submenu::with_id_and_items(
             app,

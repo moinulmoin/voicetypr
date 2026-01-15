@@ -310,7 +310,7 @@ async fn test_connection(
 }
 
 /// Save remote settings to the store
-fn save_remote_settings(app: &AppHandle, settings: &RemoteSettings) -> Result<(), String> {
+pub fn save_remote_settings(app: &AppHandle, settings: &RemoteSettings) -> Result<(), String> {
     let store = app
         .store("voicetypr-store.json")
         .map_err(|e| format!("Failed to access store: {}", e))?;
