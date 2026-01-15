@@ -122,11 +122,6 @@ export function AddServerModal({
       return;
     }
 
-    if (testStatus !== "success") {
-      toast.error("Please test the connection first");
-      return;
-    }
-
     setSaving(true);
     try {
       const portNum = parseInt(port, 10) || 47842;
@@ -264,7 +259,7 @@ export function AddServerModal({
           </Button>
           <Button
             onClick={handleAddServer}
-            disabled={testStatus !== "success" || saving}
+            disabled={!host.trim() || saving}
           >
             {saving ? (
               <>
