@@ -87,6 +87,10 @@ git add -A && git commit -m "feat: description"
 
 This project uses **Beads** for issue tracking across multiple Claude Code agents.
 
+**Source repositories:**
+- **beads** (`bd`): https://github.com/steveyegge/beads - Git-backed issue tracker
+- **beads_viewer** (`bv`): https://github.com/Dicklesworthstone/beads_viewer - Dashboard UI
+
 ### Session Startup (REQUIRED)
 
 ```bash

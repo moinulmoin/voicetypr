@@ -126,6 +126,10 @@ This project uses **Beads** (git-backed issue tracker) and **Git Worktrees** for
 
 ### Beads Issue Tracking
 
+**Source repositories:**
+- **beads** (`bd`): https://github.com/steveyegge/beads - Git-backed issue tracker
+- **beads_viewer** (`bv`): https://github.com/Dicklesworthstone/beads_viewer - Dashboard UI
+
 Beads tracks work across sessions with dependencies. Use `bd` commands:
 
 ```bash
