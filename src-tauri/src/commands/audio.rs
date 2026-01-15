@@ -10,6 +10,8 @@ use crate::parakeet::ParakeetManager;
 use crate::utils::logger::*;
 #[cfg(debug_assertions)]
 use crate::utils::system_monitor;
+use crate::remote::client::RemoteServerConnection;
+use crate::remote::settings::RemoteSettings;
 use crate::whisper::cache::TranscriberCache;
 use crate::whisper::languages::validate_language;
 use crate::whisper::manager::WhisperManager;
@@ -308,6 +310,13 @@ enum ActiveEngineSelection {
     Soniox {
         model_name: String,
     },
+    Remote {
+        server_id: String,
+        server_name: String,
+        host: String,
+        port: u16,
+        password: Option<String>,
+    },
 }
 
 impl ActiveEngineSelection {
@@ -316,6 +325,7 @@ impl ActiveEngineSelection {
             ActiveEngineSelection::Whisper { .. } => "whisper",
             ActiveEngineSelection::Parakeet { .. } => "parakeet",
             ActiveEngineSelection::Soniox { .. } => "soniox",
+            ActiveEngineSelection::Remote { .. } => "remote",
         }
     }
 
@@ -324,6 +334,7 @@ impl ActiveEngineSelection {
             ActiveEngineSelection::Whisper { model_name, .. } => model_name,
             ActiveEngineSelection::Parakeet { model_name } => model_name,
             ActiveEngineSelection::Soniox { model_name } => model_name,
+            ActiveEngineSelection::Remote { server_name, .. } => server_name,
         }
     }
 }
@@ -1244,7 +1255,29 @@ pub async fn stop_recording(
 
     let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
 
-    let engine_selection = match config.current_engine.as_str() {
+    // Check for active remote server FIRST - if set, use remote transcription
+    let remote_settings = app.state::<AsyncMutex<RemoteSettings>>();
+    let active_remote = {
+        let settings = remote_settings.lock().await;
+        settings.get_active_connection().cloned()
+    };
+
+    let engine_selection = if let Some(remote_conn) = active_remote {
+        log::info!(
+            "🌐 Using remote server for transcription: {} ({}:{})",
+            remote_conn.display_name(),
+            remote_conn.host,
+            remote_conn.port
+        );
+        ActiveEngineSelection::Remote {
+            server_id: remote_conn.id.clone(),
+            server_name: remote_conn.display_name(),
+            host: remote_conn.host,
+            port: remote_conn.port,
+            password: remote_conn.password,
+        }
+    } else {
+        match config.current_engine.as_str() {
         "parakeet" => {
             if config.current_model.is_empty() {
                 return abort_due_to_missing_model(
@@ -1412,12 +1445,17 @@ pub async fn stop_recording(
                 model_path,
             }
         }
+        }
     };
 
-    // For Whisper/Parakeet: normalize and duration gate; for Soniox: skip both
+    // For Whisper/Parakeet: normalize and duration gate; for Soniox/Remote: skip both
     let audio_path = match &engine_selection {
         ActiveEngineSelection::Soniox { .. } => {
             log::info!("[RECORD] Soniox selected — skipping normalization");
+            audio_path
+        }
+        ActiveEngineSelection::Remote { server_name, .. } => {
+            log::info!("[RECORD] Remote server '{}' selected — skipping normalization", server_name);
             audio_path
         }
         _ => {
@@ -1689,6 +1727,104 @@ pub async fn stop_recording(
                 )
                 .await
                 {
+                    Ok(text) => Ok(text),
+                    Err(e) => Err(e),
+                }
+            }
+            ActiveEngineSelection::Remote {
+                server_name,
+                host,
+                port,
+                password,
+                ..
+            } => {
+                // Perform remote transcription in an async block that returns Result
+                let remote_result: Result<String, String> = async {
+                    log::info!(
+                        "🌐 [Remote] Starting transcription to '{}' ({}:{})",
+                        server_name,
+                        host,
+                        port
+                    );
+
+                    // Read the audio file
+                    let audio_data = std::fs::read(&audio_path_clone)
+                        .map_err(|e| format!("Failed to read audio file: {}", e))?;
+
+                    let audio_size_kb = audio_data.len() as f64 / 1024.0;
+                    log::info!(
+                        "🌐 [Remote] Sending {:.1} KB audio to '{}'",
+                        audio_size_kb,
+                        server_name
+                    );
+
+                    // Create HTTP client connection
+                    let server_conn = RemoteServerConnection::new(
+                        host.clone(),
+                        *port,
+                        password.clone(),
+                    );
+
+                    // Send transcription request
+                    let client = reqwest::Client::new();
+                    let mut request = client
+                        .post(&server_conn.transcribe_url())
+                        .header("Content-Type", "audio/wav")
+                        .body(audio_data);
+
+                    // Add auth header if password is set
+                    if let Some(pwd) = server_conn.password.as_ref() {
+                        request = request.header("X-VoiceTypr-Key", pwd);
+                    }
+
+                    let response = request.send().await.map_err(|e| {
+                        log::warn!(
+                            "🌐 [Remote] Connection FAILED to '{}': {}",
+                            server_name,
+                            e
+                        );
+                        format!("Failed to connect to remote server: {}", e)
+                    })?;
+
+                    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                        log::warn!(
+                            "🌐 [Remote] Authentication FAILED to '{}'",
+                            server_name
+                        );
+                        return Err("Remote server authentication failed".to_string());
+                    }
+
+                    if !response.status().is_success() {
+                        log::warn!(
+                            "🌐 [Remote] Server error from '{}': {}",
+                            server_name,
+                            response.status()
+                        );
+                        return Err(format!("Remote server error: {}", response.status()));
+                    }
+
+                    let result: serde_json::Value = response.json().await.map_err(|e| {
+                        format!("Failed to parse remote response: {}", e)
+                    })?;
+
+                    let text = result
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .ok_or_else(|| "Invalid response: missing 'text' field".to_string())?;
+
+                    log::info!(
+                        "🌐 [Remote] Transcription COMPLETED from '{}': {} chars received",
+                        server_name,
+                        text.len()
+                    );
+
+                    Ok(text)
+                }
+                .await;
+
+                // Pass through the result like Soniox does
+                match remote_result {
                     Ok(text) => Ok(text),
                     Err(e) => Err(e),
                 }
@@ -2321,6 +2457,13 @@ pub async fn transcribe_audio_file(
         ActiveEngineSelection::Soniox { .. } => {
             soniox_transcribe_async(&app, &wav_path, Some(&language)).await?
         }
+        ActiveEngineSelection::Remote { server_name, .. } => {
+            return Err(format!(
+                "File upload transcription is not supported for remote server '{}'. \
+                Please select a local model for file transcription.",
+                server_name
+            ));
+        }
     };
 
     log::info!(
@@ -2425,6 +2568,13 @@ pub async fn transcribe_audio(
         }
         ActiveEngineSelection::Soniox { .. } => {
             soniox_transcribe_async(&app, &temp_path, Some(&language)).await?
+        }
+        ActiveEngineSelection::Remote { server_name, .. } => {
+            return Err(format!(
+                "File upload transcription is not supported for remote server '{}'. \
+                Please select a local model for file transcription.",
+                server_name
+            ));
         }
     };
 
