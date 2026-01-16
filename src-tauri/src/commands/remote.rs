@@ -5,7 +5,10 @@
 
 use std::path::PathBuf;
 
-use tauri::{async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock}, AppHandle, Manager, State};
+use tauri::{
+    async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock},
+    AppHandle, Manager, State,
+};
 use tauri_plugin_store::StoreExt;
 
 use crate::remote::client::RemoteServerConnection;
@@ -89,7 +92,14 @@ pub async fn start_sharing(
     // Start the server
     let mut manager = server_manager.lock().await;
     manager
-        .start(port, password.clone(), server_name, model_path, current_model, engine)
+        .start(
+            port,
+            password.clone(),
+            server_name,
+            model_path,
+            current_model,
+            engine,
+        )
         .await?;
 
     // Persist the sharing enabled state so it auto-starts on next launch
@@ -99,7 +109,10 @@ pub async fn start_sharing(
         settings.server_config.port = port;
         settings.server_config.password = password;
         save_remote_settings(&app, &settings)?;
-        log::info!("🌐 [SHARING] Saved sharing state: enabled=true, port={}", port);
+        log::info!(
+            "🌐 [SHARING] Saved sharing state: enabled=true, port={}",
+            port
+        );
     }
 
     log::info!("Sharing started on port {}", port);
@@ -142,8 +155,8 @@ pub async fn get_sharing_status(
 pub fn get_local_ips() -> Result<Vec<String>, String> {
     use local_ip_address::list_afinet_netifas;
 
-    let network_interfaces = list_afinet_netifas()
-        .map_err(|e| format!("Failed to get network interfaces: {}", e))?;
+    let network_interfaces =
+        list_afinet_netifas().map_err(|e| format!("Failed to get network interfaces: {}", e))?;
 
     let ips: Vec<String> = network_interfaces
         .into_iter()
@@ -195,16 +208,25 @@ pub async fn add_remote_server(
         }
         Err(_) => {
             // Connection failed, but still allow adding the server
-            log::info!("Connection test failed for {}:{}, adding server anyway", host, port);
+            log::info!(
+                "Connection test failed for {}:{}, adding server anyway",
+                host,
+                port
+            );
             (name.unwrap_or_else(|| format!("{}:{}", host, port)), None)
         }
     };
 
     // Add to settings
     let mut settings = remote_settings.lock().await;
-    let connection = settings.add_connection(host, port, password, Some(display_name), model.clone());
+    let connection =
+        settings.add_connection(host, port, password, Some(display_name), model.clone());
 
-    log::info!("Added remote server: {} (model: {:?})", connection.display_name(), model);
+    log::info!(
+        "Added remote server: {} (model: {:?})",
+        connection.display_name(),
+        model
+    );
 
     // Save settings
     save_remote_settings(&app, &settings)?;
@@ -318,7 +340,12 @@ pub async fn test_remote_server(
     };
 
     // Test the connection
-    let status = test_connection(&connection.host, connection.port, connection.password.as_deref()).await?;
+    let status = test_connection(
+        &connection.host,
+        connection.port,
+        connection.password.as_deref(),
+    )
+    .await?;
 
     // Check if model changed and update if needed
     let new_model = Some(status.model.clone());
@@ -333,7 +360,11 @@ pub async fn test_remote_server(
         // Update the cached model
         {
             let mut settings = remote_settings.lock().await;
-            if let Some(conn) = settings.saved_connections.iter_mut().find(|c| c.id == server_id) {
+            if let Some(conn) = settings
+                .saved_connections
+                .iter_mut()
+                .find(|c| c.id == server_id)
+            {
                 conn.model = new_model;
             }
             // Save updated settings
@@ -342,7 +373,10 @@ pub async fn test_remote_server(
 
         // Refresh tray menu to show new model
         if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
-            log::warn!("🔄 [REMOTE] Failed to update tray menu after model change: {}", e);
+            log::warn!(
+                "🔄 [REMOTE] Failed to update tray menu after model change: {}",
+                e
+            );
         } else {
             log::info!("🔄 [REMOTE] Tray menu updated with new model");
         }
@@ -359,7 +393,10 @@ pub async fn set_active_remote_server(
     remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
     server_manager: State<'_, AsyncMutex<RemoteServerManager>>,
 ) -> Result<(), String> {
-    log::info!("🔧 [REMOTE] set_active_remote_server called with server_id={:?}", server_id);
+    log::info!(
+        "🔧 [REMOTE] set_active_remote_server called with server_id={:?}",
+        server_id
+    );
 
     // Track if we need to restore sharing after clearing remote server
     let mut should_restore_sharing = false;
@@ -393,8 +430,13 @@ pub async fn set_active_remote_server(
             should_restore_sharing = true;
             // Get stored sharing settings from app settings
             if let Ok(store) = app.store("settings") {
-                restore_port = store.get("sharing_port").and_then(|v| v.as_u64()).map(|p| p as u16);
-                restore_password = store.get("sharing_password").and_then(|v| v.as_str().map(|s| s.to_string()));
+                restore_port = store
+                    .get("sharing_port")
+                    .and_then(|v| v.as_u64())
+                    .map(|p| p as u16);
+                restore_password = store
+                    .get("sharing_password")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()));
             }
             log::info!("🔧 [REMOTE] Will restore sharing after clearing remote server");
         }
@@ -403,7 +445,10 @@ pub async fn set_active_remote_server(
     // Update settings (scoped to release lock before tray update)
     {
         let mut settings = remote_settings.lock().await;
-        log::info!("🔧 [REMOTE] Before change: active_connection_id={:?}", settings.active_connection_id);
+        log::info!(
+            "🔧 [REMOTE] Before change: active_connection_id={:?}",
+            settings.active_connection_id
+        );
 
         if let Some(id) = &server_id {
             settings.set_active_connection(Some(id.clone()))?;
@@ -417,7 +462,10 @@ pub async fn set_active_remote_server(
             log::info!("🔧 [REMOTE] Active remote server cleared");
         }
 
-        log::info!("🔧 [REMOTE] After change: active_connection_id={:?}", settings.active_connection_id);
+        log::info!(
+            "🔧 [REMOTE] After change: active_connection_id={:?}",
+            settings.active_connection_id
+        );
 
         // Save settings
         save_remote_settings(&app, &settings)?;
@@ -427,7 +475,10 @@ pub async fn set_active_remote_server(
     // Restore sharing if we were using it before switching to remote
     if should_restore_sharing {
         let port = restore_port.unwrap_or(DEFAULT_PORT);
-        log::info!("🔧 [REMOTE] Auto-restoring network sharing on port {}", port);
+        log::info!(
+            "🔧 [REMOTE] Auto-restoring network sharing on port {}",
+            port
+        );
 
         let mut manager = server_manager.lock().await;
 
@@ -455,14 +506,25 @@ pub async fn set_active_remote_server(
 
         // Get model path for whisper models
         let model_path: PathBuf = if current_engine == "whisper" {
-            let whisper_state: &AsyncRwLock<WhisperManager> = app.state::<AsyncRwLock<WhisperManager>>().inner();
+            let whisper_state: &AsyncRwLock<WhisperManager> =
+                app.state::<AsyncRwLock<WhisperManager>>().inner();
             let guard = whisper_state.read().await;
             guard.get_model_path(&current_model).unwrap_or_default()
         } else {
             PathBuf::new()
         };
 
-        if let Err(e) = manager.start(port, restore_password, server_name, model_path, current_model, current_engine).await {
+        if let Err(e) = manager
+            .start(
+                port,
+                restore_password,
+                server_name,
+                model_path,
+                current_model,
+                current_engine,
+            )
+            .await
+        {
             log::warn!("🔧 [REMOTE] Failed to auto-restore sharing: {}", e);
         } else {
             log::info!("🔧 [REMOTE] Network sharing auto-restored successfully");
@@ -486,7 +548,10 @@ pub async fn get_active_remote_server(
 ) -> Result<Option<String>, String> {
     let settings = remote_settings.lock().await;
     let active_id = settings.active_connection_id.clone();
-    log::info!("🔍 [REMOTE] get_active_remote_server returning: {:?}", active_id);
+    log::info!(
+        "🔍 [REMOTE] get_active_remote_server returning: {:?}",
+        active_id
+    );
     Ok(active_id)
 }
 
@@ -519,8 +584,8 @@ pub async fn transcribe_remote(
     );
 
     // Read the audio file
-    let audio_data = std::fs::read(&audio_path)
-        .map_err(|e| format!("Failed to read audio file: {}", e))?;
+    let audio_data =
+        std::fs::read(&audio_path).map_err(|e| format!("Failed to read audio file: {}", e))?;
 
     let audio_size_kb = audio_data.len() as f64 / 1024.0;
     log::info!(
@@ -530,11 +595,8 @@ pub async fn transcribe_remote(
     );
 
     // Create HTTP client connection
-    let server_conn = RemoteServerConnection::new(
-        connection.host,
-        connection.port,
-        connection.password,
-    );
+    let server_conn =
+        RemoteServerConnection::new(connection.host, connection.port, connection.password);
 
     // Send transcription request
     let client = reqwest::Client::new();
@@ -548,17 +610,14 @@ pub async fn transcribe_remote(
         request = request.header("X-VoiceTypr-Key", pwd);
     }
 
-    let response = request
-        .send()
-        .await
-        .map_err(|e| {
-            log::warn!(
-                "[Remote Client] Connection FAILED to '{}': {}",
-                display_name,
-                e
-            );
-            format!("Failed to send request: {}", e)
-        })?;
+    let response = request.send().await.map_err(|e| {
+        log::warn!(
+            "[Remote Client] Connection FAILED to '{}': {}",
+            display_name,
+            e
+        );
+        format!("Failed to send request: {}", e)
+    })?;
 
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         log::warn!(
@@ -609,11 +668,7 @@ async fn test_connection(
 ) -> Result<StatusResponse, String> {
     let conn = RemoteServerConnection::new(host.to_string(), port, password.map(String::from));
 
-    log::info!(
-        "[Remote Client] Testing connection to {}:{}",
-        host,
-        port
-    );
+    log::info!("[Remote Client] Testing connection to {}:{}", host, port);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -626,18 +681,15 @@ async fn test_connection(
         request = request.header("X-VoiceTypr-Key", pwd);
     }
 
-    let response = request
-        .send()
-        .await
-        .map_err(|e| {
-            log::warn!(
-                "[Remote Client] Connection test FAILED to {}:{} - {}",
-                host,
-                port,
-                e
-            );
-            format!("Failed to connect: {}", e)
-        })?;
+    let response = request.send().await.map_err(|e| {
+        log::warn!(
+            "[Remote Client] Connection test FAILED to {}:{} - {}",
+            host,
+            port,
+            e
+        );
+        format!("Failed to connect: {}", e)
+    })?;
 
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         log::warn!(
@@ -699,13 +751,19 @@ pub fn load_remote_settings(app: &AppHandle) -> RemoteSettings {
     let store = match app.store("voicetypr-store.json") {
         Ok(s) => s,
         Err(e) => {
-            log::warn!("🔧 [REMOTE] Failed to open store: {:?}, returning default", e);
+            log::warn!(
+                "🔧 [REMOTE] Failed to open store: {:?}, returning default",
+                e
+            );
             return RemoteSettings::default();
         }
     };
 
     let raw_value = store.get("remote_settings");
-    log::info!("🔧 [REMOTE] Raw store value exists: {}", raw_value.is_some());
+    log::info!(
+        "🔧 [REMOTE] Raw store value exists: {}",
+        raw_value.is_some()
+    );
 
     let settings: RemoteSettings = raw_value
         .and_then(|v| {
@@ -731,13 +789,13 @@ pub fn get_local_machine_id() -> Result<String, String> {
 }
 
 // ============================================================================
-// Firewall Detection (macOS)
+// Firewall Detection (macOS and Windows)
 // ============================================================================
 
 /// Firewall status for network sharing
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FirewallStatus {
-    /// Whether the macOS firewall is enabled
+    /// Whether the system firewall is enabled
     pub firewall_enabled: bool,
     /// Whether VoiceTypr is allowed through the firewall
     pub app_allowed: bool,
@@ -745,7 +803,7 @@ pub struct FirewallStatus {
     pub may_be_blocked: bool,
 }
 
-/// Check if the macOS firewall may be blocking incoming connections
+/// Check if the system firewall may be blocking incoming connections
 /// Returns firewall status to help users troubleshoot connection issues
 #[tauri::command]
 pub fn get_firewall_status() -> FirewallStatus {
@@ -788,7 +846,10 @@ pub fn get_firewall_status() -> FirewallStatus {
                     if line.to_lowercase().contains("voicetypr") {
                         // Check if next line contains "Allow incoming connections"
                         if let Some(next_line) = lines.get(i + 1) {
-                            if next_line.to_lowercase().contains("allow incoming connections") {
+                            if next_line
+                                .to_lowercase()
+                                .contains("allow incoming connections")
+                            {
                                 return true;
                             }
                         }
@@ -809,10 +870,70 @@ pub fn get_firewall_status() -> FirewallStatus {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        // On non-macOS platforms, assume no firewall issues
-        // Windows firewall handling could be added later
+        use std::process::Command;
+
+        // Check if Windows Firewall is enabled for the current profile
+        // netsh advfirewall show currentprofile returns something like:
+        // "State                                 ON" or "State                                 OFF"
+        let firewall_enabled = Command::new("netsh")
+            .args(["advfirewall", "show", "currentprofile", "state"])
+            .output()
+            .map(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // Look for "State" followed by "ON"
+                stdout.to_uppercase().contains("ON")
+            })
+            .unwrap_or(false);
+
+        if !firewall_enabled {
+            return FirewallStatus {
+                firewall_enabled: false,
+                app_allowed: true, // No firewall means no blocking
+                may_be_blocked: false,
+            };
+        }
+
+        // Check if VoiceTypr has an inbound allow rule
+        // netsh advfirewall firewall show rule name="VoiceTypr" returns rule details if exists
+        // or "No rules match the specified criteria" if not found
+        let app_allowed = Command::new("netsh")
+            .args([
+                "advfirewall",
+                "firewall",
+                "show",
+                "rule",
+                "name=VoiceTypr",
+                "dir=in",
+            ])
+            .output()
+            .map(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // If we find "Rule Name:" and "Action:" with "Allow", the rule exists and allows
+                let has_rule = stdout.contains("Rule Name:") || stdout.contains("Regelname:");
+                let is_allow =
+                    stdout.to_uppercase().contains("ALLOW") || stdout.contains("Zulassen");
+
+                // Also check if it's enabled
+                let is_enabled =
+                    stdout.to_uppercase().contains("ENABLED: YES") || stdout.contains("Ja");
+
+                has_rule && is_allow && is_enabled
+            })
+            .unwrap_or(false);
+
+        FirewallStatus {
+            firewall_enabled: true,
+            app_allowed,
+            may_be_blocked: !app_allowed,
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        // On other platforms (Linux, etc.), assume no firewall issues
+        // Linux firewall detection could be added later (iptables/ufw/firewalld)
         FirewallStatus {
             firewall_enabled: false,
             app_allowed: true,
@@ -855,9 +976,7 @@ pub fn open_firewall_settings() -> Result<(), String> {
     {
         use std::process::Command;
         // Open Windows Firewall settings
-        let _ = Command::new("control")
-            .arg("firewall.cpl")
-            .spawn();
+        let _ = Command::new("control").arg("firewall.cpl").spawn();
         Ok(())
     }
 

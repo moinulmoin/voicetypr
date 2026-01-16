@@ -177,17 +177,11 @@ fn test_firewall_status_firewall_enabled_allowed() {
 #[test]
 fn test_get_firewall_status_returns_valid_struct() {
     let status = get_firewall_status();
-    // On non-macOS platforms, firewall is disabled by default
-    #[cfg(not(target_os = "macos"))]
+
+    // On macOS and Windows, verify the struct follows logical rules
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        assert!(!status.firewall_enabled);
-        assert!(status.app_allowed);
-        assert!(!status.may_be_blocked);
-    }
-    // On macOS, just verify the struct is valid
-    #[cfg(target_os = "macos")]
-    {
-        // If firewall is disabled, app should be allowed
+        // If firewall is disabled, app should be allowed and not blocked
         if !status.firewall_enabled {
             assert!(status.app_allowed);
             assert!(!status.may_be_blocked);
@@ -196,6 +190,18 @@ fn test_get_firewall_status_returns_valid_struct() {
         if status.firewall_enabled && !status.app_allowed {
             assert!(status.may_be_blocked);
         }
+        // If firewall is enabled and app allowed, should not be blocked
+        if status.firewall_enabled && status.app_allowed {
+            assert!(!status.may_be_blocked);
+        }
+    }
+
+    // On other platforms (Linux, etc.), firewall is always reported as disabled
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        assert!(!status.firewall_enabled);
+        assert!(status.app_allowed);
+        assert!(!status.may_be_blocked);
     }
 }
 

@@ -2,6 +2,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useSettings } from "@/contexts/SettingsContext";
+import { isMacOS, isWindows } from "@/lib/platform";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, Check, Copy, Eye, EyeOff, ExternalLink, Network, Server, Shield } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -102,7 +103,7 @@ export function NetworkSharingCard() {
     }
   }, []);
 
-  // Fetch firewall status (macOS)
+  // Fetch firewall status (macOS and Windows)
   const fetchFirewallStatus = useCallback(async () => {
     try {
       const result = await invoke<FirewallStatus>("get_firewall_status");
@@ -375,16 +376,40 @@ export function NetworkSharingCard() {
                   <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
                     Firewall may block connections
                   </p>
-                  <p className="text-xs text-amber-600 dark:text-amber-500 mb-2">
-                    Your macOS firewall is enabled. To allow other devices to connect:
-                  </p>
-                  <ol className="text-xs text-amber-600 dark:text-amber-500 mb-2 list-decimal list-inside space-y-0.5">
-                    <li>Open <strong>System Settings → Network → Firewall</strong></li>
-                    <li>Click <strong>Options...</strong></li>
-                    <li>Click the <strong>+</strong> button at the bottom of the app list</li>
-                    <li>Navigate to <strong>Applications</strong> and select <strong>VoiceTypr</strong></li>
-                    <li>Ensure it's set to <strong>Allow incoming connections</strong></li>
-                  </ol>
+                  {isMacOS && (
+                    <>
+                      <p className="text-xs text-amber-600 dark:text-amber-500 mb-2">
+                        Your macOS firewall is enabled. To allow other devices to connect:
+                      </p>
+                      <ol className="text-xs text-amber-600 dark:text-amber-500 mb-2 list-decimal list-inside space-y-0.5">
+                        <li>Open <strong>System Settings → Network → Firewall</strong></li>
+                        <li>Click <strong>Options...</strong></li>
+                        <li>Click the <strong>+</strong> button at the bottom of the app list</li>
+                        <li>Navigate to <strong>Applications</strong> and select <strong>VoiceTypr</strong></li>
+                        <li>Ensure it's set to <strong>Allow incoming connections</strong></li>
+                      </ol>
+                    </>
+                  )}
+                  {isWindows && (
+                    <>
+                      <p className="text-xs text-amber-600 dark:text-amber-500 mb-2">
+                        Windows Firewall may be blocking incoming connections. To allow other devices to connect:
+                      </p>
+                      <ol className="text-xs text-amber-600 dark:text-amber-500 mb-2 list-decimal list-inside space-y-0.5">
+                        <li>Open <strong>Windows Firewall</strong> settings</li>
+                        <li>Click <strong>Allow an app through firewall</strong></li>
+                        <li>Click <strong>Change settings</strong> (may require admin)</li>
+                        <li>Click <strong>Allow another app...</strong></li>
+                        <li>Browse to and select <strong>VoiceTypr</strong></li>
+                        <li>Check both <strong>Private</strong> and <strong>Public</strong> networks</li>
+                      </ol>
+                    </>
+                  )}
+                  {!isMacOS && !isWindows && (
+                    <p className="text-xs text-amber-600 dark:text-amber-500 mb-2">
+                      Your firewall may be blocking incoming connections. Please configure your firewall to allow VoiceTypr.
+                    </p>
+                  )}
                   <div className="flex items-center gap-3">
                     <button
                       onClick={async () => {
@@ -392,13 +417,18 @@ export function NetworkSharingCard() {
                           await invoke("open_firewall_settings");
                         } catch (error) {
                           console.error("Failed to open firewall settings:", error);
-                          toast.error("Could not open Firewall settings. Please open System Settings > Network > Firewall manually.");
+                          const settingsPath = isMacOS
+                            ? "System Settings > Network > Firewall"
+                            : isWindows
+                              ? "Control Panel > Windows Firewall"
+                              : "your firewall settings";
+                          toast.error(`Could not open Firewall settings. Please open ${settingsPath} manually.`);
                         }
                       }}
                       className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400 hover:underline"
                     >
                       <ExternalLink className="h-3 w-3" />
-                      Open System Settings
+                      {isMacOS ? "Open System Settings" : isWindows ? "Open Windows Firewall" : "Open Firewall Settings"}
                     </button>
                     <button
                       onClick={async () => {
