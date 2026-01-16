@@ -138,15 +138,17 @@ export function GeneralSettings() {
                   </ToggleGroupItem>
                 </ToggleGroup>
                 <p className="text-xs text-muted-foreground">
-                  {settings.recording_mode === "push_to_talk"
-                    ? "Hold the hotkey to record, release to stop"
-                    : "Press the hotkey to start/stop recording"}
-                  {" · "}
-                  Press{" "}
-                  <kbd className="px-1 py-0.5 rounded text-xs bg-background border">
-                    ESC
-                  </kbd>{" "}
-                  twice to cancel
+                  {settings.recording_mode === "push_to_talk" ? (
+                    "Hold the hotkey to record, release to stop"
+                  ) : (
+                    <>
+                      Press the hotkey to start/stop recording · Press{" "}
+                      <kbd className="px-1 py-0.5 rounded text-xs bg-background border">
+                        ESC
+                      </kbd>{" "}
+                      twice to cancel
+                    </>
+                  )}
                 </p>
               </div>
 
