@@ -49,6 +49,108 @@ gh issue close <number> --repo tomchapin/voicetypr --comment "Completed: <summar
 4. **Work on it**: Make changes, commit with `Fixes #<number>` in message
 5. **Close when done**: Issue auto-closes when PR merges, or user manually closes after verification
 
+## Multi-Agent Coordination Protocol
+
+When multiple Claude Code agents work in parallel, follow this protocol strictly.
+
+### Before Starting ANY Work
+
+**CRITICAL**: Always check the issue before starting work:
+
+```bash
+# Check issue comments and labels
+gh issue view <number> --repo tomchapin/voicetypr --comments
+```
+
+**DO NOT START** if you see:
+- Label `in progress` on the issue
+- A recent comment (< 2 hours) from another agent claiming the issue
+- A comment saying "AGENT WORKING" without a corresponding "AGENT COMPLETE"
+
+### Claiming an Issue
+
+When you begin work, **immediately** do both:
+
+1. **Add the label**:
+```bash
+gh issue edit <number> --repo tomchapin/voicetypr --add-label "in progress"
+```
+
+2. **Add a claim comment**:
+```bash
+gh issue comment <number> --repo tomchapin/voicetypr --body "$(cat <<'EOF'
+## 🤖 AGENT WORKING
+
+**Agent ID**: [Your unique session/conversation ID]
+**Started**: [ISO 8601 timestamp, e.g., 2026-01-15T19:30:00Z]
+**Branch**: feature/network-sharing-remote-transcription
+**Worktree**: .worktrees/[your-worktree-name]
+
+Working on this issue now. Other agents please select a different issue.
+EOF
+)"
+```
+
+### Completing an Issue
+
+When you finish work:
+
+1. **Add completion comment**:
+```bash
+gh issue comment <number> --repo tomchapin/voicetypr --body "$(cat <<'EOF'
+## ✅ AGENT COMPLETE
+
+**Agent ID**: [Same ID as claim]
+**Completed**: [ISO 8601 timestamp]
+**Duration**: [How long it took]
+
+### Summary
+[Brief description of what was done]
+
+### Tests Added/Modified
+- [List test files]
+
+### Verification
+- [ ] All tests pass
+- [ ] Code compiles without errors
+EOF
+)"
+```
+
+2. **Remove the label**:
+```bash
+gh issue edit <number> --repo tomchapin/voicetypr --remove-label "in progress"
+```
+
+### Git Worktrees for Parallel Work
+
+Each agent should use a separate worktree to avoid conflicts:
+
+```bash
+# Create a worktree (use unique name per agent)
+git worktree add .worktrees/<agent-name>-<issue-num> feature/network-sharing-remote-transcription
+
+# Work in that directory
+cd .worktrees/<agent-name>-<issue-num>
+
+# When done, remove worktree
+git worktree remove .worktrees/<agent-name>-<issue-num>
+```
+
+### Conflict Resolution
+
+If two agents accidentally work on the same issue:
+1. The agent who commented first has priority
+2. The second agent should stop and pick a different issue
+3. If work was already done, coordinate via issue comments to merge or discard
+
+### Issue Labels Reference
+
+- `in progress` - An agent is actively working on this (DO NOT CLAIM)
+- `tests` - Test writing task
+- `task` - General task
+- `blocked` - Cannot proceed, waiting on something
+
 ### Issue Format
 
 Issues should include:

@@ -156,59 +156,111 @@ gh issue comment <number> --repo tomchapin/voicetypr --body "Comment text"
 gh issue close <number> --repo tomchapin/voicetypr --comment "Completed: <summary>"
 ```
 
-### Multi-Agent Workflow
+### Multi-Agent Coordination Protocol
 
-Multiple agents can work on issues in parallel. Follow these rules:
+Multiple Claude Code agents can work on issues in parallel. **STRICTLY FOLLOW THIS PROTOCOL** to avoid conflicts.
 
-#### Starting Work on an Issue
+#### BEFORE Starting ANY Work - MANDATORY CHECK
 
-1. **Check the issue first** to see if another agent is already working on it:
-   ```bash
-   gh issue view <number> --repo tomchapin/voicetypr
-   ```
+**CRITICAL**: Always check the issue status before claiming:
 
-2. **Check which branch** the issue is for (specified in the issue body) and switch to it:
-   ```bash
-   git checkout <branch-name>
-   git pull origin <branch-name>
-   ```
+```bash
+gh issue view <number> --repo tomchapin/voicetypr --comments
+```
 
-3. **Claim the issue** by adding a comment:
-   ```bash
-   gh issue comment <number> --repo tomchapin/voicetypr --body "🤖 **Agent starting work**: [Your agent identifier]
+**DO NOT START WORK** if you see ANY of these:
+- ❌ Label `in progress` is present on the issue
+- ❌ A comment within the last 2 hours saying "AGENT WORKING"
+- ❌ A claim comment without a matching "AGENT COMPLETE" comment
 
-   Branch: \`<branch-name>\`
-   Working on this issue now. Will update with progress."
-   ```
+#### Agent Identity
 
-4. **Add the "in progress" label** (if available):
-   ```bash
-   gh issue edit <number> --repo tomchapin/voicetypr --add-label "in progress"
-   ```
+Each Claude Code agent needs a unique identifier. Use one of these methods:
+
+1. **User-assigned**: User tells you at conversation start (e.g., "You are Agent-Alpha")
+2. **Worktree-based**: Your worktree directory name IS your agent ID
+3. **Generated**: Create one: `agent-$(hostname)-$(date +%s)`
+
+**Your Agent ID for this session**: If not told otherwise, generate one at start and use consistently.
+
+#### Creating Your Worktree FIRST
+
+Before claiming any issue, create your worktree (this also establishes your Agent ID):
+
+```bash
+# Replace AGENT_NAME with your assigned name (e.g., alpha, beta, gamma)
+# Or generate: AGENT_NAME="agent-$(date +%s)"
+git worktree add .worktrees/$AGENT_NAME feature/network-sharing-remote-transcription
+cd .worktrees/$AGENT_NAME
+```
+
+Your **Agent ID** is now: the value of `$AGENT_NAME`
+
+#### Claiming an Issue
+
+When you decide to work on an issue, **IMMEDIATELY** perform BOTH steps:
+
+**Step 1 - Add the label:**
+```bash
+gh issue edit <number> --repo tomchapin/voicetypr --add-label "in progress"
+```
+
+**Step 2 - Add claim comment (copy and fill in the template):**
+```
+## 🤖 AGENT WORKING
+
+**Agent ID**: [YOUR_AGENT_NAME]
+**Started**: [CURRENT_UTC_TIMESTAMP, e.g., 2026-01-15T20:30:00Z]
+**Branch**: feature/network-sharing-remote-transcription
+**Worktree**: .worktrees/[YOUR_AGENT_NAME]
+
+Currently working on this issue. Other agents: please select a different issue.
+```
 
 #### While Working
 
-- Add progress comments for significant milestones
-- If you encounter blockers, comment on the issue
-- Reference the issue number in commits: `git commit -m "feat: add X (fixes #123)"`
+- Reference issue in commits: `git commit -m "test: add X tests (refs #123)"`
+- For long tasks, add progress comments every 30+ minutes
+- If blocked, comment immediately and pick different issue
 
 #### Completing Work
 
-1. **Do NOT close the issue yourself** - wait for user verification
-2. Add a completion comment:
-   ```bash
-   gh issue comment <number> --repo tomchapin/voicetypr --body "✅ **Ready for review**
+**Step 1 - Add completion comment with timestamp:**
+```bash
+gh issue comment <number> --repo tomchapin/voicetypr --body "## ✅ AGENT COMPLETE
 
-   Completed: <summary of what was done>
+**Agent ID**: [Same ID as claim comment]
+**Completed**: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+**Duration**: [X minutes/hours]
 
-   Files changed:
-   - file1.ts
-   - file2.rs
+### Summary
+[What was accomplished]
 
-   Testing: <how to test>"
-   ```
-3. Remove "in progress" label if you added it
-4. User will close the issue after verifying the work
+### Files Changed
+- [List files]
+
+### Tests
+- [ ] All tests pass locally
+- [ ] Verified with: [command used]
+
+### Ready for Review
+Waiting for user verification before closing."
+```
+
+**Step 2 - Remove the label:**
+```bash
+gh issue edit <number> --repo tomchapin/voicetypr --remove-label "in progress"
+```
+
+**Step 3 - Do NOT close the issue** - wait for user verification
+
+#### Conflict Resolution
+
+If two agents accidentally claim the same issue:
+1. Agent with **earliest timestamp** has priority
+2. Second agent must STOP immediately and pick different issue
+3. Comment explaining the situation
+4. If significant work was done, coordinate via comments to merge
 
 ### Labels
 
