@@ -109,6 +109,19 @@ See `scripts/README.md` for detailed Windows build prerequisites.
   - `parakeet/`: Parakeet sidecar integration
 - **Capabilities**: Define permissions in `src-tauri/capabilities/`
 
+### Data Paths
+
+App identifier: `com.ideaplexa.voicetypr`
+
+| Data | macOS | Windows |
+|------|-------|---------|
+| **Recordings** | `~/Library/Application Support/com.ideaplexa.voicetypr/recordings/` | `%APPDATA%\com.ideaplexa.voicetypr\recordings\` |
+| **Whisper Models** | `~/Library/Application Support/com.voicetypr.app/models/` | `%APPDATA%\com.voicetypr.app\models\` |
+| **Settings** | `~/Library/Application Support/com.ideaplexa.voicetypr/` | `%APPDATA%\com.ideaplexa.voicetypr\` |
+| **Test Audio** | `tests/fixtures/audio-files/test-audio.wav` | `tests/fixtures/audio-files/test-audio.wav` |
+
+Note: `save_recordings` must be enabled in Settings for recordings to be saved.
+
 ### Testing Philosophy
 
 #### Backend Testing

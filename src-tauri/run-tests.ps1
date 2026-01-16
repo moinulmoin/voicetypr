@@ -4,7 +4,8 @@
 
 param(
     [string]$TestFilter = "",
-    [switch]$NoCapture
+    [switch]$NoCapture,
+    [switch]$IgnoredOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,8 +76,11 @@ if ($TestFilter) {
     $testArgs += $TestFilter
 }
 $testArgs += "--"
+if ($IgnoredOnly) {
+    $testArgs += "--ignored"
+}
 if ($NoCapture) {
-    $testArgs += "--no-capture"
+    $testArgs += "--nocapture"
 }
 
 & cargo $testArgs

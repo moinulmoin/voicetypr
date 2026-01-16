@@ -218,9 +218,7 @@ Actual behavior:
 
   const handleOpenRecordings = async () => {
     try {
-      const recordingsDir = await invoke<string>('get_recordings_directory');
-      const { open } = await import('@tauri-apps/plugin-shell');
-      await open(recordingsDir);
+      await invoke('open_recordings_folder');
     } catch (error) {
       console.error('Failed to open recordings folder:', error);
       toast.error('Failed to open recordings folder');

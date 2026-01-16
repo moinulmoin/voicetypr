@@ -42,6 +42,8 @@ mod tests {
             pill_indicator_position: "bottom".to_string(),
             sharing_port: Some(47842),
             sharing_password: None,
+            save_recordings: false,
+            recording_retention_count: Some(50),
         };
 
         // Test serialization
@@ -105,6 +107,8 @@ mod tests {
             pill_indicator_position: "top".to_string(),
             sharing_port: None,
             sharing_password: Some("test123".to_string()),
+            save_recordings: true,
+            recording_retention_count: None,
         };
 
         let cloned = settings.clone();
@@ -664,6 +668,8 @@ mod tests {
             pill_indicator_position: "top".to_string(),
             sharing_port: Some(12345),
             sharing_password: Some("mysecret".to_string()),
+            save_recordings: true,
+            recording_retention_count: Some(100),
         };
 
         // Serialize to JSON

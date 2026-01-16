@@ -428,6 +428,45 @@ pub async fn get_recordings_directory(app: AppHandle) -> Result<String, String> 
     Ok(recordings_dir.to_string_lossy().to_string())
 }
 
+/// Open the recordings directory in the system file manager
+#[tauri::command]
+pub async fn open_recordings_folder(app: AppHandle) -> Result<(), String> {
+    let recordings_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?
+        .join("recordings");
+
+    // Create directory if it doesn't exist
+    if !recordings_dir.exists() {
+        std::fs::create_dir_all(&recordings_dir)
+            .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+    }
+
+    // Open the directory using the system's file manager
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&recordings_dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        std::process::Command::new("explorer")
+            .arg(&recordings_dir)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    Ok(())
+}
+
 #[derive(Clone)]
 enum ActiveEngineSelection {
     Whisper {
