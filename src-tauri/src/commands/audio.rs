@@ -3386,3 +3386,78 @@ pub fn get_current_recording_state(app: AppHandle) -> RecordingStateResponse {
         error: None,
     }
 }
+
+/// Check if a recording file exists in the recordings directory
+#[tauri::command]
+pub async fn check_recording_exists(app: AppHandle, filename: String) -> Result<bool, String> {
+    let recordings_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recordings");
+    Ok(recordings_dir.join(&filename).exists())
+}
+
+/// Get the full path to a recording file for playback
+#[tauri::command]
+pub async fn get_recording_path(app: AppHandle, filename: String) -> Result<String, String> {
+    let recordings_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recordings");
+    let file_path = recordings_dir.join(&filename);
+    if !file_path.exists() {
+        return Err(format!("Recording file not found: {}", filename));
+    }
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+/// Save a re-transcription to history, linking to the original recording
+#[tauri::command]
+pub async fn save_retranscription(
+    app: AppHandle,
+    text: String,
+    model: String,
+    recording_file: String,
+    source_recording_id: String,
+) -> Result<(), String> {
+    // Save transcription to store with current timestamp
+    let store = app
+        .store("transcriptions")
+        .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let transcription_data = serde_json::json!({
+        "text": text.clone(),
+        "model": model,
+        "timestamp": timestamp.clone(),
+        "recording_file": recording_file,
+        "source_recording_id": source_recording_id,
+        "is_retranscription": true
+    });
+
+    store.set(&timestamp, transcription_data.clone());
+
+    store
+        .save()
+        .map_err(|e| format!("Failed to save retranscription: {}", e))?;
+
+    // Emit the new transcription data to frontend for append-only update
+    let _ = emit_to_window(&app, "main", "transcription-added", transcription_data);
+
+    // Refresh tray menu (best-effort) so Recent Transcriptions stays updated
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!(
+            "Failed to update tray menu after saving retranscription: {}",
+            e
+        );
+    }
+
+    log::info!(
+        "Saved retranscription with {} characters (source: {})",
+        text.len(),
+        source_recording_id
+    );
+    Ok(())
+}

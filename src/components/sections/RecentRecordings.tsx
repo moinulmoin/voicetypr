@@ -14,8 +14,9 @@ import { TranscriptionHistory } from "@/types";
 import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, Server, Cpu } from "lucide-react";
-import { useState, useMemo, useCallback } from "react";
+import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, Server, Cpu, Volume2, VolumeX } from "lucide-react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -73,8 +74,34 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
   const [transcriptionSources, setTranscriptionSources] = useState<TranscriptionSource[]>([]);
   const [loadingSources, setLoadingSources] = useState(false);
   const [reTranscribingId, setReTranscribingId] = useState<string | null>(null);
+  const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
+  const [verifiedRecordings, setVerifiedRecordings] = useState<Set<string>>(new Set());
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const canRecord = useCanRecord();
   const canAutoInsert = useCanAutoInsert();
+
+  // Verify which recordings exist on filesystem
+  useEffect(() => {
+    const verifyRecordings = async () => {
+      const verified = new Set<string>();
+      for (const item of history) {
+        if (item.recording_file) {
+          try {
+            const exists = await invoke<boolean>("check_recording_exists", {
+              filename: item.recording_file
+            });
+            if (exists) {
+              verified.add(item.id);
+            }
+          } catch (error) {
+            console.error(`Failed to verify recording ${item.recording_file}:`, error);
+          }
+        }
+      }
+      setVerifiedRecordings(verified);
+    };
+    verifyRecordings();
+  }, [history]);
 
   // Fetch available transcription sources (local models + remote servers)
   const fetchTranscriptionSources = useCallback(async () => {
@@ -124,6 +151,55 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     setLoadingSources(false);
   }, []);
 
+  // Handle audio playback
+  const handlePlayAudio = useCallback(async (item: TranscriptionHistory) => {
+    if (!item.recording_file) return;
+
+    // If already playing this item, stop it
+    if (playingAudioId === item.id && audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+      setPlayingAudioId(null);
+      return;
+    }
+
+    // Stop any currently playing audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
+    try {
+      // Get the full path and convert to asset URL
+      const fullPath = await invoke<string>("get_recording_path", {
+        filename: item.recording_file
+      });
+      const assetUrl = convertFileSrc(fullPath);
+
+      // Create and play audio
+      const audio = new Audio(assetUrl);
+      audioRef.current = audio;
+      setPlayingAudioId(item.id);
+
+      audio.onended = () => {
+        setPlayingAudioId(null);
+        audioRef.current = null;
+      };
+
+      audio.onerror = () => {
+        toast.error("Failed to play audio");
+        setPlayingAudioId(null);
+        audioRef.current = null;
+      };
+
+      await audio.play();
+    } catch (error) {
+      console.error("Failed to play audio:", error);
+      toast.error("Failed to play audio");
+      setPlayingAudioId(null);
+    }
+  }, [playingAudioId]);
+
   // Handle re-transcription
   const handleReTranscribe = async (item: TranscriptionHistory, sourceId: string) => {
     if (!item.recording_file) {
@@ -141,30 +217,42 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       const separator = recordingsDir.includes('\\') ? '\\' : '/';
       const fullPath = `${recordingsDir}${separator}${item.recording_file}`;
 
+      let result: string;
+      let modelName: string;
+
       if (sourceType === 'local') {
         // Re-transcribe using local model
-        const result = await invoke<string>("transcribe_audio_file", {
+        result = await invoke<string>("transcribe_audio_file", {
           filePath: fullPath,
           modelName: sourceIdentifier,
           modelEngine: null,
         });
-
-        toast.success("Re-transcription completed", {
-          description: `${result.length} characters transcribed`
-        });
+        modelName = sourceIdentifier;
       } else if (sourceType === 'remote') {
         // Re-transcribe using remote server
-        // The backend will handle sending to the remote server
-        const result = await invoke<string>("transcribe_audio_file", {
+        result = await invoke<string>("transcribe_audio_file", {
           filePath: fullPath,
           modelName: `Remote:${sourceIdentifier}`,
           modelEngine: "remote",
         });
-
-        toast.success("Re-transcription completed", {
-          description: `${result.length} characters transcribed`
-        });
+        // Find the server name for the model display
+        const server = transcriptionSources.find(s => s.id === sourceId);
+        modelName = server ? `Remote: ${server.name}` : `Remote: ${sourceIdentifier}`;
+      } else {
+        throw new Error(`Unknown source type: ${sourceType}`);
       }
+
+      // Save the re-transcription as a new history entry
+      await invoke("save_retranscription", {
+        text: result,
+        model: modelName,
+        recordingFile: item.recording_file,
+        sourceRecordingId: item.id,
+      });
+
+      toast.success("Re-transcription completed", {
+        description: `${result.length} characters transcribed`
+      });
 
       // Refresh history to show the new entry
       if (onHistoryUpdate) {
@@ -431,8 +519,25 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                             >
                               <Copy className="w-4 h-4 text-muted-foreground" />
                             </button>
-                            {/* Re-transcribe button - only show if recording file exists */}
-                            {item.recording_file && (
+                            {/* Audio playback button - only show if recording file exists and verified */}
+                            {verifiedRecordings.has(item.id) && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handlePlayAudio(item);
+                                }}
+                                className="p-1.5 rounded hover:bg-accent transition-colors"
+                                title={playingAudioId === item.id ? "Stop" : "Play audio"}
+                              >
+                                {playingAudioId === item.id ? (
+                                  <VolumeX className="w-4 h-4 text-primary" />
+                                ) : (
+                                  <Volume2 className="w-4 h-4 text-muted-foreground" />
+                                )}
+                              </button>
+                            )}
+                            {/* Re-transcribe button - only show if recording file exists and verified */}
+                            {verifiedRecordings.has(item.id) && (
                               <DropdownMenu onOpenChange={(open) => open && fetchTranscriptionSources()}>
                                 <DropdownMenuTrigger asChild>
                                   <button
