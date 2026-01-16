@@ -16,6 +16,15 @@
 - [x] Frontend: Connection modal (`src/components/AddServerModal.tsx`)
 - [x] Testing: Level 3 integration tests (`src-tauri/src/remote/integration_tests.rs`)
 
+### Completed (2026-01-16)
+- [x] Backend: Parakeet engine support for remote transcription (`src-tauri/src/remote/transcription.rs`)
+- [x] Backend: Save recordings feature with retention options (`src-tauri/src/commands/audio.rs`)
+- [x] Backend: Re-transcription commands (`check_recording_exists`, `get_recording_path`, `save_retranscription`)
+- [x] Frontend: Save recordings toggle with retention dropdown (`src/components/sections/SettingsSection.tsx`)
+- [x] Frontend: Re-transcribe from history with model selection (`src/components/sections/RecentRecordings.tsx`)
+- [x] Frontend: Audio playback for saved recordings
+- [x] Frontend: Remote server model names displayed in re-transcribe dropdown
+
 ### Remaining (Manual Testing)
 See GitHub Issues: https://github.com/tomchapin/voicetypr/issues
 
@@ -310,8 +319,8 @@ transcribe_remote(server_id, audio_path) -> Result<TranscriptionResult, String>
 ## Future Enhancements (Out of Scope for v1)
 
 1. **mDNS/Bonjour auto-discovery** - Automatically find VoiceTypr instances on local network
-2. **Save recordings toggle** - Keep audio files for retry/re-transcription
-3. **Re-transcribe from history** - Select past recording and transcribe with different model
+2. ~~**Save recordings toggle**~~ - ✅ IMPLEMENTED (2026-01-16)
+3. ~~**Re-transcribe from history**~~ - ✅ IMPLEMENTED (2026-01-16)
 4. **Multiple models per server** - Load/serve multiple models (requires memory management)
 5. **HTTPS support** - Encrypted connections for internet-exposed servers
 6. **Queue status** - Show position in queue and estimated wait time
