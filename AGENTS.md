@@ -53,19 +53,37 @@ gh issue close <number> --repo tomchapin/voicetypr --comment "Completed: <summar
 
 When multiple Claude Code agents work in parallel, follow this protocol strictly.
 
-### Before Starting ANY Work
+### Automatic Agent Registration (MANDATORY FIRST STEP)
 
-**CRITICAL**: Always check the issue before starting work:
+**At the START of every conversation**, before ANY other work:
+
+1. **Read** the file `.agent-counter` in the project root
+   - If it doesn't exist, create it with content "0"
+2. **Increment** the number by 1
+3. **Write** the new number back to `.agent-counter`
+4. **Your Agent ID** for this session is `Agent-<number>` (e.g., `Agent-7`)
+
+Then create your worktree:
+```bash
+git worktree add .worktrees/agent-<number> feature/network-sharing-remote-transcription
+cd .worktrees/agent-<number>
+```
+
+**IMPORTANT**: Use your Agent ID consistently in ALL issue claims during this conversation.
+
+Note: `.agent-counter` is gitignored - stays local to this machine.
+
+### Before Claiming ANY Issue
+
+**CRITICAL**: Check the issue first:
 
 ```bash
-# Check issue comments and labels
 gh issue view <number> --repo tomchapin/voicetypr --comments
 ```
 
 **DO NOT START** if you see:
 - Label `in progress` on the issue
-- A recent comment (< 2 hours) from another agent claiming the issue
-- A comment saying "AGENT WORKING" without a corresponding "AGENT COMPLETE"
+- A recent "🤖 AGENT WORKING" comment without matching "✅ AGENT COMPLETE"
 
 ### Claiming an Issue
 
@@ -76,19 +94,15 @@ When you begin work, **immediately** do both:
 gh issue edit <number> --repo tomchapin/voicetypr --add-label "in progress"
 ```
 
-2. **Add a claim comment**:
-```bash
-gh issue comment <number> --repo tomchapin/voicetypr --body "$(cat <<'EOF'
+2. **Add claim comment** (use the template from agent-start script):
+```
 ## 🤖 AGENT WORKING
 
-**Agent ID**: [Your unique session/conversation ID]
-**Started**: [ISO 8601 timestamp, e.g., 2026-01-15T19:30:00Z]
-**Branch**: feature/network-sharing-remote-transcription
-**Worktree**: .worktrees/[your-worktree-name]
+**Agent ID**: Agent-42  (your assigned ID)
+**Started**: 2026-01-15T20:30:00Z  (current UTC time)
+**Worktree**: .worktrees/agent-42
 
 Working on this issue now. Other agents please select a different issue.
-EOF
-)"
 ```
 
 ### Completing an Issue
@@ -122,19 +136,16 @@ EOF
 gh issue edit <number> --repo tomchapin/voicetypr --remove-label "in progress"
 ```
 
-### Git Worktrees for Parallel Work
+### Working in Your Worktree
 
-Each agent should use a separate worktree to avoid conflicts:
+After creating your worktree, all work happens there:
 
 ```bash
-# Create a worktree (use unique name per agent)
-git worktree add .worktrees/<agent-name>-<issue-num> feature/network-sharing-remote-transcription
+cd .worktrees/agent-<your-number>
 
-# Work in that directory
-cd .worktrees/<agent-name>-<issue-num>
-
-# When done, remove worktree
-git worktree remove .worktrees/<agent-name>-<issue-num>
+# All work happens in this directory
+# Commits go to the shared branch automatically
+# Each agent has isolated working directory
 ```
 
 ### Conflict Resolution

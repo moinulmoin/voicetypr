@@ -52,3 +52,8 @@ opencodetmp
 # Git worktrees for parallel development
 .worktrees/
 
+# Agent counter for multi-agent coordination
+.agent-counter
+
+# bv (beads viewer) local config and caches
+.bv/

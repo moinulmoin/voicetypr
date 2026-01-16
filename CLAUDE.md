@@ -173,28 +173,29 @@ gh issue view <number> --repo tomchapin/voicetypr --comments
 - ❌ A comment within the last 2 hours saying "AGENT WORKING"
 - ❌ A claim comment without a matching "AGENT COMPLETE" comment
 
-#### Agent Identity
+#### Automatic Agent Registration (DO THIS FIRST)
 
-Each Claude Code agent needs a unique identifier. Use one of these methods:
+**At the START of every conversation**, before doing any work:
 
-1. **User-assigned**: User tells you at conversation start (e.g., "You are Agent-Alpha")
-2. **Worktree-based**: Your worktree directory name IS your agent ID
-3. **Generated**: Create one: `agent-$(hostname)-$(date +%s)`
+1. **Read** the file `.agent-counter` in the project root (create with "0" if it doesn't exist)
+2. **Increment** the number by 1
+3. **Write** the new number back to `.agent-counter`
+4. **Your Agent ID** for this session is `Agent-<number>` (e.g., `Agent-7`)
 
-**Your Agent ID for this session**: If not told otherwise, generate one at start and use consistently.
+Example:
+- Read `.agent-counter` → contains "6"
+- Your Agent ID is `Agent-7`
+- Write "7" to `.agent-counter`
 
-#### Creating Your Worktree FIRST
-
-Before claiming any issue, create your worktree (this also establishes your Agent ID):
-
+Then create your worktree:
 ```bash
-# Replace AGENT_NAME with your assigned name (e.g., alpha, beta, gamma)
-# Or generate: AGENT_NAME="agent-$(date +%s)"
-git worktree add .worktrees/$AGENT_NAME feature/network-sharing-remote-transcription
-cd .worktrees/$AGENT_NAME
+git worktree add .worktrees/agent-7 feature/network-sharing-remote-transcription
+cd .worktrees/agent-7
 ```
 
-Your **Agent ID** is now: the value of `$AGENT_NAME`
+**Use your Agent ID consistently** for all issue claims in this conversation.
+
+Note: `.agent-counter` is gitignored, so it stays local to this machine.
 
 #### Claiming an Issue
 
