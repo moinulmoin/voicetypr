@@ -4,7 +4,7 @@
 param(
     [int]$Port = 47842,
     [int]$NumRequests = 5,
-    [string]$AudioFile = "$PSScriptRoot\..\tests\fixtures\audio-files\test-audio.wav"
+    [string]$AudioFile = "$PSScriptRoot\..\tests\fixtures\audio-files\test-audio-16k.wav"
 )
 
 $serverUrl = "http://localhost:$Port/api/v1/transcribe"
@@ -22,19 +22,26 @@ Write-Host "Number of parallel requests: $NumRequests"
 Write-Host ""
 
 # Read audio file
-$audioBytes = [System.IO.File]::ReadAllBytes($AudioFile)
+$audioBytes = [System.IO.File]::ReadAllBytes((Resolve-Path $AudioFile))
 Write-Host "Audio file size: $($audioBytes.Length) bytes"
 Write-Host ""
-
-# Create jobs for parallel requests
-$jobs = @()
-$startTime = Get-Date
 
 Write-Host "Launching $NumRequests parallel requests..." -ForegroundColor Yellow
 Write-Host ""
 
+$startTime = Get-Date
+
+# Use runspaces for true parallel execution
+$runspacePool = [runspacefactory]::CreateRunspacePool(1, $NumRequests)
+$runspacePool.Open()
+
+$runspaces = @()
+
 for ($i = 1; $i -le $NumRequests; $i++) {
-    $jobs += Start-Job -ScriptBlock {
+    $powershell = [powershell]::Create()
+    $powershell.RunspacePool = $runspacePool
+
+    [void]$powershell.AddScript({
         param($url, $audioBytes, $requestNum)
 
         $requestStart = Get-Date
@@ -43,47 +50,64 @@ for ($i = 1; $i -le $NumRequests; $i++) {
                 -Method POST `
                 -ContentType "audio/wav" `
                 -Body $audioBytes `
-                -TimeoutSec 120
+                -TimeoutSec 120 `
+                -UseBasicParsing
 
             $requestEnd = Get-Date
             $duration = ($requestEnd - $requestStart).TotalMilliseconds
 
             $json = $response.Content | ConvertFrom-Json
 
-            return @{
+            return [PSCustomObject]@{
                 RequestNum = $requestNum
                 Success = $true
-                Status = $response.StatusCode
+                StatusCode = $response.StatusCode
                 Duration = [math]::Round($duration, 0)
                 Text = $json.text
                 Model = $json.model
+                Error = $null
             }
         }
         catch {
             $requestEnd = Get-Date
             $duration = ($requestEnd - $requestStart).TotalMilliseconds
 
-            return @{
+            return [PSCustomObject]@{
                 RequestNum = $requestNum
                 Success = $false
-                Status = $_.Exception.Response.StatusCode
+                StatusCode = 0
                 Duration = [math]::Round($duration, 0)
+                Text = $null
+                Model = $null
                 Error = $_.Exception.Message
             }
         }
-    } -ArgumentList $serverUrl, $audioBytes, $i
+    })
+
+    [void]$powershell.AddArgument($serverUrl)
+    [void]$powershell.AddArgument($audioBytes)
+    [void]$powershell.AddArgument($i)
+
+    $runspaces += [PSCustomObject]@{
+        PowerShell = $powershell
+        Handle = $powershell.BeginInvoke()
+        RequestNum = $i
+    }
 }
 
 Write-Host "Waiting for all requests to complete..." -ForegroundColor Yellow
 Write-Host ""
 
-# Wait for all jobs and collect results
+# Collect results
 $results = @()
-foreach ($job in $jobs) {
-    $result = Receive-Job -Job $job -Wait
+foreach ($runspace in $runspaces) {
+    $result = $runspace.PowerShell.EndInvoke($runspace.Handle)
     $results += $result
-    Remove-Job -Job $job
+    $runspace.PowerShell.Dispose()
 }
+
+$runspacePool.Close()
+$runspacePool.Dispose()
 
 $endTime = Get-Date
 $totalDuration = ($endTime - $startTime).TotalMilliseconds
@@ -95,7 +119,7 @@ Write-Host ""
 $successCount = 0
 $failCount = 0
 
-foreach ($result in $results | Sort-Object { $_.RequestNum }) {
+foreach ($result in $results | Sort-Object RequestNum) {
     if ($result.Success) {
         $successCount++
         Write-Host "Request $($result.RequestNum): " -NoNewline
