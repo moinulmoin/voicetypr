@@ -12,3 +12,6 @@ pub mod transcription;
 
 #[cfg(test)]
 mod integration_tests;
+
+#[cfg(test)]
+mod concurrent_tests;
