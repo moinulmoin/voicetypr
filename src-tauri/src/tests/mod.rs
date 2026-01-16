@@ -50,6 +50,9 @@ mod remote_transcription_tests;
 mod remote_commands_tests;
 
 #[cfg(test)]
+mod audio_recording_tests;
+
+#[cfg(test)]
 mod integration_tests {
     use crate::whisper::manager::{ModelSize, WhisperManager};
     use tempfile::TempDir;
