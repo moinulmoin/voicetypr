@@ -1,8 +1,22 @@
 # Save Recordings Feature Design
 
 **Date:** 2026-01-14
-**Status:** Approved
+**Status:** IMPLEMENTED
 **Issue:** voicetypr-5l4
+
+## Implementation Status
+
+### Completed (2026-01-16)
+- [x] Backend: Settings storage (`save_recordings`, `recording_retention_count`)
+- [x] Backend: Recording persistence with WAV files
+- [x] Backend: Count-based auto-cleanup
+- [x] Backend: History extension with `recording_file` field
+- [x] Frontend: Combined dropdown UI (simpler than original toggle + dropdown design)
+- [x] Frontend: Re-transcribe popout with model selection
+- [x] Frontend: Audio playback for saved recordings
+- [x] Frontend: "Open recordings folder" link (shown inline when enabled)
+
+---
 
 ## Overview
 
@@ -15,29 +29,25 @@ Allow users to save audio recordings for re-transcription with different models.
 - **Linked to history** - Each transcription history item may have an associated recording file
 - **No file duplication** - Re-transcriptions reference the original recording
 
-## Settings UI
+## Settings UI (As Implemented)
 
 ### In Recording Section
 
-**Save Recordings** (toggle)
+**Save Recordings** (single dropdown - simplified from original toggle + dropdown design)
 - Label: "Save Recordings"
-- Description: "Keep audio files for re-transcription with other models"
-- Default: OFF
-
-**Recording Retention** (shown when toggle is ON)
-- Label: "Keep recordings"
-- Type: Dropdown
+- Description: "Keep audio files instead of deleting after transcription"
+- Type: Dropdown combining enable/disable with retention options
 - Options:
-  - "Last 25 recordings"
-  - "Last 50 recordings" (default)
-  - "Last 100 recordings"
-  - "Last 250 recordings"
-  - "Forever (unlimited)"
-- Description: "Oldest recordings are automatically deleted when limit is reached"
+  - "Don't Save" (default - recordings disabled)
+  - "Last 25"
+  - "Last 50"
+  - "Last 100"
+  - "Last 250"
+  - "Unlimited"
 
-### In Diagnostics/Help Section
-
-- Add "Open recordings folder" button alongside existing "Open logs folder"
+**Open Recordings Folder** (shown inline when save recordings is enabled)
+- Small link with folder icon
+- Opens the recordings directory in the system file manager
 
 ## History UI Changes
 
@@ -100,13 +110,13 @@ Runs after each successful recording save:
 
 ## Implementation Tasks
 
-1. **Backend: Settings** - Add `save_recordings` and `recording_retention_count` fields
-2. **Backend: Recording persistence** - Save WAV files when `save_recordings` enabled
-3. **Backend: Cleanup logic** - Implement count-based auto-cleanup
-4. **Backend: History extension** - Add `recording_file` field to history items
-5. **Frontend: Settings UI** - Toggle and retention dropdown
-6. **Frontend: History UI** - Recording icon and re-transcribe popout
-7. **Frontend: Diagnostics** - "Open recordings folder" button
+1. ~~**Backend: Settings** - Add `save_recordings` and `recording_retention_count` fields~~ ✅
+2. ~~**Backend: Recording persistence** - Save WAV files when `save_recordings` enabled~~ ✅
+3. ~~**Backend: Cleanup logic** - Implement count-based auto-cleanup~~ ✅
+4. ~~**Backend: History extension** - Add `recording_file` field to history items~~ ✅
+5. ~~**Frontend: Settings UI** - Combined dropdown (simplified from toggle + dropdown)~~ ✅
+6. ~~**Frontend: History UI** - Recording icon, audio playback, and re-transcribe popout~~ ✅
+7. ~~**Frontend: Open recordings folder** - Inline link when recordings enabled~~ ✅
 
 ## Future Considerations (Out of Scope)
 
