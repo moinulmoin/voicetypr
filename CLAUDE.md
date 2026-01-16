@@ -72,6 +72,23 @@ cd src-tauri
 
 The script embeds the required Windows manifest into test executables before running them.
 
+### Windows Building (Important!)
+
+Windows builds require:
+1. **Vulkan SDK** - Set `VULKAN_SDK` environment variable
+2. **FFmpeg binaries** - Place in `sidecar/ffmpeg/dist/` (not tracked in git)
+3. **Short target directory** - Windows has a 260-character path limit
+
+When using git worktrees or long paths, set a short cargo target directory:
+```powershell
+$env:CARGO_TARGET_DIR = "C:\tmp\vt-target"
+cargo check
+# or in bash:
+CARGO_TARGET_DIR=/c/tmp/vt-target cargo check
+```
+
+See `scripts/README.md` for detailed Windows build prerequisites.
+
 ## Architecture
 
 ### Frontend (React + TypeScript)
