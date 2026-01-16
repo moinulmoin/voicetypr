@@ -160,6 +160,14 @@ gh issue close <number> --repo tomchapin/voicetypr --comment "Completed: <summar
 
 Multiple Claude Code agents can work on issues in parallel. **STRICTLY FOLLOW THIS PROTOCOL** to avoid conflicts.
 
+#### Why Worktrees Are MANDATORY
+
+When multiple agents work simultaneously:
+- Each agent needs an **isolated workspace** to avoid file conflicts
+- Git worktrees provide separate working directories sharing the same repo
+- **NEVER work directly in the main repo directory** - always use your worktree
+- This prevents agents from overwriting each other's uncommitted changes
+
 #### BEFORE Starting ANY Work - MANDATORY CHECK
 
 **CRITICAL**: Always check the issue status before claiming:
@@ -173,7 +181,7 @@ gh issue view <number> --repo tomchapin/voicetypr --comments
 - ❌ A comment within the last 2 hours saying "AGENT WORKING"
 - ❌ A claim comment without a matching "AGENT COMPLETE" comment
 
-#### Automatic Agent Registration (DO THIS FIRST)
+#### Step 1: Agent Registration (DO THIS FIRST)
 
 **At the START of every conversation**, before doing any work:
 
@@ -187,24 +195,39 @@ Example:
 - Your Agent ID is `Agent-7`
 - Write "7" to `.agent-counter`
 
-Then create your worktree (branch specified in the issue you're working on):
-```bash
-git worktree add .worktrees/agent-7 <branch-from-issue>
-cd .worktrees/agent-7
-```
-
-**Use your Agent ID consistently** for all issue claims in this conversation.
-
 Note: `.agent-counter` is gitignored, so it stays local to this machine.
 
-#### Sync Before Starting
+#### Step 2: Create Your Worktree (MANDATORY)
 
-**ALWAYS pull latest changes before starting any work:**
+**You MUST work in a dedicated worktree, not the main repo directory.**
+
 ```bash
+# Create worktree for your agent (use the branch from the issue you'll work on)
+git worktree add .worktrees/agent-<N> <branch-from-issue>
+
+# IMPORTANT: Change into your worktree - ALL work happens here
+cd .worktrees/agent-<N>
+
+# Pull latest changes
 git pull origin <branch-name>
 ```
 
-This ensures you have the latest code from other agents.
+Example for Agent-7 working on the network-sharing branch:
+```bash
+git worktree add .worktrees/agent-7 feature/network-sharing-remote-transcription
+cd .worktrees/agent-7
+git pull origin feature/network-sharing-remote-transcription
+```
+
+**ALL subsequent commands (commits, file edits, tests) must run from inside your worktree directory.**
+
+#### Step 3: Verify You're in Your Worktree
+
+Before starting work, confirm you're in the right place:
+```bash
+pwd  # Should show: .../voicetypr/.worktrees/agent-<N>
+git worktree list  # Verify your worktree exists
+```
 
 #### Claiming an Issue
 
@@ -327,19 +350,60 @@ Brief description of what needs to be done
 
 ## Git Worktrees for Parallel Development
 
-Multiple agents can work simultaneously using separate worktrees:
+Worktrees allow multiple agents to work on the same repository simultaneously without conflicts.
 
-```bash
-git worktree list                           # See all worktrees
-git worktree add .worktrees/<name> -b <branch>  # Create new worktree
+### How It Works
+
+```
+voicetypr/                          # Main repo (DO NOT work here when agents are active)
+├── .worktrees/
+│   ├── agent-1/                    # Agent-1's isolated workspace
+│   ├── agent-2/                    # Agent-2's isolated workspace
+│   └── agent-3/                    # Agent-3's isolated workspace
+├── src/
+├── src-tauri/
+└── ...
 ```
 
-**Worktree locations:**
-- `.worktrees/` - Contains isolated workspaces for each feature branch
-- Each agent works in their own worktree to avoid conflicts
+Each worktree is a complete, independent working directory that shares the same Git history.
 
-**Coordination rules:**
-1. Each agent claims ONE issue at a time via GitHub Issues
-2. Each active issue should have its own worktree/branch
-3. Check issue comments to see what others are working on
-4. Don't modify files in another agent's worktree
+### Essential Commands
+
+```bash
+# List all worktrees
+git worktree list
+
+# Create worktree on existing branch
+git worktree add .worktrees/agent-<N> <existing-branch>
+
+# Create worktree with new branch
+git worktree add .worktrees/agent-<N> -b <new-branch>
+
+# Remove worktree when done
+git worktree remove .worktrees/agent-<N>
+
+# Prune stale worktree references
+git worktree prune
+```
+
+### Coordination Rules
+
+1. **One issue per agent**: Each agent claims ONE issue at a time via GitHub Issues
+2. **One worktree per agent**: Each agent works exclusively in their own worktree
+3. **Never cross-modify**: Don't modify files in another agent's worktree
+4. **Commit frequently**: Push changes often to minimize merge conflicts
+5. **Pull before starting**: Always `git pull` in your worktree before starting new work
+6. **Clean up**: Remove your worktree after completing all tasks in a session
+
+### Handling Worktree Already Exists
+
+If a worktree already exists for your agent ID (from a previous session):
+```bash
+# Option 1: Reuse existing worktree
+cd .worktrees/agent-<N>
+git pull origin <branch-name>
+
+# Option 2: Remove and recreate
+git worktree remove .worktrees/agent-<N>
+git worktree add .worktrees/agent-<N> <branch-name>
+```
