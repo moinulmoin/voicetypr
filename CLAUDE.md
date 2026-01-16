@@ -201,23 +201,30 @@ Note: `.agent-counter` is gitignored, so it stays local to this machine.
 
 **You MUST work in a dedicated worktree, not the main repo directory.**
 
-```bash
-# Create worktree for your agent (use the branch from the issue you'll work on)
-git worktree add .worktrees/agent-<N> <branch-from-issue>
+**IMPORTANT**: Use `origin/<branch-name>` (not the local branch name) to avoid "branch already checked out" errors:
 
-# IMPORTANT: Change into your worktree - ALL work happens here
+```bash
+# Create worktree using the REMOTE branch reference (origin/...)
+git worktree add .worktrees/agent-<N> origin/<branch-from-issue>
+
+# Change into your worktree
 cd .worktrees/agent-<N>
 
-# Pull latest changes
-git pull origin <branch-name>
+# Create a local tracking branch for your work
+git checkout -B agent-<N>-work origin/<branch-name>
 ```
 
 Example for Agent-7 working on the network-sharing branch:
 ```bash
-git worktree add .worktrees/agent-7 feature/network-sharing-remote-transcription
+git worktree add .worktrees/agent-7 origin/feature/network-sharing-remote-transcription
 cd .worktrees/agent-7
-git pull origin feature/network-sharing-remote-transcription
+git checkout -B agent-7-work origin/feature/network-sharing-remote-transcription
 ```
+
+This creates:
+- A worktree at `.worktrees/agent-7`
+- A local branch `agent-7-work` that tracks the remote feature branch
+- When you push, use: `git push origin agent-7-work:feature/network-sharing-remote-transcription`
 
 **ALL subsequent commands (commits, file edits, tests) must run from inside your worktree directory.**
 
@@ -258,11 +265,13 @@ Currently working on this issue. Other agents: please select a different issue.
 
 #### Completing Work
 
-**Step 1 - Commit your changes:**
+**Step 1 - Commit and push your changes:**
 ```bash
 git add <files>
 git commit -m "<type>: <description> (closes #<number>)"
-git push
+
+# Push your agent branch to the feature branch
+git push origin agent-<N>-work:feature/network-sharing-remote-transcription
 ```
 
 Commit types: `feat`, `fix`, `test`, `docs`, `refactor`, `chore`
@@ -294,9 +303,10 @@ gh issue close <number> --repo tomchapin/voicetypr --comment "## ✅ AGENT COMPL
 gh issue edit <number> --repo tomchapin/voicetypr --remove-label "in progress"
 ```
 
-**Step 4 - Pull latest before starting next task:**
+**Step 4 - Sync latest before starting next task:**
 ```bash
-git pull origin <branch-name>
+git fetch origin
+git rebase origin/feature/network-sharing-remote-transcription
 ```
 
 This syncs any changes from other agents before you pick up the next issue.
@@ -373,11 +383,12 @@ Each worktree is a complete, independent working directory that shares the same 
 # List all worktrees
 git worktree list
 
-# Create worktree on existing branch
-git worktree add .worktrees/agent-<N> <existing-branch>
+# Create worktree from remote branch (ALWAYS use origin/ prefix)
+git worktree add .worktrees/agent-<N> origin/<branch-name>
 
-# Create worktree with new branch
-git worktree add .worktrees/agent-<N> -b <new-branch>
+# Then create local tracking branch inside the worktree
+cd .worktrees/agent-<N>
+git checkout -B agent-<N>-work origin/<branch-name>
 
 # Remove worktree when done
 git worktree remove .worktrees/agent-<N>
@@ -385,6 +396,8 @@ git worktree remove .worktrees/agent-<N>
 # Prune stale worktree references
 git worktree prune
 ```
+
+**Why use `origin/<branch>`?** Using a local branch name fails if that branch is already checked out elsewhere. Using the remote reference (`origin/...`) always works.
 
 ### Coordination Rules
 
@@ -401,9 +414,12 @@ If a worktree already exists for your agent ID (from a previous session):
 ```bash
 # Option 1: Reuse existing worktree
 cd .worktrees/agent-<N>
-git pull origin <branch-name>
+git fetch origin
+git checkout -B agent-<N>-work origin/<branch-name>
 
 # Option 2: Remove and recreate
 git worktree remove .worktrees/agent-<N>
-git worktree add .worktrees/agent-<N> <branch-name>
+git worktree add .worktrees/agent-<N> origin/<branch-name>
+cd .worktrees/agent-<N>
+git checkout -B agent-<N>-work origin/<branch-name>
 ```
