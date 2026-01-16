@@ -249,6 +249,25 @@ pwd  # Should show: .../voicetypr/.worktrees/agent-<N>
 git worktree list  # Verify your worktree exists
 ```
 
+#### BEFORE Starting Each New Task - MANDATORY SYNC
+
+**At the start of EVERY new task** (even within the same session), you MUST:
+
+1. **Pull latest changes** - Other agents may have pushed updates:
+   ```bash
+   cd .worktrees/agent-<N>
+   git fetch origin
+   git rebase origin/<current-branch>  # Use the branch specified in the issue
+   ```
+
+2. **Re-read CLAUDE.md** - Instructions may have been updated:
+   ```bash
+   # Read the updated instructions
+   cat CLAUDE.md
+   ```
+
+This ensures you have the latest code and instructions before starting work.
+
 #### Claiming an Issue
 
 When you decide to work on an issue, **IMMEDIATELY** perform BOTH steps:
