@@ -3461,3 +3461,97 @@ pub async fn save_retranscription(
     );
     Ok(())
 }
+
+/// Update an existing transcription entry in place (for re-transcription)
+#[tauri::command]
+pub async fn update_transcription(
+    app: AppHandle,
+    timestamp: String,
+    text: String,
+    model: String,
+) -> Result<(), String> {
+    let store = app
+        .store("transcriptions")
+        .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
+
+    // Get the existing entry
+    let existing = store
+        .get(&timestamp)
+        .ok_or_else(|| format!("Transcription not found: {}", timestamp))?;
+
+    // Preserve original fields, update text and model
+    let mut updated = existing.clone();
+    if let serde_json::Value::Object(ref mut map) = updated {
+        map.insert("text".to_string(), serde_json::Value::String(text.clone()));
+        map.insert("model".to_string(), serde_json::Value::String(model.clone()));
+    }
+
+    store.set(&timestamp, updated.clone());
+
+    store
+        .save()
+        .map_err(|e| format!("Failed to save updated transcription: {}", e))?;
+
+    // Emit update event to frontend
+    let _ = emit_to_window(&app, "main", "transcription-updated", serde_json::json!({
+        "timestamp": timestamp,
+        "text": text,
+        "model": model
+    }));
+
+    // Refresh tray menu (best-effort)
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!(
+            "Failed to update tray menu after updating transcription: {}",
+            e
+        );
+    }
+
+    log::info!(
+        "Updated transcription {} with {} characters",
+        timestamp,
+        text.len()
+    );
+    Ok(())
+}
+
+/// Open the file explorer with the specified file selected
+#[tauri::command]
+pub async fn show_in_folder(path: String) -> Result<(), String> {
+    let path = std::path::Path::new(&path);
+
+    if !path.exists() {
+        return Err(format!("File not found: {}", path.display()));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Use explorer.exe /select to open folder with file selected
+        std::process::Command::new("explorer.exe")
+            .args(["/select,", &path.to_string_lossy()])
+            .spawn()
+            .map_err(|e| format!("Failed to open explorer: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Use open -R to reveal file in Finder
+        std::process::Command::new("open")
+            .args(["-R", &path.to_string_lossy()])
+            .spawn()
+            .map_err(|e| format!("Failed to open Finder: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Try xdg-open on the parent directory
+        if let Some(parent) = path.parent() {
+            std::process::Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map_err(|e| format!("Failed to open file manager: {}", e))?;
+        }
+    }
+
+    Ok(())
+}

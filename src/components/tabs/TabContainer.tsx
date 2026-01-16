@@ -64,10 +64,17 @@ export function TabContainer({ activeSection }: TabContainerProps) {
         timestamp: new Date(data.timestamp),
         model: data.model
       };
-      // Prepend new item to history (newest first)
-      setHistory(prev => [newItem, ...prev]);
-      // Increment total count
-      setTotalCount(prev => prev + 1);
+      // Prepend new item to history (newest first), avoiding duplicates
+      setHistory(prev => {
+        // Check if item already exists (by ID)
+        if (prev.some(item => item.id === newItem.id)) {
+          console.log("[TabContainer] Skipping duplicate item:", newItem.id);
+          return prev;
+        }
+        // Only increment count when actually adding a new item
+        setTotalCount(count => count + 1);
+        return [newItem, ...prev];
+      });
     });
     
     // Listen for history-updated only for delete/clear operations

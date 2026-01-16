@@ -14,9 +14,8 @@ import { TranscriptionHistory } from "@/types";
 import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, Server, Cpu, Volume2, VolumeX } from "lucide-react";
+import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, FolderOpen, Server, Cpu } from "lucide-react";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +24,6 @@ interface TranscriptionSource {
   id: string;
   name: string;
   type: 'local' | 'remote';
-  available: boolean;
 }
 
 // Interface for remote server connection
@@ -34,13 +32,6 @@ interface SavedConnection {
   name: string;
   host: string;
   port: number;
-  is_active: boolean;
-}
-
-// Interface for local model
-interface LocalModel {
-  name: string;
-  downloaded: boolean;
 }
 
 // Static mapping for model display names
@@ -70,26 +61,63 @@ interface RecentRecordingsProps {
 
 export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistoryUpdate }: RecentRecordingsProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [dropdownOpenId, setDropdownOpenId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [transcriptionSources, setTranscriptionSources] = useState<TranscriptionSource[]>([]);
   const [loadingSources, setLoadingSources] = useState(false);
-  const [reTranscribingId, setReTranscribingId] = useState<string | null>(null);
-  const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
+  const [reTranscribingIds, setReTranscribingIds] = useState<Set<string>>(new Set());
   const [verifiedRecordings, setVerifiedRecordings] = useState<Set<string>>(new Set());
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Track which items are being re-transcribed and with which model
+  const [reTranscribingModels, setReTranscribingModels] = useState<Map<string, string>>(new Map());
+  const onlineServersRef = useRef<Map<string, string>>(new Map()); // serverId -> serverName
   const canRecord = useCanRecord();
   const canAutoInsert = useCanAutoInsert();
+
+  // Check remote server connectivity in the background (runs once on mount)
+  useEffect(() => {
+    const checkRemoteServers = async () => {
+      try {
+        const servers = await invoke<SavedConnection[]>("list_remote_servers");
+        // Check each server in parallel
+        const checks = servers.map(async (server) => {
+          try {
+            await invoke("test_remote_server", { serverId: server.id });
+            return { id: server.id, name: server.name, online: true };
+          } catch {
+            return { id: server.id, name: server.name, online: false };
+          }
+        });
+        const results = await Promise.all(checks);
+        // Update the cache with online servers
+        const onlineMap = new Map<string, string>();
+        for (const result of results) {
+          if (result.online) {
+            onlineMap.set(result.id, result.name);
+          }
+        }
+        onlineServersRef.current = onlineMap;
+      } catch (error) {
+        console.error("Failed to check remote servers:", error);
+      }
+    };
+    checkRemoteServers();
+  }, []);
 
   // Verify which recordings exist on filesystem
   useEffect(() => {
     const verifyRecordings = async () => {
+      console.log("[RecentRecordings] Starting verification for", history.length, "items");
       const verified = new Set<string>();
+      let itemsWithRecordingFile = 0;
       for (const item of history) {
         if (item.recording_file) {
+          itemsWithRecordingFile++;
+          console.log("[RecentRecordings] Checking recording:", item.recording_file, "for item:", item.id);
           try {
             const exists = await invoke<boolean>("check_recording_exists", {
               filename: item.recording_file
             });
+            console.log("[RecentRecordings] Recording", item.recording_file, "exists:", exists);
             if (exists) {
               verified.add(item.id);
             }
@@ -98,107 +126,64 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
           }
         }
       }
+      console.log("[RecentRecordings] Verification complete. Items with recording_file:", itemsWithRecordingFile, "Verified:", verified.size);
       setVerifiedRecordings(verified);
     };
     verifyRecordings();
   }, [history]);
 
-  // Fetch available transcription sources (local models + remote servers)
+  // Fetch available transcription sources (local models only - remote servers are too slow to test)
   const fetchTranscriptionSources = useCallback(async () => {
     setLoadingSources(true);
     const sources: TranscriptionSource[] = [];
 
     try {
-      // Fetch local Whisper models
-      const models = await invoke<LocalModel[]>("check_whisper_models");
-      const downloadedModels = models.filter(m => m.downloaded);
-      for (const model of downloadedModels) {
+      // Fetch local models using get_model_status (this is fast)
+      const response = await invoke<{models: {name: string; downloaded: boolean; engine: string}[]}>("get_model_status");
+      // Filter to only downloaded Whisper models (not cloud/soniox)
+      const downloadedLocalModels = response.models.filter(m => m.downloaded && m.engine === 'whisper');
+      for (const model of downloadedLocalModels) {
         sources.push({
           id: `local:${model.name}`,
           name: MODEL_DISPLAY_NAMES[model.name] || model.name,
           type: 'local',
-          available: true,
         });
       }
     } catch (error) {
       console.error("Failed to fetch local models:", error);
     }
 
-    try {
-      // Fetch remote servers
-      const servers = await invoke<SavedConnection[]>("list_remote_servers");
-      for (const server of servers) {
-        // Test if server is online
-        let available = false;
-        try {
-          await invoke("test_remote_server", { serverId: server.id });
-          available = true;
-        } catch {
-          // Server is offline
-        }
+    // Add cached online remote servers (pre-checked in background)
+    for (const serverId of onlineServersRef.current.keys()) {
+      const serverName = onlineServersRef.current.get(serverId);
+      if (serverName) {
         sources.push({
-          id: `remote:${server.id}`,
-          name: server.name,
+          id: `remote:${serverId}`,
+          name: serverName,
           type: 'remote',
-          available,
         });
       }
-    } catch (error) {
-      console.error("Failed to fetch remote servers:", error);
     }
 
     setTranscriptionSources(sources);
     setLoadingSources(false);
   }, []);
 
-  // Handle audio playback
-  const handlePlayAudio = useCallback(async (item: TranscriptionHistory) => {
+  // Handle showing recording in folder
+  const handleShowInFolder = useCallback(async (item: TranscriptionHistory) => {
     if (!item.recording_file) return;
 
-    // If already playing this item, stop it
-    if (playingAudioId === item.id && audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-      setPlayingAudioId(null);
-      return;
-    }
-
-    // Stop any currently playing audio
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-
     try {
-      // Get the full path and convert to asset URL
+      // Get the full path and reveal in file explorer
       const fullPath = await invoke<string>("get_recording_path", {
         filename: item.recording_file
       });
-      const assetUrl = convertFileSrc(fullPath);
-
-      // Create and play audio
-      const audio = new Audio(assetUrl);
-      audioRef.current = audio;
-      setPlayingAudioId(item.id);
-
-      audio.onended = () => {
-        setPlayingAudioId(null);
-        audioRef.current = null;
-      };
-
-      audio.onerror = () => {
-        toast.error("Failed to play audio");
-        setPlayingAudioId(null);
-        audioRef.current = null;
-      };
-
-      await audio.play();
+      await invoke("show_in_folder", { path: fullPath });
     } catch (error) {
-      console.error("Failed to play audio:", error);
-      toast.error("Failed to play audio");
-      setPlayingAudioId(null);
+      console.error("Failed to show recording in folder:", error);
+      toast.error("Failed to open file location");
     }
-  }, [playingAudioId]);
+  }, []);
 
   // Handle re-transcription
   const handleReTranscribe = async (item: TranscriptionHistory, sourceId: string) => {
@@ -207,11 +192,36 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       return;
     }
 
-    setReTranscribingId(item.id);
+    const [sourceType, sourceIdentifier] = sourceId.split(':');
+
+    // Get the display name for the model being used
+    let displayModelName: string;
+    if (sourceType === 'local') {
+      displayModelName = MODEL_DISPLAY_NAMES[sourceIdentifier] || sourceIdentifier;
+    } else {
+      const server = transcriptionSources.find(s => s.id === sourceId);
+      displayModelName = server ? server.name : sourceIdentifier;
+    }
+
+    // Mark this item as re-transcribing with the model name
+    setReTranscribingIds(prev => new Set(prev).add(item.id));
+    setReTranscribingModels(prev => new Map(prev).set(item.id, displayModelName));
+
+    // Helper to clear the transcribing state for this item
+    const cleanup = () => {
+      setReTranscribingIds(prev => {
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+      setReTranscribingModels(prev => {
+        const next = new Map(prev);
+        next.delete(item.id);
+        return next;
+      });
+    };
 
     try {
-      const [sourceType, sourceIdentifier] = sourceId.split(':');
-
       // Get recordings directory to build full path
       const recordingsDir = await invoke<string>("get_recordings_directory");
       const separator = recordingsDir.includes('\\') ? '\\' : '/';
@@ -242,19 +252,17 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
         throw new Error(`Unknown source type: ${sourceType}`);
       }
 
-      // Save the re-transcription as a new history entry
-      await invoke("save_retranscription", {
+      // Update the existing transcription entry in place
+      await invoke("update_transcription", {
+        timestamp: item.id,
         text: result,
         model: modelName,
-        recordingFile: item.recording_file,
-        sourceRecordingId: item.id,
       });
 
-      toast.success("Re-transcription completed", {
-        description: `${result.length} characters transcribed`
-      });
+      // Clear the re-transcribing state
+      cleanup();
 
-      // Refresh history to show the new entry
+      // Refresh history to show the updated item
       if (onHistoryUpdate) {
         onHistoryUpdate();
       }
@@ -263,17 +271,17 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       toast.error("Re-transcription failed", {
         description: String(error)
       });
-    } finally {
-      setReTranscribingId(null);
+      // Clear pending on error too
+      cleanup();
     }
   };
 
   // Filter history based on search query
   const filteredHistory = useMemo(() => {
     if (!searchQuery.trim()) return history;
-    
+
     const query = searchQuery.toLowerCase();
-    return history.filter(item => 
+    return history.filter(item =>
       item.text.toLowerCase().includes(query) ||
       (item.model && item.model.toLowerCase().includes(query))
     );
@@ -290,21 +298,21 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     filteredHistory.forEach(item => {
       const itemDate = new Date(item.timestamp);
       itemDate.setHours(0, 0, 0, 0);
-      
+
       let groupKey: string;
       if (itemDate.getTime() === today.getTime()) {
         groupKey = "Today";
       } else if (itemDate.getTime() === yesterday.getTime()) {
         groupKey = "Yesterday";
       } else {
-        groupKey = itemDate.toLocaleDateString('en-US', { 
-          weekday: 'long', 
-          month: 'short', 
+        groupKey = itemDate.toLocaleDateString('en-US', {
+          weekday: 'long',
+          month: 'short',
           day: 'numeric',
           year: itemDate.getFullYear() !== today.getFullYear() ? 'numeric' : undefined
         });
       }
-      
+
       if (!groups[groupKey]) {
         groups[groupKey] = [];
       }
@@ -483,154 +491,172 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                       <div
                         key={item.id}
                         className={cn(
-                          "group relative p-4 rounded-lg cursor-pointer",
-                          "bg-card border border-border/50",
-                          "hover:bg-accent/30 hover:border-border",
+                          "group relative rounded-lg cursor-pointer",
+                          "bg-card border",
+                          reTranscribingIds.has(item.id)
+                            ? "border-primary/50"
+                            : "border-border/50 hover:bg-accent/30 hover:border-border",
                           "transition-all duration-200"
                         )}
                         onClick={() => handleCopy(item.text)}
                         onMouseEnter={() => setHoveredId(item.id)}
                         onMouseLeave={() => setHoveredId(null)}
                       >
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm text-foreground leading-relaxed line-clamp-5">
-                              {item.text}
-                            </p>
-                            {item.model && (
-                              <div className="mt-2">
-                                <span className="text-xs text-muted-foreground">
-                                  {MODEL_DISPLAY_NAMES[item.model] || item.model}
-                                </span>
-                              </div>
-                            )}
+                        {/* Re-transcribing status bar */}
+                        {reTranscribingIds.has(item.id) && (
+                          <div className="flex items-center gap-2 px-4 py-2 bg-primary/10 border-b border-primary/20 rounded-t-lg">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                            <span className="text-xs text-primary font-medium">
+                              Re-transcribing with {reTranscribingModels.get(item.id)}...
+                            </span>
                           </div>
-                          <div className={cn(
-                            "flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity",
-                            hoveredId === item.id && "opacity-100"
-                          )}>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleCopy(item.text);
-                              }}
-                              className="p-1.5 rounded hover:bg-accent transition-colors"
-                              title="Copy"
-                            >
-                              <Copy className="w-4 h-4 text-muted-foreground" />
-                            </button>
-                            {/* Audio playback button - only show if recording file exists and verified */}
-                            {verifiedRecordings.has(item.id) && (
+                        )}
+                        <div className="p-4">
+                          {/* Text content */}
+                          <p className="text-sm text-foreground leading-relaxed line-clamp-5">
+                            {item.text}
+                          </p>
+                          {/* Bottom row: model name, time + action buttons */}
+                          <div className="flex items-center justify-between mt-2">
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              {item.model && (
+                                <span>{MODEL_DISPLAY_NAMES[item.model] || item.model}</span>
+                              )}
+                              {item.model && <span className="text-muted-foreground/50">•</span>}
+                              <span>
+                                {new Date(item.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}{' '}
+                                {new Date(item.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                              </span>
+                            </div>
+                            <div className={cn(
+                              "flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity",
+                              (hoveredId === item.id || dropdownOpenId === item.id) && "opacity-100"
+                            )}>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handlePlayAudio(item);
+                                  handleCopy(item.text);
                                 }}
                                 className="p-1.5 rounded hover:bg-accent transition-colors"
-                                title={playingAudioId === item.id ? "Stop" : "Play audio"}
+                                title="Copy"
                               >
-                                {playingAudioId === item.id ? (
-                                  <VolumeX className="w-4 h-4 text-primary" />
-                                ) : (
-                                  <Volume2 className="w-4 h-4 text-muted-foreground" />
-                                )}
+                                <Copy className="w-4 h-4 text-muted-foreground" />
                               </button>
-                            )}
-                            {/* Re-transcribe button - only show if recording file exists and verified */}
-                            {verifiedRecordings.has(item.id) && (
-                              <DropdownMenu onOpenChange={(open) => open && fetchTranscriptionSources()}>
-                                <DropdownMenuTrigger asChild>
-                                  <button
-                                    onClick={(e) => e.stopPropagation()}
-                                    className={cn(
-                                      "p-1.5 rounded hover:bg-accent transition-colors",
-                                      reTranscribingId === item.id && "pointer-events-none"
-                                    )}
-                                    title="Re-transcribe"
-                                    disabled={reTranscribingId === item.id}
-                                  >
-                                    {reTranscribingId === item.id ? (
-                                      <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
-                                    ) : (
-                                      <RotateCcw className="w-4 h-4 text-muted-foreground" />
-                                    )}
-                                  </button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-56">
-                                  <DropdownMenuLabel>Re-transcribe using...</DropdownMenuLabel>
-                                  <DropdownMenuSeparator />
-                                  {loadingSources ? (
-                                    <div className="flex items-center justify-center py-4">
-                                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                                      <span className="ml-2 text-sm text-muted-foreground">Loading sources...</span>
-                                    </div>
-                                  ) : transcriptionSources.length === 0 ? (
-                                    <div className="py-4 text-center text-sm text-muted-foreground">
-                                      No transcription sources available
-                                    </div>
-                                  ) : (
-                                    <>
-                                      {/* Local models */}
-                                      {transcriptionSources.filter(s => s.type === 'local').length > 0 && (
-                                        <DropdownMenuGroup>
-                                          <DropdownMenuLabel className="text-xs text-muted-foreground flex items-center gap-1">
-                                            <Cpu className="w-3 h-3" />
-                                            Local Models
-                                          </DropdownMenuLabel>
-                                          {transcriptionSources
-                                            .filter(s => s.type === 'local')
-                                            .map(source => (
-                                              <DropdownMenuItem
-                                                key={source.id}
-                                                onClick={() => handleReTranscribe(item, source.id)}
-                                                disabled={!source.available}
-                                              >
-                                                {source.name}
-                                              </DropdownMenuItem>
-                                            ))}
-                                        </DropdownMenuGroup>
+                              {/* Show in folder button - only show if recording file exists and verified */}
+                              {verifiedRecordings.has(item.id) && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleShowInFolder(item);
+                                  }}
+                                  className="p-1.5 rounded hover:bg-accent transition-colors"
+                                  title="Show recording in folder"
+                                >
+                                  <FolderOpen className="w-4 h-4 text-muted-foreground" />
+                                </button>
+                              )}
+                              {/* Re-transcribe button - only show if recording file exists and verified */}
+                              {verifiedRecordings.has(item.id) && (
+                                <DropdownMenu onOpenChange={(open) => {
+                                  setDropdownOpenId(open ? item.id : null);
+                                  if (open) fetchTranscriptionSources();
+                                }}>
+                                  <DropdownMenuTrigger asChild>
+                                    <button
+                                      onClick={(e) => e.stopPropagation()}
+                                      className={cn(
+                                        "p-1.5 rounded hover:bg-accent transition-colors",
+                                        reTranscribingIds.has(item.id) && "pointer-events-none"
                                       )}
-                                      {/* Remote servers */}
-                                      {transcriptionSources.filter(s => s.type === 'remote').length > 0 && (
-                                        <>
-                                          <DropdownMenuSeparator />
+                                      title="Re-transcribe"
+                                      disabled={reTranscribingIds.has(item.id)}
+                                    >
+                                      {reTranscribingIds.has(item.id) ? (
+                                        <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
+                                      ) : (
+                                        <RotateCcw className="w-4 h-4 text-muted-foreground" />
+                                      )}
+                                    </button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent
+                                    align="end"
+                                    className="w-52"
+                                    side="top"
+                                    sideOffset={5}
+                                    collisionPadding={16}
+                                  >
+                                    <DropdownMenuLabel>Re-transcribe using...</DropdownMenuLabel>
+                                    <DropdownMenuSeparator />
+                                    {loadingSources ? (
+                                      <div className="flex items-center justify-center py-4">
+                                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                                      </div>
+                                    ) : transcriptionSources.length === 0 ? (
+                                      <div className="py-4 text-center text-sm text-muted-foreground">
+                                        No models available
+                                      </div>
+                                    ) : (
+                                      <>
+                                        {/* Local models */}
+                                        {transcriptionSources.filter(s => s.type === 'local').length > 0 && (
                                           <DropdownMenuGroup>
                                             <DropdownMenuLabel className="text-xs text-muted-foreground flex items-center gap-1">
-                                              <Server className="w-3 h-3" />
-                                              Remote Servers
+                                              <Cpu className="w-3 h-3" />
+                                              Local Models
                                             </DropdownMenuLabel>
                                             {transcriptionSources
-                                              .filter(s => s.type === 'remote')
+                                              .filter(s => s.type === 'local')
                                               .map(source => (
                                                 <DropdownMenuItem
                                                   key={source.id}
-                                                  onClick={() => handleReTranscribe(item, source.id)}
-                                                  disabled={!source.available}
-                                                  className={!source.available ? "opacity-50" : ""}
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleReTranscribe(item, source.id);
+                                                  }}
                                                 >
-                                                  <span className="flex items-center gap-2">
-                                                    {source.name}
-                                                    {!source.available && (
-                                                      <span className="text-xs text-muted-foreground">(offline)</span>
-                                                    )}
-                                                  </span>
+                                                  {source.name}
                                                 </DropdownMenuItem>
                                               ))}
                                           </DropdownMenuGroup>
-                                        </>
-                                      )}
-                                    </>
-                                  )}
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            )}
-                            <button
-                              onClick={(e) => handleDelete(e, item.id)}
-                              className="p-1.5 rounded hover:bg-destructive/10 transition-colors"
-                              title="Delete"
-                            >
-                              <Trash2 className="w-4 h-4 text-destructive" />
-                            </button>
+                                        )}
+                                        {/* Remote servers */}
+                                        {transcriptionSources.filter(s => s.type === 'remote').length > 0 && (
+                                          <>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuGroup>
+                                              <DropdownMenuLabel className="text-xs text-muted-foreground flex items-center gap-1">
+                                                <Server className="w-3 h-3" />
+                                                Remote Servers
+                                              </DropdownMenuLabel>
+                                              {transcriptionSources
+                                                .filter(s => s.type === 'remote')
+                                                .map(source => (
+                                                  <DropdownMenuItem
+                                                    key={source.id}
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      handleReTranscribe(item, source.id);
+                                                    }}
+                                                  >
+                                                    {source.name}
+                                                  </DropdownMenuItem>
+                                                ))}
+                                            </DropdownMenuGroup>
+                                          </>
+                                        )}
+                                      </>
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              )}
+                              <button
+                                onClick={(e) => handleDelete(e, item.id)}
+                                className="p-1.5 rounded hover:bg-destructive/10 transition-colors"
+                                title="Delete"
+                              >
+                                <Trash2 className="w-4 h-4 text-destructive" />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </div>

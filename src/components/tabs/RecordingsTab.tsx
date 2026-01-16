@@ -20,7 +20,9 @@ export function RecordingsTab() {
         id: item.timestamp || Date.now().toString(),
         text: item.text,
         timestamp: new Date(item.timestamp),
-        model: item.model
+        model: item.model,
+        recording_file: item.recording_file,
+        source_recording_id: item.source_recording_id
       }));
       setHistory(formattedHistory);
     } catch (error) {
@@ -36,16 +38,24 @@ export function RecordingsTab() {
         await loadHistory();
 
         // Listen for new transcriptions (append-only for efficiency)
-        registerEvent<{text: string; model: string; timestamp: string}>("transcription-added", (data) => {
+        registerEvent<{text: string; model: string; timestamp: string; recording_file?: string}>("transcription-added", (data) => {
           console.log("[RecordingsTab] New transcription added:", data.timestamp);
           const newItem: TranscriptionHistory = {
             id: data.timestamp,
             text: data.text,
             timestamp: new Date(data.timestamp),
-            model: data.model
+            model: data.model,
+            recording_file: data.recording_file
           };
-          // Prepend new item to history (newest first)
-          setHistory(prev => [newItem, ...prev]);
+          // Prepend new item to history (newest first), avoiding duplicates
+          setHistory(prev => {
+            // Check if item already exists (by ID)
+            if (prev.some(item => item.id === newItem.id)) {
+              console.log("[RecordingsTab] Skipping duplicate item:", newItem.id);
+              return prev;
+            }
+            return [newItem, ...prev];
+          });
         });
         
         // Listen for history-updated for delete/clear operations

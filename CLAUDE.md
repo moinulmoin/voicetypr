@@ -59,6 +59,22 @@ pnpm lint         # Run ESLint
 pnpm typecheck    # Run TypeScript compiler
 ```
 
+### Windows Dev Server Management (Important!)
+
+When developing on Windows, use these commands to manage dev servers:
+
+```powershell
+# Kill all VoiceTypr-related processes (required before restarting)
+powershell -Command "Get-Process -Name voicetypr,node -ErrorAction SilentlyContinue | Stop-Process -Force"
+
+# Start Tauri dev app (from voicetypr repo root)
+pnpm tauri dev
+```
+
+**Common issues:**
+- **Port 1420 in use**: Kill processes first with the command above
+- **Blank app window**: The Vite dev server stopped; kill processes and restart with `pnpm tauri dev`
+
 ### Windows Testing (Important!)
 
 On Windows, `cargo test` fails with `STATUS_ENTRYPOINT_NOT_FOUND` (TaskDialogIndirect) due to a [Tauri manifest issue](https://github.com/tauri-apps/tauri/issues/13419). Use the provided PowerShell script instead:

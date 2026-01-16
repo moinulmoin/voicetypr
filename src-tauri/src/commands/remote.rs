@@ -920,61 +920,18 @@ pub fn get_firewall_status() -> FirewallStatus {
 
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
-
-        // Check if Windows Firewall is enabled for the current profile
-        // netsh advfirewall show currentprofile returns something like:
-        // "State                                 ON" or "State                                 OFF"
-        let firewall_enabled = Command::new("netsh")
-            .args(["advfirewall", "show", "currentprofile", "state"])
-            .output()
-            .map(|output| {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // Look for "State" followed by "ON"
-                stdout.to_uppercase().contains("ON")
-            })
-            .unwrap_or(false);
-
-        if !firewall_enabled {
-            return FirewallStatus {
-                firewall_enabled: false,
-                app_allowed: true, // No firewall means no blocking
-                may_be_blocked: false,
-            };
-        }
-
-        // Check if VoiceTypr has an inbound allow rule
-        // netsh advfirewall firewall show rule name="VoiceTypr" returns rule details if exists
-        // or "No rules match the specified criteria" if not found
-        let app_allowed = Command::new("netsh")
-            .args([
-                "advfirewall",
-                "firewall",
-                "show",
-                "rule",
-                "name=VoiceTypr",
-                "dir=in",
-            ])
-            .output()
-            .map(|output| {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // If we find "Rule Name:" and "Action:" with "Allow", the rule exists and allows
-                let has_rule = stdout.contains("Rule Name:") || stdout.contains("Regelname:");
-                let is_allow =
-                    stdout.to_uppercase().contains("ALLOW") || stdout.contains("Zulassen");
-
-                // Also check if it's enabled
-                let is_enabled =
-                    stdout.to_uppercase().contains("ENABLED: YES") || stdout.contains("Ja");
-
-                has_rule && is_allow && is_enabled
-            })
-            .unwrap_or(false);
-
+        // On Windows, we don't show a proactive firewall warning because:
+        // 1. Windows Firewall shows its own popup when an app starts listening on a port
+        // 2. We can't reliably detect if traffic is actually blocked without testing
+        // 3. Checking for a rule named "VoiceTypr" is unreliable - user may have clicked
+        //    "Allow" in the Windows popup, which creates a rule with a different name
+        //
+        // If users have connection issues, they'll troubleshoot from there.
+        // Showing a warning when ports aren't actually blocked is confusing.
         FirewallStatus {
-            firewall_enabled: true,
-            app_allowed,
-            may_be_blocked: !app_allowed,
+            firewall_enabled: false, // Don't claim we know firewall state
+            app_allowed: true,
+            may_be_blocked: false, // Don't show warning on Windows
         }
     }
 

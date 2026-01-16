@@ -1174,6 +1174,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             check_recording_exists,
             get_recording_path,
             save_retranscription,
+            update_transcription,
+            show_in_folder,
             get_transcription_history,
             get_transcription_count,
             delete_transcription_entry,
