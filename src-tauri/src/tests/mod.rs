@@ -44,6 +44,9 @@ mod remote_http_tests;
 mod remote_lifecycle_tests;
 
 #[cfg(test)]
+mod remote_transcription_tests;
+
+#[cfg(test)]
 mod integration_tests {
     use crate::whisper::manager::{ModelSize, WhisperManager};
     use tempfile::TempDir;
