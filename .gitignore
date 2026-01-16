@@ -52,12 +52,3 @@ opencodetmp
 # Git worktrees for parallel development
 .worktrees/
 
-# Generated files
-bv-site/
-
-# Legacy beads issue tracker (migrated to GitHub Issues)
-.beads/
-.bv/
-
-# bv (beads viewer) local config and caches
-.bv/
