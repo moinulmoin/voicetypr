@@ -226,9 +226,18 @@ Currently working on this issue. Other agents: please select a different issue.
 
 #### Completing Work
 
-**Step 1 - Add completion comment with timestamp:**
+**Step 1 - Commit your changes:**
 ```bash
-gh issue comment <number> --repo tomchapin/voicetypr --body "## ✅ AGENT COMPLETE
+git add <files>
+git commit -m "<type>: <description> (closes #<number>)"
+git push
+```
+
+Commit types: `feat`, `fix`, `test`, `docs`, `refactor`, `chore`
+
+**Step 2 - Close the issue with completion comment:**
+```bash
+gh issue close <number> --repo tomchapin/voicetypr --comment "## ✅ AGENT COMPLETE
 
 **Agent ID**: [Same ID as claim comment]
 **Completed**: $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -240,20 +249,18 @@ gh issue comment <number> --repo tomchapin/voicetypr --body "## ✅ AGENT COMPLE
 ### Files Changed
 - [List files]
 
-### Tests
-- [ ] All tests pass locally
-- [ ] Verified with: [command used]
+### Commit
+[commit hash or link]
 
-### Ready for Review
-Waiting for user verification before closing."
+### Verification
+- Code compiles: \`cargo check\` or \`pnpm typecheck\`
+- Tests pass (if applicable): \`cargo test\` or \`pnpm test\`"
 ```
 
-**Step 2 - Remove the label:**
+**Step 3 - Remove the "in progress" label** (if not auto-removed on close):
 ```bash
 gh issue edit <number> --repo tomchapin/voicetypr --remove-label "in progress"
 ```
-
-**Step 3 - Do NOT close the issue** - wait for user verification
 
 #### Conflict Resolution
 
