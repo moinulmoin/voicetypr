@@ -53,6 +53,9 @@ mod remote_commands_tests;
 mod audio_recording_tests;
 
 #[cfg(test)]
+mod tray_menu_tests;
+
+#[cfg(test)]
 mod integration_tests {
     use crate::whisper::manager::{ModelSize, WhisperManager};
     use tempfile::TempDir;
