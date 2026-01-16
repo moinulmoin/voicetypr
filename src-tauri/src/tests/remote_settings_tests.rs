@@ -229,3 +229,210 @@ fn test_set_active_connection_validates() {
     let result = settings.set_active_connection(None);
     assert!(result.is_ok());
 }
+
+/// Test sharing_was_active field defaults to false
+#[test]
+fn test_sharing_was_active_default() {
+    let settings = RemoteSettings::default();
+    assert!(!settings.sharing_was_active);
+}
+
+/// Test sharing_was_active field persists through serialization
+#[test]
+fn test_sharing_was_active_serialization() {
+    let mut settings = RemoteSettings::default();
+    settings.sharing_was_active = true;
+
+    let json = serde_json::to_string(&settings).unwrap();
+    let restored: RemoteSettings = serde_json::from_str(&json).unwrap();
+
+    assert!(restored.sharing_was_active);
+}
+
+/// Test adding a connection with model field
+#[test]
+fn test_add_connection_with_model() {
+    let mut settings = RemoteSettings::default();
+
+    let saved = settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        None,
+        Some("GPU Server".to_string()),
+        Some("whisper-large-v3".to_string()),
+    );
+
+    assert_eq!(saved.model, Some("whisper-large-v3".to_string()));
+
+    // Verify it persists
+    let retrieved = settings.get_connection(&saved.id).unwrap();
+    assert_eq!(retrieved.model, Some("whisper-large-v3".to_string()));
+}
+
+/// Test model field serialization
+#[test]
+fn test_connection_model_serialization() {
+    let mut settings = RemoteSettings::default();
+
+    settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        None,
+        None,
+        Some("whisper-medium".to_string()),
+    );
+
+    let json = serde_json::to_string(&settings).unwrap();
+    let restored: RemoteSettings = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(restored.saved_connections.len(), 1);
+    assert_eq!(
+        restored.saved_connections[0].model,
+        Some("whisper-medium".to_string())
+    );
+}
+
+/// Test get_connection on empty settings returns None
+#[test]
+fn test_get_connection_empty_settings() {
+    let settings = RemoteSettings::default();
+    assert!(settings.get_connection("any-id").is_none());
+}
+
+/// Test multiple connections with same host:port are allowed (different IDs)
+#[test]
+fn test_duplicate_host_port_allowed() {
+    let mut settings = RemoteSettings::default();
+
+    let saved1 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+    let saved2 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+
+    // Both should exist with different IDs
+    assert_eq!(settings.saved_connections.len(), 2);
+    assert_ne!(saved1.id, saved2.id);
+    assert!(settings.get_connection(&saved1.id).is_some());
+    assert!(settings.get_connection(&saved2.id).is_some());
+}
+
+/// Test adding connection with password
+#[test]
+fn test_add_connection_with_password() {
+    let mut settings = RemoteSettings::default();
+
+    let saved = settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        Some("secret-password".to_string()),
+        None,
+        None,
+    );
+
+    assert_eq!(saved.password, Some("secret-password".to_string()));
+}
+
+/// Test SavedConnection equality
+#[test]
+fn test_saved_connection_equality() {
+    let conn1 = crate::remote::settings::SavedConnection {
+        id: "test-id".to_string(),
+        host: "192.168.1.100".to_string(),
+        port: 47842,
+        password: None,
+        name: Some("Test".to_string()),
+        created_at: 1000,
+        model: None,
+    };
+
+    let conn2 = crate::remote::settings::SavedConnection {
+        id: "test-id".to_string(),
+        host: "192.168.1.100".to_string(),
+        port: 47842,
+        password: None,
+        name: Some("Test".to_string()),
+        created_at: 1000,
+        model: None,
+    };
+
+    let conn3 = crate::remote::settings::SavedConnection {
+        id: "different-id".to_string(),
+        host: "192.168.1.100".to_string(),
+        port: 47842,
+        password: None,
+        name: Some("Test".to_string()),
+        created_at: 1000,
+        model: None,
+    };
+
+    assert_eq!(conn1, conn2);
+    assert_ne!(conn1, conn3);
+}
+
+/// Test RemoteSettings equality
+#[test]
+fn test_remote_settings_equality() {
+    let settings1 = RemoteSettings::default();
+    let settings2 = RemoteSettings::default();
+
+    assert_eq!(settings1, settings2);
+}
+
+/// Test list_connections returns cloned data
+#[test]
+fn test_list_connections_returns_clones() {
+    let mut settings = RemoteSettings::default();
+
+    settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+
+    let list = settings.list_connections();
+
+    // Modifying the returned list shouldn't affect the original
+    assert_eq!(list.len(), 1);
+    assert_eq!(settings.saved_connections.len(), 1);
+}
+
+/// Test deserializing settings without sharing_was_active field (migration)
+#[test]
+fn test_settings_migration_without_sharing_was_active() {
+    // Simulate old settings JSON without sharing_was_active field
+    let old_json = r#"{
+        "server_config": {
+            "port": 47842,
+            "password": null,
+            "enabled": false
+        },
+        "saved_connections": [],
+        "active_connection_id": null
+    }"#;
+
+    let settings: RemoteSettings = serde_json::from_str(old_json).unwrap();
+
+    // Should default to false
+    assert!(!settings.sharing_was_active);
+}
+
+/// Test deserializing connection without model field (migration)
+#[test]
+fn test_connection_migration_without_model() {
+    let old_json = r#"{
+        "server_config": {
+            "port": 47842,
+            "password": null,
+            "enabled": false
+        },
+        "saved_connections": [{
+            "id": "conn_123",
+            "host": "192.168.1.100",
+            "port": 47842,
+            "password": null,
+            "name": null,
+            "created_at": 1000
+        }],
+        "active_connection_id": null
+    }"#;
+
+    let settings: RemoteSettings = serde_json::from_str(old_json).unwrap();
+
+    // Model should default to None
+    assert_eq!(settings.saved_connections.len(), 1);
+    assert!(settings.saved_connections[0].model.is_none());
+}
