@@ -1,6 +1,59 @@
 # VoiceTypr
 
-macOS desktop app for offline voice transcription using Whisper AI. Built with Tauri v2 (Rust backend) and React 19 (TypeScript frontend). Features system-wide hotkey recording, automatic text insertion at cursor, and local model management.
+macOS desktop app for offline voice transcription using Whisper AI. Built with Tauri v2 (Rust backend) and React 19 (TypeScript frontend). Features system-wide hotkey recording, automatic text insertion at cursor, local model management, and **remote transcription via network sharing**.
+
+## 🔴 CRITICAL: Beads Viewer & Daemon
+
+This project uses **three essential tools** for issue tracking:
+
+| Tool | Purpose | Command | Source |
+|------|---------|---------|--------|
+| **Beads CLI (`bd`)** | Issue tracking commands | `bd list`, `bd ready`, etc. | [steveyegge/beads](https://github.com/steveyegge/beads) |
+| **Beads Viewer (`bv`)** | Web dashboard showing all issues | `bv --preview-pages bv-site` | [Dicklesworthstone/beads_viewer](https://github.com/Dicklesworthstone/beads_viewer) |
+| **Beads Daemon** | Syncs dashboard every 30 seconds | `./beads-watch.sh` (or `.ps1`) | (local script in repo) |
+
+**⚠️ The daemon MUST be running or the dashboard shows stale/wrong data!**
+
+The daemon watches the SQLite database and syncs changes to the JSONL file that the viewer reads. Without it, status updates (like `open → in_progress`) won't appear.
+
+**Dashboard URL:** http://127.0.0.1:9001
+
+## ⚡ Quick Start Checklist
+
+**Do these steps at the START of every session:**
+
+```bash
+# 1. Start beads daemon (REQUIRED - syncs dashboard every 30 seconds)
+./beads-watch.sh &              # macOS/Linux
+# OR: powershell -ExecutionPolicy Bypass -File beads-watch.ps1  # Windows
+
+# 2. Start Beads Viewer dashboard
+bv --preview-pages bv-site &    # Opens dashboard at http://127.0.0.1:9001
+
+# 3. Check what's being worked on
+bd list --status=in_progress    # See active work
+bd ready                        # Find available issues
+
+# 4. Read the prioritized issue list
+cat bv-site/README.md
+```
+
+**Before starting any issue:**
+```bash
+bd show <issue-id>                    # Read FULL details + comments
+bd update <id> --status=in_progress   # Claim it before working
+```
+
+**While working:**
+```bash
+bd comments add <id> "Progress: ..."  # Add regular updates
+```
+
+**After completing:**
+```bash
+bd comments add <id> "STATUS: READY FOR VERIFICATION - <summary>"
+# DO NOT use 'bd close' - wait for user to verify
+```
 
 ## Core Commands
 
@@ -41,6 +94,12 @@ src-tauri/src/                # Rust backend
 ├── commands/                 # Tauri command handlers
 ├── audio/                    # CoreAudio recording
 ├── whisper/                  # Transcription engine
+├── remote/                   # Network sharing (server + client)
+│   ├── server.rs             # HTTP server (warp)
+│   ├── client.rs             # HTTP client for remote transcription
+│   ├── lifecycle.rs          # Server start/stop management
+│   └── settings.rs           # Saved connections persistence
+├── menu/                     # System tray menu
 ├── ai/                       # AI model management
 ├── parakeet/                 # Parakeet sidecar integration
 ├── state/                    # Backend state management
@@ -91,19 +150,79 @@ This project uses **Beads** for issue tracking across multiple Claude Code agent
 - **beads** (`bd`): https://github.com/steveyegge/beads - Git-backed issue tracker
 - **beads_viewer** (`bv`): https://github.com/Dicklesworthstone/beads_viewer - Dashboard UI
 
-### Session Startup (REQUIRED)
+### First-Time Setup (Bootstrap)
 
+If `bd` or `bv` commands are not found, install them:
+
+**Install `bd` (Beads CLI):**
 ```bash
-# macOS/Linux:
-./beads-watch.sh &
-bv --preview-pages bv-site &
+# macOS/Linux (Homebrew)
+brew install steveyegge/beads/bd
 
-# Windows (PowerShell):
-powershell -ExecutionPolicy Bypass -File beads-watch.ps1 &
+# Or via curl
+curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+
+# Or via npm
+npm install -g @beads/bd
+```
+
+**Install `bv` (Beads Viewer):**
+```bash
+# macOS/Linux
+curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/beads_viewer/main/install.sh" | bash
+
+# Windows (PowerShell)
+irm "https://raw.githubusercontent.com/Dicklesworthstone/beads_viewer/main/install.ps1" | iex
+```
+
+**Verify installation:**
+```bash
+bd --version && bv --version && bd list
+```
+
+### Session Startup (REQUIRED - DO THIS FIRST)
+
+**You MUST start the beads watch daemon at the beginning of every session.**
+
+**Detect your platform**, then run the appropriate commands:
+
+#### macOS / Linux
+```bash
+./beads-watch.sh &
 bv --preview-pages bv-site &
 ```
 
-Dashboard at: http://127.0.0.1:9001
+#### Windows (PowerShell)
+```powershell
+powershell -ExecutionPolicy Bypass -File beads-watch.ps1
+# In a separate terminal:
+bv --preview-pages bv-site
+```
+
+#### Windows (Git Bash / WSL)
+```bash
+./beads-watch.sh &
+bv --preview-pages bv-site &
+```
+
+**Dashboard URL:** http://127.0.0.1:9001
+
+### Beads Watch Daemon Explained
+
+**Watch script files (in project root):**
+- `beads-watch.ps1` - Windows PowerShell version
+- `beads-watch.sh` - macOS/Linux bash version
+
+**What it does:**
+- Runs every 30 seconds
+- Compares MD5 hash of `bd export` output vs `.beads/issues.jsonl`
+- If different, syncs JSONL and regenerates `bv-site/` dashboard
+- Detects ALL changes including status updates (e.g., `open → in_progress`)
+
+**Why it's necessary:**
+- `bd` stores in SQLite, `bv` reads from JSONL
+- Without daemon, dashboard shows stale/wrong data
+- Multiple agents need accurate real-time view of issue states
 
 ### Essential Commands
 
@@ -111,21 +230,53 @@ Dashboard at: http://127.0.0.1:9001
 bd ready                          # Find available work (no blockers)
 bd list --status=in_progress      # See what others are working on
 bd update <id> --status=in_progress  # Claim work before starting
-bd close <id> --reason="..."      # Mark complete when done
-
-# Force sync if stale:
-# macOS/Linux: bd export > .beads/issues.jsonl
-# Windows:     bd export | Out-File .beads/issues.jsonl -Encoding utf8
+bd close <id> --reason="..."      # ONLY after user confirms completion
 ```
 
-### Why the Watch Daemon?
+### Manual Sync (If Daemon Not Running)
 
-- `bd` stores data in SQLite (fast queries)
-- `bv` reads from JSONL (git-friendly format)
-- Without the daemon, dashboard shows stale data
-- The watch script syncs them every 30 seconds
+#### macOS / Linux / Git Bash / WSL
+```bash
+bd export > .beads/issues.jsonl
+bv --export-pages bv-site
+```
+
+#### Windows (PowerShell)
+```powershell
+# PowerShell requires special handling to avoid UTF-16 BOM corruption
+$content = bd export | Out-String
+[System.IO.File]::WriteAllText(".beads/issues.jsonl", $content.Trim(), [System.Text.UTF8Encoding]::new($false))
+bv --export-pages bv-site
+```
+
+### Issue Closure Policy (CRITICAL)
+
+**NEVER close issues (`bd close`) until a human has verified the work is functionally complete.**
+
+- Tests passing is NOT sufficient for closure
+- The user must confirm the feature works correctly in the actual app
+- Keep issues `in_progress` until user gives explicit approval
+- Only then run `bd close <id> --reason="User verified: <what they confirmed>"`
 
 See `CLAUDE.md` → Multi-Agent Collaboration for full details.
+
+## Active Development Branch
+
+The `combined-fixes` branch aggregates features and fixes being prepared for main:
+
+- **Remote Transcription**: Full network sharing feature
+  - Server mode: Host transcription for other VoiceTypr instances
+  - Client mode: Use remote server for transcription
+  - Tray menu integration with "ServerName - ModelName" format
+  - System notifications when remote server unavailable
+
+Features are developed in individual feature branches, then merged to `combined-fixes` for integration testing before going to main.
+
+**To work on the latest code:**
+```bash
+git checkout combined-fixes
+git pull origin combined-fixes
+```
 
 ## Gotchas
 
@@ -137,18 +288,26 @@ See `CLAUDE.md` → Multi-Agent Collaboration for full details.
 6. **Tauri capabilities**: Permission changes require edits in `src-tauri/capabilities/`
 7. **Large lib.rs**: Main Rust entry point at 96KB; navigate via module imports
 8. **Sidecar builds**: Parakeet Swift sidecar built via `build.rs` during `tauri build`
+9. **Beads daemon**: MUST run `./beads-watch.sh &` or dashboard shows stale data
+10. **Issue comments**: Read ALL comments on an issue - they contain critical context
+11. **Never close issues**: Wait for user verification before running `bd close`
 
 ## Key Files
 
 - `src-tauri/src/lib.rs` — Main Rust entry, command registration
 - `src-tauri/src/commands/` — All Tauri command implementations
+- `src-tauri/src/commands/audio.rs` — Recording and transcription flow
+- `src-tauri/src/commands/remote.rs` — Remote server commands
+- `src-tauri/src/remote/` — Network sharing implementation
+- `src-tauri/src/menu/tray.rs` — System tray menu
 - `src/hooks/` — React hooks for Tauri integration
 - `src/components/tabs/` — Main UI tab components
+- `src/components/sections/` — Section components (ModelsSection, NetworkSharingSection)
 - `src-tauri/capabilities/` — Tauri permission definitions
 
 ## References
 
-- `agent-docs/ARCHITECTURE.md` — Detailed architecture diagrams
-- `agent-docs/EVENT-FLOW-ANALYSIS.md` — Event system documentation
-- `CLAUDE.md` — Coding assistant guidelines
+- `CLAUDE.md` — Full coding guidelines and multi-agent collaboration docs
+- `bv-site/README.md` — Auto-generated prioritized issue list
+- `.beads/issues.jsonl` — Issue data (synced by beads daemon)
 - `README.md` — Product overview
