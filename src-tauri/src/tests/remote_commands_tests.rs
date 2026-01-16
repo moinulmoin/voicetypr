@@ -28,7 +28,7 @@ fn test_default_port_is_valid() {
     // Port should be in the dynamic/private port range (49152-65535)
     // or registered port range (1024-49151)
     assert!(DEFAULT_PORT > 1023, "Port should not be a well-known port");
-    assert!(DEFAULT_PORT < 65536, "Port should be valid TCP port");
+    // u16 type already guarantees port is <= 65535, so no upper bound check needed
 }
 
 // ============================================================================

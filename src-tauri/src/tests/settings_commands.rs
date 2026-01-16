@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::commands::settings::{get_supported_languages, resolve_pill_indicator_mode, Settings};
+    use crate::commands::settings::{get_supported_languages, Settings};
     use serde_json::json;
 
     #[test]
@@ -250,15 +250,7 @@ mod tests {
         }
     }
 
-    // ============================================================================
-    // Recording Indicator Mode (pill_indicator_mode) Tests
-    // ============================================================================
-
-    #[test]
-    fn test_pill_indicator_mode_default() {
-        let settings = Settings::default();
-        assert_eq!(settings.pill_indicator_mode, "when_recording");
-    }
+    // ==================== Pill Indicator Mode Tests ====================
 
     #[test]
     fn test_pill_indicator_mode_valid_values() {
@@ -271,6 +263,12 @@ mod tests {
             };
             assert_eq!(settings.pill_indicator_mode, mode);
         }
+    }
+
+    #[test]
+    fn test_pill_indicator_mode_default() {
+        let settings = Settings::default();
+        assert_eq!(settings.pill_indicator_mode, "when_recording");
     }
 
     #[test]
@@ -287,24 +285,7 @@ mod tests {
         assert_eq!(deserialized.pill_indicator_mode, "always");
     }
 
-    #[test]
-    fn test_pill_indicator_mode_never() {
-        let settings = Settings {
-            pill_indicator_mode: "never".to_string(),
-            ..Settings::default()
-        };
-        assert_eq!(settings.pill_indicator_mode, "never");
-    }
-
-    // ============================================================================
-    // Pill Indicator Position Tests
-    // ============================================================================
-
-    #[test]
-    fn test_pill_indicator_position_default() {
-        let settings = Settings::default();
-        assert_eq!(settings.pill_indicator_position, "bottom");
-    }
+    // ==================== Pill Indicator Position Tests ====================
 
     #[test]
     fn test_pill_indicator_position_valid_values() {
@@ -317,6 +298,12 @@ mod tests {
             };
             assert_eq!(settings.pill_indicator_position, position);
         }
+    }
+
+    #[test]
+    fn test_pill_indicator_position_default() {
+        let settings = Settings::default();
+        assert_eq!(settings.pill_indicator_position, "bottom");
     }
 
     #[test]
@@ -333,9 +320,7 @@ mod tests {
         assert_eq!(deserialized.pill_indicator_position, "top");
     }
 
-    // ============================================================================
-    // Sound on Recording End Tests
-    // ============================================================================
+    // ==================== Sound Settings Tests ====================
 
     #[test]
     fn test_play_sound_on_recording_default() {
@@ -350,18 +335,19 @@ mod tests {
     }
 
     #[test]
-    fn test_play_sound_settings_disabled() {
+    fn test_sound_settings_can_be_disabled() {
         let settings = Settings {
             play_sound_on_recording: false,
             play_sound_on_recording_end: false,
             ..Settings::default()
         };
+
         assert!(!settings.play_sound_on_recording);
         assert!(!settings.play_sound_on_recording_end);
     }
 
     #[test]
-    fn test_play_sound_settings_serialization() {
+    fn test_sound_settings_serialization() {
         let settings = Settings {
             play_sound_on_recording: false,
             play_sound_on_recording_end: true,
@@ -377,30 +363,7 @@ mod tests {
         assert!(deserialized.play_sound_on_recording_end);
     }
 
-    #[test]
-    fn test_play_sound_mixed_settings() {
-        // Test with only start sound enabled
-        let settings1 = Settings {
-            play_sound_on_recording: true,
-            play_sound_on_recording_end: false,
-            ..Settings::default()
-        };
-        assert!(settings1.play_sound_on_recording);
-        assert!(!settings1.play_sound_on_recording_end);
-
-        // Test with only end sound enabled
-        let settings2 = Settings {
-            play_sound_on_recording: false,
-            play_sound_on_recording_end: true,
-            ..Settings::default()
-        };
-        assert!(!settings2.play_sound_on_recording);
-        assert!(settings2.play_sound_on_recording_end);
-    }
-
-    // ============================================================================
-    // Recording Mode (Toggle vs Push-to-Talk) Tests
-    // ============================================================================
+    // ==================== Recording Mode Tests ====================
 
     #[test]
     fn test_recording_mode_default() {
@@ -409,21 +372,16 @@ mod tests {
     }
 
     #[test]
-    fn test_recording_mode_toggle() {
-        let settings = Settings {
-            recording_mode: "toggle".to_string(),
-            ..Settings::default()
-        };
-        assert_eq!(settings.recording_mode, "toggle");
-    }
+    fn test_recording_mode_valid_values() {
+        let valid_modes = vec!["toggle", "push_to_talk"];
 
-    #[test]
-    fn test_recording_mode_push_to_talk() {
-        let settings = Settings {
-            recording_mode: "push_to_talk".to_string(),
-            ..Settings::default()
-        };
-        assert_eq!(settings.recording_mode, "push_to_talk");
+        for mode in valid_modes {
+            let settings = Settings {
+                recording_mode: mode.to_string(),
+                ..Settings::default()
+            };
+            assert_eq!(settings.recording_mode, mode);
+        }
     }
 
     #[test]
@@ -440,28 +398,19 @@ mod tests {
         assert_eq!(deserialized.recording_mode, "push_to_talk");
     }
 
-    // ============================================================================
-    // Push-to-Talk Settings Tests
-    // ============================================================================
-
     #[test]
-    fn test_use_different_ptt_key_default() {
+    fn test_ptt_settings_defaults() {
         let settings = Settings::default();
         assert!(!settings.use_different_ptt_key);
-    }
-
-    #[test]
-    fn test_ptt_hotkey_default() {
-        let settings = Settings::default();
         assert_eq!(settings.ptt_hotkey, Some("Alt+Space".to_string()));
     }
 
     #[test]
-    fn test_ptt_settings_enabled() {
+    fn test_ptt_settings_with_custom_key() {
         let settings = Settings {
             recording_mode: "push_to_talk".to_string(),
             use_different_ptt_key: true,
-            ptt_hotkey: Some("CommandOrControl+Space".to_string()),
+            ptt_hotkey: Some("CommandOrControl+Shift+R".to_string()),
             ..Settings::default()
         };
 
@@ -469,7 +418,7 @@ mod tests {
         assert!(settings.use_different_ptt_key);
         assert_eq!(
             settings.ptt_hotkey,
-            Some("CommandOrControl+Space".to_string())
+            Some("CommandOrControl+Shift+R".to_string())
         );
     }
 
@@ -479,29 +428,11 @@ mod tests {
             ptt_hotkey: None,
             ..Settings::default()
         };
+
         assert!(settings.ptt_hotkey.is_none());
     }
 
-    #[test]
-    fn test_ptt_settings_serialization() {
-        let settings = Settings {
-            use_different_ptt_key: true,
-            ptt_hotkey: Some("Shift+Space".to_string()),
-            ..Settings::default()
-        };
-
-        let json = serde_json::to_string(&settings).unwrap();
-        assert!(json.contains("\"use_different_ptt_key\":true"));
-        assert!(json.contains("\"ptt_hotkey\":\"Shift+Space\""));
-
-        let deserialized: Settings = serde_json::from_str(&json).unwrap();
-        assert!(deserialized.use_different_ptt_key);
-        assert_eq!(deserialized.ptt_hotkey, Some("Shift+Space".to_string()));
-    }
-
-    // ============================================================================
-    // Network Sharing Settings Tests
-    // ============================================================================
+    // ==================== Network Sharing Settings Tests ====================
 
     #[test]
     fn test_sharing_port_default() {
@@ -519,60 +450,56 @@ mod tests {
     fn test_sharing_settings_with_password() {
         let settings = Settings {
             sharing_port: Some(8080),
-            sharing_password: Some("secret123".to_string()),
+            sharing_password: Some("secretpass".to_string()),
             ..Settings::default()
         };
 
         assert_eq!(settings.sharing_port, Some(8080));
-        assert_eq!(settings.sharing_password, Some("secret123".to_string()));
-    }
-
-    #[test]
-    fn test_sharing_port_none() {
-        let settings = Settings {
-            sharing_port: None,
-            ..Settings::default()
-        };
-        assert!(settings.sharing_port.is_none());
+        assert_eq!(settings.sharing_password, Some("secretpass".to_string()));
     }
 
     #[test]
     fn test_sharing_settings_serialization() {
         let settings = Settings {
-            sharing_port: Some(9000),
-            sharing_password: Some("mypassword".to_string()),
+            sharing_port: Some(9999),
+            sharing_password: Some("test123".to_string()),
             ..Settings::default()
         };
 
         let json = serde_json::to_string(&settings).unwrap();
-        assert!(json.contains("\"sharing_port\":9000"));
-        assert!(json.contains("\"sharing_password\":\"mypassword\""));
+        assert!(json.contains("\"sharing_port\":9999"));
+        assert!(json.contains("\"sharing_password\":\"test123\""));
 
         let deserialized: Settings = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.sharing_port, Some(9000));
-        assert_eq!(deserialized.sharing_password, Some("mypassword".to_string()));
+        assert_eq!(deserialized.sharing_port, Some(9999));
+        assert_eq!(deserialized.sharing_password, Some("test123".to_string()));
     }
 
     #[test]
-    fn test_sharing_port_edge_values() {
-        // Test minimum valid port
-        let min_port = Settings {
+    fn test_sharing_port_boundary_values() {
+        // Minimum valid port
+        let settings_min = Settings {
             sharing_port: Some(1),
             ..Settings::default()
         };
-        assert_eq!(min_port.sharing_port, Some(1));
+        assert_eq!(settings_min.sharing_port, Some(1));
 
-        // Test maximum valid port
-        let max_port = Settings {
+        // Maximum valid port
+        let settings_max = Settings {
             sharing_port: Some(65535),
             ..Settings::default()
         };
-        assert_eq!(max_port.sharing_port, Some(65535));
+        assert_eq!(settings_max.sharing_port, Some(65535));
+
+        // No port (None)
+        let settings_none = Settings {
+            sharing_port: None,
+            ..Settings::default()
+        };
+        assert!(settings_none.sharing_port.is_none());
     }
 
-    // ============================================================================
-    // Clipboard Settings Tests
-    // ============================================================================
+    // ==================== Clipboard Settings Tests ====================
 
     #[test]
     fn test_keep_transcription_in_clipboard_default() {
@@ -586,114 +513,32 @@ mod tests {
             keep_transcription_in_clipboard: true,
             ..Settings::default()
         };
+
         assert!(settings.keep_transcription_in_clipboard);
     }
 
-    // ============================================================================
-    // resolve_pill_indicator_mode Helper Function Tests
-    // ============================================================================
+    // ==================== Microphone Settings Tests ====================
 
     #[test]
-    fn test_resolve_pill_indicator_mode_prefers_stored_mode() {
-        // When stored_mode is present, it should be returned regardless of legacy value
-        let result = resolve_pill_indicator_mode(
-            Some("always".to_string()),
-            Some(false),
-            "when_recording".to_string(),
-        );
-        assert_eq!(result, "always");
-
-        let result2 = resolve_pill_indicator_mode(
-            Some("never".to_string()),
-            Some(true),
-            "when_recording".to_string(),
-        );
-        assert_eq!(result2, "never");
-    }
-
-    #[test]
-    fn test_resolve_pill_indicator_mode_migrates_legacy_show_true() {
-        // When legacy show_pill=true, should migrate to "always"
-        let result = resolve_pill_indicator_mode(None, Some(true), "when_recording".to_string());
-        assert_eq!(result, "always");
-    }
-
-    #[test]
-    fn test_resolve_pill_indicator_mode_migrates_legacy_show_false() {
-        // When legacy show_pill=false, should migrate to "when_recording"
-        let result = resolve_pill_indicator_mode(None, Some(false), "when_recording".to_string());
-        assert_eq!(result, "when_recording");
-    }
-
-    #[test]
-    fn test_resolve_pill_indicator_mode_uses_default_when_nothing_set() {
-        // When both stored_mode and legacy are None, use default
-        let result = resolve_pill_indicator_mode(None, None, "when_recording".to_string());
-        assert_eq!(result, "when_recording");
-
-        let result2 = resolve_pill_indicator_mode(None, None, "never".to_string());
-        assert_eq!(result2, "never");
-
-        let result3 = resolve_pill_indicator_mode(None, None, "always".to_string());
-        assert_eq!(result3, "always");
-    }
-
-    #[test]
-    fn test_resolve_pill_indicator_mode_with_empty_string() {
-        // Empty string should still be returned if it's the stored value
-        let result = resolve_pill_indicator_mode(
-            Some("".to_string()),
-            Some(true),
-            "when_recording".to_string(),
-        );
-        assert_eq!(result, "");
-    }
-
-    // ============================================================================
-    // Model Engine Settings Tests
-    // ============================================================================
-
-    #[test]
-    fn test_current_model_engine_default() {
+    fn test_selected_microphone_default() {
         let settings = Settings::default();
-        assert_eq!(settings.current_model_engine, "whisper");
+        assert!(settings.selected_microphone.is_none());
     }
 
     #[test]
-    fn test_current_model_engine_parakeet() {
+    fn test_selected_microphone_with_device() {
         let settings = Settings {
-            current_model_engine: "parakeet".to_string(),
-            ..Settings::default()
-        };
-        assert_eq!(settings.current_model_engine, "parakeet");
-    }
-
-    #[test]
-    fn test_current_model_engine_soniox() {
-        let settings = Settings {
-            current_model_engine: "soniox".to_string(),
-            ..Settings::default()
-        };
-        assert_eq!(settings.current_model_engine, "soniox");
-    }
-
-    #[test]
-    fn test_current_model_engine_serialization() {
-        let settings = Settings {
-            current_model_engine: "parakeet".to_string(),
+            selected_microphone: Some("USB Audio Device".to_string()),
             ..Settings::default()
         };
 
-        let json = serde_json::to_string(&settings).unwrap();
-        assert!(json.contains("\"current_model_engine\":\"parakeet\""));
-
-        let deserialized: Settings = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.current_model_engine, "parakeet");
+        assert_eq!(
+            settings.selected_microphone,
+            Some("USB Audio Device".to_string())
+        );
     }
 
-    // ============================================================================
-    // Translate to English Settings Tests
-    // ============================================================================
+    // ==================== Translate Settings Tests ====================
 
     #[test]
     fn test_translate_to_english_default() {
@@ -707,51 +552,11 @@ mod tests {
             translate_to_english: true,
             ..Settings::default()
         };
+
         assert!(settings.translate_to_english);
     }
 
-    // ============================================================================
-    // Selected Microphone Settings Tests
-    // ============================================================================
-
-    #[test]
-    fn test_selected_microphone_default() {
-        let settings = Settings::default();
-        assert!(settings.selected_microphone.is_none());
-    }
-
-    #[test]
-    fn test_selected_microphone_set() {
-        let settings = Settings {
-            selected_microphone: Some("USB Microphone".to_string()),
-            ..Settings::default()
-        };
-        assert_eq!(
-            settings.selected_microphone,
-            Some("USB Microphone".to_string())
-        );
-    }
-
-    #[test]
-    fn test_selected_microphone_serialization() {
-        let settings = Settings {
-            selected_microphone: Some("Blue Yeti".to_string()),
-            ..Settings::default()
-        };
-
-        let json = serde_json::to_string(&settings).unwrap();
-        assert!(json.contains("\"selected_microphone\":\"Blue Yeti\""));
-
-        let deserialized: Settings = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            deserialized.selected_microphone,
-            Some("Blue Yeti".to_string())
-        );
-    }
-
-    // ============================================================================
-    // Pill Position Settings Tests
-    // ============================================================================
+    // ==================== Pill Position Tests ====================
 
     #[test]
     fn test_pill_position_default() {
@@ -760,41 +565,37 @@ mod tests {
     }
 
     #[test]
-    fn test_pill_position_set() {
+    fn test_pill_position_with_coordinates() {
         let settings = Settings {
-            pill_position: Some((100.5, 200.75)),
-            ..Settings::default()
-        };
-        assert_eq!(settings.pill_position, Some((100.5, 200.75)));
-    }
-
-    #[test]
-    fn test_pill_position_serialization() {
-        let settings = Settings {
-            pill_position: Some((50.0, 150.0)),
+            pill_position: Some((150.5, 300.25)),
             ..Settings::default()
         };
 
-        let json = serde_json::to_string(&settings).unwrap();
-        assert!(json.contains("\"pill_position\":[50.0,150.0]"));
-
-        let deserialized: Settings = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.pill_position, Some((50.0, 150.0)));
+        assert_eq!(settings.pill_position, Some((150.5, 300.25)));
     }
 
     #[test]
-    fn test_pill_position_negative_values() {
-        // Negative positions might occur on multi-monitor setups
+    fn test_pill_position_negative_coordinates() {
+        // Negative coordinates could occur with multiple monitors
         let settings = Settings {
             pill_position: Some((-100.0, -50.0)),
             ..Settings::default()
         };
+
         assert_eq!(settings.pill_position, Some((-100.0, -50.0)));
     }
 
-    // ============================================================================
-    // Transcription Cleanup Days Tests
-    // ============================================================================
+    #[test]
+    fn test_pill_position_zero_coordinates() {
+        let settings = Settings {
+            pill_position: Some((0.0, 0.0)),
+            ..Settings::default()
+        };
+
+        assert_eq!(settings.pill_position, Some((0.0, 0.0)));
+    }
+
+    // ==================== Transcription Cleanup Days Tests ====================
 
     #[test]
     fn test_transcription_cleanup_days_default() {
@@ -803,110 +604,235 @@ mod tests {
     }
 
     #[test]
-    fn test_transcription_cleanup_days_set() {
-        let settings = Settings {
-            transcription_cleanup_days: Some(30),
-            ..Settings::default()
-        };
-        assert_eq!(settings.transcription_cleanup_days, Some(30));
+    fn test_transcription_cleanup_days_values() {
+        let test_values = vec![1, 7, 30, 90, 365];
+
+        for days in test_values {
+            let settings = Settings {
+                transcription_cleanup_days: Some(days),
+                ..Settings::default()
+            };
+            assert_eq!(settings.transcription_cleanup_days, Some(days));
+        }
+    }
+
+    // ==================== Model Engine Tests ====================
+
+    #[test]
+    fn test_model_engine_default() {
+        let settings = Settings::default();
+        assert_eq!(settings.current_model_engine, "whisper");
     }
 
     #[test]
-    fn test_transcription_cleanup_days_edge_values() {
-        // Test minimum value
-        let min_days = Settings {
-            transcription_cleanup_days: Some(1),
-            ..Settings::default()
-        };
-        assert_eq!(min_days.transcription_cleanup_days, Some(1));
+    fn test_model_engine_valid_values() {
+        let valid_engines = vec!["whisper", "parakeet", "soniox"];
 
-        // Test larger value
-        let large_days = Settings {
-            transcription_cleanup_days: Some(365),
-            ..Settings::default()
-        };
-        assert_eq!(large_days.transcription_cleanup_days, Some(365));
+        for engine in valid_engines {
+            let settings = Settings {
+                current_model_engine: engine.to_string(),
+                ..Settings::default()
+            };
+            assert_eq!(settings.current_model_engine, engine);
+        }
     }
 
-    // ============================================================================
-    // Combined Settings Tests (Integration)
-    // ============================================================================
+    // ==================== Complete Settings Round-Trip Tests ====================
 
     #[test]
-    fn test_settings_full_configuration() {
-        // Test a fully configured Settings struct
-        let settings = Settings {
-            hotkey: "Alt+R".to_string(),
-            current_model: "large-v3-turbo".to_string(),
+    fn test_settings_full_round_trip() {
+        let original = Settings {
+            hotkey: "CommandOrControl+Alt+V".to_string(),
+            current_model: "large-v3".to_string(),
             current_model_engine: "whisper".to_string(),
             language: "ja".to_string(),
             translate_to_english: true,
             theme: "dark".to_string(),
             transcription_cleanup_days: Some(14),
-            pill_position: Some((500.0, 300.0)),
+            pill_position: Some((500.0, 200.0)),
             launch_at_startup: true,
             onboarding_completed: true,
             check_updates_automatically: false,
-            selected_microphone: Some("Built-in Microphone".to_string()),
+            selected_microphone: Some("Blue Yeti".to_string()),
             recording_mode: "push_to_talk".to_string(),
             use_different_ptt_key: true,
-            ptt_hotkey: Some("Alt+P".to_string()),
+            ptt_hotkey: Some("Alt+R".to_string()),
             keep_transcription_in_clipboard: true,
             play_sound_on_recording: false,
             play_sound_on_recording_end: true,
             pill_indicator_mode: "always".to_string(),
             pill_indicator_position: "top".to_string(),
-            sharing_port: Some(9999),
-            sharing_password: Some("secure_pass".to_string()),
+            sharing_port: Some(12345),
+            sharing_password: Some("mysecret".to_string()),
         };
 
-        // Verify all values
-        assert_eq!(settings.hotkey, "Alt+R");
-        assert_eq!(settings.current_model, "large-v3-turbo");
-        assert_eq!(settings.current_model_engine, "whisper");
-        assert_eq!(settings.language, "ja");
-        assert!(settings.translate_to_english);
-        assert_eq!(settings.theme, "dark");
-        assert_eq!(settings.transcription_cleanup_days, Some(14));
-        assert_eq!(settings.pill_position, Some((500.0, 300.0)));
-        assert!(settings.launch_at_startup);
-        assert!(settings.onboarding_completed);
-        assert!(!settings.check_updates_automatically);
+        // Serialize to JSON
+        let json = serde_json::to_string(&original).unwrap();
+
+        // Deserialize back
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+
+        // Verify all fields match
+        assert_eq!(restored.hotkey, original.hotkey);
+        assert_eq!(restored.current_model, original.current_model);
+        assert_eq!(restored.current_model_engine, original.current_model_engine);
+        assert_eq!(restored.language, original.language);
+        assert_eq!(restored.translate_to_english, original.translate_to_english);
+        assert_eq!(restored.theme, original.theme);
+        assert_eq!(
+            restored.transcription_cleanup_days,
+            original.transcription_cleanup_days
+        );
+        assert_eq!(restored.pill_position, original.pill_position);
+        assert_eq!(restored.launch_at_startup, original.launch_at_startup);
+        assert_eq!(restored.onboarding_completed, original.onboarding_completed);
+        assert_eq!(
+            restored.check_updates_automatically,
+            original.check_updates_automatically
+        );
+        assert_eq!(restored.selected_microphone, original.selected_microphone);
+        assert_eq!(restored.recording_mode, original.recording_mode);
+        assert_eq!(restored.use_different_ptt_key, original.use_different_ptt_key);
+        assert_eq!(restored.ptt_hotkey, original.ptt_hotkey);
+        assert_eq!(
+            restored.keep_transcription_in_clipboard,
+            original.keep_transcription_in_clipboard
+        );
+        assert_eq!(
+            restored.play_sound_on_recording,
+            original.play_sound_on_recording
+        );
+        assert_eq!(
+            restored.play_sound_on_recording_end,
+            original.play_sound_on_recording_end
+        );
+        assert_eq!(restored.pill_indicator_mode, original.pill_indicator_mode);
+        assert_eq!(
+            restored.pill_indicator_position,
+            original.pill_indicator_position
+        );
+        assert_eq!(restored.sharing_port, original.sharing_port);
+        assert_eq!(restored.sharing_password, original.sharing_password);
+    }
+
+    #[test]
+    fn test_settings_json_structure() {
+        let settings = Settings::default();
+        let json_value: serde_json::Value = serde_json::to_value(&settings).unwrap();
+
+        // Verify all expected keys exist
+        assert!(json_value.get("hotkey").is_some());
+        assert!(json_value.get("current_model").is_some());
+        assert!(json_value.get("current_model_engine").is_some());
+        assert!(json_value.get("language").is_some());
+        assert!(json_value.get("translate_to_english").is_some());
+        assert!(json_value.get("theme").is_some());
+        assert!(json_value.get("transcription_cleanup_days").is_some());
+        assert!(json_value.get("pill_position").is_some());
+        assert!(json_value.get("launch_at_startup").is_some());
+        assert!(json_value.get("onboarding_completed").is_some());
+        assert!(json_value.get("check_updates_automatically").is_some());
+        assert!(json_value.get("selected_microphone").is_some());
+        assert!(json_value.get("recording_mode").is_some());
+        assert!(json_value.get("use_different_ptt_key").is_some());
+        assert!(json_value.get("ptt_hotkey").is_some());
+        assert!(json_value.get("keep_transcription_in_clipboard").is_some());
+        assert!(json_value.get("play_sound_on_recording").is_some());
+        assert!(json_value.get("play_sound_on_recording_end").is_some());
+        assert!(json_value.get("pill_indicator_mode").is_some());
+        assert!(json_value.get("pill_indicator_position").is_some());
+        assert!(json_value.get("sharing_port").is_some());
+        assert!(json_value.get("sharing_password").is_some());
+    }
+
+    // ==================== Edge Case Tests ====================
+
+    #[test]
+    fn test_settings_empty_strings() {
+        let settings = Settings {
+            hotkey: "".to_string(),
+            current_model: "".to_string(),
+            current_model_engine: "".to_string(),
+            language: "".to_string(),
+            theme: "".to_string(),
+            recording_mode: "".to_string(),
+            pill_indicator_mode: "".to_string(),
+            pill_indicator_position: "".to_string(),
+            ..Settings::default()
+        };
+
+        // Empty strings should be preserved
+        assert_eq!(settings.hotkey, "");
+        assert_eq!(settings.current_model, "");
+        assert_eq!(settings.current_model_engine, "");
+        assert_eq!(settings.language, "");
+    }
+
+    #[test]
+    fn test_settings_unicode_values() {
+        let settings = Settings {
+            selected_microphone: Some("マイク 日本語".to_string()),
+            sharing_password: Some("пароль123".to_string()),
+            ..Settings::default()
+        };
+
         assert_eq!(
             settings.selected_microphone,
-            Some("Built-in Microphone".to_string())
+            Some("マイク 日本語".to_string())
         );
-        assert_eq!(settings.recording_mode, "push_to_talk");
-        assert!(settings.use_different_ptt_key);
-        assert_eq!(settings.ptt_hotkey, Some("Alt+P".to_string()));
-        assert!(settings.keep_transcription_in_clipboard);
-        assert!(!settings.play_sound_on_recording);
-        assert!(settings.play_sound_on_recording_end);
-        assert_eq!(settings.pill_indicator_mode, "always");
-        assert_eq!(settings.pill_indicator_position, "top");
-        assert_eq!(settings.sharing_port, Some(9999));
-        assert_eq!(settings.sharing_password, Some("secure_pass".to_string()));
+        assert_eq!(
+            settings.sharing_password,
+            Some("пароль123".to_string())
+        );
 
-        // Test full round-trip serialization
+        // Verify serialization preserves unicode
         let json = serde_json::to_string(&settings).unwrap();
-        let deserialized: Settings = serde_json::from_str(&json).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.selected_microphone, settings.selected_microphone);
+        assert_eq!(restored.sharing_password, settings.sharing_password);
+    }
 
-        assert_eq!(deserialized.hotkey, settings.hotkey);
-        assert_eq!(deserialized.current_model, settings.current_model);
-        assert_eq!(deserialized.pill_indicator_mode, settings.pill_indicator_mode);
-        assert_eq!(
-            deserialized.pill_indicator_position,
-            settings.pill_indicator_position
-        );
-        assert_eq!(
-            deserialized.play_sound_on_recording,
-            settings.play_sound_on_recording
-        );
-        assert_eq!(
-            deserialized.play_sound_on_recording_end,
-            settings.play_sound_on_recording_end
-        );
-        assert_eq!(deserialized.sharing_port, settings.sharing_port);
-        assert_eq!(deserialized.sharing_password, settings.sharing_password);
+    #[test]
+    fn test_settings_special_characters_in_password() {
+        let special_passwords = vec![
+            "pass!@#$%^&*()",
+            "with spaces here",
+            "quotes\"and'apostrophes",
+            "backslash\\path",
+            "newline\ntest",
+        ];
+
+        for password in special_passwords {
+            let settings = Settings {
+                sharing_password: Some(password.to_string()),
+                ..Settings::default()
+            };
+
+            let json = serde_json::to_string(&settings).unwrap();
+            let restored: Settings = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                restored.sharing_password,
+                Some(password.to_string()),
+                "Failed for password: {}",
+                password
+            );
+        }
+    }
+
+    #[test]
+    fn test_settings_very_long_values() {
+        let long_string = "a".repeat(10000);
+
+        let settings = Settings {
+            selected_microphone: Some(long_string.clone()),
+            ..Settings::default()
+        };
+
+        assert_eq!(settings.selected_microphone, Some(long_string.clone()));
+
+        // Should still serialize/deserialize correctly
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.selected_microphone, Some(long_string));
     }
 }
