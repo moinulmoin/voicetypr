@@ -451,10 +451,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             (model_name, path)
                         };
 
-                        // Start the server
+                        // Start the server (pass app handle for Parakeet support)
                         let mut manager = server_manager.lock().await;
                         manager
-                            .start(saved_port, saved_password, server_name, model_path, current_model, stored_engine)
+                            .start(saved_port, saved_password, server_name, model_path, current_model, stored_engine, Some(app_handle_for_sharing.clone()))
                             .await?;
 
                         Ok::<(), String>(())

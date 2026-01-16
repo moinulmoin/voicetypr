@@ -781,7 +781,7 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
             };
 
             let mut manager = server_manager.lock().await;
-            if let Err(e) = manager.start(port, password, server_name, model_path, model_name.clone(), engine).await {
+            if let Err(e) = manager.start(port, password, server_name, model_path, model_name.clone(), engine, Some(app.clone())).await {
                 log::warn!("🔧 [TRAY] Failed to auto-restore sharing: {}", e);
             } else {
                 log::info!("🔧 [TRAY] Network sharing auto-restored successfully");

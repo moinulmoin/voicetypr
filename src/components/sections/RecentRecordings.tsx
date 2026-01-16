@@ -33,6 +33,13 @@ interface SavedConnection {
   name: string;
   host: string;
   port: number;
+  model?: string;
+}
+
+// Interface for remote server status response
+interface StatusResponse {
+  model: string;
+  engine: string;
 }
 
 // Static mapping for model display names
@@ -74,7 +81,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
   // Track which items are being re-transcribed and with which model
   const { modelOrder } = useModelManagementContext();
   const [reTranscribingModels, setReTranscribingModels] = useState<Map<string, string>>(new Map());
-  const onlineServersRef = useRef<Map<string, string>>(new Map()); // serverId -> serverName
+  const onlineServersRef = useRef<Map<string, { name: string; model: string }>>(new Map()); // serverId -> { name, model }
   const canRecord = useCanRecord();
   const canAutoInsert = useCanAutoInsert();
 
@@ -86,18 +93,20 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
         // Check each server in parallel
         const checks = servers.map(async (server) => {
           try {
-            await invoke("test_remote_server", { serverId: server.id });
-            return { id: server.id, name: server.name, online: true };
+            const status = await invoke<StatusResponse>("test_remote_server", { serverId: server.id });
+            // Use server name or fallback to host:port
+            const displayName = server.name || `${server.host}:${server.port}`;
+            return { id: server.id, name: displayName, model: status.model, online: true };
           } catch {
-            return { id: server.id, name: server.name, online: false };
+            return { id: server.id, name: server.name || '', model: '', online: false };
           }
         });
         const results = await Promise.all(checks);
         // Update the cache with online servers
-        const onlineMap = new Map<string, string>();
+        const onlineMap = new Map<string, { name: string; model: string }>();
         for (const result of results) {
           if (result.online) {
-            onlineMap.set(result.id, result.name);
+            onlineMap.set(result.id, { name: result.name, model: result.model });
           }
         }
         onlineServersRef.current = onlineMap;
@@ -162,11 +171,15 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
 
     // Add cached online remote servers (pre-checked in background)
     for (const serverId of onlineServersRef.current.keys()) {
-      const serverName = onlineServersRef.current.get(serverId);
-      if (serverName) {
+      const serverInfo = onlineServersRef.current.get(serverId);
+      if (serverInfo) {
+        // Display as "ServerName - ModelName" if model is available
+        const displayName = serverInfo.model
+          ? `${serverInfo.name} - ${serverInfo.model}`
+          : serverInfo.name;
         sources.push({
           id: `remote:${serverId}`,
-          name: serverName,
+          name: displayName,
           type: 'remote',
         });
       }

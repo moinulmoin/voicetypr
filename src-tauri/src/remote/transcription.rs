@@ -1,15 +1,18 @@
 //! Real transcription context for the remote HTTP server
 //!
-//! Implements ServerContext using actual Whisper transcription.
+//! Implements ServerContext using actual Whisper or Parakeet transcription.
 
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::Instant;
 use tempfile::NamedTempFile;
+use tauri::AppHandle;
 
 use super::http::ServerContext;
 use super::server::TranscribeResponse;
+use crate::parakeet::messages::ParakeetResponse;
+use crate::parakeet::ParakeetManager;
 use crate::whisper::cache::TranscriberCache;
 
 /// Configuration for the transcription server
@@ -75,7 +78,7 @@ impl SharedServerState {
     }
 }
 
-/// Real transcription context that uses Whisper
+/// Real transcription context that uses Whisper or Parakeet
 ///
 /// Uses std::sync::Mutex for the cache because transcription is inherently
 /// blocking/CPU-bound and we want to serialize requests (as per design).
@@ -88,20 +91,24 @@ pub struct RealTranscriptionContext {
     shared_state: SharedServerState,
     /// Cache for loaded transcriber models - uses std Mutex for blocking access
     cache: Arc<StdMutex<TranscriberCache>>,
+    /// AppHandle for accessing Parakeet manager (optional, needed for parakeet engine)
+    app_handle: Option<AppHandle>,
 }
 
 impl RealTranscriptionContext {
-    /// Create a new transcription context with shared state
+    /// Create a new transcription context with shared state and AppHandle
     pub fn new_with_shared_state(
         server_name: String,
         password: Option<String>,
         shared_state: SharedServerState,
+        app_handle: Option<AppHandle>,
     ) -> Self {
         Self {
             server_name,
             password,
             shared_state,
             cache: Arc::new(StdMutex::new(TranscriberCache::new())),
+            app_handle,
         }
     }
 
@@ -114,6 +121,7 @@ impl RealTranscriptionContext {
             password: config.password,
             shared_state,
             cache: Arc::new(StdMutex::new(TranscriberCache::new())),
+            app_handle: None,
         }
     }
 
@@ -155,9 +163,15 @@ impl ServerContext for RealTranscriptionContext {
     fn transcribe(&self, audio_data: &[u8]) -> Result<TranscribeResponse, String> {
         let start = Instant::now();
 
+        // Get current engine and model info from shared state
+        let engine = self.shared_state.get_engine();
+        let model_name = self.shared_state.get_model_name();
+
         log::info!(
-            "Starting remote transcription: {} bytes of audio",
-            audio_data.len()
+            "Starting remote transcription: {} bytes of audio, engine='{}', model='{}'",
+            audio_data.len(),
+            engine,
+            model_name
         );
 
         // Validate audio data is not empty
@@ -181,9 +195,40 @@ impl ServerContext for RealTranscriptionContext {
 
         log::info!("Audio written to temp file: {:?}", temp_path);
 
-        // Get current model path from shared state
+        // Route to appropriate transcription engine
+        let text = match engine.as_str() {
+            "parakeet" => {
+                // Use Parakeet sidecar for transcription
+                self.transcribe_with_parakeet(&temp_path, &model_name)?
+            }
+            _ => {
+                // Default to Whisper transcription
+                self.transcribe_with_whisper(&temp_path)?
+            }
+        };
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        log::info!(
+            "Remote transcription completed: {} chars in {}ms using {} ({})",
+            text.len(),
+            duration_ms,
+            model_name,
+            engine
+        );
+
+        Ok(TranscribeResponse {
+            text,
+            duration_ms,
+            model: model_name,
+        })
+    }
+}
+
+impl RealTranscriptionContext {
+    /// Transcribe using Whisper model
+    fn transcribe_with_whisper(&self, audio_path: &PathBuf) -> Result<String, String> {
         let model_path = self.shared_state.get_model_path();
-        let model_name = self.shared_state.get_model_name();
 
         // Get transcriber from cache (blocking lock - serializes all transcriptions)
         let transcriber = {
@@ -194,31 +239,67 @@ impl ServerContext for RealTranscriptionContext {
 
             cache
                 .get_or_create(&model_path)
-                .map_err(|e| format!("Failed to load model: {}", e))?
+                .map_err(|e| format!("Failed to load Whisper model: {}", e))?
         };
 
-        log::info!("Model loaded, starting transcription...");
+        log::info!("Whisper model loaded, starting transcription...");
 
         // Perform transcription (this can take a while)
-        // Note: transcriber is Arc<Transcriber>, safe to use after releasing cache lock
-        let text = transcriber
-            .transcribe_with_translation(&temp_path, None, false)
-            .map_err(|e| format!("Transcription failed: {}", e))?;
+        transcriber
+            .transcribe_with_translation(audio_path, None, false)
+            .map_err(|e| format!("Whisper transcription failed: {}", e))
+    }
 
-        let duration_ms = start.elapsed().as_millis() as u64;
+    /// Transcribe using Parakeet sidecar
+    fn transcribe_with_parakeet(&self, audio_path: &PathBuf, model_name: &str) -> Result<String, String> {
+        let app_handle = self.app_handle.as_ref()
+            .ok_or_else(|| "Parakeet transcription requires AppHandle but none was provided".to_string())?;
 
-        log::info!(
-            "Remote transcription completed: {} chars in {}ms using {}",
-            text.len(),
-            duration_ms,
-            model_name
-        );
+        log::info!("Using Parakeet engine for transcription with model '{}'", model_name);
 
-        Ok(TranscribeResponse {
-            text,
-            duration_ms,
-            model: model_name,
-        })
+        // Get the ParakeetManager from app state
+        use tauri::Manager;
+        let parakeet_manager = app_handle.state::<ParakeetManager>();
+
+        // Clone what we need for the async block
+        let app_handle_clone = app_handle.clone();
+        let model_name_owned = model_name.to_string();
+        let audio_path_clone = audio_path.clone();
+
+        // Run the async Parakeet transcription in a blocking context
+        // Since we're already in a sync context (ServerContext::transcribe), use block_on
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // First, ensure the model is loaded
+                parakeet_manager
+                    .load_model(&app_handle_clone, &model_name_owned)
+                    .await
+                    .map_err(|e| format!("Failed to load Parakeet model: {}", e))?;
+
+                // Perform transcription
+                let response = parakeet_manager
+                    .transcribe(
+                        &app_handle_clone,
+                        &model_name_owned,
+                        audio_path_clone,
+                        None,    // language
+                        false,   // translate
+                    )
+                    .await
+                    .map_err(|e| format!("Parakeet transcription failed: {}", e))?;
+
+                // Extract text from the ParakeetResponse enum
+                match response {
+                    ParakeetResponse::Transcription { text, .. } => Ok::<String, String>(text),
+                    ParakeetResponse::Error { code, message, .. } => {
+                        Err(format!("Parakeet error {}: {}", code, message))
+                    }
+                    other => Err(format!("Unexpected Parakeet response: {:?}", other)),
+                }
+            })
+        });
+
+        result
     }
 }
 

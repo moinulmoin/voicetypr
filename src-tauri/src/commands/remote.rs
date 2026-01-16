@@ -89,7 +89,7 @@ pub async fn start_sharing(
         (model_name, path, stored_engine)
     };
 
-    // Start the server
+    // Start the server (pass app handle for Parakeet support)
     let mut manager = server_manager.lock().await;
     manager
         .start(
@@ -99,6 +99,7 @@ pub async fn start_sharing(
             model_path,
             current_model,
             engine,
+            Some(app.clone()),
         )
         .await?;
 
@@ -558,6 +559,7 @@ pub async fn set_active_remote_server(
                 model_path,
                 current_model,
                 current_engine,
+                Some(app.clone()),
             )
             .await
         {

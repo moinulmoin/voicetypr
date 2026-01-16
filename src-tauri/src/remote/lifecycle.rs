@@ -5,6 +5,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tauri::AppHandle;
 use tokio::sync::{oneshot, Mutex};
 use warp::Filter;
 
@@ -79,6 +80,8 @@ impl RemoteServerManager {
     /// * `server_name` - Display name for this server
     /// * `model_path` - Path to the currently selected model
     /// * `model_name` - Name of the current model
+    /// * `engine` - Transcription engine (whisper, parakeet, etc.)
+    /// * `app_handle` - Optional AppHandle for Parakeet support
     pub async fn start(
         &mut self,
         port: u16,
@@ -87,6 +90,7 @@ impl RemoteServerManager {
         model_path: PathBuf,
         model_name: String,
         engine: String,
+        app_handle: Option<AppHandle>,
     ) -> Result<(), String> {
         // Stop existing server if running
         if self.handle.is_some() {
@@ -103,14 +107,16 @@ impl RemoteServerManager {
         self.config = Some(config.clone());
 
         // Create shared state for dynamic model updates
-        let shared_state = SharedServerState::new(model_name, model_path, engine);
+        let shared_state = SharedServerState::new(model_name, model_path, engine.clone());
         self.shared_state = Some(shared_state.clone());
 
-        // Create the transcription context with shared state
+        // Create the transcription context with shared state and app handle
+        // App handle is needed for Parakeet engine support
         let ctx = Arc::new(Mutex::new(RealTranscriptionContext::new_with_shared_state(
             server_name.clone(),
             password,
             shared_state,
+            app_handle,
         )));
 
         // Create routes
@@ -260,7 +266,7 @@ mod tests {
     async fn test_server_start_stop() {
         let mut manager = RemoteServerManager::new();
 
-        // Start server
+        // Start server (no app handle needed for whisper-only test)
         let result = manager
             .start(
                 47843, // Use non-default port for test
@@ -269,6 +275,7 @@ mod tests {
                 PathBuf::from("/fake/model.bin"),
                 "test-model".to_string(),
                 "whisper".to_string(),
+                None,
             )
             .await;
 
@@ -304,6 +311,7 @@ mod tests {
                 PathBuf::from("/model1.bin"),
                 "model1".to_string(),
                 "whisper".to_string(),
+                None,
             )
             .await
             .unwrap();
@@ -319,6 +327,7 @@ mod tests {
                 PathBuf::from("/model2.bin"),
                 "model2".to_string(),
                 "whisper".to_string(),
+                None,
             )
             .await
             .unwrap();
