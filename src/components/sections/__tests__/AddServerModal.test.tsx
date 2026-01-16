@@ -341,7 +341,7 @@ describe("AddServerModal", () => {
     });
 
     it("shows error toast when trying to save without host", async () => {
-      const { toast } = await import("sonner");
+      const { toast: _toast } = await import("sonner");
       render(
         <AddServerModal
           open={true}

@@ -1,5 +1,4 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeneralSettings } from '../GeneralSettings';
 
@@ -69,7 +68,7 @@ vi.mock('@/components/ui/switch', () => ({
 }));
 
 vi.mock('@/components/ui/toggle-group', () => ({
-  ToggleGroup: ({ children, value, onValueChange }: {
+  ToggleGroup: ({ children, value, onValueChange: _onValueChange }: {
     children: React.ReactNode;
     value?: string;
     onValueChange?: (value: string) => void;
@@ -87,7 +86,7 @@ vi.mock('@/components/ui/toggle-group', () => ({
 
 // Mock Select with interactive behavior
 vi.mock('@/components/ui/select', () => ({
-  Select: ({ children, value, onValueChange }: {
+  Select: ({ children, value, onValueChange: _onValueChange }: {
     children: React.ReactNode;
     value?: string;
     onValueChange?: (value: string) => void;
