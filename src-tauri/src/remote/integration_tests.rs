@@ -13,9 +13,10 @@
 mod tests {
     use crate::remote::http::create_routes;
     use crate::remote::transcription::{RealTranscriptionContext, TranscriptionServerConfig};
+    use futures_util::future::join_all;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tempfile::TempDir;
     use tokio::sync::Mutex;
     use tokio::time::sleep;
@@ -52,8 +53,11 @@ mod tests {
         // Check common model locations
         let possible_paths = [
             // User data directory (where VoiceTypr downloads models)
-            dirs::data_local_dir()
-                .map(|p| p.join("com.voicetypr.app").join("models").join("ggml-tiny.en.bin")),
+            dirs::data_local_dir().map(|p| {
+                p.join("com.voicetypr.app")
+                    .join("models")
+                    .join("ggml-tiny.en.bin")
+            }),
             // Development directory
             Some(PathBuf::from("models/ggml-tiny.en.bin")),
         ];
@@ -117,10 +121,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -224,10 +227,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -240,7 +242,11 @@ mod tests {
         let status_url = format!("http://{}/api/v1/status", addr);
 
         // Request without password should fail
-        let response = client.get(&status_url).send().await.expect("Request failed");
+        let response = client
+            .get(&status_url)
+            .send()
+            .await
+            .expect("Request failed");
         assert_eq!(
             response.status(),
             reqwest::StatusCode::UNAUTHORIZED,
@@ -327,10 +333,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -345,7 +350,7 @@ mod tests {
 
         // Send rapid sequential requests concurrently
         println!("Sending {} rapid concurrent requests...", num_requests);
-        let start_time = std::time::Instant::now();
+        let start_time = Instant::now();
 
         let mut handles = Vec::new();
         for (i, audio_path) in audio_files.iter().enumerate() {
@@ -355,7 +360,7 @@ mod tests {
             let request_id = i;
 
             handles.push(tokio::spawn(async move {
-                let req_start = std::time::Instant::now();
+                let req_start = Instant::now();
                 println!("Request {} starting", request_id);
 
                 let result = client
@@ -367,10 +372,7 @@ mod tests {
                     .await;
 
                 let req_duration = req_start.elapsed();
-                println!(
-                    "Request {} completed in {:?}",
-                    request_id, req_duration
-                );
+                println!("Request {} completed in {:?}", request_id, req_duration);
 
                 (request_id, result, req_duration)
             }));
@@ -457,8 +459,8 @@ mod tests {
                 bits_per_sample: 16,
                 sample_format: hound::SampleFormat::Int,
             };
-            let mut writer = hound::WavWriter::create(&audio_path, spec)
-                .expect("Failed to create WAV writer");
+            let mut writer =
+                hound::WavWriter::create(&audio_path, spec).expect("Failed to create WAV writer");
             for _ in 0..samples {
                 writer.write_sample(0i16).expect("Failed to write sample");
             }
@@ -480,8 +482,9 @@ mod tests {
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(context);
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async { shutdown_rx.await.ok(); });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
             let _ = addr_tx.send(addr);
             server.await;
         });
@@ -512,7 +515,10 @@ mod tests {
 
             let json: serde_json::Value = response.json().await.expect("Failed to parse JSON");
             assert!(json["text"].is_string(), "Response should have text field");
-            assert!(json["model"].is_string(), "Response should have model field");
+            assert!(
+                json["model"].is_string(),
+                "Response should have model field"
+            );
             println!(
                 "Processed {} samples: {:?}",
                 samples,
@@ -524,5 +530,303 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(5), server_handle).await;
 
         println!("✓ Sequential requests with varying sizes test passed!");
+    }
+
+    /// Level 3 Integration Test: Host local + remote client concurrent transcription (Issue #3)
+    ///
+    /// This test simulates the scenario from Issue #3:
+    /// 1. PC starts sharing (server mode)
+    /// 2. MacBook connects as client
+    /// 3. Both machines initiate transcription simultaneously
+    /// 4. Verify both complete successfully without crashes
+    ///
+    /// In this test, we simulate "local" and "remote" by:
+    /// - Local: Direct call to the transcription context (as if host is transcribing)
+    /// - Remote: HTTP request to the server (as if client is requesting)
+    ///
+    /// The key verification is that both complete without error when running concurrently.
+    #[tokio::test]
+    #[ignore]
+    async fn test_concurrent_local_and_remote_transcription() {
+        let model_path = match get_tiny_model_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("SKIPPED: tiny.en model not found");
+                return;
+            }
+        };
+
+        println!("Using model: {:?}", model_path);
+
+        // Create test audio files
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let audio_path_1 = temp_dir.path().join("test1.wav");
+        let audio_path_2 = temp_dir.path().join("test2.wav");
+        create_test_wav(&audio_path_1).expect("Failed to create test WAV 1");
+        create_test_wav(&audio_path_2).expect("Failed to create test WAV 2");
+        println!("Created test audio files");
+
+        // Create server config
+        let config = TranscriptionServerConfig {
+            server_name: "Concurrent Test Server".to_string(),
+            password: None,
+            model_name: "tiny.en".to_string(),
+            model_path,
+        };
+
+        // Create shared transcription context
+        // This simulates the host having one context used for both local and remote transcriptions
+        let context = Arc::new(Mutex::new(RealTranscriptionContext::new(config)));
+        let context_for_local = context.clone();
+
+        // Start HTTP server for remote requests
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
+
+        let server_handle = tokio::spawn(async move {
+            let addr = ([127, 0, 0, 1], 0u16);
+            let routes = create_routes(context);
+
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
+
+            let _ = addr_tx.send(addr);
+            server.await;
+        });
+
+        let addr = addr_rx.await.expect("Server failed to start");
+        println!("Server started at: http://{}", addr);
+        sleep(Duration::from_millis(100)).await;
+
+        // Prepare audio data for both requests
+        let audio_data_remote = std::fs::read(&audio_path_1).expect("Failed to read audio file 1");
+        let audio_data_local = std::fs::read(&audio_path_2).expect("Failed to read audio file 2");
+
+        // Spawn "remote client" request (HTTP)
+        let addr_clone = addr;
+        let remote_handle = tokio::spawn(async move {
+            println!("[Remote] Starting HTTP transcription request...");
+            let client = reqwest::Client::new();
+            let transcribe_url = format!("http://{}/api/v1/transcribe", addr_clone);
+            let response = client
+                .post(&transcribe_url)
+                .header("Content-Type", "audio/wav")
+                .body(audio_data_remote)
+                .timeout(Duration::from_secs(120))
+                .send()
+                .await
+                .expect("[Remote] Failed to send request");
+
+            let status = response.status();
+            println!("[Remote] Response status: {}", status);
+            assert!(
+                status.is_success(),
+                "[Remote] Transcription failed with status: {}",
+                status
+            );
+
+            let json: serde_json::Value = response
+                .json()
+                .await
+                .expect("[Remote] Failed to parse JSON");
+            println!("[Remote] Transcription completed: {:?}", json);
+            json
+        });
+
+        // Spawn "local host" transcription (direct context access)
+        let local_handle = tokio::spawn(async move {
+            println!("[Local] Starting direct transcription...");
+
+            // Access the shared context directly (simulating local transcription on host)
+            let ctx = context_for_local.lock().await;
+            let result = ctx.transcribe(&audio_data_local);
+            drop(ctx); // Release lock
+
+            match result {
+                Ok(response) => {
+                    println!(
+                        "[Local] Transcription completed: text='{}', duration={}ms, model='{}'",
+                        response.text, response.duration_ms, response.model
+                    );
+                    Ok(response)
+                }
+                Err(e) => {
+                    println!("[Local] Transcription failed: {}", e);
+                    Err(e)
+                }
+            }
+        });
+
+        // Wait for both to complete
+        println!("Waiting for both transcriptions to complete...");
+        let (remote_result, local_result) = tokio::join!(remote_handle, local_handle);
+
+        // Verify remote request succeeded
+        let remote_json = remote_result.expect("[Remote] Task panicked");
+        assert!(
+            remote_json["text"].is_string(),
+            "[Remote] Missing 'text' in response"
+        );
+        assert!(
+            remote_json["model"].is_string(),
+            "[Remote] Missing 'model' in response"
+        );
+
+        // Verify local transcription succeeded
+        let local_response = local_result.expect("[Local] Task panicked");
+        assert!(
+            local_response.is_ok(),
+            "[Local] Transcription failed: {:?}",
+            local_response.err()
+        );
+        let local_response = local_response.unwrap();
+        assert!(!local_response.model.is_empty(), "[Local] Empty model name");
+
+        // Shutdown server
+        let _ = shutdown_tx.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(5), server_handle).await;
+
+        println!("✓ Concurrent local + remote transcription test passed!");
+        println!("  Both transcriptions completed without crashes or errors.");
+    }
+
+    /// Level 3 Integration Test: Multiple concurrent remote requests
+    ///
+    /// This test simulates multiple clients sending requests simultaneously,
+    /// verifying the server can queue and handle them correctly.
+    #[tokio::test]
+    #[ignore]
+    async fn test_multiple_concurrent_remote_requests() {
+        let model_path = match get_tiny_model_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("SKIPPED: tiny.en model not found");
+                return;
+            }
+        };
+
+        println!("Using model: {:?}", model_path);
+
+        // Create test audio
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let audio_path = temp_dir.path().join("test.wav");
+        create_test_wav(&audio_path).expect("Failed to create test WAV");
+        let audio_data = std::fs::read(&audio_path).expect("Failed to read audio file");
+        println!("Created test audio");
+
+        // Create server
+        let config = TranscriptionServerConfig {
+            server_name: "Multi-Client Test Server".to_string(),
+            password: None,
+            model_name: "tiny.en".to_string(),
+            model_path,
+        };
+
+        let context = Arc::new(Mutex::new(RealTranscriptionContext::new(config)));
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
+
+        let server_handle = tokio::spawn(async move {
+            let addr = ([127, 0, 0, 1], 0u16);
+            let routes = create_routes(context);
+
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
+
+            let _ = addr_tx.send(addr);
+            server.await;
+        });
+
+        let addr = addr_rx.await.expect("Server failed to start");
+        println!("Server started at: http://{}", addr);
+        sleep(Duration::from_millis(100)).await;
+
+        // Number of concurrent requests to send
+        const NUM_REQUESTS: usize = 3;
+
+        // Spawn multiple concurrent HTTP requests
+        let mut handles = Vec::new();
+        for i in 0..NUM_REQUESTS {
+            let audio_data_clone = audio_data.clone();
+            let addr_clone = addr;
+
+            handles.push(tokio::spawn(async move {
+                println!("[Client {}] Starting transcription request...", i);
+                let start = Instant::now();
+
+                let client = reqwest::Client::new();
+                let transcribe_url = format!("http://{}/api/v1/transcribe", addr_clone);
+                let response = client
+                    .post(&transcribe_url)
+                    .header("Content-Type", "audio/wav")
+                    .body(audio_data_clone)
+                    .timeout(Duration::from_secs(180)) // Allow time for queued requests
+                    .send()
+                    .await
+                    .expect(&format!("[Client {}] Failed to send request", i));
+
+                let status = response.status();
+                let elapsed = start.elapsed();
+                println!(
+                    "[Client {}] Response status: {} (took {:?})",
+                    i, status, elapsed
+                );
+
+                assert!(
+                    status.is_success(),
+                    "[Client {}] Failed with status: {}",
+                    i,
+                    status
+                );
+
+                let json: serde_json::Value = response
+                    .json()
+                    .await
+                    .expect(&format!("[Client {}] Failed to parse JSON", i));
+
+                println!("[Client {}] Completed successfully", i);
+                (i, json, elapsed)
+            }));
+        }
+
+        // Wait for all requests to complete
+        println!(
+            "Waiting for {} concurrent requests to complete...",
+            NUM_REQUESTS
+        );
+        let results = join_all(handles).await;
+
+        // Verify all succeeded
+        let mut total_duration = Duration::ZERO;
+        for result in results {
+            let (client_id, json, elapsed) = result.expect("Task panicked");
+            assert!(
+                json["text"].is_string(),
+                "[Client {}] Missing 'text' in response",
+                client_id
+            );
+            assert!(
+                json["model"].is_string(),
+                "[Client {}] Missing 'model' in response",
+                client_id
+            );
+            total_duration += elapsed;
+        }
+
+        // Shutdown server
+        let _ = shutdown_tx.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(5), server_handle).await;
+
+        println!("✓ Multiple concurrent remote requests test passed!");
+        println!(
+            "  All {} requests completed without crashes or errors.",
+            NUM_REQUESTS
+        );
+        println!(
+            "  Average response time: {:?}",
+            total_duration / NUM_REQUESTS as u32
+        );
     }
 }
