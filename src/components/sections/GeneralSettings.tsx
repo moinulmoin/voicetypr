@@ -453,6 +453,77 @@ export function GeneralSettings() {
                   </Select>
                 </div>
               )}
+
+              {/* Divider */}
+              <div className="border-t border-border/50 my-2" />
+
+              {/* Save Recordings */}
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor="save-recordings"
+                    className="text-sm font-medium"
+                  >
+                    Save Recordings
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Keep audio files for re-transcription with other models
+                  </p>
+                </div>
+                <Switch
+                  id="save-recordings"
+                  checked={settings.save_recordings ?? false}
+                  onCheckedChange={async (checked) => {
+                    await updateSettings({
+                      save_recordings: checked,
+                    });
+                    if (checked) {
+                      toast.success("Recordings will now be saved");
+                    }
+                  }}
+                />
+              </div>
+
+              {/* Recording Retention - shown when save_recordings is enabled */}
+              {settings.save_recordings && (
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label
+                      htmlFor="recording-retention"
+                      className="text-sm font-medium"
+                    >
+                      Keep Recordings
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Oldest recordings are auto-deleted when limit is reached
+                    </p>
+                  </div>
+                  <Select
+                    value={
+                      settings.recording_retention_count === null
+                        ? "unlimited"
+                        : String(settings.recording_retention_count ?? 50)
+                    }
+                    onValueChange={async (value) => {
+                      const count = value === "unlimited" ? null : parseInt(value, 10);
+                      await updateSettings({
+                        recording_retention_count: count,
+                      });
+                    }}
+                  >
+                    <SelectTrigger className="w-[160px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="25">Last 25</SelectItem>
+                      <SelectItem value="50">Last 50</SelectItem>
+                      <SelectItem value="100">Last 100</SelectItem>
+                      <SelectItem value="250">Last 250</SelectItem>
+                      <SelectItem value="unlimited">Forever (Unlimited)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
 
             <div className="px-4 pb-4">

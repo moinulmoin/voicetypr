@@ -1169,6 +1169,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             list_downloaded_models,
             cancel_download,
             cleanup_old_transcriptions,
+            get_recordings_directory,
             get_transcription_history,
             get_transcription_count,
             delete_transcription_entry,

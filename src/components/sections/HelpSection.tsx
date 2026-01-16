@@ -216,6 +216,17 @@ Actual behavior:
     }
   };
 
+  const handleOpenRecordings = async () => {
+    try {
+      const recordingsDir = await invoke<string>('get_recordings_directory');
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(recordingsDir);
+    } catch (error) {
+      console.error('Failed to open recordings folder:', error);
+      toast.error('Failed to open recordings folder');
+    }
+  };
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -356,6 +367,24 @@ Actual behavior:
                     <p className="text-sm font-medium">Open Logs Folder</p>
                     <p className="text-xs text-muted-foreground">
                       Open logs folder to attach to support messages
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
+              </button>
+
+              <button
+                onClick={handleOpenRecordings}
+                className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
+                    <Mic className="h-4 w-4" />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-sm font-medium">Open Recordings Folder</p>
+                    <p className="text-xs text-muted-foreground">
+                      Browse saved audio recordings
                     </p>
                   </div>
                 </div>

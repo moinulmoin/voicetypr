@@ -298,6 +298,136 @@ impl RecordingConfig {
 impl UnwindSafe for RecordingConfig {}
 impl RefUnwindSafe for RecordingConfig {}
 
+/// Save a recording file to persistent storage if save_recordings is enabled
+/// Returns the saved filename (not full path) if saved, None otherwise
+pub async fn maybe_save_recording(app: &AppHandle, audio_path: &Path) -> Option<String> {
+    // Check if save_recordings is enabled
+    let store = match app.store("settings") {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("Failed to get settings store for save_recordings check: {}", e);
+            return None;
+        }
+    };
+
+    let save_recordings = store
+        .get("save_recordings")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if !save_recordings {
+        log::debug!("save_recordings is disabled, skipping recording persistence");
+        return None;
+    }
+
+    // Get recordings directory
+    let recordings_dir = match app.path().app_data_dir() {
+        Ok(dir) => dir.join("recordings"),
+        Err(e) => {
+            log::error!("Failed to get app data directory: {}", e);
+            return None;
+        }
+    };
+
+    // Create recordings directory if it doesn't exist
+    if let Err(e) = std::fs::create_dir_all(&recordings_dir) {
+        log::error!("Failed to create recordings directory: {}", e);
+        return None;
+    }
+
+    // Generate filename: timestamp_uuid.wav
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let uuid_part = uuid::Uuid::new_v4().to_string()[..8].to_string();
+    let filename = format!("{}_{}.wav", timestamp, uuid_part);
+    let dest_path = recordings_dir.join(&filename);
+
+    // Copy the file to persistent storage
+    match std::fs::copy(audio_path, &dest_path) {
+        Ok(_) => {
+            log::info!("Saved recording to: {:?}", dest_path);
+
+            // Cleanup old recordings
+            let retention_count = store
+                .get("recording_retention_count")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize);
+
+            if let Some(max_count) = retention_count {
+                cleanup_old_recordings(&recordings_dir, max_count);
+            }
+
+            Some(filename)
+        }
+        Err(e) => {
+            log::error!("Failed to save recording: {}", e);
+            None
+        }
+    }
+}
+
+/// Clean up old recordings when count exceeds retention limit
+fn cleanup_old_recordings(recordings_dir: &Path, max_count: usize) {
+    if max_count == 0 {
+        // Unlimited retention
+        return;
+    }
+
+    // Get all .wav files in the recordings directory
+    let mut recordings: Vec<_> = match std::fs::read_dir(recordings_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "wav")
+                    .unwrap_or(false)
+            })
+            .collect(),
+        Err(e) => {
+            log::warn!("Failed to read recordings directory for cleanup: {}", e);
+            return;
+        }
+    };
+
+    // Sort by creation time (oldest first)
+    recordings.sort_by(|a, b| {
+        let time_a = a.metadata().and_then(|m| m.created()).ok();
+        let time_b = b.metadata().and_then(|m| m.created()).ok();
+        time_a.cmp(&time_b)
+    });
+
+    // Delete oldest files until we're at or below the limit
+    while recordings.len() > max_count {
+        if let Some(oldest) = recordings.first() {
+            let path = oldest.path();
+            if let Err(e) = std::fs::remove_file(&path) {
+                log::warn!("Failed to remove old recording {:?}: {}", path, e);
+            } else {
+                log::info!("Cleaned up old recording: {:?}", path);
+            }
+            recordings.remove(0);
+        } else {
+            break;
+        }
+    }
+}
+
+/// Get the full path to the recordings directory
+#[tauri::command]
+pub async fn get_recordings_directory(app: AppHandle) -> Result<String, String> {
+    let recordings_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recordings");
+
+    // Create if it doesn't exist
+    std::fs::create_dir_all(&recordings_dir)
+        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+
+    Ok(recordings_dir.to_string_lossy().to_string())
+}
+
 #[derive(Clone)]
 enum ActiveEngineSelection {
     Whisper {
@@ -1840,6 +1970,13 @@ pub async fn stop_recording(
             }
         };
 
+        // Try to save recording to persistent storage BEFORE cleanup
+        let recording_file = if transcription_result.is_ok() {
+            maybe_save_recording(&app_for_task, &audio_path_clone).await
+        } else {
+            None
+        };
+
         // Clean up temp file regardless of outcome
         if let Err(e) = std::fs::remove_file(&audio_path_clone) {
             log::warn!("Failed to remove temporary audio file: {}", e);
@@ -1911,6 +2048,7 @@ pub async fn stop_recording(
                 let text_for_process = text.clone();
                 let model_for_process = selected_model_name_for_task.clone();
                 let ai_enabled_for_task = ai_enabled; // Capture from cached config
+                let recording_file_for_task = recording_file.clone(); // Capture recording file
 
                 tokio::spawn(async move {
                     // 1. Process the transcription and enhancement
@@ -2036,11 +2174,13 @@ pub async fn stop_recording(
                     let app_for_history = app_for_process.clone();
                     let history_text = final_text.clone();
                     let history_model = model_for_process.clone();
+                    let recording_file_for_history = recording_file_for_task.clone();
                     tokio::spawn(async move {
-                        match save_transcription(
+                        match save_transcription_with_recording(
                             app_for_history.clone(),
                             history_text,
                             history_model,
+                            recording_file_for_history,
                         )
                         .await
                         {
@@ -2245,8 +2385,19 @@ pub async fn cleanup_old_transcriptions(app: AppHandle, days: Option<u32>) -> Re
     Ok(())
 }
 
+/// Save transcription to history without a recording file
 #[tauri::command]
 pub async fn save_transcription(app: AppHandle, text: String, model: String) -> Result<(), String> {
+    save_transcription_with_recording(app, text, model, None).await
+}
+
+/// Save transcription to history with optional recording file reference
+pub async fn save_transcription_with_recording(
+    app: AppHandle,
+    text: String,
+    model: String,
+    recording_file: Option<String>,
+) -> Result<(), String> {
     // De-dup guard: skip saving if the most recent entry matches the same text & model within a short window
     if let Ok(store) = app.store("transcriptions") {
         // Find most recent entry
@@ -2298,11 +2449,17 @@ pub async fn save_transcription(app: AppHandle, text: String, model: String) -> 
         .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
 
     let timestamp = chrono::Utc::now().to_rfc3339();
-    let transcription_data = serde_json::json!({
+    let mut transcription_data = serde_json::json!({
         "text": text.clone(),
         "model": model,
         "timestamp": timestamp.clone()
     });
+
+    // Add recording_file if present
+    if let Some(ref file) = recording_file {
+        transcription_data["recording_file"] = serde_json::json!(file);
+        log::info!("Saving transcription with recording file: {}", file);
+    }
 
     store.set(&timestamp, transcription_data.clone());
 

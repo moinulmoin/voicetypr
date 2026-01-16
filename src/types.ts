@@ -68,6 +68,9 @@ export interface AppSettings {
   // Network sharing settings
   sharing_port?: number;
   sharing_password?: string;
+  // Recording persistence settings
+  save_recordings?: boolean;
+  recording_retention_count?: number | null; // null = unlimited
 }
 
 export interface TranscriptionHistory {
@@ -75,8 +78,8 @@ export interface TranscriptionHistory {
   text: string;
   timestamp: Date;
   model: string;
-  recording_file?: string;
-  source_recording_id?: string;
+  recording_file?: string; // Filename of the saved recording (not full path)
+  source_recording_id?: string; // For re-transcriptions, references original transcription
   status?: 'completed' | 'in_progress' | 'failed';
 }
 

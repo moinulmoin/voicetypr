@@ -136,13 +136,15 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     try {
       const [sourceType, sourceIdentifier] = sourceId.split(':');
 
-      // Create new history entry with "in progress" status
-      // This will be done by the backend
+      // Get recordings directory to build full path
+      const recordingsDir = await invoke<string>("get_recordings_directory");
+      const separator = recordingsDir.includes('\\') ? '\\' : '/';
+      const fullPath = `${recordingsDir}${separator}${item.recording_file}`;
 
       if (sourceType === 'local') {
         // Re-transcribe using local model
         const result = await invoke<string>("transcribe_audio_file", {
-          filePath: item.recording_file,
+          filePath: fullPath,
           modelName: sourceIdentifier,
           modelEngine: null,
         });
@@ -154,7 +156,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
         // Re-transcribe using remote server
         // The backend will handle sending to the remote server
         const result = await invoke<string>("transcribe_audio_file", {
-          filePath: item.recording_file,
+          filePath: fullPath,
           modelName: `Remote:${sourceIdentifier}`,
           modelEngine: "remote",
         });

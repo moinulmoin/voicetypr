@@ -43,6 +43,9 @@ pub struct Settings {
     // Network sharing settings
     pub sharing_port: Option<u16>,
     pub sharing_password: Option<String>,
+    // Recording persistence settings
+    pub save_recordings: bool,
+    pub recording_retention_count: Option<u32>, // None = unlimited
 }
 
 impl Default for Settings {
@@ -70,6 +73,8 @@ impl Default for Settings {
             pill_indicator_position: "bottom".to_string(), // Default to bottom of screen
             sharing_port: Some(47842), // Default network sharing port
             sharing_password: None,    // No password by default
+            save_recordings: false,    // Default to not saving recordings
+            recording_retention_count: Some(50), // Default to keeping 50 recordings
         }
     }
 }
@@ -201,6 +206,14 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
         sharing_password: store
             .get("sharing_password")
             .and_then(|v| v.as_str().map(|s| s.to_string())),
+        save_recordings: store
+            .get("save_recordings")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().save_recordings),
+        recording_retention_count: store
+            .get("recording_retention_count")
+            .and_then(|v| v.as_u64().map(|n| n as u32))
+            .or(Settings::default().recording_retention_count),
     };
 
     Ok(settings)
@@ -291,6 +304,14 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         store.set("sharing_password", json!(pwd));
     } else {
         store.delete("sharing_password");
+    }
+
+    // Recording persistence settings
+    store.set("save_recordings", json!(settings.save_recordings));
+    if let Some(count) = settings.recording_retention_count {
+        store.set("recording_retention_count", json!(count));
+    } else {
+        store.delete("recording_retention_count");
     }
 
     // Save pill position if provided

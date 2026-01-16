@@ -7942,6 +7942,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-test",
+ "uuid",
  "warp",
  "whisper-rs",
  "windows 0.51.1",
