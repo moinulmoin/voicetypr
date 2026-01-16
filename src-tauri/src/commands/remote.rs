@@ -116,6 +116,19 @@ pub async fn start_sharing(
     }
 
     log::info!("Sharing started on port {}", port);
+
+    // Emit event to notify frontend of sharing status change
+    let status = manager.get_status();
+    let _ = app.emit(
+        "sharing-status-changed",
+        serde_json::json!({
+            "enabled": status.enabled,
+            "port": status.port,
+            "model_name": status.model_name
+        }),
+    );
+    log::info!("🔔 [SHARING] Emitted sharing-status-changed event (enabled=true)");
+
     Ok(())
 }
 
@@ -138,6 +151,18 @@ pub async fn stop_sharing(
     }
 
     log::info!("Sharing stopped");
+
+    // Emit event to notify frontend of sharing status change
+    let _ = app.emit(
+        "sharing-status-changed",
+        serde_json::json!({
+            "enabled": false,
+            "port": null,
+            "model_name": null
+        }),
+    );
+    log::info!("🔔 [SHARING] Emitted sharing-status-changed event (enabled=false)");
+
     Ok(())
 }
 
@@ -422,6 +447,17 @@ pub async fn set_active_remote_server(
             settings.sharing_was_active = true;
             save_remote_settings(&app, &settings)?;
             log::info!("🔧 [REMOTE] Network sharing stopped, sharing_was_active flag set");
+
+            // Emit event to notify frontend of sharing status change
+            let _ = app.emit(
+                "sharing-status-changed",
+                serde_json::json!({
+                    "enabled": false,
+                    "port": null,
+                    "model_name": null
+                }),
+            );
+            log::info!("🔔 [SHARING] Emitted sharing-status-changed event (auto-disabled for remote server)");
         }
     } else {
         // Clearing remote server - check if we should restore sharing
@@ -528,6 +564,18 @@ pub async fn set_active_remote_server(
             log::warn!("🔧 [REMOTE] Failed to auto-restore sharing: {}", e);
         } else {
             log::info!("🔧 [REMOTE] Network sharing auto-restored successfully");
+
+            // Emit event to notify frontend of sharing status change
+            let status = manager.get_status();
+            let _ = app.emit(
+                "sharing-status-changed",
+                serde_json::json!({
+                    "enabled": status.enabled,
+                    "port": status.port,
+                    "model_name": status.model_name
+                }),
+            );
+            log::info!("🔔 [SHARING] Emitted sharing-status-changed event (auto-restored)");
         }
     }
 
