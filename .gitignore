@@ -57,5 +57,3 @@ opencodetmp
 
 # bv (beads viewer) local config and caches
 .bv/
-.beads/
-bv-site/
