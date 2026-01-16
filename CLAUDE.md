@@ -49,7 +49,7 @@ pnpm tauri dev    # Full Tauri app development
 # Testing
 pnpm test         # Run all frontend tests
 pnpm test:watch   # Run tests in watch mode
-cd src-tauri && cargo test  # Run backend tests
+cd src-tauri && cargo test  # Run backend tests (macOS/Linux)
 
 # Build production app
 pnpm tauri build  # Creates native .app bundle
@@ -58,6 +58,19 @@ pnpm tauri build  # Creates native .app bundle
 pnpm lint         # Run ESLint
 pnpm typecheck    # Run TypeScript compiler
 ```
+
+### Windows Testing (Important!)
+
+On Windows, `cargo test` fails with `STATUS_ENTRYPOINT_NOT_FOUND` (TaskDialogIndirect) due to a [Tauri manifest issue](https://github.com/tauri-apps/tauri/issues/13419). Use the provided PowerShell script instead:
+
+```powershell
+cd src-tauri
+.\run-tests.ps1                    # Run all tests
+.\run-tests.ps1 -TestFilter "name" # Run specific test
+.\run-tests.ps1 -NoCapture         # Show test output
+```
+
+The script embeds the required Windows manifest into test executables before running them.
 
 ## Architecture
 
@@ -259,9 +272,29 @@ Currently working on this issue. Other agents: please select a different issue.
 
 #### While Working
 
-- Reference issue in commits: `git commit -m "test: add X tests (refs #123)"`
-- For long tasks, add progress comments every 30+ minutes
-- If blocked, comment immediately and pick different issue
+**Dynamic Issue Updates (IMPORTANT):**
+Keep the issue updated as you work so the user can track progress:
+
+1. **When you discover sub-tasks**: Update the issue body with a task checklist
+   ```bash
+   gh issue edit <number> --repo tomchapin/voicetypr --body "$(cat <<'EOF'
+   [Original issue content]
+
+   ## Progress
+   - [x] Task 1 completed
+   - [ ] Task 2 in progress
+   - [ ] Task 3 pending
+   EOF
+   )"
+   ```
+
+2. **Add progress comments** every 30+ minutes for long tasks
+
+3. **Research is allowed**: Use web search to find solutions, documentation, or examples
+
+4. **If blocked**: Comment immediately explaining the blocker and pick a different issue
+
+5. **Reference issue in commits**: `git commit -m "test: add X tests (refs #123)"`
 
 #### Completing Work
 

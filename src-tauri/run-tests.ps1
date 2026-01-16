@@ -1,101 +1,83 @@
-# PowerShell script to run Rust tests with manifest embedding for Windows
-# This fixes the TaskDialogIndirect / Common Controls v6 issue
+# PowerShell script to run Rust tests on Windows with proper manifest
+# This fixes the TaskDialogIndirect entry point not found error
+# See: https://github.com/tauri-apps/tauri/issues/13419
 
 param(
     [string]$TestFilter = "",
-    [switch]$NoBuild = $false
+    [switch]$NoCapture
 )
 
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
 
-# Find Visual Studio installation
-$vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-if (-not (Test-Path $vsWhere)) {
-    Write-Error "vswhere.exe not found. Please install Visual Studio."
-    exit 1
+# Create manifest file if it doesn't exist
+$manifestPath = "$PSScriptRoot\test-manifest.xml"
+$manifestContent = @"
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>
+"@
+
+Set-Content -Path $manifestPath -Value $manifestContent -Encoding UTF8
+
+# Build tests first
+Write-Host "Building tests..." -ForegroundColor Cyan
+$buildArgs = @("test", "--no-run")
+if ($TestFilter) {
+    $buildArgs += $TestFilter
+}
+& cargo $buildArgs
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Build failed!" -ForegroundColor Red
+    exit $LASTEXITCODE
 }
 
-$vsPath = & $vsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-if (-not $vsPath) {
-    Write-Error "Visual Studio with VC Tools not found."
-    exit 1
-}
+# Find test executables
+$testExes = Get-ChildItem -Path "target\debug\deps" -Filter "voicetypr_lib-*.exe" |
+    Where-Object { $_.Name -notmatch "\.d$" }
 
-# Find vcvarsall.bat
-$vcvarsall = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
-if (-not (Test-Path $vcvarsall)) {
-    Write-Error "vcvarsall.bat not found at: $vcvarsall"
-    exit 1
-}
+foreach ($exe in $testExes) {
+    Write-Host "Embedding manifest into $($exe.Name)..." -ForegroundColor Yellow
 
-Write-Host "Using Visual Studio at: $vsPath" -ForegroundColor Cyan
+    # Use mt.exe to embed manifest (from Windows SDK)
+    $mtExe = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\mt.exe"
+    if (-not (Test-Path $mtExe)) {
+        # Try older SDK version
+        $mtExe = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\mt.exe"
+    }
 
-# Build the test binary first (compile only, don't run)
-if (-not $NoBuild) {
-    Write-Host "Building test binary..." -ForegroundColor Yellow
-    cargo test --no-run --lib 2>&1 | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Build failed"
-        exit 1
+    if (Test-Path $mtExe) {
+        & $mtExe -manifest $manifestPath -outputresource:"$($exe.FullName);1" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  Manifest embedded successfully" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "Warning: mt.exe not found in Windows SDK" -ForegroundColor Yellow
     }
 }
 
-# Find the test binary
-$testBinaryPattern = "target\debug\deps\voicetypr_lib-*.exe"
-$testBinaries = Get-ChildItem -Path $testBinaryPattern -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -notmatch "\.d$" } |
-    Sort-Object LastWriteTime -Descending
-
-if ($testBinaries.Count -eq 0) {
-    Write-Error "No test binary found matching: $testBinaryPattern"
-    exit 1
-}
-
-$testBinary = $testBinaries[0].FullName
-Write-Host "Found test binary: $testBinary" -ForegroundColor Green
-
-# Path to our manifest
-$manifestPath = Join-Path $PSScriptRoot "test.manifest"
-if (-not (Test-Path $manifestPath)) {
-    Write-Error "Manifest file not found at: $manifestPath"
-    exit 1
-}
-
-# Embed manifest using mt.exe from VS Developer Command Prompt
-Write-Host "Embedding manifest..." -ForegroundColor Yellow
-
-$mtCommand = @"
-call "$vcvarsall" x64 >nul 2>&1
-mt.exe -manifest "$manifestPath" -outputresource:"$testBinary";1
-"@
-
-$tempBat = [System.IO.Path]::GetTempFileName() + ".bat"
-Set-Content -Path $tempBat -Value $mtCommand -Encoding ASCII
-
-$process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $tempBat -Wait -PassThru -NoNewWindow
-Remove-Item $tempBat -ErrorAction SilentlyContinue
-
-if ($process.ExitCode -ne 0) {
-    Write-Error "Failed to embed manifest (exit code: $($process.ExitCode))"
-    exit 1
-}
-
-Write-Host "Manifest embedded successfully" -ForegroundColor Green
-
-# Run the tests
-Write-Host "Running tests..." -ForegroundColor Yellow
-
+# Run tests
+Write-Host "Running tests..." -ForegroundColor Cyan
+$testArgs = @("test")
 if ($TestFilter) {
-    & $testBinary $TestFilter
-} else {
-    & $testBinary
+    $testArgs += $TestFilter
+}
+$testArgs += "--"
+if ($NoCapture) {
+    $testArgs += "--no-capture"
 }
 
-$testExitCode = $LASTEXITCODE
-if ($testExitCode -eq 0) {
-    Write-Host "Tests passed!" -ForegroundColor Green
-} else {
-    Write-Host "Tests failed with exit code: $testExitCode" -ForegroundColor Red
-}
-
-exit $testExitCode
+& cargo $testArgs
+exit $LASTEXITCODE
