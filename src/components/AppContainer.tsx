@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { AppErrorBoundary } from "./ErrorBoundary";
 import { Sidebar } from "./Sidebar";
 import { OnboardingDesktop } from "./onboarding/OnboardingDesktop";
@@ -105,6 +106,34 @@ export function AppContainer() {
             description,
             duration: 8000
           });
+        });
+
+        // Listen for remote VoiceTypr errors
+        registerEvent<{ title: string; message: string }>("remote-server-error", async (data) => {
+          console.error("Remote VoiceTypr error:", data);
+
+          // Show toast in the app
+          toast.error(data.title || "Remote VoiceTypr Error", {
+            description: data.message || "Failed to connect to remote VoiceTypr",
+            duration: 5000
+          });
+
+          // Also show system notification so user sees it even if app is not focused
+          try {
+            let permitted = await isPermissionGranted();
+            if (!permitted) {
+              const permission = await requestPermission();
+              permitted = permission === "granted";
+            }
+            if (permitted) {
+              sendNotification({
+                title: data.title || "Remote VoiceTypr Unavailable",
+                body: data.message || "The remote VoiceTypr is not responding. Please check the connection or switch to a local model."
+              });
+            }
+          } catch (err) {
+            console.error("Failed to send system notification:", err);
+          }
         });
 
         // Listen for license-required event and navigate to License section

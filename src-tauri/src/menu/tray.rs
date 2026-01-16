@@ -4,6 +4,7 @@ use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 
 use crate::audio;
+use crate::remote::server::StatusResponse;
 use crate::remote::settings::RemoteSettings;
 use crate::whisper;
 
@@ -55,24 +56,47 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
     };
 
     // Get remote server info (active connection and saved connections)
-    let (active_remote_id, active_remote_display, remote_connections) = {
+    // Collect: (id, display_name, model_name)
+    // For connections missing model info, fetch it via status check
+    let (active_remote_id, active_remote_display, active_remote_model, remote_connections) = {
         if let Some(remote_state) = app.try_state::<AsyncMutex<RemoteSettings>>() {
             let settings = remote_state.lock().await;
             let active_id = settings.active_connection_id.clone();
-            let active_display = settings.get_active_connection().map(|c| c.display_name());
-            let connections: Vec<(String, String)> = settings
-                .saved_connections
-                .iter()
-                .map(|c| (c.id.clone(), c.display_name()))
-                .collect();
-            (active_id, active_display, connections)
+
+            // Build connections list, always fetching fresh model info from servers
+            let mut connections: Vec<(String, String, Option<String>)> = Vec::new();
+            for conn in settings.saved_connections.iter() {
+                // Always try to fetch fresh status (server may have changed model)
+                let model = match fetch_server_status(&conn.host, conn.port, conn.password.as_deref()).await {
+                    Ok(status) => {
+                        log::debug!("Fetched model for '{}': {}", conn.display_name(), status.model);
+                        Some(status.model)
+                    }
+                    Err(e) => {
+                        // Fall back to cached model if fetch fails
+                        log::debug!("Could not fetch model for '{}': {}, using cached", conn.display_name(), e);
+                        conn.model.clone()
+                    }
+                };
+                connections.push((conn.id.clone(), conn.display_name(), model));
+            }
+
+            // Get active connection info
+            let active_conn_info = active_id.as_ref().and_then(|id| {
+                connections.iter().find(|(cid, _, _)| cid == id)
+            });
+            let active_display = active_conn_info.map(|(_, name, _)| name.clone());
+            let active_model = active_conn_info.and_then(|(_, _, model)| model.clone());
+
+            (active_id, active_display, active_model, connections)
         } else {
-            (None, None, Vec::new())
+            (None, None, None, Vec::new())
         }
     };
 
     let (available_models, whisper_models_info) = {
-        let mut models: Vec<(String, String)> = Vec::new();
+        // Store (name, display_name, size) for sorting
+        let mut models: Vec<(String, String, u64)> = Vec::new();
         let mut whisper_all = std::collections::HashMap::new();
 
         if let Some(whisper_state) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
@@ -81,7 +105,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             whisper_all = manager.get_models_status();
             for (name, info) in whisper_all.iter() {
                 if info.downloaded {
-                    models.push((name.clone(), info.display_name.clone()));
+                    models.push((name.clone(), info.display_name.clone(), info.size));
                 }
             }
         } else {
@@ -91,7 +115,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         if let Some(parakeet_manager) = app.try_state::<crate::parakeet::ParakeetManager>() {
             for m in parakeet_manager.list_models().into_iter() {
                 if m.downloaded {
-                    models.push((m.name.clone(), m.display_name.clone()));
+                    models.push((m.name.clone(), m.display_name.clone(), m.size));
                 }
             }
         } else {
@@ -101,36 +125,32 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         let has_soniox =
             crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
         if has_soniox {
-            models.push(("soniox".to_string(), "Soniox (Cloud)".to_string()));
+            // Soniox is cloud, put at end with max size
+            models.push(("soniox".to_string(), "Soniox (Cloud)".to_string(), u64::MAX));
         }
 
-        // Add remote servers
-        for (conn_id, conn_display) in &remote_connections {
-            // Use "remote_<id>" as the model name to distinguish from local models
-            let model_id = format!("remote_{}", conn_id);
-            let display = format!("🌐 {}", conn_display);
-            models.push((model_id, display));
-        }
+        // Sort by size (ascending) to match the UI order
+        models.sort_by_key(|m| m.2);
 
+        // Convert back to (name, display_name) pairs
+        let models: Vec<(String, String)> = models.into_iter().map(|(n, d, _)| (n, d)).collect();
+
+        // NOTE: Remote servers are added separately below with a separator
         (models, whisper_all)
     };
 
-    let model_submenu = if !available_models.is_empty() {
+    let model_submenu = if !available_models.is_empty() || !remote_connections.is_empty() {
         let mut model_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
         let mut model_check_items = Vec::new();
+        let mut separator_items = Vec::new();
+        let mut remote_header_items = Vec::new();
+        let mut remote_check_items = Vec::new();
 
-        for (model_name, display_name) in available_models {
-            // Determine selection:
-            // - Remote models: selected if active_remote_id matches
-            // - Local models: selected if no remote active AND current_model matches
-            let is_selected = if let Some(conn_id) = model_name.strip_prefix("remote_") {
-                // This is a remote server
-                active_remote_id.as_deref() == Some(conn_id)
-            } else {
-                // Local model - only selected if no remote is active
-                active_remote_id.is_none()
-                    && should_mark_model_selected(onboarding_done, &model_name, &current_model)
-            };
+        // Add local models first
+        for (model_name, display_name) in &available_models {
+            // Local model - only selected if no remote is active
+            let is_selected = active_remote_id.is_none()
+                && should_mark_model_selected(onboarding_done, model_name, &current_model);
 
             let model_item = CheckMenuItem::with_id(
                 app,
@@ -147,10 +167,57 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             model_items.push(item);
         }
 
-        // Resolve display name - prioritize active remote server
+        // Add remote servers section if any exist
+        if !remote_connections.is_empty() {
+            // Add separator
+            let sep = PredefinedMenuItem::separator(app)?;
+            separator_items.push(sep);
+            for item in &separator_items {
+                model_items.push(item);
+            }
+
+            // Add "Remote VoiceTypr" header (disabled item)
+            let header = MenuItem::with_id(app, "remote_header", "Remote VoiceTypr", false, None::<&str>)?;
+            remote_header_items.push(header);
+            for item in &remote_header_items {
+                model_items.push(item);
+            }
+
+            // Add remote server items with format "ServerName - ModelName"
+            for (conn_id, conn_display, conn_model) in &remote_connections {
+                let model_id = format!("remote_{}", conn_id);
+                let display = if let Some(model) = conn_model {
+                    format!("{} - {}", conn_display, model)
+                } else {
+                    conn_display.clone()
+                };
+                let is_selected = active_remote_id.as_deref() == Some(conn_id.as_str());
+
+                let remote_item = CheckMenuItem::with_id(
+                    app,
+                    &format!("model_{}", model_id),
+                    &display,
+                    true,
+                    is_selected,
+                    None::<&str>,
+                )?;
+                remote_check_items.push(remote_item);
+            }
+
+            for item in &remote_check_items {
+                model_items.push(item);
+            }
+        }
+
+        // Resolve display name for the menu label - prioritize active remote server
         let (effective_model, resolved_display_name) = if let Some(ref remote_display) = active_remote_display {
-            // Remote server is active - show it as the current model
-            ("remote".to_string(), Some(format!("🌐 {}", remote_display)))
+            // Remote server is active - show "ServerName - ModelName"
+            let display = if let Some(ref model) = active_remote_model {
+                format!("{} - {}", remote_display, model)
+            } else {
+                remote_display.clone()
+            };
+            ("remote".to_string(), Some(display))
         } else if onboarding_done && !current_model.is_empty() {
             let display = if let Some(info) = whisper_models_info.get(&current_model) {
                 Some(info.display_name.clone())
@@ -367,4 +434,33 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         .build()?;
 
     Ok(menu)
+}
+
+/// Fetch server status with a short timeout (for getting model info)
+async fn fetch_server_status(host: &str, port: u16, password: Option<&str>) -> Result<StatusResponse, String> {
+    let url = format!("http://{}:{}/api/v1/status", host, port);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let mut request = client.get(&url);
+    if let Some(pwd) = password {
+        request = request.header("X-VoiceTypr-Key", pwd);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Server error: {}", response.status()));
+    }
+
+    response
+        .json::<StatusResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
 }

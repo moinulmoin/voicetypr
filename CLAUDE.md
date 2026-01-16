@@ -74,6 +74,9 @@ pnpm typecheck    # Run TypeScript compiler
   - `audio/`: Audio recording with CoreAudio
   - `whisper/`: Whisper model management and transcription
   - `commands/`: Tauri command handlers
+  - `remote/`: Network sharing server and client (HTTP API via warp)
+  - `menu/`: System tray menu management
+  - `parakeet/`: Parakeet sidecar integration
 - **Capabilities**: Define permissions in `src-tauri/capabilities/`
 
 ### Testing Philosophy
@@ -96,18 +99,39 @@ pnpm typecheck    # Run TypeScript compiler
 ✅ **Completed**:
 - Core recording and transcription functionality
 - Model download and management (Whisper + Parakeet)
-- **NEW**: Swift/FluidAudio Parakeet sidecar (1.2MB vs 123MB Python)
+- Swift/FluidAudio Parakeet sidecar (1.2MB vs 123MB Python)
 - Settings persistence
 - Comprehensive test suite (110+ tests)
 - Error boundaries and recovery
 - Global hotkey support
+- **Remote Transcription / Network Sharing** (see below)
 
-📝 **Recent Updates**:
-- Parakeet Swift integration complete (see `PARAKEET_SWIFT_INTEGRATION.md`)
-- Native Apple Neural Engine support for **macOS only** (see `PARAKEET_MACOS_ONLY_FIX.md`)
+📝 **Recent Updates** (combined-fixes branch):
+- **Remote Transcription**: Mac can use Windows PC as transcription server
+- Network Sharing UI for hosting/connecting to remote servers
+- Tray menu shows remote servers with "ServerName - ModelName" format
+- System notifications when remote server unavailable
+- Parakeet Swift integration (Apple Neural Engine, macOS only)
 - Automated sidecar build via `build.rs`
-- Parakeet V2 removed, only V3 available
-- Dynamic engine detection (whisper/parakeet)
+
+### Remote Transcription Feature
+
+The `combined-fixes` branch includes full remote transcription support:
+
+**Server Mode (Windows/powerful machine):**
+- Settings → Network Sharing → Enable "Share on Network"
+- Serves transcription requests from other VoiceTypr instances
+- Uses local Whisper models on GPU
+
+**Client Mode (Mac/lightweight machine):**
+- Settings → Models → Add Remote Server
+- Select remote server from tray menu or dashboard
+- Audio recorded locally, sent to server for transcription
+
+**Key files:**
+- `src-tauri/src/remote/` - Server and client implementation
+- `src-tauri/src/commands/remote.rs` - Tauri commands for remote features
+- `src/components/sections/NetworkSharingSection.tsx` - UI for network sharing
 
 ### Common Patterns
 
@@ -116,13 +140,127 @@ pnpm typecheck    # Run TypeScript compiler
 3. **Graceful Degradation**: App should work even if some features fail
 4. **Type Safety**: Use TypeScript strictly, avoid `any`
 
-IMPORTANT: Read `agent-docs` for more details on the project before making any changes.
-IMPORTANT: Read `agent-reports` to understand whats going on
-IMPORTANT: Read `CLAUDE.local.md` for any local changes.
+IMPORTANT: Run `bd list` to see current issues before starting work.
+IMPORTANT: Run `bd ready` to find issues with no blockers that you can pick up.
+IMPORTANT: Read `CLAUDE.local.md` for any machine-specific configuration.
 
 ## Multi-Agent Collaboration
 
 This project uses **Beads** (git-backed issue tracker) and **Git Worktrees** for parallel async development by multiple Claude Code agents.
+
+### 🔴 CRITICAL: Beads Viewer & Daemon
+
+This project uses two essential tools for multi-agent coordination:
+
+| Tool | What It Does | Command | Source |
+|------|--------------|---------|--------|
+| **Beads CLI (`bd`)** | Issue tracking commands | `bd list`, `bd ready`, etc. | [steveyegge/beads](https://github.com/steveyegge/beads) |
+| **Beads Viewer (`bv`)** | Web dashboard (used by daemon) | (started by daemon) | [Dicklesworthstone/beads_viewer](https://github.com/Dicklesworthstone/beads_viewer) |
+| **Beads Daemon** | Syncs SQLite → JSONL + runs preview server | `./beads-watch.sh` (or `.ps1`) | (local script in repo) |
+
+**⚠️ WITHOUT THE DAEMON, THE DASHBOARD SHOWS STALE DATA!**
+
+The `bd` CLI stores data in SQLite. The `bv` viewer reads from `.beads/issues.jsonl`. The daemon bridges them by exporting changes every 5 seconds. If you update an issue with `bd update` but don't run the daemon, other agents won't see your changes in the dashboard.
+
+### Quick Start for New Agents
+
+**Every session, do these steps FIRST:**
+
+1. **Start the beads daemon** (REQUIRED - includes preview server):
+   ```bash
+   # macOS/Linux
+   ./beads-watch.sh &
+
+   # Windows PowerShell
+   powershell -ExecutionPolicy Bypass -File beads-watch.ps1
+   ```
+
+2. **Check current work status:**
+   ```bash
+   bd list --status=in_progress   # See what's being worked on
+   bd ready                        # Find available issues
+   ```
+
+3. **Read the bv-site/README.md** for prioritized issue list
+
+4. **Before starting any issue:**
+   ```bash
+   bd show <issue-id>              # Read full details and comments
+   bd update <id> --status=in_progress  # Claim the work
+   ```
+
+5. **While working, add progress comments:**
+   ```bash
+   bd comments add <id> "Started work on X..."
+   bd comments add <id> "Fixed Y, testing Z..."
+   ```
+
+6. **After completing work:**
+   ```bash
+   bd comments add <id> "STATUS: READY FOR VERIFICATION - <summary>"
+   # DO NOT close - wait for user to verify
+   ```
+
+### First-Time Setup (Bootstrap)
+
+**Prerequisites:** Go 1.21+ (for building from source) or use package managers.
+
+#### Install Beads CLI (`bd`)
+
+**macOS/Linux (Homebrew - recommended):**
+```bash
+brew install steveyegge/beads/bd
+```
+
+**macOS/Linux (curl script):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+```
+
+**npm (any platform):**
+```bash
+npm install -g @beads/bd
+```
+
+**Go (any platform):**
+```bash
+go install github.com/steveyegge/beads/cmd/bd@latest
+```
+
+#### Install Beads Viewer (`bv`)
+
+**macOS/Linux (curl script - recommended):**
+```bash
+curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/beads_viewer/main/install.sh" | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm "https://raw.githubusercontent.com/Dicklesworthstone/beads_viewer/main/install.ps1" | iex
+```
+
+**Go (any platform):**
+```bash
+git clone https://github.com/Dicklesworthstone/beads_viewer.git
+cd beads_viewer
+go install ./cmd/bv
+```
+
+#### Initialize Beads (if not already done)
+
+```bash
+bd init
+```
+
+This creates the `.beads/` directory. The project should already have this initialized.
+
+#### Verify Installation
+
+```bash
+bd --version    # Should show version
+bv --version    # Should show version
+bd list         # Should show project issues
+```
 
 ### Beads Issue Tracking
 
@@ -148,40 +286,88 @@ bd comments add <id> "..."    # Add progress notes
 3. Update status to `in_progress` before starting
 
 **After completing work:**
-1. Close the issue with `bd close <id> --reason="..."`
+1. **DO NOT close the issue yourself** - wait for user verification
 2. Commit your changes
+3. Inform the user the work is ready for testing
+4. Only close the issue with `bd close <id> --reason="..."` **after the user confirms** it's functionally complete
 
-### Beads Dashboard (IMPORTANT)
+**IMPORTANT:** Never close issues until a human has verified the feature works correctly. Tests passing is not sufficient - the user must confirm the actual functionality.
 
-**At session start**, launch the beads monitoring daemon and dashboard:
+### Beads Watch Daemon (CRITICAL)
 
+This project includes custom watch scripts that keep the beads dashboard in sync with the database. **You MUST run this daemon at the start of every session.**
+
+**Watch script files (in project root):**
+- `beads-watch.ps1` - Windows PowerShell version
+- `beads-watch.sh` - macOS/Linux bash version
+
+**What the daemon does:**
+1. Starts the `bv` preview server at http://127.0.0.1:9001
+2. Every 5 seconds, exports the SQLite database content via `bd export`
+3. Compares MD5 hash of DB content vs `.beads/issues.jsonl` file
+4. If different, writes the new content to JSONL and regenerates `bv-site/`
+5. This ensures the web dashboard always reflects the current database state
+
+**Why this is necessary:**
+- `bd` (beads CLI) stores data in SQLite for fast queries
+- `bv` (beads viewer) reads from `.beads/issues.jsonl` for git-friendly storage
+- Without the daemon, changes to issues (status updates, new issues, etc.) won't appear in the dashboard
+- The daemon detects ANY change (not just new issues) including status changes like `open → in_progress`
+
+### Starting the Daemon (REQUIRED AT SESSION START)
+
+The daemon handles everything: SQLite→JSONL sync AND the preview server.
+
+**Detect your platform first**, then run the appropriate command:
+
+#### macOS / Linux / Git Bash / WSL
 ```bash
-# macOS/Linux:
 ./beads-watch.sh &
-bv --preview-pages bv-site &
-
-# Windows (PowerShell):
-powershell -ExecutionPolicy Bypass -File beads-watch.ps1 &
-bv --preview-pages bv-site &
 ```
 
-Dashboard available at: http://127.0.0.1:9001
+#### Windows (PowerShell)
+```powershell
+powershell -ExecutionPolicy Bypass -File beads-watch.ps1
+```
 
-**Why this matters:**
-- `bd` stores data in SQLite, but `bv` reads from JSONL
-- The watch script ensures they stay in sync
-- Without it, the dashboard shows stale data
+**Dashboard URL:** http://127.0.0.1:9001
 
-**If data looks wrong:**
+**Verify daemon is working:**
+- Check for output like `Preview server running at http://127.0.0.1:9001`
+- Check for periodic output like `[HH:MM:SS] DB changed, syncing N issues...`
+- Make a change with `bd` and confirm it appears in the dashboard within 5 seconds
+
+### Manual Sync (If Daemon Not Running)
+
+If the dashboard shows stale data and the daemon isn't running:
+
+#### macOS / Linux / Git Bash / WSL
 ```bash
-# macOS/Linux:
 bd export > .beads/issues.jsonl
 bv --export-pages bv-site
+```
 
-# Windows (PowerShell - must use Out-File for UTF-8):
-bd export | Out-File -FilePath .beads/issues.jsonl -Encoding utf8
+#### Windows (PowerShell)
+```powershell
+# PowerShell requires special handling to avoid UTF-16 BOM corruption
+$content = bd export | Out-String
+[System.IO.File]::WriteAllText(".beads/issues.jsonl", $content.Trim(), [System.Text.UTF8Encoding]::new($false))
 bv --export-pages bv-site
 ```
+
+### Troubleshooting
+
+**Dashboard empty or showing wrong data:**
+1. Run `bd doctor` to check for sync issues
+2. Run the manual sync commands above (use correct platform commands!)
+3. Restart the watch daemon
+
+**Windows-specific: JSONL file shows garbage characters (ÿþ or ��):**
+- This is UTF-16 BOM corruption from using `>` redirect in PowerShell
+- Fix: Use the `.NET WriteAllText` method shown above, or use Git Bash instead
+
+**"Count mismatch" or "Status mismatch" warnings:**
+- Run `bd export > .beads/issues.jsonl` to force sync from DB (source of truth)
 
 ### Git Worktrees for Parallel Development
 

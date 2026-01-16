@@ -4,7 +4,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::Instant;
 use tempfile::NamedTempFile;
 
@@ -25,53 +25,131 @@ pub struct TranscriptionServerConfig {
     pub model_name: String,
 }
 
+/// Shared state that can be updated while the server is running
+#[derive(Clone)]
+pub struct SharedServerState {
+    /// Current model name (can be updated dynamically)
+    pub model_name: Arc<RwLock<String>>,
+    /// Current model path (can be updated dynamically, only for whisper)
+    pub model_path: Arc<RwLock<PathBuf>>,
+    /// Current engine type (whisper, parakeet, etc.)
+    pub engine: Arc<RwLock<String>>,
+}
+
+impl SharedServerState {
+    /// Create new shared state from initial values
+    pub fn new(model_name: String, model_path: PathBuf, engine: String) -> Self {
+        Self {
+            model_name: Arc::new(RwLock::new(model_name)),
+            model_path: Arc::new(RwLock::new(model_path)),
+            engine: Arc::new(RwLock::new(engine)),
+        }
+    }
+
+    /// Update the model
+    pub fn update_model(&self, model_name: String, model_path: PathBuf, engine: String) {
+        if let Ok(mut name) = self.model_name.write() {
+            *name = model_name;
+        }
+        if let Ok(mut path) = self.model_path.write() {
+            *path = model_path;
+        }
+        if let Ok(mut eng) = self.engine.write() {
+            *eng = engine;
+        }
+    }
+
+    /// Get the current model name
+    pub fn get_model_name(&self) -> String {
+        self.model_name.read().map(|n| n.clone()).unwrap_or_default()
+    }
+
+    /// Get the current model path
+    pub fn get_model_path(&self) -> PathBuf {
+        self.model_path.read().map(|p| p.clone()).unwrap_or_default()
+    }
+
+    /// Get the current engine
+    pub fn get_engine(&self) -> String {
+        self.engine.read().map(|e| e.clone()).unwrap_or_else(|_| "whisper".to_string())
+    }
+}
+
 /// Real transcription context that uses Whisper
 ///
 /// Uses std::sync::Mutex for the cache because transcription is inherently
 /// blocking/CPU-bound and we want to serialize requests (as per design).
 pub struct RealTranscriptionContext {
-    config: TranscriptionServerConfig,
+    /// Server name (static)
+    server_name: String,
+    /// Password for authentication
+    password: Option<String>,
+    /// Shared state for dynamic model updates
+    shared_state: SharedServerState,
     /// Cache for loaded transcriber models - uses std Mutex for blocking access
     cache: Arc<StdMutex<TranscriberCache>>,
 }
 
 impl RealTranscriptionContext {
-    /// Create a new transcription context
-    pub fn new(config: TranscriptionServerConfig) -> Self {
+    /// Create a new transcription context with shared state
+    pub fn new_with_shared_state(
+        server_name: String,
+        password: Option<String>,
+        shared_state: SharedServerState,
+    ) -> Self {
         Self {
-            config,
+            server_name,
+            password,
+            shared_state,
+            cache: Arc::new(StdMutex::new(TranscriberCache::new())),
+        }
+    }
+
+    /// Create a new transcription context (legacy, creates its own shared state)
+    pub fn new(config: TranscriptionServerConfig) -> Self {
+        // Default to whisper engine for legacy compatibility
+        let shared_state = SharedServerState::new(config.model_name, config.model_path, "whisper".to_string());
+        Self {
+            server_name: config.server_name,
+            password: config.password,
+            shared_state,
             cache: Arc::new(StdMutex::new(TranscriberCache::new())),
         }
     }
 
     /// Update the model being served
-    pub fn update_model(&mut self, model_path: PathBuf, model_name: String) {
-        self.config.model_path = model_path;
-        self.config.model_name = model_name;
+    pub fn update_model(&mut self, model_path: PathBuf, model_name: String, engine: String) {
+        self.shared_state.update_model(model_name, model_path, engine);
     }
 
     /// Update the password
     pub fn update_password(&mut self, password: Option<String>) {
-        self.config.password = password;
+        self.password = password;
     }
 
     /// Get the current model path
-    pub fn get_model_path(&self) -> &PathBuf {
-        &self.config.model_path
+    pub fn get_model_path(&self) -> PathBuf {
+        self.shared_state.get_model_path()
+    }
+
+    /// Get the shared state (for external updates)
+    pub fn get_shared_state(&self) -> SharedServerState {
+        self.shared_state.clone()
     }
 }
 
 impl ServerContext for RealTranscriptionContext {
     fn get_model_name(&self) -> String {
-        self.config.model_name.clone()
+        // Read current model name from shared state (dynamic)
+        self.shared_state.get_model_name()
     }
 
     fn get_server_name(&self) -> String {
-        self.config.server_name.clone()
+        self.server_name.clone()
     }
 
     fn get_password(&self) -> Option<String> {
-        self.config.password.clone()
+        self.password.clone()
     }
 
     fn transcribe(&self, audio_data: &[u8]) -> Result<TranscribeResponse, String> {
@@ -103,6 +181,10 @@ impl ServerContext for RealTranscriptionContext {
 
         log::info!("Audio written to temp file: {:?}", temp_path);
 
+        // Get current model path from shared state
+        let model_path = self.shared_state.get_model_path();
+        let model_name = self.shared_state.get_model_name();
+
         // Get transcriber from cache (blocking lock - serializes all transcriptions)
         let transcriber = {
             let mut cache = self
@@ -111,7 +193,7 @@ impl ServerContext for RealTranscriptionContext {
                 .map_err(|e| format!("Failed to acquire cache lock: {}", e))?;
 
             cache
-                .get_or_create(&self.config.model_path)
+                .get_or_create(&model_path)
                 .map_err(|e| format!("Failed to load model: {}", e))?
         };
 
@@ -129,13 +211,13 @@ impl ServerContext for RealTranscriptionContext {
             "Remote transcription completed: {} chars in {}ms using {}",
             text.len(),
             duration_ms,
-            self.config.model_name
+            model_name
         );
 
         Ok(TranscribeResponse {
             text,
             duration_ms,
-            model: self.config.model_name.clone(),
+            model: model_name,
         })
     }
 }

@@ -9,7 +9,7 @@ use tokio::sync::{oneshot, Mutex};
 use warp::Filter;
 
 use super::http::{create_routes, ServerContext};
-use super::transcription::{RealTranscriptionContext, TranscriptionServerConfig};
+use super::transcription::{RealTranscriptionContext, SharedServerState, TranscriptionServerConfig};
 
 /// Handle to a running server, used to stop it
 pub struct ServerHandle {
@@ -24,7 +24,7 @@ impl ServerHandle {
     pub fn stop(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
-            log::info!("Server shutdown signal sent");
+            log::info!("[Remote Server] Shutdown signal sent for port {}", self.port);
         }
     }
 }
@@ -41,6 +41,8 @@ pub struct RemoteServerManager {
     handle: Option<ServerHandle>,
     /// Server configuration
     config: Option<TranscriptionServerConfig>,
+    /// Shared state for dynamic model updates (only valid while server is running)
+    shared_state: Option<SharedServerState>,
 }
 
 impl Default for RemoteServerManager {
@@ -55,6 +57,7 @@ impl RemoteServerManager {
         Self {
             handle: None,
             config: None,
+            shared_state: None,
         }
     }
 
@@ -83,6 +86,7 @@ impl RemoteServerManager {
         server_name: String,
         model_path: PathBuf,
         model_name: String,
+        engine: String,
     ) -> Result<(), String> {
         // Stop existing server if running
         if self.handle.is_some() {
@@ -91,15 +95,23 @@ impl RemoteServerManager {
 
         let config = TranscriptionServerConfig {
             server_name: server_name.clone(),
-            password,
-            model_path,
-            model_name,
+            password: password.clone(),
+            model_path: model_path.clone(),
+            model_name: model_name.clone(),
         };
 
         self.config = Some(config.clone());
 
-        // Create the transcription context
-        let ctx = Arc::new(Mutex::new(RealTranscriptionContext::new(config)));
+        // Create shared state for dynamic model updates
+        let shared_state = SharedServerState::new(model_name, model_path, engine);
+        self.shared_state = Some(shared_state.clone());
+
+        // Create the transcription context with shared state
+        let ctx = Arc::new(Mutex::new(RealTranscriptionContext::new_with_shared_state(
+            server_name.clone(),
+            password,
+            shared_state,
+        )));
 
         // Create routes
         let routes = create_routes(ctx);
@@ -110,18 +122,21 @@ impl RemoteServerManager {
         // Bind to address
         let addr: SocketAddr = ([0, 0, 0, 0], port).into();
 
-        log::info!("Starting remote transcription server on {}", addr);
+        log::info!(
+            "[Remote Server] Starting server on {} as '{}'",
+            addr, server_name
+        );
 
         // Create the server with graceful shutdown
         let (_, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
             shutdown_rx.await.ok();
-            log::info!("Server received shutdown signal");
+            log::info!("[Remote Server] Received shutdown signal");
         });
 
         // Spawn the server task
         tokio::spawn(async move {
             server.await;
-            log::info!("Server task completed");
+            log::info!("[Remote Server] Server task completed");
         });
 
         // Store the handle
@@ -131,9 +146,10 @@ impl RemoteServerManager {
         });
 
         log::info!(
-            "Remote transcription server started on port {} as '{}'",
+            "[Remote Server] Server STARTED on port {} as '{}' with model '{}'",
             port,
-            server_name
+            server_name,
+            self.config.as_ref().map(|c| c.model_name.as_str()).unwrap_or("unknown")
         );
 
         Ok(())
@@ -142,18 +158,29 @@ impl RemoteServerManager {
     /// Stop the remote transcription server
     pub fn stop(&mut self) {
         if let Some(mut handle) = self.handle.take() {
+            let port = handle.port;
             handle.stop();
-            log::info!("Remote transcription server stopped");
+            log::info!("[Remote Server] Server STOPPED (was on port {})", port);
         }
         self.config = None;
+        self.shared_state = None;
     }
 
     /// Update the model being served (without restarting server)
-    pub fn update_model(&mut self, model_path: PathBuf, model_name: String) {
+    ///
+    /// This updates the shared state that the running server reads from,
+    /// so the change takes effect immediately for new requests.
+    pub fn update_model(&mut self, model_path: PathBuf, model_name: String, engine: String) {
+        // Update config for tracking
         if let Some(config) = &mut self.config {
-            config.model_path = model_path;
-            config.model_name = model_name;
-            log::info!("Server model updated to: {}", config.model_name);
+            config.model_path = model_path.clone();
+            config.model_name = model_name.clone();
+        }
+
+        // Update shared state - this is what the running server actually reads
+        if let Some(shared_state) = &self.shared_state {
+            shared_state.update_model(model_name.clone(), model_path, engine.clone());
+            log::info!("[Remote Server] Model dynamically updated to '{}' (engine: {})", model_name, engine);
         }
     }
 
@@ -176,6 +203,8 @@ pub struct SharingStatus {
     pub server_name: Option<String>,
     /// Number of active connections (placeholder for future)
     pub active_connections: u32,
+    /// The password for authentication (if set)
+    pub password: Option<String>,
 }
 
 impl RemoteServerManager {
@@ -189,6 +218,7 @@ impl RemoteServerManager {
                 model_name: config.map(|c| c.model_name.clone()),
                 server_name: config.map(|c| c.server_name.clone()),
                 active_connections: 0, // TODO: track actual connections
+                password: config.and_then(|c| c.password.clone()),
             }
         } else {
             SharingStatus {
@@ -197,6 +227,7 @@ impl RemoteServerManager {
                 model_name: None,
                 server_name: None,
                 active_connections: 0,
+                password: None,
             }
         }
     }

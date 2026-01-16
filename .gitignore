@@ -54,8 +54,10 @@ opencodetmp
 # bv (beads viewer) local config and caches
 .bv/
 
-# beads issue tracker (local project management)
-.beads/
+# beads issue tracker - track JSONL for cross-environment sync
+# but ignore SQLite database (local cache)
+.beads/*.db
+.beads/*.db-*
 
 # Git worktrees for parallel development
 .worktrees/

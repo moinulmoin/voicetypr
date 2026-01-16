@@ -1,11 +1,22 @@
-# Beads Watch - Keeps bv pages in sync with bd database
+# Beads Watch - Keeps bv pages in sync with bd database AND runs preview server
 # Compares DB content hash vs JSONL hash to detect ANY changes (not just count)
 
-$interval = 30  # seconds between checks
+$interval = 5  # seconds between checks
 
 Write-Host "Beads Watch starting..."
 Write-Host "  Interval: ${interval}s"
-Write-Host "  Press Ctrl+C to stop"
+Write-Host ""
+
+# Start the preview server in background
+Write-Host "Starting bv preview server..."
+$bvJob = Start-Job -ScriptBlock {
+    Set-Location $using:PWD
+    bv --preview-pages bv-site 2>&1
+}
+Start-Sleep -Seconds 2
+Write-Host "  -> Preview server running at http://127.0.0.1:9001"
+Write-Host ""
+Write-Host "Press Ctrl+C to stop both daemon and server"
 Write-Host ""
 
 $lastDbHash = ""
@@ -51,5 +62,19 @@ while ($true) {
     }
     $lastJsonlHash = $jsonlHash
 
+    # Check if preview server is still running
+    if ($bvJob.State -eq "Failed" -or $bvJob.State -eq "Stopped") {
+        Write-Host "Preview server stopped, restarting..."
+        $bvJob = Start-Job -ScriptBlock {
+            Set-Location $using:PWD
+            bv --preview-pages bv-site 2>&1
+        }
+    }
+
     Start-Sleep -Seconds $interval
 }
+
+# Cleanup on exit (Ctrl+C)
+Stop-Job $bvJob -ErrorAction SilentlyContinue
+Remove-Job $bvJob -ErrorAction SilentlyContinue
+Write-Host "Beads Watch stopped."

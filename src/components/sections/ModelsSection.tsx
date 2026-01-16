@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Label } from "../ui/label";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { AddServerModal } from "./AddServerModal";
 
 interface ModelsSectionProps {
@@ -58,7 +59,7 @@ export function ModelsSection({
   onSelect,
   refreshModels,
 }: ModelsSectionProps) {
-  const { settings, updateSettings } = useSettings();
+  const { settings, updateSettings, refreshSettings } = useSettings();
   const [cloudModal, setCloudModal] = useState<CloudModalState | null>(null);
   const [cloudModalLoading, setCloudModalLoading] = useState(false);
   const [remoteServers, setRemoteServers] = useState<SavedConnection[]>([]);
@@ -66,6 +67,8 @@ export function ModelsSection({
     null
   );
   const [addServerModalOpen, setAddServerModalOpen] = useState(false);
+  const [editingServer, setEditingServer] = useState<SavedConnection | null>(null);
+  const [remoteRefreshTrigger, setRemoteRefreshTrigger] = useState(0);
 
   const { availableToUse, availableToSetup } = useMemo(() => {
     const useList: [string, ModelInfo][] = [];
@@ -148,6 +151,44 @@ export function ModelsSection({
     fetchActiveRemoteServer();
   }, [fetchRemoteServers, fetchActiveRemoteServer]);
 
+  // Refresh active remote server when window gains focus (handles tray menu changes)
+  useEffect(() => {
+    const handleFocus = () => {
+      fetchActiveRemoteServer();
+      fetchRemoteServers();
+    };
+
+    window.addEventListener("focus", handleFocus);
+
+    // Also listen for Tauri window focus events
+    const unlisten = listen("tauri://focus", handleFocus);
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      unlisten.then((fn) => fn());
+    };
+  }, [fetchActiveRemoteServer, fetchRemoteServers]);
+
+  // Listen for model-changed events (from tray menu selection or UI)
+  useEffect(() => {
+    const unlistenModelChanged = listen<{ model: string; engine: string }>(
+      "model-changed",
+      (event) => {
+        console.log("[ModelsSection] model-changed event received:", event.payload);
+        // Refresh all model-related state
+        fetchActiveRemoteServer();
+        fetchRemoteServers();
+        refreshSettings();
+        // Trigger immediate status refresh on all remote server cards
+        setRemoteRefreshTrigger((prev) => prev + 1);
+      }
+    );
+
+    return () => {
+      unlistenModelChanged.then((fn) => fn());
+    };
+  }, [fetchActiveRemoteServer, fetchRemoteServers, refreshSettings]);
+
   const handleSelectRemoteServer = useCallback(
     async (serverId: string) => {
       try {
@@ -159,12 +200,12 @@ export function ModelsSection({
         );
         toast.success(
           serverId === activeRemoteServer
-            ? "Remote server deselected"
-            : "Remote server selected"
+            ? "Remote VoiceTypr deselected"
+            : "Remote VoiceTypr selected"
         );
       } catch (error) {
         console.error("Failed to set active remote server:", error);
-        toast.error("Failed to select remote server");
+        toast.error("Failed to select remote VoiceTypr");
       }
     },
     [activeRemoteServer]
@@ -178,10 +219,10 @@ export function ModelsSection({
         if (activeRemoteServer === serverId) {
           setActiveRemoteServer(null);
         }
-        toast.success("Server removed");
+        toast.success("Remote VoiceTypr removed");
       } catch (error) {
         console.error("Failed to remove remote server:", error);
-        toast.error("Failed to remove server");
+        toast.error("Failed to remove remote VoiceTypr");
       }
     },
     [activeRemoteServer]
@@ -189,17 +230,47 @@ export function ModelsSection({
 
   const handleServerAdded = useCallback(
     (server: SavedConnection) => {
-      setRemoteServers((prev) => [...prev, server]);
+      setRemoteServers((prev) => {
+        // Check if this is an update (server already exists)
+        const existingIndex = prev.findIndex((s) => s.id === server.id);
+        if (existingIndex >= 0) {
+          // Update existing server
+          const updated = [...prev];
+          updated[existingIndex] = server;
+          return updated;
+        }
+        // Add new server
+        return [...prev, server];
+      });
+      setEditingServer(null);
+      // Trigger immediate status refresh on all remote server cards
+      setRemoteRefreshTrigger((prev) => prev + 1);
     },
     []
   );
 
+  const handleEditServer = useCallback((server: SavedConnection) => {
+    setEditingServer(server);
+    setAddServerModalOpen(true);
+  }, []);
+
   const activeModelLabel = useMemo(() => {
+    // If a remote server is active, show "ServerName - ModelName" format
+    if (activeRemoteServer) {
+      const activeServer = remoteServers.find(s => s.id === activeRemoteServer);
+      if (activeServer) {
+        const serverName = activeServer.name || activeServer.host;
+        if (activeServer.model) {
+          return `${serverName} - ${activeServer.model}`;
+        }
+        return serverName;
+      }
+    }
     if (!currentModel) return null;
     const entry = models.find(([name]) => name === currentModel);
     if (!entry) return currentModel;
     return entry[1].display_name || currentModel;
-  }, [currentModel, models]);
+  }, [currentModel, models, activeRemoteServer, remoteServers]);
 
   useEffect(() => {
     if (!settings) return;
@@ -457,11 +528,20 @@ export function ModelsSection({
                         onDownload={onDownload}
                         onDelete={onDelete}
                         onCancelDownload={onCancelDownload}
-                        onSelect={(modelName) => {
+                        onSelect={async (modelName) => {
+                          // Clear active remote server when selecting a local model
+                          if (activeRemoteServer) {
+                            try {
+                              await invoke("set_active_remote_server", { serverId: null });
+                              setActiveRemoteServer(null);
+                            } catch (error) {
+                              console.error("Failed to clear active remote server:", error);
+                            }
+                          }
                           void onSelect(modelName);
                         }}
                         showSelectButton={model.downloaded}
-                        isSelected={currentModel === name}
+                        isSelected={!activeRemoteServer && currentModel === name}
                       />
                     ) : (
                       renderCloudCard([name, model])
@@ -488,11 +568,20 @@ export function ModelsSection({
                         onDownload={onDownload}
                         onDelete={onDelete}
                         onCancelDownload={onCancelDownload}
-                        onSelect={(modelName) => {
+                        onSelect={async (modelName) => {
+                          // Clear active remote server when selecting a local model
+                          if (activeRemoteServer) {
+                            try {
+                              await invoke("set_active_remote_server", { serverId: null });
+                              setActiveRemoteServer(null);
+                            } catch (error) {
+                              console.error("Failed to clear active remote server:", error);
+                            }
+                          }
                           void onSelect(modelName);
                         }}
                         showSelectButton={model.downloaded}
-                        isSelected={currentModel === name}
+                        isSelected={!activeRemoteServer && currentModel === name}
                       />
                     ) : (
                       renderCloudCard([name, model])
@@ -502,12 +591,12 @@ export function ModelsSection({
               </div>
             )}
 
-            {/* Remote Servers Section */}
+            {/* Remote VoiceTypr Models Section */}
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
                   <Server className="h-4 w-4" />
-                  Remote Servers ({remoteServers.length})
+                  Remote VoiceTypr Models ({remoteServers.length})
                 </h2>
                 <Button
                   size="sm"
@@ -515,7 +604,7 @@ export function ModelsSection({
                   onClick={() => setAddServerModalOpen(true)}
                 >
                   <Plus className="h-4 w-4 mr-1" />
-                  Add Server
+                  Add Remote
                 </Button>
               </div>
               {remoteServers.length > 0 ? (
@@ -527,6 +616,8 @@ export function ModelsSection({
                       isActive={activeRemoteServer === server.id}
                       onSelect={handleSelectRemoteServer}
                       onRemove={handleRemoveRemoteServer}
+                      onEdit={handleEditServer}
+                      refreshTrigger={remoteRefreshTrigger}
                     />
                   ))}
                 </div>
@@ -534,7 +625,7 @@ export function ModelsSection({
                 <Card className="px-4 py-6 border-border/50 border-dashed">
                   <div className="text-center text-muted-foreground">
                     <Server className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                    <p className="text-sm">No remote servers configured</p>
+                    <p className="text-sm">No remote VoiceTyprs configured</p>
                     <p className="text-xs mt-1 opacity-75">
                       Connect to another VoiceTypr to use its transcription
                     </p>
@@ -588,8 +679,12 @@ export function ModelsSection({
 
       <AddServerModal
         open={addServerModalOpen}
-        onOpenChange={setAddServerModalOpen}
+        onOpenChange={(open) => {
+          setAddServerModalOpen(open);
+          if (!open) setEditingServer(null);
+        }}
         onServerAdded={handleServerAdded}
+        editServer={editingServer}
       />
     </div>
   );

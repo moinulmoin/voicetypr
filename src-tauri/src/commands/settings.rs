@@ -2,6 +2,7 @@ use crate::audio::device_watcher::try_start_device_watcher_if_ready;
 use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_combination};
 use crate::commands::remote::save_remote_settings;
 use crate::parakeet::ParakeetManager;
+use crate::remote::lifecycle::RemoteServerManager;
 use crate::remote::settings::RemoteSettings;
 use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
 use crate::whisper::manager::WhisperManager;
@@ -39,6 +40,9 @@ pub struct Settings {
     pub pill_indicator_mode: String,
     // Pill indicator screen position: "top", "center", or "bottom"
     pub pill_indicator_position: String,
+    // Network sharing settings
+    pub sharing_port: Option<u16>,
+    pub sharing_password: Option<String>,
 }
 
 impl Default for Settings {
@@ -64,6 +68,8 @@ impl Default for Settings {
             play_sound_on_recording_end: true,    // Default to playing sound on recording end
             pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
             pill_indicator_position: "bottom".to_string(), // Default to bottom of screen
+            sharing_port: Some(47842), // Default network sharing port
+            sharing_password: None,    // No password by default
         }
     }
 }
@@ -188,6 +194,13 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("pill_indicator_position")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().pill_indicator_position),
+        sharing_port: store
+            .get("sharing_port")
+            .and_then(|v| v.as_u64().map(|n| n as u16))
+            .or(Settings::default().sharing_port),
+        sharing_password: store
+            .get("sharing_password")
+            .and_then(|v| v.as_str().map(|s| s.to_string())),
     };
 
     Ok(settings)
@@ -270,6 +283,15 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         "pill_indicator_position",
         json!(settings.pill_indicator_position),
     );
+    // Network sharing settings
+    if let Some(port) = settings.sharing_port {
+        store.set("sharing_port", json!(port));
+    }
+    if let Some(ref pwd) = settings.sharing_password {
+        store.set("sharing_password", json!(pwd));
+    } else {
+        store.delete("sharing_password");
+    }
 
     // Save pill position if provided
     if let Some((x, y)) = settings.pill_position {
@@ -372,6 +394,35 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         if let Err(e) = update_tray_menu(app.clone()).await {
             log::warn!("Failed to update tray menu after model change: {}", e);
             // Don't fail the whole operation if tray update fails
+        }
+
+        // Update the sharing server's model if it's running
+        {
+            use tauri::async_runtime::RwLock as AsyncRwLock;
+            let server_manager = app.state::<AsyncMutex<RemoteServerManager>>();
+            let mut server = server_manager.lock().await;
+            if server.is_running() {
+                let model_path: std::path::PathBuf = if !is_parakeet_engine && !is_cloud_engine {
+                    let whisper_state = app.state::<AsyncRwLock<WhisperManager>>();
+                    let manager = whisper_state.read().await;
+                    manager.get_model_path(&settings.current_model).unwrap_or_default()
+                } else {
+                    std::path::PathBuf::new()
+                };
+                server.update_model(model_path, settings.current_model.clone(), settings.current_model_engine.clone());
+                log::info!("Remote server model updated to: {} (engine: {})", settings.current_model, settings.current_model_engine);
+            }
+        }
+
+        // Emit model-changed event so frontend can refresh remote server status
+        if let Err(e) = app.emit(
+            "model-changed",
+            json!({
+                "model": settings.current_model,
+                "engine": settings.current_model_engine
+            }),
+        ) {
+            log::warn!("Failed to emit model-changed event: {}", e);
         }
     }
 
@@ -612,6 +663,25 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     if let Some(connection_id) = model_name.strip_prefix("remote_") {
         log::info!("Setting active remote server from tray: {}", connection_id);
 
+        // Stop network sharing if enabled (can't share while using remote)
+        // and remember that it was active for auto-restore later
+        if let Some(server_manager) = app.try_state::<AsyncMutex<RemoteServerManager>>() {
+            let manager = server_manager.lock().await;
+            if manager.get_status().enabled {
+                drop(manager); // Release lock before calling stop
+                log::info!("🔧 [TRAY] Stopping network sharing - selecting remote server (will remember for auto-restore)");
+                let mut manager = server_manager.lock().await;
+                manager.stop();
+
+                // Set flag to remember sharing was active
+                let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+                let mut settings = remote_state.lock().await;
+                settings.sharing_was_active = true;
+                save_remote_settings(&app, &settings)?;
+                log::info!("🔧 [TRAY] Network sharing stopped, sharing_was_active flag set");
+            }
+        }
+
         // Set the remote server as active
         let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
         {
@@ -638,13 +708,63 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     }
 
     // Clear any active remote server when selecting a local model
+    // and restore sharing if it was previously active
+    let should_restore_sharing;
     {
         let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
         let mut settings = remote_state.lock().await;
+        should_restore_sharing = settings.sharing_was_active;
+
         if settings.active_connection_id.is_some() {
             log::info!("Clearing active remote server - switching to local model");
             settings.set_active_connection(None)?;
-            save_remote_settings(&app, &settings)?;
+        }
+
+        // Clear the flag since we'll restore sharing now (if needed)
+        if should_restore_sharing {
+            settings.sharing_was_active = false;
+            log::info!("🔧 [TRAY] Will auto-restore network sharing");
+        }
+
+        save_remote_settings(&app, &settings)?;
+    }
+
+    // Restore sharing if it was previously active
+    if should_restore_sharing {
+        if let Some(server_manager) = app.try_state::<AsyncMutex<RemoteServerManager>>() {
+            // Get sharing settings from app store
+            let store = app.store("settings").map_err(|e| format!("Failed to access store: {}", e))?;
+            let port = store.get("sharing_port").and_then(|v| v.as_u64()).map(|p| p as u16).unwrap_or(47842);
+            let password = store.get("sharing_password").and_then(|v| v.as_str().map(|s| s.to_string()));
+
+            let server_name = hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "VoiceTypr Server".to_string());
+
+            log::info!("🔧 [TRAY] Auto-restoring network sharing on port {} with model {}", port, model_name);
+
+            // Determine the engine and model path for the model we're switching to
+            let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
+            let (engine, model_path) = if model_name == "soniox" {
+                ("soniox".to_string(), std::path::PathBuf::new())
+            } else {
+                let guard = whisper_state.read().await;
+                let is_whisper = guard.get_models_status().contains_key(&model_name);
+                if is_whisper {
+                    let path = guard.get_model_path(&model_name).unwrap_or_default();
+                    ("whisper".to_string(), path)
+                } else {
+                    ("parakeet".to_string(), std::path::PathBuf::new())
+                }
+            };
+
+            let mut manager = server_manager.lock().await;
+            if let Err(e) = manager.start(port, password, server_name, model_path, model_name.clone(), engine).await {
+                log::warn!("🔧 [TRAY] Failed to auto-restore sharing: {}", e);
+            } else {
+                log::info!("🔧 [TRAY] Network sharing auto-restored successfully");
+            }
         }
     }
 
@@ -687,6 +807,27 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
 
     // Save settings (this will also preload the model)
     save_settings(app.clone(), settings).await?;
+
+    // Update the sharing server's model if it's running
+    {
+        let server_manager = app.state::<AsyncMutex<RemoteServerManager>>();
+        let mut server = server_manager.lock().await;
+        if server.is_running() {
+            // Get the model path based on engine type
+            let model_path: std::path::PathBuf = if engine == "whisper" {
+                let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
+                let manager = whisper_state.read().await;
+                manager.get_model_path(&model_name).unwrap_or_default()
+            } else {
+                // For non-whisper engines (parakeet, soniox), model path is handled differently
+                // Parakeet uses a sidecar, soniox uses cloud API
+                std::path::PathBuf::new()
+            };
+
+            // Update the shared state - this takes effect immediately for new requests
+            server.update_model(model_path, model_name.clone(), engine.clone());
+        }
+    }
 
     // Update the tray menu to reflect the new selection
     update_tray_menu(app.clone()).await?;

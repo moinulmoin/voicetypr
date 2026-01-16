@@ -1259,8 +1259,17 @@ pub async fn stop_recording(
     let remote_settings = app.state::<AsyncMutex<RemoteSettings>>();
     let active_remote = {
         let settings = remote_settings.lock().await;
-        settings.get_active_connection().cloned()
+        log::info!(
+            "🔍 [REMOTE DEBUG] Checking remote settings: active_connection_id={:?}, saved_connections={}",
+            settings.active_connection_id,
+            settings.saved_connections.len()
+        );
+        let conn = settings.get_active_connection().cloned();
+        log::info!("🔍 [REMOTE DEBUG] get_active_connection returned: {:?}", conn.as_ref().map(|c| &c.id));
+        conn
     };
+
+    log::info!("🔍 [REMOTE DEBUG] active_remote is_some={}", active_remote.is_some());
 
     let engine_selection = if let Some(remote_conn) = active_remote {
         log::info!(
@@ -2088,6 +2097,32 @@ pub async fn stop_recording(
                             }
                         }
 
+                        update_recording_state(&app_for_reset, RecordingState::Idle, None);
+                    });
+                } else if e.contains("remote server") || e.contains("Remote server") {
+                    // Remote server error - emit specific event for system notification
+                    log::warn!("Remote server error: {}", e);
+
+                    // Emit event for frontend to show system notification
+                    let _ = app_for_task.emit("remote-server-error", serde_json::json!({
+                        "message": e.clone(),
+                        "title": "Remote Server Unavailable"
+                    }));
+
+                    update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
+                    pill_toast(&app_for_task, "Remote server unavailable", 2000);
+
+                    // Transition back to Idle after showing the error
+                    let app_for_reset = app_for_task.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        if should_hide_pill(&app_for_reset).await {
+                            if let Err(e) =
+                                crate::commands::window::hide_pill_widget(app_for_reset.clone()).await
+                            {
+                                log::error!("Failed to hide pill window: {}", e);
+                            }
+                        }
                         update_recording_state(&app_for_reset, RecordingState::Idle, None);
                     });
                 } else {

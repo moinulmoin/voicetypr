@@ -262,10 +262,29 @@ export function GeneralSettings() {
                     <p className="text-sm font-medium text-amber-900 dark:text-amber-400">
                       Accessibility permission required
                     </p>
-                    <p className="text-xs text-amber-800 dark:text-amber-500">
-                      Grant permission in Advanced settings for hotkeys to work
-                      system-wide
+                    <p className="text-xs text-amber-800 dark:text-amber-500 mb-1">
+                      VoiceTypr needs accessibility permission for hotkeys and auto-insert to work:
                     </p>
+                    <ol className="text-xs text-amber-800 dark:text-amber-500 list-decimal list-inside space-y-0.5 mb-2">
+                      <li>Open <strong>System Settings</strong></li>
+                      <li>Click <strong>Privacy & Security</strong> (not the top-level Accessibility)</li>
+                      <li>Scroll down and click <strong>Accessibility</strong></li>
+                      <li>Click the <strong>+</strong> button, select <strong>VoiceTypr</strong> from Applications</li>
+                      <li>Enable the toggle next to VoiceTypr</li>
+                    </ol>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await invoke("open_accessibility_settings");
+                        } catch (error) {
+                          console.error("Failed to open accessibility settings:", error);
+                          toast.error("Could not open settings. Please open System Settings manually.");
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400 hover:underline"
+                    >
+                      Open Accessibility Settings
+                    </button>
                   </div>
                 </div>
               )}
@@ -450,6 +469,9 @@ export function GeneralSettings() {
             </div>
           </div>
 
+          {/* Network Sharing Section */}
+          <NetworkSharingCard />
+
           {/* Startup Section */}
           <div className="rounded-lg border border-border/50 bg-card p-4">
             <div className="flex items-center justify-between">
@@ -474,9 +496,6 @@ export function GeneralSettings() {
               />
             </div>
           </div>
-
-          {/* Network Sharing Section */}
-          <NetworkSharingCard />
         </div>
       </ScrollArea>
     </div>

@@ -51,7 +51,7 @@ export const ModelCard = function ModelCard({
         isUsable ? 'cursor-pointer' : ''
       } ${
         isSelected
-          ? 'bg-primary/15 border-primary ring-2 ring-primary/30'
+          ? 'bg-primary/8 border-primary/50 ring-2 ring-primary/20'
           : 'border-border/50 hover:border-border'
       }`}
       onClick={() => isUsable && showSelectButton && onSelect(name)}

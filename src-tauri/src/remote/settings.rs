@@ -23,6 +23,9 @@ pub struct SavedConnection {
     pub name: Option<String>,
     /// Timestamp when this connection was added (unix timestamp ms)
     pub created_at: u64,
+    /// Model being served by this server (cached from last connection test)
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 impl SavedConnection {
@@ -43,6 +46,10 @@ pub struct RemoteSettings {
     pub saved_connections: Vec<SavedConnection>,
     /// Currently active connection ID (if using remote transcription)
     pub active_connection_id: Option<String>,
+    /// Flag indicating sharing was auto-disabled when switching to remote model
+    /// Used to auto-restore sharing when returning to a local model
+    #[serde(default)]
+    pub sharing_was_active: bool,
 }
 
 impl Default for RemoteSettings {
@@ -51,6 +58,7 @@ impl Default for RemoteSettings {
             server_config: RemoteServerConfig::default(),
             saved_connections: Vec::new(),
             active_connection_id: None,
+            sharing_was_active: false,
         }
     }
 }
@@ -63,6 +71,7 @@ impl RemoteSettings {
         port: u16,
         password: Option<String>,
         name: Option<String>,
+        model: Option<String>,
     ) -> SavedConnection {
         let id = generate_id();
         let created_at = current_timestamp();
@@ -74,6 +83,7 @@ impl RemoteSettings {
             password,
             name,
             created_at,
+            model,
         };
 
         self.saved_connections.push(saved.clone());

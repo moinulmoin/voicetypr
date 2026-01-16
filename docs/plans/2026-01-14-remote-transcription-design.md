@@ -1,7 +1,29 @@
 # Remote Transcription Feature Design
 
 **Date:** 2026-01-14
-**Status:** Draft
+**Status:** IMPLEMENTED
+
+## Implementation Status
+
+### Completed (2026-01-14)
+- [x] Backend: HTTP Server module (`src-tauri/src/remote/http.rs`, `lifecycle.rs`, `server.rs`)
+- [x] Backend: HTTP Client module (`src-tauri/src/remote/client.rs`)
+- [x] Backend: Settings storage (`src-tauri/src/remote/settings.rs`)
+- [x] Backend: Tauri commands (`src-tauri/src/commands/remote.rs`)
+- [x] Backend: Comprehensive logging for server/client operations
+- [x] Frontend: Network Sharing card (`src/components/sections/NetworkSharingCard.tsx`)
+- [x] Frontend: Models section with remote servers (`src/components/sections/ModelsSection.tsx`)
+- [x] Frontend: Connection modal (`src/components/AddServerModal.tsx`)
+- [x] Testing: Level 3 integration tests (`src-tauri/src/remote/integration_tests.rs`)
+- [x] Beads tracking for cross-environment collaboration
+
+### Remaining (Manual Testing)
+- [ ] End-to-end verification on PC (voicetypr-hca)
+- [ ] Setup MacBook as client (voicetypr-5qq)
+- [ ] Concurrent transcription test (voicetypr-0k3)
+- [ ] Rapid sequential requests test (voicetypr-9fj)
+
+---
 
 ## Overview
 

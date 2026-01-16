@@ -65,6 +65,9 @@ export interface AppSettings {
   pill_indicator_mode?: PillIndicatorMode;
   // Pill indicator screen position
   pill_indicator_position?: PillIndicatorPosition;
+  // Network sharing settings
+  sharing_port?: number;
+  sharing_password?: string;
 }
 
 export interface TranscriptionHistory {

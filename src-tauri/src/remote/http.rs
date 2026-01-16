@@ -2,6 +2,7 @@
 //!
 //! Uses warp to create REST API endpoints for status and transcription.
 
+use log::{info, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
@@ -66,12 +67,21 @@ async fn handle_status<T: ServerContext + 'static>(
     ctx: Arc<Mutex<T>>,
 ) -> Result<impl Reply, Rejection> {
     let ctx = ctx.lock().await;
+    let server_name = ctx.get_server_name();
+
+    info!("[Remote Server] Status request received on '{}'", server_name);
 
     // Check authentication
     if let Some(required_password) = ctx.get_password() {
         match auth_key {
-            Some(provided) if provided == required_password => {}
+            Some(provided) if provided == required_password => {
+                info!("[Remote Server] Status request authenticated successfully");
+            }
             _ => {
+                warn!(
+                    "[Remote Server] Status request REJECTED - authentication failed on '{}'",
+                    server_name
+                );
                 return Ok(warp::reply::with_status(
                     warp::reply::json(&ErrorResponse {
                         error: "unauthorized".to_string(),
@@ -82,12 +92,22 @@ async fn handle_status<T: ServerContext + 'static>(
         }
     }
 
+    // Get unique machine ID to allow clients to detect self-connection
+    let machine_id = crate::license::device::get_device_hash()
+        .unwrap_or_else(|_| "unknown".to_string());
+
     let response = StatusResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         model: ctx.get_model_name(),
         name: ctx.get_server_name(),
+        machine_id,
     };
+
+    info!(
+        "[Remote Server] Status response sent: model='{}', server='{}'",
+        response.model, response.name
+    );
 
     Ok(warp::reply::with_status(
         warp::reply::json(&response),
@@ -103,12 +123,26 @@ async fn handle_transcribe<T: ServerContext + 'static>(
     ctx: Arc<Mutex<T>>,
 ) -> Result<impl Reply, Rejection> {
     let ctx = ctx.lock().await;
+    let server_name = ctx.get_server_name();
+    let model_name = ctx.get_model_name();
+    let audio_size_kb = body.len() as f64 / 1024.0;
+
+    info!(
+        "🎙️ [Remote Server] Transcription request received on '{}': {:.1} KB audio, content-type='{}'",
+        server_name, audio_size_kb, content_type
+    );
 
     // Check authentication
     if let Some(required_password) = ctx.get_password() {
         match auth_key {
-            Some(provided) if provided == required_password => {}
+            Some(provided) if provided == required_password => {
+                info!("[Remote Server] Transcription request authenticated successfully");
+            }
             _ => {
+                warn!(
+                    "[Remote Server] Transcription request REJECTED - authentication failed on '{}'",
+                    server_name
+                );
                 return Ok(warp::reply::with_status(
                     warp::reply::json(&ErrorResponse {
                         error: "unauthorized".to_string(),
@@ -121,6 +155,10 @@ async fn handle_transcribe<T: ServerContext + 'static>(
 
     // Validate content type
     if !content_type.starts_with("audio/") {
+        warn!(
+            "[Remote Server] Transcription request REJECTED - unsupported content type: '{}'",
+            content_type
+        );
         return Ok(warp::reply::with_status(
             warp::reply::json(&ErrorResponse {
                 error: "unsupported_media_type".to_string(),
@@ -129,16 +167,43 @@ async fn handle_transcribe<T: ServerContext + 'static>(
         ));
     }
 
+    info!(
+        "[Remote Server] Starting transcription with model '{}' for {:.1} KB audio",
+        model_name, audio_size_kb
+    );
+
     // Perform transcription
     match ctx.transcribe(&body) {
-        Ok(response) => Ok(warp::reply::with_status(
-            warp::reply::json(&response),
-            StatusCode::OK,
-        )),
-        Err(error) => Ok(warp::reply::with_status(
-            warp::reply::json(&ErrorResponse { error }),
-            StatusCode::INTERNAL_SERVER_ERROR,
-        )),
+        Ok(response) => {
+            info!(
+                "🎯 [Remote Server] Transcription COMPLETED on '{}': {} chars in {}ms using '{}'",
+                server_name,
+                response.text.len(),
+                response.duration_ms,
+                response.model
+            );
+            // Log the actual transcription text (truncated for long texts)
+            let preview = if response.text.len() > 100 {
+                format!("{}...", &response.text[..100])
+            } else {
+                response.text.clone()
+            };
+            info!("📝 [Remote Server] Transcription result: \"{}\"", preview);
+            Ok(warp::reply::with_status(
+                warp::reply::json(&response),
+                StatusCode::OK,
+            ))
+        }
+        Err(error) => {
+            warn!(
+                "[Remote Server] Transcription FAILED on '{}': {}",
+                server_name, error
+            );
+            Ok(warp::reply::with_status(
+                warp::reply::json(&ErrorResponse { error }),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ))
+        }
     }
 }
 

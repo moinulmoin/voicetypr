@@ -12,6 +12,8 @@ pub struct StatusResponse {
     pub version: String,
     pub model: String,
     pub name: String,
+    /// Unique machine identifier to prevent self-connection
+    pub machine_id: String,
 }
 
 /// Response from the /api/v1/transcribe endpoint

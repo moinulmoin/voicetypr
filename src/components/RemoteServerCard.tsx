@@ -3,8 +3,11 @@ import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  AlertTriangle,
   CheckCircle2,
+  KeyRound,
   Loader2,
+  Pencil,
   Server,
   Trash2,
   Wifi,
@@ -19,6 +22,7 @@ export interface SavedConnection {
   password: string | null;
   name: string | null;
   created_at: number;
+  model?: string | null;
 }
 
 export interface StatusResponse {
@@ -26,6 +30,7 @@ export interface StatusResponse {
   version: string;
   model: string;
   name: string;
+  machine_id: string;
 }
 
 interface RemoteServerCardProps {
@@ -33,6 +38,9 @@ interface RemoteServerCardProps {
   isActive: boolean;
   onSelect: (serverId: string) => void;
   onRemove: (serverId: string) => void;
+  onEdit: (server: SavedConnection) => void;
+  /** Increment to force immediate status refresh */
+  refreshTrigger?: number;
 }
 
 export function RemoteServerCard({
@@ -40,12 +48,22 @@ export function RemoteServerCard({
   isActive,
   onSelect,
   onRemove,
+  onEdit,
+  refreshTrigger = 0,
 }: RemoteServerCardProps) {
-  const [status, setStatus] = useState<"checking" | "online" | "offline">(
+  const [status, setStatus] = useState<"checking" | "online" | "auth_failed" | "offline" | "self_connection">(
     "checking"
   );
   const [serverInfo, setServerInfo] = useState<StatusResponse | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [localMachineId, setLocalMachineId] = useState<string | null>(null);
+
+  // Fetch local machine ID once on mount
+  useEffect(() => {
+    invoke<string>("get_local_machine_id")
+      .then(setLocalMachineId)
+      .catch((err) => console.warn("Failed to get local machine ID:", err));
+  }, []);
 
   const checkStatus = useCallback(async () => {
     setStatus("checking");
@@ -54,12 +72,25 @@ export function RemoteServerCard({
         serverId: server.id,
       });
       setServerInfo(response);
-      setStatus("online");
-    } catch {
+
+      // Check for self-connection
+      if (localMachineId && response.machine_id === localMachineId) {
+        setStatus("self_connection");
+      } else {
+        setStatus("online");
+      }
+    } catch (error) {
       setServerInfo(null);
-      setStatus("offline");
+      // Check if it's an authentication failure vs connection failure
+      const errorMessage = typeof error === "string" ? error : "";
+      if (errorMessage.includes("Authentication failed")) {
+        setStatus("auth_failed");
+      } else {
+        setStatus("offline");
+      }
     }
-  }, [server.id]);
+  // Include connection details so checkStatus re-runs when server is edited
+  }, [server.id, server.host, server.port, server.password, localMachineId]);
 
   useEffect(() => {
     checkStatus();
@@ -67,6 +98,13 @@ export function RemoteServerCard({
     const interval = setInterval(checkStatus, 30000);
     return () => clearInterval(interval);
   }, [checkStatus]);
+
+  // Re-check when refreshTrigger changes (used by parent to force refresh)
+  useEffect(() => {
+    if (refreshTrigger > 0) {
+      checkStatus();
+    }
+  }, [refreshTrigger, checkStatus]);
 
   const handleRemove = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -78,37 +116,72 @@ export function RemoteServerCard({
     }
   };
 
+  const handleEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onEdit(server);
+  };
+
   const displayName = server.name || `${server.host}:${server.port}`;
+
+  const isSelectable = status === "online";
 
   return (
     <Card
       className={cn(
-        "px-4 py-3 border-border/50 transition cursor-pointer",
-        "hover:border-border",
-        isActive && "bg-primary/5 border-primary/30"
+        "px-4 py-3 border transition",
+        isSelectable ? "cursor-pointer" : "cursor-default",
+        status === "self_connection"
+          ? "bg-amber-500/5 border-amber-500/30"
+          : isActive
+            ? "bg-primary/8 border-primary/50 ring-2 ring-primary/20"
+            : isSelectable
+              ? "border-border/50 hover:border-border"
+              : "border-border/50"
       )}
-      onClick={() => status === "online" && onSelect(server.id)}
+      onClick={() => isSelectable && onSelect(server.id)}
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
           <div
             className={cn(
               "p-2 rounded-md",
-              status === "online" ? "bg-green-500/10" : "bg-muted"
+              isActive && status === "online"
+                ? "bg-primary/20"
+                : status === "online"
+                  ? "bg-green-500/10"
+                  : status === "auth_failed" || status === "self_connection"
+                    ? "bg-amber-500/10"
+                    : "bg-muted"
             )}
           >
             <Server
               className={cn(
                 "h-4 w-4",
-                status === "online" ? "text-green-500" : "text-muted-foreground"
+                isActive && status === "online"
+                  ? "text-primary"
+                  : status === "online"
+                    ? "text-green-500"
+                    : status === "auth_failed" || status === "self_connection"
+                      ? "text-amber-500"
+                      : "text-muted-foreground"
               )}
             />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="font-medium text-sm truncate">{displayName}</h3>
+              <h3
+                className={cn(
+                  "font-medium text-sm truncate",
+                  isActive && "text-primary"
+                )}
+              >
+                {displayName}
+              </h3>
               {isActive && (
-                <CheckCircle2 className="h-4 w-4 text-primary flex-shrink-0" />
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/20 text-primary text-xs font-medium flex-shrink-0">
+                  <CheckCircle2 className="h-3 w-3" />
+                  Active
+                </span>
               )}
             </div>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -129,6 +202,23 @@ export function RemoteServerCard({
                     </span>
                   )}
                 </>
+              ) : status === "auth_failed" ? (
+                <>
+                  <KeyRound className="h-3 w-3 text-amber-500" />
+                  <span className="text-amber-600 dark:text-amber-400">
+                    Auth Failed
+                  </span>
+                </>
+              ) : status === "self_connection" ? (
+                <>
+                  <AlertTriangle className="h-3 w-3 text-amber-500" />
+                  <span className="text-amber-600 dark:text-amber-400">
+                    This Machine
+                  </span>
+                  <span className="text-muted-foreground">
+                    • Cannot use self
+                  </span>
+                </>
               ) : (
                 <>
                   <WifiOff className="h-3 w-3 text-red-500" />
@@ -141,13 +231,23 @@ export function RemoteServerCard({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+            onClick={handleEdit}
+            title="Edit server"
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
           <Button
             size="sm"
             variant="ghost"
             className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
             onClick={handleRemove}
             disabled={removing}
+            title="Remove server"
           >
             {removing ? (
               <Loader2 className="h-4 w-4 animate-spin" />

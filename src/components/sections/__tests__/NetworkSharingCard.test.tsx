@@ -1,5 +1,4 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ReactNode } from "react";
 
@@ -198,11 +197,11 @@ describe("NetworkSharingCard", () => {
       });
     });
 
-    it("shows the model being shared", async () => {
+    it("shows the model being shared with friendly name", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByText("Model: large-v3-turbo")).toBeInTheDocument();
+        expect(screen.getByText("Model: Large v3 Turbo")).toBeInTheDocument();
       });
     });
 
@@ -297,89 +296,26 @@ describe("NetworkSharingCard", () => {
       });
     });
 
-    it("shows warning when shared model differs from selected model", async () => {
+    it("automatically restarts sharing when model changes", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
-      await waitFor(() => {
-        expect(screen.getByText("Model changed")).toBeInTheDocument();
-      });
-
-      // Should show both models in the warning message
-      expect(screen.getByText(/You selected/)).toBeInTheDocument();
-      expect(screen.getByText(/Base \(English\)/)).toBeInTheDocument();
-      // "large-v3-turbo" appears twice - once in status and once in warning
-      // Use getAllByText to verify it appears
-      expect(screen.getAllByText(/large-v3-turbo/).length).toBeGreaterThanOrEqual(2);
-    });
-
-    it("shows Update button to restart sharing with new model", async () => {
-      renderWithProviders(<NetworkSharingCard />);
-
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: /Update/i })).toBeInTheDocument();
-      });
-    });
-
-    it("restarts sharing when Update button is clicked", async () => {
-      const user = userEvent.setup();
-      renderWithProviders(<NetworkSharingCard />);
-
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: /Update/i })).toBeInTheDocument();
-      });
-
-      const updateButton = screen.getByRole("button", { name: /Update/i });
-      await user.click(updateButton);
-
-      // Should call stop_sharing and then start_sharing
+      // Wait for the auto-restart to be triggered
       await waitFor(() => {
         expect(mockInvoke).toHaveBeenCalledWith("stop_sharing");
         expect(mockInvoke).toHaveBeenCalledWith("start_sharing", expect.any(Object));
       });
     });
-  });
 
-  describe("when models match while sharing", () => {
-    beforeEach(() => {
-      mockInvoke.mockImplementation((command: string) => {
-        switch (command) {
-          case "get_settings":
-            return Promise.resolve({
-              current_model: "large-v3-turbo",
-              auto_insert: true,
-              launch_at_startup: false,
-            });
-          case "get_sharing_status":
-            return Promise.resolve({
-              enabled: true,
-              port: 47842,
-              model_name: "large-v3-turbo",
-              server_name: "My-PC",
-              active_connections: 0,
-            });
-          case "get_local_ips":
-            return Promise.resolve(["192.168.1.100 (eth0)"]);
-          case "get_model_status":
-            return Promise.resolve({
-              models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
-              ],
-            });
-          default:
-            return Promise.reject(new Error(`Unknown command: ${command}`));
-        }
-      });
-    });
-
-    it("does not show model mismatch warning when models match", async () => {
+    it("does not show manual Update button", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
+      // Wait for component to render
       await waitFor(() => {
         expect(screen.getByText("Sharing Active")).toBeInTheDocument();
       });
 
-      // Should NOT show the warning
-      expect(screen.queryByText("Model changed")).not.toBeInTheDocument();
+      // Should NOT show Update button - restart is automatic
+      expect(screen.queryByRole("button", { name: /Update/i })).not.toBeInTheDocument();
     });
   });
 });
