@@ -16,9 +16,10 @@ const ShareStatsModal = lazy(() =>
 
 interface OverviewTabProps {
   history: TranscriptionHistory[];
+  totalCount: number;
 }
 
-export function OverviewTab({ history }: OverviewTabProps) {
+export function OverviewTab({ history, totalCount }: OverviewTabProps) {
   const canRecord = useCanRecord();
   const canAutoInsert = useCanAutoInsert();
   const { settings } = useSettings();
@@ -125,11 +126,11 @@ export function OverviewTab({ history }: OverviewTabProps) {
       avgLength,
       timeSavedDisplay,
       productivityScore,
-      totalTranscriptions: history.length,
+      totalTranscriptions: totalCount,  // Use true total count instead of limited history length
       currentStreak,
       longestStreak
     };
-  }, [history]);
+  }, [history, totalCount]);
 
   return (
     <div className="h-full flex flex-col">

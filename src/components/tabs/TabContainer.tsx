@@ -20,14 +20,20 @@ interface TabContainerProps {
 
 export function TabContainer({ activeSection }: TabContainerProps) {
   const [history, setHistory] = useState<TranscriptionHistory[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
   const { registerEvent } = useEventCoordinator("main");
 
   // Load history function shared between overview and recordings tabs
   const loadHistory = useCallback(async () => {
     try {
-      const storedHistory = await invoke<any[]>("get_transcription_history", {
-        limit: 500  // Increased to ensure we get enough data for monthly stats
-      });
+      // Fetch both history (limited for stats calculation) and total count
+      const [storedHistory, count] = await Promise.all([
+        invoke<any[]>("get_transcription_history", {
+          limit: 500  // Limited for monthly stats calculation
+        }),
+        invoke<number>("get_transcription_count")  // Get true total count
+      ]);
+
       const formattedHistory: TranscriptionHistory[] = storedHistory.map((item) => ({
         id: item.timestamp || Date.now().toString(),
         text: item.text,
@@ -35,6 +41,7 @@ export function TabContainer({ activeSection }: TabContainerProps) {
         model: item.model
       }));
       setHistory(formattedHistory);
+      setTotalCount(count);
     } catch (error) {
       console.error("Failed to load transcription history:", error);
     }
@@ -59,6 +66,8 @@ export function TabContainer({ activeSection }: TabContainerProps) {
       };
       // Prepend new item to history (newest first)
       setHistory(prev => [newItem, ...prev]);
+      // Increment total count
+      setTotalCount(prev => prev + 1);
     });
     
     // Listen for history-updated only for delete/clear operations
@@ -72,7 +81,7 @@ export function TabContainer({ activeSection }: TabContainerProps) {
   const renderTabContent = () => {
     switch (activeSection) {
       case "overview":
-        return <OverviewTab history={history} />;
+        return <OverviewTab history={history} totalCount={totalCount} />;
 
       case "recordings":
         return <RecordingsTab />;
@@ -102,7 +111,7 @@ export function TabContainer({ activeSection }: TabContainerProps) {
         return <AboutTab />;
 
       default:
-        return <OverviewTab history={history} />;
+        return <OverviewTab history={history} totalCount={totalCount} />;
     }
   };
 

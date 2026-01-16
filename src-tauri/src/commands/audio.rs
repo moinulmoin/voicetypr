@@ -2352,6 +2352,14 @@ pub async fn get_transcription_history(
     Ok(entries.into_iter().map(|(_, v)| v).collect())
 }
 
+/// Get the total count of transcriptions in history
+/// This is more efficient than loading all history when only the count is needed
+#[tauri::command]
+pub async fn get_transcription_count(app: AppHandle) -> Result<usize, String> {
+    let store = app.store("transcriptions").map_err(|e| e.to_string())?;
+    Ok(store.keys().len())
+}
+
 #[tauri::command]
 pub async fn transcribe_audio_file(
     app: AppHandle,
