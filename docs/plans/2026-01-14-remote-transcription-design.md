@@ -168,12 +168,15 @@ Response 200:
   "status": "ok",
   "version": "1.11.2",
   "model": "large-v3-turbo",
-  "name": "Desktop-PC"
+  "name": "Desktop-PC",
+  "machine_id": "abc123..."
 }
 
 Response 401:
 { "error": "unauthorized" }
 ```
+
+Note: `machine_id` is a unique device identifier used to prevent self-connection (client detecting it's connecting to itself).
 
 ### 2. Transcribe Audio
 
@@ -181,7 +184,7 @@ Response 401:
 POST /api/v1/transcribe
 Headers:
   X-VoiceTypr-Key: <password> (if required)
-  Content-Type: audio/wav
+  Content-Type: audio/wav (or any audio/* type)
 Body: <audio file bytes>
 
 Response 200:
@@ -193,6 +196,12 @@ Response 200:
 
 Response 401:
 { "error": "unauthorized" }
+
+Response 415:
+{ "error": "unsupported_media_type" }
+
+Response 500:
+{ "error": "<error message>" }
 ```
 
 ### Concurrency Handling
@@ -302,18 +311,28 @@ The Upload section allows users to upload audio/video files for transcription. W
 
 ```rust
 // Server mode
-start_sharing() -> Result<(), String>
+start_sharing(port?, password?, server_name?) -> Result<(), String>
 stop_sharing() -> Result<(), String>
-get_sharing_status() -> SharingStatus
+get_sharing_status() -> Result<SharingStatus, String>
+get_local_ips() -> Result<Vec<String>, String>
 
 // Client mode
-add_remote_server(host, port, password) -> Result<ServerInfo, String>
+add_remote_server(host, port, password?, name?) -> Result<SavedConnection, String>
 remove_remote_server(server_id) -> Result<(), String>
-list_remote_servers() -> Vec<RemoteServer>
-test_remote_server(server_id) -> Result<ServerStatus, String>
+update_remote_server(server_id, host, port, password?, name?) -> Result<SavedConnection, String>
+list_remote_servers() -> Result<Vec<SavedConnection>, String>
+test_remote_connection(host, port, password?) -> Result<StatusResponse, String>
+test_remote_server(server_id) -> Result<StatusResponse, String>
+set_active_remote_server(server_id?) -> Result<(), String>
+get_active_remote_server() -> Result<Option<String>, String>
 
 // Transcription
-transcribe_remote(server_id, audio_path) -> Result<TranscriptionResult, String>
+transcribe_remote(server_id, audio_path) -> Result<String, String>
+
+// Utilities
+get_local_machine_id() -> Result<String, String>  // Prevent self-connection
+get_firewall_status() -> FirewallStatus           // Detect blocked connections
+open_firewall_settings() -> Result<(), String>    // Help users fix firewall
 ```
 
 ## Future Enhancements (Out of Scope for v1)
@@ -329,7 +348,7 @@ transcribe_remote(server_id, audio_path) -> Result<TranscriptionResult, String>
 
 1. ~~**Client timeout**~~ - RESOLVED: Different for live vs uploads (see Concurrency Handling section)
 2. **Health check frequency** - How often to poll server status? 30 seconds? Only when Models section open?
-3. **Friendly name** - Should servers have configurable display names, or just use hostname/IP?
+3. ~~**Friendly name**~~ - RESOLVED: Servers support configurable display names via `name` parameter in `add_remote_server` command. Defaults to server's hostname if not provided.
 4. **Upload FFmpeg processing** - Should video→audio extraction happen locally before sending, or should we send raw video to server? Local extraction means less data to transfer but requires FFmpeg on client.
 
 ---
