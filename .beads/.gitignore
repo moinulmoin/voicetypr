@@ -1,0 +1,12 @@
+# Local daemon files (not synced)
+*.db
+*.db-shm
+*.db-wal
+daemon.log
+daemon.lock
+daemon.pid
+bd.sock
+bd.sock.startlock
+.local_version
+.sync.lock
+sync_base.jsonl
