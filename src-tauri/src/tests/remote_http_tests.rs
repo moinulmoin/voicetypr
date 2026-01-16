@@ -2,12 +2,19 @@
 //!
 //! These tests verify the actual HTTP server and client communication
 //! without requiring whisper models (uses mock transcription).
+//!
+//! Test coverage includes:
+//! - Route creation and configuration
+//! - Status endpoint responses
+//! - Transcription endpoint handling
+//! - Authentication middleware
+//! - Request validation
+//! - Error response formatting
 
 use crate::remote::http::{create_routes, ServerContext};
-use crate::remote::server::{RemoteServerConfig, StatusResponse, TranscribeResponse};
+use crate::remote::server::{ErrorResponse, StatusResponse, TranscribeResponse};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use warp::Filter;
 
 /// Test context for mock transcription
 struct TestContext {
@@ -241,4 +248,568 @@ fn create_test_wav_data() -> Vec<u8> {
     wav.extend(std::iter::repeat(0u8).take(data_size as usize));
 
     wav
+}
+
+// ============================================================================
+// Additional Test Contexts
+// ============================================================================
+
+/// Test context that returns an error on transcription
+struct FailingContext {
+    model_name: String,
+    server_name: String,
+    password: Option<String>,
+    error_message: String,
+}
+
+impl ServerContext for FailingContext {
+    fn get_model_name(&self) -> String {
+        self.model_name.clone()
+    }
+
+    fn get_server_name(&self) -> String {
+        self.server_name.clone()
+    }
+
+    fn get_password(&self) -> Option<String> {
+        self.password.clone()
+    }
+
+    fn transcribe(&self, _audio_data: &[u8]) -> Result<TranscribeResponse, String> {
+        Err(self.error_message.clone())
+    }
+}
+
+fn create_failing_context(error_message: &str) -> Arc<Mutex<FailingContext>> {
+    Arc::new(Mutex::new(FailingContext {
+        model_name: "test-model".to_string(),
+        server_name: "test-server".to_string(),
+        password: None,
+        error_message: error_message.to_string(),
+    }))
+}
+
+/// Test context with custom model and server names
+fn create_custom_context(model: &str, server: &str) -> Arc<Mutex<TestContext>> {
+    Arc::new(Mutex::new(TestContext {
+        model_name: model.to_string(),
+        server_name: server.to_string(),
+        password: None,
+        mock_result: "Custom transcription result".to_string(),
+    }))
+}
+
+// ============================================================================
+// Route Creation and Configuration Tests
+// ============================================================================
+
+/// Test that routes are created successfully
+#[tokio::test]
+async fn test_routes_are_created() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    // Status route should work
+    let response = warp::test::request()
+        .method("GET")
+        .path("/api/v1/status")
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 200);
+}
+
+/// Test that unknown routes return 404
+#[tokio::test]
+async fn test_unknown_route_returns_404() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let response = warp::test::request()
+        .method("GET")
+        .path("/api/v1/unknown")
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 404);
+}
+
+/// Test that wrong HTTP method returns appropriate error
+#[tokio::test]
+async fn test_wrong_method_on_status_endpoint() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/status")
+        .reply(&routes)
+        .await;
+
+    // POST to status should fail (it's GET only)
+    assert_eq!(response.status(), 405); // Method Not Allowed
+}
+
+/// Test that wrong HTTP method on transcribe endpoint returns error
+#[tokio::test]
+async fn test_wrong_method_on_transcribe_endpoint() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let response = warp::test::request()
+        .method("GET")
+        .path("/api/v1/transcribe")
+        .reply(&routes)
+        .await;
+
+    // GET to transcribe should fail (it's POST only)
+    assert_eq!(response.status(), 405); // Method Not Allowed
+}
+
+// ============================================================================
+// Status Endpoint Response Tests
+// ============================================================================
+
+/// Test status response includes all required fields
+#[tokio::test]
+async fn test_status_response_has_all_fields() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let response = warp::test::request()
+        .method("GET")
+        .path("/api/v1/status")
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 200);
+
+    let body: StatusResponse = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(body.status, "ok");
+    assert!(!body.version.is_empty());
+    assert!(!body.model.is_empty());
+    assert!(!body.name.is_empty());
+    assert!(!body.machine_id.is_empty());
+}
+
+/// Test status response reflects custom model name
+#[tokio::test]
+async fn test_status_response_custom_model_name() {
+    let ctx = create_custom_context("large-v3-turbo", "My Desktop");
+    let routes = create_routes(ctx);
+
+    let response = warp::test::request()
+        .method("GET")
+        .path("/api/v1/status")
+        .reply(&routes)
+        .await;
+
+    let body: StatusResponse = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(body.model, "large-v3-turbo");
+    assert_eq!(body.name, "My Desktop");
+}
+
+/// Test status response version matches package version
+#[tokio::test]
+async fn test_status_response_version_is_valid() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let response = warp::test::request()
+        .method("GET")
+        .path("/api/v1/status")
+        .reply(&routes)
+        .await;
+
+    let body: StatusResponse = serde_json::from_slice(response.body()).unwrap();
+    // Version should be in semver format (e.g., "1.11.2")
+    assert!(body.version.contains('.'), "Version should contain a dot");
+}
+
+// ============================================================================
+// Transcription Endpoint Handling Tests
+// ============================================================================
+
+/// Test transcribe endpoint accepts audio/mpeg content type
+#[tokio::test]
+async fn test_transcribe_accepts_audio_mpeg() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let audio_data = vec![0u8; 100]; // Minimal audio data
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "audio/mpeg")
+        .body(audio_data)
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 200);
+}
+
+/// Test transcribe endpoint accepts audio/webm content type
+#[tokio::test]
+async fn test_transcribe_accepts_audio_webm() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let audio_data = vec![0u8; 100];
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "audio/webm")
+        .body(audio_data)
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 200);
+}
+
+/// Test transcribe response includes model name
+#[tokio::test]
+async fn test_transcribe_response_includes_model() {
+    let ctx = create_custom_context("base.en", "Test Server");
+    let routes = create_routes(ctx);
+
+    let audio_data = create_test_wav_data();
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "audio/wav")
+        .body(audio_data)
+        .reply(&routes)
+        .await;
+
+    let body: TranscribeResponse = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(body.model, "base.en");
+}
+
+/// Test transcribe response includes duration
+#[tokio::test]
+async fn test_transcribe_response_includes_duration() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let audio_data = create_test_wav_data();
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "audio/wav")
+        .body(audio_data)
+        .reply(&routes)
+        .await;
+
+    let body: TranscribeResponse = serde_json::from_slice(response.body()).unwrap();
+    assert!(body.duration_ms > 0);
+}
+
+// ============================================================================
+// Authentication Middleware Tests
+// ============================================================================
+
+/// Test authentication with empty password string (should still require auth)
+#[tokio::test]
+async fn test_auth_with_empty_password_string() {
+    let ctx = Arc::new(Mutex::new(TestContext {
+        model_name: "test-model".to_string(),
+        server_name: "test-server".to_string(),
+        password: Some("".to_string()), // Empty string password
+        mock_result: "Test".to_string(),
+    }));
+    let routes = create_routes(ctx);
+
+    // Without header - should fail because empty string is still "some" password
+    let response = warp::test::request()
+        .method("GET")
+        .path("/api/v1/status")
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 401);
+
+    // With empty string header - should succeed
+    let response = warp::test::request()
+        .method("GET")
+        .path("/api/v1/status")
+        .header("X-VoiceTypr-Key", "")
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 200);
+}
+
+/// Test that password is case-sensitive
+#[tokio::test]
+async fn test_password_is_case_sensitive() {
+    let ctx = create_test_context_with_password("Secret123");
+    let routes = create_routes(ctx);
+
+    // Lowercase should fail
+    let response = warp::test::request()
+        .method("GET")
+        .path("/api/v1/status")
+        .header("X-VoiceTypr-Key", "secret123")
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 401);
+}
+
+/// Test authentication on transcribe endpoint with wrong password
+#[tokio::test]
+async fn test_transcribe_auth_wrong_password() {
+    let ctx = create_test_context_with_password("correct");
+    let routes = create_routes(ctx);
+
+    let audio_data = create_test_wav_data();
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "audio/wav")
+        .header("X-VoiceTypr-Key", "wrong")
+        .body(audio_data)
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 401);
+}
+
+/// Test no password required when password is None
+#[tokio::test]
+async fn test_no_auth_when_password_none() {
+    let ctx = create_test_context(); // password is None
+    let routes = create_routes(ctx);
+
+    // Should work without any auth header
+    let response = warp::test::request()
+        .method("GET")
+        .path("/api/v1/status")
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 200);
+}
+
+// ============================================================================
+// Request Validation Tests
+// ============================================================================
+
+/// Test transcribe rejects text/plain content type
+#[tokio::test]
+async fn test_transcribe_rejects_text_plain() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "text/plain")
+        .body("not audio data")
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 415);
+}
+
+/// Test transcribe rejects application/octet-stream content type
+#[tokio::test]
+async fn test_transcribe_rejects_octet_stream() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "application/octet-stream")
+        .body(vec![0u8; 100])
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 415);
+}
+
+/// Test transcribe rejects multipart/form-data content type
+#[tokio::test]
+async fn test_transcribe_rejects_multipart() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "multipart/form-data")
+        .body(vec![0u8; 100])
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 415);
+}
+
+// ============================================================================
+// Error Response Formatting Tests
+// ============================================================================
+
+/// Test unauthorized error response format
+#[tokio::test]
+async fn test_unauthorized_error_format() {
+    let ctx = create_test_context_with_password("secret");
+    let routes = create_routes(ctx);
+
+    let response = warp::test::request()
+        .method("GET")
+        .path("/api/v1/status")
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 401);
+
+    let body: ErrorResponse = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(body.error, "unauthorized");
+}
+
+/// Test unsupported media type error response format
+#[tokio::test]
+async fn test_unsupported_media_type_error_format() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 415);
+
+    let body: ErrorResponse = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(body.error, "unsupported_media_type");
+}
+
+/// Test transcription failure error response format
+#[tokio::test]
+async fn test_transcription_error_format() {
+    let ctx = create_failing_context("Model failed to load");
+    let routes = create_routes(ctx);
+
+    let audio_data = create_test_wav_data();
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "audio/wav")
+        .body(audio_data)
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 500);
+
+    let body: ErrorResponse = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(body.error, "Model failed to load");
+}
+
+/// Test transcription failure with different error messages
+#[tokio::test]
+async fn test_transcription_error_preserves_message() {
+    let ctx = create_failing_context("Connection timeout during transcription");
+    let routes = create_routes(ctx);
+
+    let audio_data = create_test_wav_data();
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "audio/wav")
+        .body(audio_data)
+        .reply(&routes)
+        .await;
+
+    let body: ErrorResponse = serde_json::from_slice(response.body()).unwrap();
+    assert_eq!(body.error, "Connection timeout during transcription");
+}
+
+// ============================================================================
+// Content-Type Variations Tests
+// ============================================================================
+
+/// Test audio/wav with charset parameter is accepted
+#[tokio::test]
+async fn test_audio_wav_with_charset_accepted() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let audio_data = create_test_wav_data();
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "audio/wav; charset=binary")
+        .body(audio_data)
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 200);
+}
+
+/// Test audio/x-wav is accepted (alternative MIME type)
+#[tokio::test]
+async fn test_audio_x_wav_accepted() {
+    let ctx = create_test_context();
+    let routes = create_routes(ctx);
+
+    let audio_data = create_test_wav_data();
+
+    let response = warp::test::request()
+        .method("POST")
+        .path("/api/v1/transcribe")
+        .header("Content-Type", "audio/x-wav")
+        .body(audio_data)
+        .reply(&routes)
+        .await;
+
+    assert_eq!(response.status(), 200);
+}
+
+// ============================================================================
+// ServerContext Trait Tests
+// ============================================================================
+
+/// Test that TestContext correctly implements ServerContext
+#[test]
+fn test_context_implements_trait() {
+    let ctx = TestContext {
+        model_name: "test".to_string(),
+        server_name: "server".to_string(),
+        password: Some("pass".to_string()),
+        mock_result: "result".to_string(),
+    };
+
+    assert_eq!(ctx.get_model_name(), "test");
+    assert_eq!(ctx.get_server_name(), "server");
+    assert_eq!(ctx.get_password(), Some("pass".to_string()));
+
+    let result = ctx.transcribe(&[1, 2, 3]).unwrap();
+    assert_eq!(result.text, "result");
+}
+
+/// Test that FailingContext correctly returns errors
+#[test]
+fn test_failing_context_returns_error() {
+    let ctx = FailingContext {
+        model_name: "test".to_string(),
+        server_name: "server".to_string(),
+        password: None,
+        error_message: "Test error".to_string(),
+    };
+
+    let result = ctx.transcribe(&[1, 2, 3]);
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), "Test error");
 }
