@@ -18,7 +18,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import {
   AlertCircle,
-  Info,
   Keyboard,
   Mic,
   Rocket,
@@ -142,6 +141,12 @@ export function GeneralSettings() {
                   {settings.recording_mode === "push_to_talk"
                     ? "Hold the hotkey to record, release to stop"
                     : "Press the hotkey to start/stop recording"}
+                  {" · "}
+                  Press{" "}
+                  <kbd className="px-1 py-0.5 rounded text-xs bg-background border">
+                    ESC
+                  </kbd>{" "}
+                  twice to cancel
                 </p>
               </div>
 
@@ -524,19 +529,6 @@ export function GeneralSettings() {
                   </Select>
                 </div>
               )}
-            </div>
-
-            <div className="px-4 pb-4">
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-primary/5 border border-primary/10">
-                <Info className="h-4 w-4 text-primary" />
-                <p className="text-xs text-muted-foreground">
-                  Press{" "}
-                  <kbd className="px-1.5 py-0.5 rounded text-xs bg-background border">
-                    ESC
-                  </kbd>{" "}
-                  twice while recording to cancel
-                </p>
-              </div>
             </div>
           </div>
 
