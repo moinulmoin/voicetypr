@@ -1,14 +1,46 @@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { TranscriptionHistory } from "@/types";
 import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Download } from "lucide-react";
-import { useState, useMemo } from "react";
+import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, Server, Cpu } from "lucide-react";
+import { useState, useMemo, useCallback } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+
+// Interface for available transcription sources
+interface TranscriptionSource {
+  id: string;
+  name: string;
+  type: 'local' | 'remote';
+  available: boolean;
+}
+
+// Interface for remote server connection
+interface SavedConnection {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  is_active: boolean;
+}
+
+// Interface for local model
+interface LocalModel {
+  name: string;
+  downloaded: boolean;
+}
 
 // Static mapping for model display names
 const MODEL_DISPLAY_NAMES: Record<string, string> = {
@@ -38,8 +70,113 @@ interface RecentRecordingsProps {
 export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistoryUpdate }: RecentRecordingsProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [transcriptionSources, setTranscriptionSources] = useState<TranscriptionSource[]>([]);
+  const [loadingSources, setLoadingSources] = useState(false);
+  const [reTranscribingId, setReTranscribingId] = useState<string | null>(null);
   const canRecord = useCanRecord();
   const canAutoInsert = useCanAutoInsert();
+
+  // Fetch available transcription sources (local models + remote servers)
+  const fetchTranscriptionSources = useCallback(async () => {
+    setLoadingSources(true);
+    const sources: TranscriptionSource[] = [];
+
+    try {
+      // Fetch local Whisper models
+      const models = await invoke<LocalModel[]>("check_whisper_models");
+      const downloadedModels = models.filter(m => m.downloaded);
+      for (const model of downloadedModels) {
+        sources.push({
+          id: `local:${model.name}`,
+          name: MODEL_DISPLAY_NAMES[model.name] || model.name,
+          type: 'local',
+          available: true,
+        });
+      }
+    } catch (error) {
+      console.error("Failed to fetch local models:", error);
+    }
+
+    try {
+      // Fetch remote servers
+      const servers = await invoke<SavedConnection[]>("list_remote_servers");
+      for (const server of servers) {
+        // Test if server is online
+        let available = false;
+        try {
+          await invoke("test_remote_server", { serverId: server.id });
+          available = true;
+        } catch {
+          // Server is offline
+        }
+        sources.push({
+          id: `remote:${server.id}`,
+          name: server.name,
+          type: 'remote',
+          available,
+        });
+      }
+    } catch (error) {
+      console.error("Failed to fetch remote servers:", error);
+    }
+
+    setTranscriptionSources(sources);
+    setLoadingSources(false);
+  }, []);
+
+  // Handle re-transcription
+  const handleReTranscribe = async (item: TranscriptionHistory, sourceId: string) => {
+    if (!item.recording_file) {
+      toast.error("No recording file available for re-transcription");
+      return;
+    }
+
+    setReTranscribingId(item.id);
+
+    try {
+      const [sourceType, sourceIdentifier] = sourceId.split(':');
+
+      // Create new history entry with "in progress" status
+      // This will be done by the backend
+
+      if (sourceType === 'local') {
+        // Re-transcribe using local model
+        const result = await invoke<string>("transcribe_audio_file", {
+          filePath: item.recording_file,
+          modelName: sourceIdentifier,
+          modelEngine: null,
+        });
+
+        toast.success("Re-transcription completed", {
+          description: `${result.length} characters transcribed`
+        });
+      } else if (sourceType === 'remote') {
+        // Re-transcribe using remote server
+        // The backend will handle sending to the remote server
+        const result = await invoke<string>("transcribe_audio_file", {
+          filePath: item.recording_file,
+          modelName: `Remote:${sourceIdentifier}`,
+          modelEngine: "remote",
+        });
+
+        toast.success("Re-transcription completed", {
+          description: `${result.length} characters transcribed`
+        });
+      }
+
+      // Refresh history to show the new entry
+      if (onHistoryUpdate) {
+        onHistoryUpdate();
+      }
+    } catch (error) {
+      console.error("Re-transcription failed:", error);
+      toast.error("Re-transcription failed", {
+        description: String(error)
+      });
+    } finally {
+      setReTranscribingId(null);
+    }
+  };
 
   // Filter history based on search query
   const filteredHistory = useMemo(() => {
@@ -292,6 +429,94 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                             >
                               <Copy className="w-4 h-4 text-muted-foreground" />
                             </button>
+                            {/* Re-transcribe button - only show if recording file exists */}
+                            {item.recording_file && (
+                              <DropdownMenu onOpenChange={(open) => open && fetchTranscriptionSources()}>
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    onClick={(e) => e.stopPropagation()}
+                                    className={cn(
+                                      "p-1.5 rounded hover:bg-accent transition-colors",
+                                      reTranscribingId === item.id && "pointer-events-none"
+                                    )}
+                                    title="Re-transcribe"
+                                    disabled={reTranscribingId === item.id}
+                                  >
+                                    {reTranscribingId === item.id ? (
+                                      <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
+                                    ) : (
+                                      <RotateCcw className="w-4 h-4 text-muted-foreground" />
+                                    )}
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-56">
+                                  <DropdownMenuLabel>Re-transcribe using...</DropdownMenuLabel>
+                                  <DropdownMenuSeparator />
+                                  {loadingSources ? (
+                                    <div className="flex items-center justify-center py-4">
+                                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                                      <span className="ml-2 text-sm text-muted-foreground">Loading sources...</span>
+                                    </div>
+                                  ) : transcriptionSources.length === 0 ? (
+                                    <div className="py-4 text-center text-sm text-muted-foreground">
+                                      No transcription sources available
+                                    </div>
+                                  ) : (
+                                    <>
+                                      {/* Local models */}
+                                      {transcriptionSources.filter(s => s.type === 'local').length > 0 && (
+                                        <DropdownMenuGroup>
+                                          <DropdownMenuLabel className="text-xs text-muted-foreground flex items-center gap-1">
+                                            <Cpu className="w-3 h-3" />
+                                            Local Models
+                                          </DropdownMenuLabel>
+                                          {transcriptionSources
+                                            .filter(s => s.type === 'local')
+                                            .map(source => (
+                                              <DropdownMenuItem
+                                                key={source.id}
+                                                onClick={() => handleReTranscribe(item, source.id)}
+                                                disabled={!source.available}
+                                              >
+                                                {source.name}
+                                              </DropdownMenuItem>
+                                            ))}
+                                        </DropdownMenuGroup>
+                                      )}
+                                      {/* Remote servers */}
+                                      {transcriptionSources.filter(s => s.type === 'remote').length > 0 && (
+                                        <>
+                                          <DropdownMenuSeparator />
+                                          <DropdownMenuGroup>
+                                            <DropdownMenuLabel className="text-xs text-muted-foreground flex items-center gap-1">
+                                              <Server className="w-3 h-3" />
+                                              Remote Servers
+                                            </DropdownMenuLabel>
+                                            {transcriptionSources
+                                              .filter(s => s.type === 'remote')
+                                              .map(source => (
+                                                <DropdownMenuItem
+                                                  key={source.id}
+                                                  onClick={() => handleReTranscribe(item, source.id)}
+                                                  disabled={!source.available}
+                                                  className={!source.available ? "opacity-50" : ""}
+                                                >
+                                                  <span className="flex items-center gap-2">
+                                                    {source.name}
+                                                    {!source.available && (
+                                                      <span className="text-xs text-muted-foreground">(offline)</span>
+                                                    )}
+                                                  </span>
+                                                </DropdownMenuItem>
+                                              ))}
+                                          </DropdownMenuGroup>
+                                        </>
+                                      )}
+                                    </>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
                             <button
                               onClick={(e) => handleDelete(e, item.id)}
                               className="p-1.5 rounded hover:bg-destructive/10 transition-colors"

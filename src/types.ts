@@ -75,6 +75,9 @@ export interface TranscriptionHistory {
   text: string;
   timestamp: Date;
   model: string;
+  recording_file?: string;
+  source_recording_id?: string;
+  status?: 'completed' | 'in_progress' | 'failed';
 }
 
 export interface LicenseStatus {
