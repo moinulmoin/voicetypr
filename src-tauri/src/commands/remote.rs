@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use tauri::{
     async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock},
-    AppHandle, Manager, State,
+    AppHandle, Emitter, Manager, State,
 };
 use tauri_plugin_store::StoreExt;
 

@@ -2500,12 +2500,109 @@ pub async fn transcribe_audio_file(
         ActiveEngineSelection::Soniox { .. } => {
             soniox_transcribe_async(&app, &wav_path, Some(&language)).await?
         }
-        ActiveEngineSelection::Remote { server_name, .. } => {
-            return Err(format!(
-                "File upload transcription is not supported for remote server '{}'. \
-                Please select a local model for file transcription.",
+        ActiveEngineSelection::Remote {
+            server_name,
+            host,
+            port,
+            password,
+            ..
+        } => {
+            // Normalize to Whisper contract (16k mono s16 WAV) for remote transcription
+            log::debug!("[UPLOAD] Normalizing to Whisper WAV for remote transcription...");
+            let normalized_path = {
+                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
+                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
+                    .await
+                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+                out_path
+            };
+            log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_path);
+
+            log::info!(
+                "🌐 [Remote Upload] Starting transcription to '{}' ({}:{})",
+                server_name,
+                host,
+                port
+            );
+
+            // Read the normalized audio file
+            let audio_data = std::fs::read(&normalized_path)
+                .map_err(|e| format!("Failed to read audio file: {}", e))?;
+
+            let audio_size_kb = audio_data.len() as f64 / 1024.0;
+            log::info!(
+                "🌐 [Remote Upload] Sending {:.1} KB audio to '{}'",
+                audio_size_kb,
                 server_name
-            ));
+            );
+
+            // Create HTTP client connection
+            let server_conn = RemoteServerConnection::new(host.clone(), port, password.clone());
+
+            // Send transcription request with extended timeout for large files
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300)) // 5 minute timeout for large files
+                .build()
+                .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+            let mut request = client
+                .post(&server_conn.transcribe_url())
+                .header("Content-Type", "audio/wav")
+                .body(audio_data);
+
+            // Add auth header if password is set
+            if let Some(pwd) = server_conn.password.as_ref() {
+                request = request.header("X-VoiceTypr-Key", pwd);
+            }
+
+            let response = request.send().await.map_err(|e| {
+                log::warn!(
+                    "🌐 [Remote Upload] Connection FAILED to '{}': {}",
+                    server_name,
+                    e
+                );
+                format!("Failed to connect to remote server: {}", e)
+            })?;
+
+            // Clean up normalized file
+            let _ = std::fs::remove_file(&normalized_path);
+
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                log::warn!(
+                    "🌐 [Remote Upload] Authentication FAILED to '{}'",
+                    server_name
+                );
+                return Err("Remote server authentication failed".to_string());
+            }
+
+            if !response.status().is_success() {
+                log::warn!(
+                    "🌐 [Remote Upload] Server error from '{}': {}",
+                    server_name,
+                    response.status()
+                );
+                return Err(format!("Remote server error: {}", response.status()));
+            }
+
+            let result: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse remote response: {}", e))?;
+
+            let text = result
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .ok_or_else(|| "Invalid response: missing 'text' field".to_string())?;
+
+            log::info!(
+                "🌐 [Remote Upload] Transcription COMPLETED from '{}': {} chars received",
+                server_name,
+                text.len()
+            );
+
+            text
         }
     };
 
@@ -2612,12 +2709,109 @@ pub async fn transcribe_audio(
         ActiveEngineSelection::Soniox { .. } => {
             soniox_transcribe_async(&app, &temp_path, Some(&language)).await?
         }
-        ActiveEngineSelection::Remote { server_name, .. } => {
-            return Err(format!(
-                "File upload transcription is not supported for remote server '{}'. \
-                Please select a local model for file transcription.",
+        ActiveEngineSelection::Remote {
+            server_name,
+            host,
+            port,
+            password,
+            ..
+        } => {
+            // Normalize to Whisper contract (16k mono s16 WAV) for remote transcription
+            log::debug!("[CLIPBOARD] Normalizing to Whisper WAV for remote transcription...");
+            let normalized_path = {
+                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                let out_path = recordings_dir.join(format!("normalized_clipboard_{}.wav", ts));
+                crate::ffmpeg::normalize_streaming(&app, &temp_path, &out_path)
+                    .await
+                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+                out_path
+            };
+            log::info!("[CLIPBOARD] Normalized WAV at {:?}", normalized_path);
+
+            log::info!(
+                "🌐 [Remote Clipboard] Starting transcription to '{}' ({}:{})",
+                server_name,
+                host,
+                port
+            );
+
+            // Read the normalized audio file
+            let audio_data = std::fs::read(&normalized_path)
+                .map_err(|e| format!("Failed to read audio file: {}", e))?;
+
+            let audio_size_kb = audio_data.len() as f64 / 1024.0;
+            log::info!(
+                "🌐 [Remote Clipboard] Sending {:.1} KB audio to '{}'",
+                audio_size_kb,
                 server_name
-            ));
+            );
+
+            // Create HTTP client connection
+            let server_conn = RemoteServerConnection::new(host.clone(), port, password.clone());
+
+            // Send transcription request with extended timeout for large files
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300)) // 5 minute timeout for large files
+                .build()
+                .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+            let mut request = client
+                .post(&server_conn.transcribe_url())
+                .header("Content-Type", "audio/wav")
+                .body(audio_data);
+
+            // Add auth header if password is set
+            if let Some(pwd) = server_conn.password.as_ref() {
+                request = request.header("X-VoiceTypr-Key", pwd);
+            }
+
+            let response = request.send().await.map_err(|e| {
+                log::warn!(
+                    "🌐 [Remote Clipboard] Connection FAILED to '{}': {}",
+                    server_name,
+                    e
+                );
+                format!("Failed to connect to remote server: {}", e)
+            })?;
+
+            // Clean up normalized file
+            let _ = std::fs::remove_file(&normalized_path);
+
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                log::warn!(
+                    "🌐 [Remote Clipboard] Authentication FAILED to '{}'",
+                    server_name
+                );
+                return Err("Remote server authentication failed".to_string());
+            }
+
+            if !response.status().is_success() {
+                log::warn!(
+                    "🌐 [Remote Clipboard] Server error from '{}': {}",
+                    server_name,
+                    response.status()
+                );
+                return Err(format!("Remote server error: {}", response.status()));
+            }
+
+            let result: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse remote response: {}", e))?;
+
+            let text = result
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .ok_or_else(|| "Invalid response: missing 'text' field".to_string())?;
+
+            log::info!(
+                "🌐 [Remote Clipboard] Transcription COMPLETED from '{}': {} chars received",
+                server_name,
+                text.len()
+            );
+
+            text
         }
     };
 
