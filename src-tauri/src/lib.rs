@@ -1085,6 +1085,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,
+            recreate_pill_widget,
             hide_toast_window,
             focus_main_window,
             check_accessibility_permission,
