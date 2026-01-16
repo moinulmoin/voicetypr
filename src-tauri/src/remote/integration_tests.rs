@@ -1,13 +1,23 @@
 //! Level 3 Integration Tests for Remote Transcription
 //!
 //! These tests require external resources (Whisper models) and are ignored by default.
+//! They work on both macOS and Windows.
+//!
 //! To run these tests manually:
 //!
-//! 1. Ensure the tiny.en model is downloaded
-//! 2. Run: cargo test --package voicetypr_app integration_tests -- --ignored --nocapture
+//! 1. Ensure the tiny.en model is downloaded via VoiceTypr app
+//! 2. Run the tests:
 //!
-//! On Windows, use run-tests.ps1 for proper manifest embedding:
+//! **macOS:**
+//! ```bash
+//! cargo test --package voicetypr_app integration_tests -- --ignored --nocapture
+//! ```
+//!
+//! **Windows** (requires manifest embedding):
+//! ```powershell
+//! cd src-tauri
 //! ./run-tests.ps1 -IgnoredOnly
+//! ```
 
 #[cfg(test)]
 mod tests {
@@ -49,22 +59,39 @@ mod tests {
     }
 
     /// Get the path to the tiny.en model if it exists
+    /// Works on both macOS and Windows by checking the appropriate data directories
     fn get_tiny_model_path() -> Option<PathBuf> {
-        // Check common model locations
-        let possible_paths = [
-            // User data directory (where VoiceTypr downloads models)
-            dirs::data_local_dir().map(|p| {
-                p.join("com.voicetypr.app")
-                    .join("models")
-                    .join("ggml-tiny.en.bin")
-            }),
-            // Development directory
-            Some(PathBuf::from("models/ggml-tiny.en.bin")),
-        ];
+        // Check common model locations in order of priority
+        let mut possible_paths: Vec<PathBuf> = Vec::new();
 
-        for maybe_path in possible_paths.into_iter().flatten() {
-            if maybe_path.exists() {
-                return Some(maybe_path);
+        // Primary: User data directory (where VoiceTypr downloads models)
+        // - macOS: ~/Library/Application Support/com.voicetypr.app/models/
+        // - Windows: C:\Users\<user>\AppData\Roaming\com.voicetypr.app\models\
+        if let Some(data_dir) = dirs::data_dir() {
+            possible_paths.push(
+                data_dir
+                    .join("com.voicetypr.app")
+                    .join("models")
+                    .join("ggml-tiny.en.bin"),
+            );
+        }
+
+        // Fallback: data_local_dir (Windows AppData\Local, same as data_dir on macOS)
+        if let Some(local_dir) = dirs::data_local_dir() {
+            possible_paths.push(
+                local_dir
+                    .join("com.voicetypr.app")
+                    .join("models")
+                    .join("ggml-tiny.en.bin"),
+            );
+        }
+
+        // Development directory (relative to src-tauri/)
+        possible_paths.push(PathBuf::from("models/ggml-tiny.en.bin"));
+
+        for path in possible_paths {
+            if path.exists() {
+                return Some(path);
             }
         }
 
