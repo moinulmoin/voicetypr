@@ -284,10 +284,11 @@ mod tests {
         ctx.update_model(
             PathBuf::from("/models/new.bin"),
             "new-model".to_string(),
+            "whisper".to_string(),
         );
 
         assert_eq!(ctx.get_model_name(), "new-model");
-        assert_eq!(ctx.get_model_path(), &PathBuf::from("/models/new.bin"));
+        assert_eq!(ctx.get_model_path(), PathBuf::from("/models/new.bin"));
     }
 
     #[test]

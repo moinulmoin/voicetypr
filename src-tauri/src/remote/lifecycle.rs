@@ -268,6 +268,7 @@ mod tests {
                 "Test Server".to_string(),
                 PathBuf::from("/fake/model.bin"),
                 "test-model".to_string(),
+                "whisper".to_string(),
             )
             .await;
 
@@ -302,6 +303,7 @@ mod tests {
                 "Server 1".to_string(),
                 PathBuf::from("/model1.bin"),
                 "model1".to_string(),
+                "whisper".to_string(),
             )
             .await
             .unwrap();
@@ -316,6 +318,7 @@ mod tests {
                 "Server 2".to_string(),
                 PathBuf::from("/model2.bin"),
                 "model2".to_string(),
+                "whisper".to_string(),
             )
             .await
             .unwrap();

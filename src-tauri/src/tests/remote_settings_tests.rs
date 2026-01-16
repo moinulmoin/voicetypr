@@ -22,7 +22,7 @@ fn test_remote_settings_default() {
 fn test_add_connection() {
     let mut settings = RemoteSettings::default();
 
-    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
 
     assert_eq!(settings.saved_connections.len(), 1);
     assert!(settings.get_connection(&saved.id).is_some());
@@ -42,6 +42,7 @@ fn test_add_connection_with_name() {
         47842,
         None,
         Some("Living Room Desktop".to_string()),
+        None,
     );
 
     assert_eq!(saved.name, Some("Living Room Desktop".to_string()));
@@ -53,7 +54,7 @@ fn test_add_connection_with_name() {
 fn test_remove_connection() {
     let mut settings = RemoteSettings::default();
 
-    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
 
     assert_eq!(settings.saved_connections.len(), 1);
 
@@ -76,7 +77,7 @@ fn test_remove_nonexistent_connection() {
 fn test_remove_active_connection_clears_active() {
     let mut settings = RemoteSettings::default();
 
-    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
 
     settings.set_active_connection(Some(saved.id.clone())).unwrap();
     assert_eq!(settings.active_connection_id, Some(saved.id.clone()));
@@ -90,8 +91,8 @@ fn test_remove_active_connection_clears_active() {
 fn test_set_active_connection() {
     let mut settings = RemoteSettings::default();
 
-    let saved1 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
-    let saved2 = settings.add_connection("192.168.1.101".to_string(), 47842, None, None);
+    let saved1 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+    let saved2 = settings.add_connection("192.168.1.101".to_string(), 47842, None, None, None);
 
     settings.set_active_connection(Some(saved1.id.clone())).unwrap();
     assert_eq!(settings.active_connection_id, Some(saved1.id.clone()));
@@ -111,7 +112,7 @@ fn test_get_active_connection() {
     // No active connection
     assert!(settings.get_active_connection().is_none());
 
-    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
 
     settings.set_active_connection(Some(saved.id.clone())).unwrap();
 
@@ -136,11 +137,13 @@ fn test_remote_settings_serialization() {
         47842,
         None,
         Some("Desktop".to_string()),
+        None,
     );
     let _saved2 = settings.add_connection(
         "192.168.1.101".to_string(),
         47842,
         Some("pass".to_string()),
+        None,
         None,
     );
 
@@ -163,7 +166,7 @@ fn test_remote_settings_serialization() {
 fn test_saved_connection_has_timestamp() {
     let mut settings = RemoteSettings::default();
 
-    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
 
     // Timestamp should be set to a reasonable recent value
     assert!(saved.created_at > 0);
@@ -174,9 +177,9 @@ fn test_saved_connection_has_timestamp() {
 fn test_list_connections() {
     let mut settings = RemoteSettings::default();
 
-    settings.add_connection("192.168.1.100".to_string(), 47842, None, Some("A".to_string()));
-    settings.add_connection("192.168.1.101".to_string(), 47842, None, Some("B".to_string()));
-    settings.add_connection("192.168.1.102".to_string(), 47842, None, Some("C".to_string()));
+    settings.add_connection("192.168.1.100".to_string(), 47842, None, Some("A".to_string()), None);
+    settings.add_connection("192.168.1.101".to_string(), 47842, None, Some("B".to_string()), None);
+    settings.add_connection("192.168.1.102".to_string(), 47842, None, Some("C".to_string()), None);
 
     let all = settings.list_connections();
     assert_eq!(all.len(), 3);
@@ -187,8 +190,8 @@ fn test_list_connections() {
 fn test_connection_ids_are_unique() {
     let mut settings = RemoteSettings::default();
 
-    let saved1 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
-    let saved2 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None);
+    let saved1 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+    let saved2 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
 
     assert_ne!(saved1.id, saved2.id);
 }
@@ -204,11 +207,12 @@ fn test_saved_connection_display_name() {
         47842,
         None,
         Some("My Desktop".to_string()),
+        None,
     );
     assert_eq!(saved1.display_name(), "My Desktop");
 
     // Without custom name - should use host:port
-    let saved2 = settings.add_connection("192.168.1.101".to_string(), 8080, None, None);
+    let saved2 = settings.add_connection("192.168.1.101".to_string(), 8080, None, None, None);
     assert_eq!(saved2.display_name(), "192.168.1.101:8080");
 }
 

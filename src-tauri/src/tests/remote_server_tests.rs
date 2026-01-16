@@ -13,6 +13,7 @@ fn test_status_response_serialization() {
         version: "1.11.2".to_string(),
         model: "large-v3-turbo".to_string(),
         name: "Desktop-PC".to_string(),
+        machine_id: "test-machine-123".to_string(),
     };
 
     let json = serde_json::to_string(&response).unwrap();
@@ -20,6 +21,7 @@ fn test_status_response_serialization() {
     assert!(json.contains("\"version\":\"1.11.2\""));
     assert!(json.contains("\"model\":\"large-v3-turbo\""));
     assert!(json.contains("\"name\":\"Desktop-PC\""));
+    assert!(json.contains("\"machine_id\":\"test-machine-123\""));
 }
 
 /// Test that StatusResponse deserializes correctly
@@ -29,7 +31,8 @@ fn test_status_response_deserialization() {
         "status": "ok",
         "version": "1.11.2",
         "model": "large-v3-turbo",
-        "name": "Desktop-PC"
+        "name": "Desktop-PC",
+        "machine_id": "test-machine-456"
     }"#;
 
     let response: StatusResponse = serde_json::from_str(json).unwrap();
@@ -37,6 +40,7 @@ fn test_status_response_deserialization() {
     assert_eq!(response.version, "1.11.2");
     assert_eq!(response.model, "large-v3-turbo");
     assert_eq!(response.name, "Desktop-PC");
+    assert_eq!(response.machine_id, "test-machine-456");
 }
 
 /// Test that TranscribeResponse serializes correctly

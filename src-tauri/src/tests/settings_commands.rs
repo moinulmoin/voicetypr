@@ -40,6 +40,8 @@ mod tests {
             play_sound_on_recording_end: true,
             pill_indicator_mode: "when_recording".to_string(),
             pill_indicator_position: "bottom".to_string(),
+            sharing_port: Some(47842),
+            sharing_password: None,
         };
 
         // Test serialization
@@ -101,6 +103,8 @@ mod tests {
             play_sound_on_recording_end: false,
             pill_indicator_mode: "never".to_string(),
             pill_indicator_position: "top".to_string(),
+            sharing_port: None,
+            sharing_password: Some("test123".to_string()),
         };
 
         let cloned = settings.clone();

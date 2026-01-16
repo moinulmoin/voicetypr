@@ -15,13 +15,9 @@
 - [x] Frontend: Models section with remote servers (`src/components/sections/ModelsSection.tsx`)
 - [x] Frontend: Connection modal (`src/components/AddServerModal.tsx`)
 - [x] Testing: Level 3 integration tests (`src-tauri/src/remote/integration_tests.rs`)
-- [x] Beads tracking for cross-environment collaboration
 
 ### Remaining (Manual Testing)
-- [ ] End-to-end verification on PC (voicetypr-hca)
-- [ ] Setup MacBook as client (voicetypr-5qq)
-- [ ] Concurrent transcription test (voicetypr-0k3)
-- [ ] Rapid sequential requests test (voicetypr-9fj)
+See GitHub Issues: https://github.com/tomchapin/voicetypr/issues
 
 ---
 

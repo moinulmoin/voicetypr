@@ -32,10 +32,10 @@ dist-ssr
 *.sw?
 
 agent-docs
+agent-docs/
+agent-reports
 
 CLAUDE.local.md
-
-agent-reports
 
 /release-*
 
@@ -43,21 +43,21 @@ notarized-build-*
 
 claudedocs/
 
-agent-docs/
-
 # Swift build artifacts
 .build/
 
 sidecar/ffmpeg/vendor
 opencodetmp
 
-# bv (beads viewer) local config and caches
-.bv/
-
-# beads issue tracker - track JSONL for cross-environment sync
-# but ignore SQLite database (local cache)
-.beads/*.db
-.beads/*.db-*
-
 # Git worktrees for parallel development
 .worktrees/
+
+# Generated files
+bv-site/
+
+# Legacy beads issue tracker (migrated to GitHub Issues)
+.beads/
+.bv/
+
+# bv (beads viewer) local config and caches
+.bv/
