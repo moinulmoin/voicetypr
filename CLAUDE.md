@@ -197,6 +197,15 @@ cd .worktrees/agent-7
 
 Note: `.agent-counter` is gitignored, so it stays local to this machine.
 
+#### Sync Before Starting
+
+**ALWAYS pull latest changes before starting any work:**
+```bash
+git pull origin <branch-name>
+```
+
+This ensures you have the latest code from other agents.
+
 #### Claiming an Issue
 
 When you decide to work on an issue, **IMMEDIATELY** perform BOTH steps:
@@ -261,6 +270,13 @@ gh issue close <number> --repo tomchapin/voicetypr --comment "## ✅ AGENT COMPL
 ```bash
 gh issue edit <number> --repo tomchapin/voicetypr --remove-label "in progress"
 ```
+
+**Step 4 - Pull latest before starting next task:**
+```bash
+git pull origin <branch-name>
+```
+
+This syncs any changes from other agents before you pick up the next issue.
 
 #### Conflict Resolution
 
