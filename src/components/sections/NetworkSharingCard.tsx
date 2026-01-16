@@ -357,8 +357,8 @@ export function NetworkSharingCard() {
         </div>
       )}
 
-      {/* Model info when disabled but model available */}
-      {hasDownloadedModel && !status.enabled && modelDisplayName && (
+      {/* Model info when disabled but model available - hide when using remote server */}
+      {hasDownloadedModel && !status.enabled && modelDisplayName && !activeRemoteServer && (
         <div className="px-4 py-3">
           <p className="text-xs text-muted-foreground">
             When enabled, other VoiceTypr instances on your network can use your{" "}
