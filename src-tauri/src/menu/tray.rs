@@ -63,22 +63,20 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             let settings = remote_state.lock().await;
             let active_id = settings.active_connection_id.clone();
 
-            // Build connections list, always fetching fresh model info from servers
+            // Build connections list, only including online/reachable servers
             let mut connections: Vec<(String, String, Option<String>)> = Vec::new();
             for conn in settings.saved_connections.iter() {
-                // Always try to fetch fresh status (server may have changed model)
-                let model = match fetch_server_status(&conn.host, conn.port, conn.password.as_deref()).await {
+                // Try to fetch fresh status - only include server if reachable
+                match fetch_server_status(&conn.host, conn.port, conn.password.as_deref()).await {
                     Ok(status) => {
-                        log::debug!("Fetched model for '{}': {}", conn.display_name(), status.model);
-                        Some(status.model)
+                        log::debug!("Server '{}' is online with model: {}", conn.display_name(), status.model);
+                        connections.push((conn.id.clone(), conn.display_name(), Some(status.model)));
                     }
                     Err(e) => {
-                        // Fall back to cached model if fetch fails
-                        log::debug!("Could not fetch model for '{}': {}, using cached", conn.display_name(), e);
-                        conn.model.clone()
+                        // Server is offline/unreachable - don't include in menu
+                        log::debug!("Server '{}' is offline: {}, not showing in tray menu", conn.display_name(), e);
                     }
                 };
-                connections.push((conn.id.clone(), conn.display_name(), model));
             }
 
             // Get active connection info
