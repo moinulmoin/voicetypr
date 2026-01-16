@@ -42,8 +42,8 @@ mod tests {
             pill_indicator_position: "bottom".to_string(),
             sharing_port: Some(47842),
             sharing_password: None,
-            save_recordings: false,
-            recording_retention_count: Some(50),
+            save_recordings: true,
+            recording_retention_count: Some(25),
         };
 
         // Test serialization

@@ -73,8 +73,8 @@ impl Default for Settings {
             pill_indicator_position: "bottom".to_string(), // Default to bottom of screen
             sharing_port: Some(47842), // Default network sharing port
             sharing_password: None,    // No password by default
-            save_recordings: false,    // Default to not saving recordings
-            recording_retention_count: Some(50), // Default to keeping 50 recordings
+            save_recordings: true,     // Default to saving recordings
+            recording_retention_count: Some(25), // Default to keeping 25 recordings
         }
     }
 }

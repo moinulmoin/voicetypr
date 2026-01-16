@@ -12,6 +12,7 @@ import {
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { TranscriptionHistory } from "@/types";
 import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
+import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, FolderOpen, Server, Cpu } from "lucide-react";
@@ -51,6 +52,9 @@ const MODEL_DISPLAY_NAMES: Record<string, string> = {
   // Tiny models
   'tiny.en': 'Tiny (English)',
   'tiny': 'Tiny',
+  // Parakeet models
+  'parakeet-tdt-0.6b-v2': 'Parakeet V2 (English)',
+  'parakeet-tdt-0.6b-v3': 'Parakeet V3',
 };
 
 interface RecentRecordingsProps {
@@ -68,6 +72,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
   const [reTranscribingIds, setReTranscribingIds] = useState<Set<string>>(new Set());
   const [verifiedRecordings, setVerifiedRecordings] = useState<Set<string>>(new Set());
   // Track which items are being re-transcribed and with which model
+  const { modelOrder } = useModelManagementContext();
   const [reTranscribingModels, setReTranscribingModels] = useState<Map<string, string>>(new Map());
   const onlineServersRef = useRef<Map<string, string>>(new Map()); // serverId -> serverName
   const canRecord = useCanRecord();
@@ -140,11 +145,13 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     try {
       // Fetch local models using get_model_status (this is fast)
       const response = await invoke<{models: {name: string; downloaded: boolean; engine: string}[]}>("get_model_status");
-      // Filter to only downloaded Whisper models (not cloud/soniox)
-      const downloadedLocalModels = response.models.filter(m => m.downloaded && m.engine === 'whisper');
+      // Filter to downloaded local models (whisper and parakeet, not cloud/soniox)
+      const downloadedLocalModels = response.models.filter(m =>
+        m.downloaded && (m.engine === 'whisper' || m.engine === 'parakeet')
+      );
       for (const model of downloadedLocalModels) {
         sources.push({
-          id: `local:${model.name}`,
+          id: `local:${model.name}:${model.engine}`,
           name: MODEL_DISPLAY_NAMES[model.name] || model.name,
           type: 'local',
         });
@@ -192,15 +199,19 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       return;
     }
 
-    const [sourceType, sourceIdentifier] = sourceId.split(':');
+    // Parse source ID - format is "local:modelName:engine" or "remote:serverId"
+    const parts = sourceId.split(':');
+    const sourceType = parts[0];
+    const modelNameOrServerId = parts[1];
+    const engine = parts[2]; // undefined for remote
 
     // Get the display name for the model being used
     let displayModelName: string;
     if (sourceType === 'local') {
-      displayModelName = MODEL_DISPLAY_NAMES[sourceIdentifier] || sourceIdentifier;
+      displayModelName = MODEL_DISPLAY_NAMES[modelNameOrServerId] || modelNameOrServerId;
     } else {
       const server = transcriptionSources.find(s => s.id === sourceId);
-      displayModelName = server ? server.name : sourceIdentifier;
+      displayModelName = server ? server.name : modelNameOrServerId;
     }
 
     // Mark this item as re-transcribing with the model name
@@ -231,23 +242,22 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       let modelName: string;
 
       if (sourceType === 'local') {
-        // Re-transcribe using local model
+        // Re-transcribe using local model (whisper or parakeet)
         result = await invoke<string>("transcribe_audio_file", {
           filePath: fullPath,
-          modelName: sourceIdentifier,
-          modelEngine: null,
+          modelName: modelNameOrServerId,
+          modelEngine: engine || null,
         });
-        modelName = sourceIdentifier;
+        modelName = modelNameOrServerId;
       } else if (sourceType === 'remote') {
-        // Re-transcribe using remote server
-        result = await invoke<string>("transcribe_audio_file", {
-          filePath: fullPath,
-          modelName: `Remote:${sourceIdentifier}`,
-          modelEngine: "remote",
+        // Re-transcribe using remote server via dedicated command
+        result = await invoke<string>("transcribe_remote", {
+          serverId: modelNameOrServerId,
+          audioPath: fullPath,
         });
         // Find the server name for the model display
         const server = transcriptionSources.find(s => s.id === sourceId);
-        modelName = server ? `Remote: ${server.name}` : `Remote: ${sourceIdentifier}`;
+        modelName = server ? `Remote: ${server.name}` : `Remote: ${modelNameOrServerId}`;
       } else {
         throw new Error(`Unknown source type: ${sourceType}`);
       }
@@ -580,19 +590,16 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                                   </DropdownMenuTrigger>
                                   <DropdownMenuContent
                                     align="end"
-                                    className="w-52"
-                                    side="top"
-                                    sideOffset={5}
-                                    collisionPadding={16}
+                                    className="w-44 max-h-72 overflow-y-auto text-xs"
                                   >
-                                    <DropdownMenuLabel>Re-transcribe using...</DropdownMenuLabel>
+                                    <DropdownMenuLabel className="text-xs py-1.5 px-2 -mx-1 bg-zinc-100 dark:bg-zinc-800 font-medium">Re-transcribe using...</DropdownMenuLabel>
                                     <DropdownMenuSeparator />
                                     {loadingSources ? (
-                                      <div className="flex items-center justify-center py-4">
-                                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                                      <div className="flex items-center justify-center py-2">
+                                        <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
                                       </div>
                                     ) : transcriptionSources.length === 0 ? (
-                                      <div className="py-4 text-center text-sm text-muted-foreground">
+                                      <div className="py-2 text-center text-xs text-muted-foreground">
                                         No models available
                                       </div>
                                     ) : (
@@ -600,15 +607,27 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                                         {/* Local models */}
                                         {transcriptionSources.filter(s => s.type === 'local').length > 0 && (
                                           <DropdownMenuGroup>
-                                            <DropdownMenuLabel className="text-xs text-muted-foreground flex items-center gap-1">
-                                              <Cpu className="w-3 h-3" />
+                                            <DropdownMenuLabel className="text-[10px] text-muted-foreground flex items-center gap-1 py-0.5">
+                                              <Cpu className="w-2.5 h-2.5" />
                                               Local Models
                                             </DropdownMenuLabel>
                                             {transcriptionSources
                                               .filter(s => s.type === 'local')
+                                              .sort((a, b) => {
+                                                // Sort by modelOrder from context
+                                                const aModelName = a.id.split(':')[1];
+                                                const bModelName = b.id.split(':')[1];
+                                                const aIndex = modelOrder.indexOf(aModelName);
+                                                const bIndex = modelOrder.indexOf(bModelName);
+                                                // If not found in modelOrder, put at end
+                                                const aOrder = aIndex === -1 ? 999 : aIndex;
+                                                const bOrder = bIndex === -1 ? 999 : bIndex;
+                                                return aOrder - bOrder;
+                                              })
                                               .map(source => (
                                                 <DropdownMenuItem
                                                   key={source.id}
+                                                  className="text-xs py-1"
                                                   onClick={(e) => {
                                                     e.stopPropagation();
                                                     handleReTranscribe(item, source.id);
@@ -624,8 +643,8 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                                           <>
                                             <DropdownMenuSeparator />
                                             <DropdownMenuGroup>
-                                              <DropdownMenuLabel className="text-xs text-muted-foreground flex items-center gap-1">
-                                                <Server className="w-3 h-3" />
+                                              <DropdownMenuLabel className="text-[10px] text-muted-foreground flex items-center gap-1 py-0.5">
+                                                <Server className="w-2.5 h-2.5" />
                                                 Remote Servers
                                               </DropdownMenuLabel>
                                               {transcriptionSources
@@ -633,6 +652,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                                                 .map(source => (
                                                   <DropdownMenuItem
                                                     key={source.id}
+                                                    className="text-xs py-1"
                                                     onClick={(e) => {
                                                       e.stopPropagation();
                                                       handleReTranscribe(item, source.id);

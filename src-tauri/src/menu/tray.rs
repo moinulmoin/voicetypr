@@ -93,8 +93,8 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
     };
 
     let (available_models, whisper_models_info) = {
-        // Store (name, display_name, size) for sorting
-        let mut models: Vec<(String, String, u64)> = Vec::new();
+        // Store (name, display_name, accuracy_score, speed_score) for sorting to match UI order
+        let mut models: Vec<(String, String, u8, u8)> = Vec::new();
         let mut whisper_all = std::collections::HashMap::new();
 
         if let Some(whisper_state) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
@@ -103,7 +103,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             whisper_all = manager.get_models_status();
             for (name, info) in whisper_all.iter() {
                 if info.downloaded {
-                    models.push((name.clone(), info.display_name.clone(), info.size));
+                    models.push((name.clone(), info.display_name.clone(), info.accuracy_score, info.speed_score));
                 }
             }
         } else {
@@ -113,7 +113,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         if let Some(parakeet_manager) = app.try_state::<crate::parakeet::ParakeetManager>() {
             for m in parakeet_manager.list_models().into_iter() {
                 if m.downloaded {
-                    models.push((m.name.clone(), m.display_name.clone(), m.size));
+                    models.push((m.name.clone(), m.display_name.clone(), m.accuracy_score, m.speed_score));
                 }
             }
         } else {
@@ -123,15 +123,22 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         let has_soniox =
             crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
         if has_soniox {
-            // Soniox is cloud, put at end with max size
-            models.push(("soniox".to_string(), "Soniox (Cloud)".to_string(), u64::MAX));
+            // Soniox is cloud, put at end with max accuracy score, min speed
+            models.push(("soniox".to_string(), "Soniox (Cloud)".to_string(), u8::MAX, 0));
         }
 
-        // Sort by size (ascending) to match the UI order
-        models.sort_by_key(|m| m.2);
+        // Sort by accuracy_score (ascending), then by speed_score (descending) as tiebreaker
+        // Lower accuracy_score = better accuracy = shown first
+        // Higher speed_score = faster = shown first within same accuracy
+        models.sort_by(|a, b| {
+            match a.2.cmp(&b.2) {
+                std::cmp::Ordering::Equal => b.3.cmp(&a.3), // speed descending
+                other => other,
+            }
+        });
 
         // Convert back to (name, display_name) pairs
-        let models: Vec<(String, String)> = models.into_iter().map(|(n, d, _)| (n, d)).collect();
+        let models: Vec<(String, String)> = models.into_iter().map(|(n, d, _, _)| (n, d)).collect();
 
         // NOTE: Remote servers are added separately below with a separator
         (models, whisper_all)
