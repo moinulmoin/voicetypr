@@ -18,6 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import {
   AlertCircle,
+  FolderOpen,
   Keyboard,
   Mic,
   Rocket,
@@ -474,63 +475,62 @@ export function GeneralSettings() {
                     Save Recordings
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    Keep audio files for re-transcription with other models
+                    Keep audio files instead of deleting after transcription
                   </p>
+                  {settings.save_recordings && (
+                    <button
+                      type="button"
+                      className="text-xs text-primary hover:underline flex items-center gap-1 mt-1"
+                      onClick={async () => {
+                        try {
+                          await invoke('open_recordings_folder');
+                        } catch (error) {
+                          console.error('Failed to open recordings folder:', error);
+                          toast.error('Failed to open recordings folder');
+                        }
+                      }}
+                    >
+                      <FolderOpen className="h-3 w-3" />
+                      Open Recordings Folder
+                    </button>
+                  )}
                 </div>
-                <Switch
-                  id="save-recordings"
-                  checked={settings.save_recordings ?? false}
-                  onCheckedChange={async (checked) => {
-                    await updateSettings({
-                      save_recordings: checked,
-                    });
-                    if (checked) {
+                <Select
+                  value={
+                    !settings.save_recordings
+                      ? "off"
+                      : settings.recording_retention_count === null
+                        ? "unlimited"
+                        : String(settings.recording_retention_count ?? 50)
+                  }
+                  onValueChange={async (value) => {
+                    if (value === "off") {
+                      await updateSettings({
+                        save_recordings: false,
+                      });
+                    } else {
+                      const count = value === "unlimited" ? null : parseInt(value, 10);
+                      await updateSettings({
+                        save_recordings: true,
+                        recording_retention_count: count,
+                      });
                       toast.success("Recordings will now be saved");
                     }
                   }}
-                />
+                >
+                  <SelectTrigger className="w-[160px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="off">Don't Save</SelectItem>
+                    <SelectItem value="25">Last 25</SelectItem>
+                    <SelectItem value="50">Last 50</SelectItem>
+                    <SelectItem value="100">Last 100</SelectItem>
+                    <SelectItem value="250">Last 250</SelectItem>
+                    <SelectItem value="unlimited">Unlimited</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-
-              {/* Recording Retention - shown when save_recordings is enabled */}
-              {settings.save_recordings && (
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label
-                      htmlFor="recording-retention"
-                      className="text-sm font-medium"
-                    >
-                      Keep Recordings
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      Oldest recordings are auto-deleted when limit is reached
-                    </p>
-                  </div>
-                  <Select
-                    value={
-                      settings.recording_retention_count === null
-                        ? "unlimited"
-                        : String(settings.recording_retention_count ?? 50)
-                    }
-                    onValueChange={async (value) => {
-                      const count = value === "unlimited" ? null : parseInt(value, 10);
-                      await updateSettings({
-                        recording_retention_count: count,
-                      });
-                    }}
-                  >
-                    <SelectTrigger className="w-[160px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="25">Last 25</SelectItem>
-                      <SelectItem value="50">Last 50</SelectItem>
-                      <SelectItem value="100">Last 100</SelectItem>
-                      <SelectItem value="250">Last 250</SelectItem>
-                      <SelectItem value="unlimited">Forever (Unlimited)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
             </div>
           </div>
 
