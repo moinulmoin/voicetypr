@@ -187,9 +187,9 @@ Example:
 - Your Agent ID is `Agent-7`
 - Write "7" to `.agent-counter`
 
-Then create your worktree:
+Then create your worktree (branch specified in the issue you're working on):
 ```bash
-git worktree add .worktrees/agent-7 feature/network-sharing-remote-transcription
+git worktree add .worktrees/agent-7 <branch-from-issue>
 cd .worktrees/agent-7
 ```
 

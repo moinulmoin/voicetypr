@@ -63,9 +63,9 @@ When multiple Claude Code agents work in parallel, follow this protocol strictly
 3. **Write** the new number back to `.agent-counter`
 4. **Your Agent ID** for this session is `Agent-<number>` (e.g., `Agent-7`)
 
-Then create your worktree:
+Then create your worktree (use the branch specified in the issue you're working on):
 ```bash
-git worktree add .worktrees/agent-<number> feature/network-sharing-remote-transcription
+git worktree add .worktrees/agent-<number> <branch-from-issue>
 cd .worktrees/agent-<number>
 ```
 
