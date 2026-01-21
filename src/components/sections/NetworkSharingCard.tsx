@@ -5,9 +5,15 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { isMacOS, isWindows } from "@/lib/platform";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { AlertTriangle, Check, Copy, Eye, EyeOff, ExternalLink, Network, Server, Shield } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle, Copy, Eye, EyeOff, ExternalLink, Network, Server, Shield, XCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+
+interface BindingResult {
+  ip: string;
+  success: boolean;
+  error: string | null;
+}
 
 interface SharingStatus {
   enabled: boolean;
@@ -16,6 +22,7 @@ interface SharingStatus {
   server_name: string | null;
   active_connections: number;
   password: string | null;
+  binding_results: BindingResult[];
 }
 
 interface FirewallStatus {
@@ -43,6 +50,7 @@ export function NetworkSharingCard() {
     server_name: null,
     active_connections: 0,
     password: null,
+    binding_results: [],
   });
   const [showPassword, setShowPassword] = useState(false);
   const [port, setPort] = useState("47842");
@@ -52,7 +60,6 @@ export function NetworkSharingCard() {
   const [loading, setLoading] = useState(false);
   const [savingPort, setSavingPort] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
-  const [localIps, setLocalIps] = useState<string[]>([]);
   const [modelDisplayName, setModelDisplayName] = useState<string | null>(null);
   const [hasDownloadedModel, setHasDownloadedModel] = useState<boolean>(true);
   const [activeRemoteServer, setActiveRemoteServer] = useState<string | null>(null);
@@ -80,17 +87,6 @@ export function NetworkSharingCard() {
       }
     } catch (error) {
       console.error("Failed to get sharing status:", error);
-    }
-  }, []);
-
-  // Fetch local IPs
-  const fetchLocalIps = useCallback(async () => {
-    try {
-      const ips = await invoke<string[]>("get_local_ips");
-      setLocalIps(ips);
-    } catch (error) {
-      console.error("Failed to get local IPs:", error);
-      setLocalIps(["Unable to detect IP"]);
     }
   }, []);
 
@@ -139,14 +135,13 @@ export function NetworkSharingCard() {
     }
   }, [currentModel]);
 
-  // Fetch status, IPs, model info, remote server state, and firewall status on mount
+  // Fetch status, model info, remote server state, and firewall status on mount
   useEffect(() => {
     fetchStatus();
-    fetchLocalIps();
     fetchModelInfo();
     fetchActiveRemoteServer();
     fetchFirewallStatus();
-  }, [fetchStatus, fetchLocalIps, fetchModelInfo, fetchActiveRemoteServer, fetchFirewallStatus]);
+  }, [fetchStatus, fetchModelInfo, fetchActiveRemoteServer, fetchFirewallStatus]);
 
   // Refetch model info when current model changes
   useEffect(() => {
@@ -467,37 +462,59 @@ export function NetworkSharingCard() {
             <div className="space-y-2">
               <Label className="text-sm font-medium">Connect Using</Label>
               <div className="space-y-1">
-                {localIps.length === 0 ? (
+                {status.binding_results.length === 0 ? (
                   <div className="px-3 py-2 rounded-md bg-muted/50 border border-border/50 font-mono text-sm text-muted-foreground">
-                    Detecting IP addresses...
+                    Starting server...
                   </div>
                 ) : (
-                  localIps.map((ip, index) => {
-                    const justIp = ip.split(" ")[0];
-                    const interfaceName = ip.includes("(") ? ip.split("(")[1]?.replace(")", "") : "";
-                    return (
-                      <div key={index} className="flex items-center gap-2">
-                        <div className="flex-1 px-3 py-2 rounded-md bg-muted/50 border border-border/50 font-mono text-sm">
-                          <span className="font-semibold">{justIp}:{port}</span>
-                          {interfaceName && (
-                            <span className="text-muted-foreground ml-2 text-xs">({interfaceName})</span>
-                          )}
+                  <>
+                    {/* Show successful bindings first */}
+                    {status.binding_results
+                      .filter((result) => result.success)
+                      .map((result, index) => (
+                        <div key={`success-${index}`} className="flex items-center gap-2">
+                          <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
+                          <div className="flex-1 px-3 py-2 rounded-md bg-muted/50 border border-green-500/30 font-mono text-sm">
+                            <span className="font-semibold">{result.ip}:{port}</span>
+                          </div>
+                          <button
+                            onClick={() => copyAddress(result.ip)}
+                            className="p-2 rounded-md border border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground hover:border-border/50 active:bg-accent/80 active:scale-95 transition-all duration-150"
+                            title="Copy address"
+                          >
+                            <Copy className="h-4 w-4" />
+                          </button>
                         </div>
-                        <button
-                          onClick={() => copyAddress(ip)}
-                          className="p-2 rounded-md border border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground hover:border-border/50 active:bg-accent/80 active:scale-95 transition-all duration-150"
-                          title="Copy address"
+                      ))}
+                    {/* Show failed bindings with tooltip */}
+                    {status.binding_results
+                      .filter((result) => !result.success)
+                      .map((result, index) => (
+                        <div
+                          key={`failed-${index}`}
+                          className="flex items-center gap-2 opacity-50"
+                          title={result.error || "Failed to bind"}
                         >
-                          <Copy className="h-4 w-4" />
-                        </button>
-                      </div>
-                    );
-                  })
+                          <XCircle className="h-4 w-4 text-red-400 flex-shrink-0" />
+                          <div className="flex-1 px-3 py-2 rounded-md bg-muted/30 border border-border/30 font-mono text-sm text-muted-foreground">
+                            <span>{result.ip}:{port}</span>
+                            <span className="ml-2 text-xs text-red-400">(bind failed)</span>
+                          </div>
+                        </div>
+                      ))}
+                  </>
                 )}
               </div>
-              <p className="text-xs text-muted-foreground">
-                Other VoiceTypr instances can connect using any of these addresses
-              </p>
+              {status.binding_results.filter((r) => r.success).length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Other VoiceTypr instances can connect using any of the addresses above
+                </p>
+              )}
+              {status.binding_results.filter((r) => !r.success).length > 0 && (
+                <p className="text-xs text-amber-500">
+                  Some addresses failed to bind - hover for details
+                </p>
+              )}
             </div>
 
             {/* Server Configuration Section */}
