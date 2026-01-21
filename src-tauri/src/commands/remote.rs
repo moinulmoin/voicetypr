@@ -711,59 +711,63 @@ pub async fn transcribe_remote(
 // ============================================================================
 
 /// Test connection to a remote server
+/// Uses blocking HTTP client in a separate thread to avoid async runtime issues on Intel Macs
 async fn test_connection(
     host: &str,
     port: u16,
     password: Option<&str>,
 ) -> Result<StatusResponse, String> {
     let conn = RemoteServerConnection::new(host.to_string(), port, password.map(String::from));
+    let url = conn.status_url();
+    let password_owned = password.map(String::from);
+    let host_clone = host.to_string();
+    let port_clone = port;
 
     log::info!("[Remote Client] Testing connection to {}:{}", host, port);
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    // Use blocking client in spawn_blocking to avoid tokio async I/O issues on Intel Macs
+    let status = tokio::task::spawn_blocking(move || {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    let mut request = client.get(&conn.status_url());
+        let mut request = client.get(&url);
 
-    if let Some(pwd) = password {
-        request = request.header("X-VoiceTypr-Key", pwd);
-    }
+        if let Some(pwd) = password_owned.as_ref() {
+            request = request.header("X-VoiceTypr-Key", pwd);
+        }
 
-    let response = request.send().await.map_err(|e| {
-        log::warn!(
-            "[Remote Client] Connection test FAILED to {}:{} - {}",
-            host,
-            port,
-            e
-        );
-        format!("Failed to connect: {}", e)
-    })?;
+        let response = request.send().map_err(|e| {
+            log::warn!(
+                "[Remote Client] Connection test FAILED to {}:{} - {}",
+                host_clone, port_clone, e
+            );
+            format!("Failed to connect: {}", e)
+        })?;
 
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        log::warn!(
-            "[Remote Client] Connection test REJECTED - authentication failed for {}:{}",
-            host,
-            port
-        );
-        return Err("Authentication failed".to_string());
-    }
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            log::warn!(
+                "[Remote Client] Connection test REJECTED - authentication failed for {}:{}",
+                host_clone, port_clone
+            );
+            return Err("Authentication failed".to_string());
+        }
 
-    if !response.status().is_success() {
-        log::warn!(
-            "[Remote Client] Connection test FAILED - server error {} for {}:{}",
-            response.status(),
-            host,
-            port
-        );
-        return Err(format!("Server error: {}", response.status()));
-    }
+        if !response.status().is_success() {
+            log::warn!(
+                "[Remote Client] Connection test FAILED - server error {} for {}:{}",
+                response.status(), host_clone, port_clone
+            );
+            return Err(format!("Server error: {}", response.status()));
+        }
 
-    let status = response
-        .json::<StatusResponse>()
-        .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+        response
+            .json::<StatusResponse>()
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))??;
 
     log::info!(
         "[Remote Client] Connection test SUCCEEDED to '{}' ({}:{}) - model: '{}', version: {}",

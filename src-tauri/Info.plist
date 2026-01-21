@@ -8,5 +8,18 @@
     <string>VoiceType uses speech recognition to convert your voice to text.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>VoiceType needs accessibility permissions to insert transcribed text at your cursor position.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>VoiceTypr needs local network access to connect to remote VoiceTypr servers for transcription.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_http._tcp</string>
+    </array>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
 </dict>
 </plist>
