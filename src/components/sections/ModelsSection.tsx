@@ -68,7 +68,7 @@ export function ModelsSection({
   );
   const [addServerModalOpen, setAddServerModalOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<SavedConnection | null>(null);
-  const [remoteRefreshTrigger, setRemoteRefreshTrigger] = useState(0);
+  const [isRefreshingServers, setIsRefreshingServers] = useState(false);
 
   const { availableToUse, availableToSetup } = useMemo(() => {
     const useList: [string, ModelInfo][] = [];
@@ -128,12 +128,27 @@ export function ModelsSection({
   );
 
   // Remote servers management
+  // Quick list fetch (no status checks) - for immediate display
   const fetchRemoteServers = useCallback(async () => {
     try {
       const servers = await invoke<SavedConnection[]>("list_remote_servers");
       setRemoteServers(servers);
     } catch (error) {
       console.error("Failed to fetch remote servers:", error);
+    }
+  }, []);
+
+  // Full refresh with status checks - called when user views the tab
+  const refreshRemoteServers = useCallback(async () => {
+    setIsRefreshingServers(true);
+    try {
+      // This backend call checks all servers and updates cached status
+      const servers = await invoke<SavedConnection[]>("refresh_remote_servers");
+      setRemoteServers(servers);
+    } catch (error) {
+      console.error("Failed to refresh remote servers:", error);
+    } finally {
+      setIsRefreshingServers(false);
     }
   }, []);
 
@@ -147,15 +162,32 @@ export function ModelsSection({
   }, []);
 
   useEffect(() => {
+    // On mount: fetch list quickly, then refresh status in background
     fetchRemoteServers();
     fetchActiveRemoteServer();
-  }, [fetchRemoteServers, fetchActiveRemoteServer]);
+    // Trigger status refresh after initial list load
+    refreshRemoteServers();
+  }, [fetchRemoteServers, fetchActiveRemoteServer, refreshRemoteServers]);
+
+  // Listen for remote-servers-updated event (from backend after status refresh)
+  useEffect(() => {
+    const unlisten = listen<SavedConnection[]>("remote-servers-updated", (event) => {
+      console.log("[ModelsSection] remote-servers-updated event received", event.payload.length, "servers");
+      setRemoteServers(event.payload);
+      setIsRefreshingServers(false);
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   // Refresh active remote server when window gains focus (handles tray menu changes)
   useEffect(() => {
     const handleFocus = () => {
       fetchActiveRemoteServer();
-      fetchRemoteServers();
+      // Refresh server status when user returns to the app
+      refreshRemoteServers();
     };
 
     window.addEventListener("focus", handleFocus);
@@ -167,7 +199,7 @@ export function ModelsSection({
       window.removeEventListener("focus", handleFocus);
       unlisten.then((fn) => fn());
     };
-  }, [fetchActiveRemoteServer, fetchRemoteServers]);
+  }, [fetchActiveRemoteServer, refreshRemoteServers]);
 
   // Listen for model-changed events (from tray menu selection or UI)
   useEffect(() => {
@@ -179,8 +211,6 @@ export function ModelsSection({
         fetchActiveRemoteServer();
         fetchRemoteServers();
         refreshSettings();
-        // Trigger immediate status refresh on all remote server cards
-        setRemoteRefreshTrigger((prev) => prev + 1);
       }
     );
 
@@ -191,20 +221,28 @@ export function ModelsSection({
 
   const handleSelectRemoteServer = useCallback(
     async (serverId: string) => {
+      const startTime = performance.now();
+      console.log(`⏱️ [UI TIMING] handleSelectRemoteServer START - serverId=${serverId}`);
       try {
+        const invokeStart = performance.now();
+        console.log(`⏱️ [UI TIMING] Calling set_active_remote_server... (+${(invokeStart - startTime).toFixed(0)}ms)`);
         await invoke("set_active_remote_server", {
           serverId: serverId === activeRemoteServer ? null : serverId,
         });
+        console.log(`⏱️ [UI TIMING] set_active_remote_server returned (+${(performance.now() - startTime).toFixed(0)}ms)`);
         setActiveRemoteServer(
           serverId === activeRemoteServer ? null : serverId
         );
+        console.log(`⏱️ [UI TIMING] State updated (+${(performance.now() - startTime).toFixed(0)}ms)`);
         toast.success(
           serverId === activeRemoteServer
             ? "Remote VoiceTypr deselected"
             : "Remote VoiceTypr selected"
         );
+        console.log(`⏱️ [UI TIMING] handleSelectRemoteServer COMPLETE - total: ${(performance.now() - startTime).toFixed(0)}ms`);
       } catch (error) {
         console.error("Failed to set active remote server:", error);
+        console.log(`⏱️ [UI TIMING] handleSelectRemoteServer ERROR after ${(performance.now() - startTime).toFixed(0)}ms`);
         toast.error("Failed to select remote VoiceTypr");
       }
     },
@@ -243,10 +281,10 @@ export function ModelsSection({
         return [...prev, server];
       });
       setEditingServer(null);
-      // Trigger immediate status refresh on all remote server cards
-      setRemoteRefreshTrigger((prev) => prev + 1);
+      // Trigger status refresh for all servers
+      refreshRemoteServers();
     },
-    []
+    [refreshRemoteServers]
   );
 
   const handleEditServer = useCallback((server: SavedConnection) => {
@@ -529,16 +567,22 @@ export function ModelsSection({
                         onDelete={onDelete}
                         onCancelDownload={onCancelDownload}
                         onSelect={async (modelName) => {
+                          const startTime = performance.now();
+                          console.log(`⏱️ [UI TIMING] Local model onSelect START - model=${modelName}`);
                           // Clear active remote server when selecting a local model
                           if (activeRemoteServer) {
                             try {
+                              console.log(`⏱️ [UI TIMING] Clearing remote server... (+${(performance.now() - startTime).toFixed(0)}ms)`);
                               await invoke("set_active_remote_server", { serverId: null });
+                              console.log(`⏱️ [UI TIMING] Remote server cleared (+${(performance.now() - startTime).toFixed(0)}ms)`);
                               setActiveRemoteServer(null);
                             } catch (error) {
                               console.error("Failed to clear active remote server:", error);
                             }
                           }
+                          console.log(`⏱️ [UI TIMING] Calling onSelect... (+${(performance.now() - startTime).toFixed(0)}ms)`);
                           void onSelect(modelName);
+                          console.log(`⏱️ [UI TIMING] Local model onSelect COMPLETE - total: ${(performance.now() - startTime).toFixed(0)}ms`);
                         }}
                         showSelectButton={model.downloaded}
                         isSelected={!activeRemoteServer && currentModel === name}
@@ -569,16 +613,22 @@ export function ModelsSection({
                         onDelete={onDelete}
                         onCancelDownload={onCancelDownload}
                         onSelect={async (modelName) => {
+                          const startTime = performance.now();
+                          console.log(`⏱️ [UI TIMING] Local model onSelect START - model=${modelName}`);
                           // Clear active remote server when selecting a local model
                           if (activeRemoteServer) {
                             try {
+                              console.log(`⏱️ [UI TIMING] Clearing remote server... (+${(performance.now() - startTime).toFixed(0)}ms)`);
                               await invoke("set_active_remote_server", { serverId: null });
+                              console.log(`⏱️ [UI TIMING] Remote server cleared (+${(performance.now() - startTime).toFixed(0)}ms)`);
                               setActiveRemoteServer(null);
                             } catch (error) {
                               console.error("Failed to clear active remote server:", error);
                             }
                           }
+                          console.log(`⏱️ [UI TIMING] Calling onSelect... (+${(performance.now() - startTime).toFixed(0)}ms)`);
                           void onSelect(modelName);
+                          console.log(`⏱️ [UI TIMING] Local model onSelect COMPLETE - total: ${(performance.now() - startTime).toFixed(0)}ms`);
                         }}
                         showSelectButton={model.downloaded}
                         isSelected={!activeRemoteServer && currentModel === name}
@@ -617,7 +667,7 @@ export function ModelsSection({
                       onSelect={handleSelectRemoteServer}
                       onRemove={handleRemoveRemoteServer}
                       onEdit={handleEditServer}
-                      refreshTrigger={remoteRefreshTrigger}
+                      isRefreshing={isRefreshingServers}
                     />
                   ))}
                 </div>

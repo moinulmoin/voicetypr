@@ -8,6 +8,11 @@ use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
 use crate::whisper::manager::WhisperManager;
 use crate::AppState;
 use tauri::async_runtime::Mutex as AsyncMutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Generation counter for tray menu updates to prevent race conditions.
+/// Each update increments this and checks if it's still current before applying.
+static TRAY_MENU_GENERATION: AtomicU64 = AtomicU64::new(0);
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
@@ -869,18 +874,53 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     Ok(())
 }
 
+/// Increment the tray menu generation and return the new value.
+/// Used by callers who want to spawn background updates.
+pub fn next_tray_menu_generation() -> u64 {
+    TRAY_MENU_GENERATION.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// Get the current tray menu generation.
+pub fn current_tray_menu_generation() -> u64 {
+    TRAY_MENU_GENERATION.load(Ordering::SeqCst)
+}
+
 #[tauri::command]
 pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
+    update_tray_menu_with_generation(app, None).await
+}
+
+/// Update tray menu with optional generation check.
+/// If generation is provided, the update will be skipped if a newer generation was requested.
+pub async fn update_tray_menu_with_generation(app: AppHandle, my_generation: Option<u64>) -> Result<(), String> {
+    use std::time::Instant;
+    let start_time = Instant::now();
+
+    let gen_info = my_generation.map(|g| format!(" (gen={})", g)).unwrap_or_default();
+    log::info!("⏱️ [TRAY TIMING] update_tray_menu called{}", gen_info);
+
     // Build the new menu
+    log::info!("⏱️ [TRAY TIMING] Building tray menu...{} (+{}ms)", gen_info, start_time.elapsed().as_millis());
     let new_menu = crate::build_tray_menu(&app)
         .await
         .map_err(|e| format!("Failed to build tray menu: {}", e))?;
+    log::info!("⏱️ [TRAY TIMING] Tray menu built{} (+{}ms)", gen_info, start_time.elapsed().as_millis());
+
+    // Check if this update is still current (if generation was provided)
+    if let Some(my_gen) = my_generation {
+        let current_gen = current_tray_menu_generation();
+        if my_gen < current_gen {
+            log::info!("⏱️ [TRAY TIMING] Skipping stale tray menu update (gen={} < current={})", my_gen, current_gen);
+            return Ok(());
+        }
+    }
 
     // Update the tray menu
     if let Some(tray) = app.tray_by_id("main") {
+        log::info!("⏱️ [TRAY TIMING] Setting tray menu...{} (+{}ms)", gen_info, start_time.elapsed().as_millis());
         tray.set_menu(Some(new_menu))
             .map_err(|e| format!("Failed to set tray menu: {}", e))?;
-        log::info!("Tray menu updated successfully");
+        log::info!("⏱️ [TRAY TIMING] Tray menu set{} - total: {}ms", gen_info, start_time.elapsed().as_millis());
     } else {
         log::warn!("Tray icon not found");
     }

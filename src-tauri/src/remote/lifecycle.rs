@@ -107,9 +107,15 @@ impl RemoteServerManager {
         engine: String,
         app_handle: Option<AppHandle>,
     ) -> Result<(), String> {
+        use std::time::Instant;
+        let start_time = Instant::now();
+        log::info!("⏱️ [SERVER TIMING] start() called");
+
         // Stop existing server if running
         if self.handle.is_some() {
+            log::info!("⏱️ [SERVER TIMING] Stopping existing server... (+{}ms)", start_time.elapsed().as_millis());
             self.stop();
+            log::info!("⏱️ [SERVER TIMING] Existing server stopped (+{}ms)", start_time.elapsed().as_millis());
         }
 
         let config = TranscriptionServerConfig {
@@ -133,6 +139,7 @@ impl RemoteServerManager {
             shared_state,
             app_handle,
         )));
+        log::info!("⏱️ [SERVER TIMING] Context created (+{}ms)", start_time.elapsed().as_millis());
 
         // Get all local IPs to bind to
         // On Intel Macs, binding to 0.0.0.0 doesn't work properly for non-localhost connections,
@@ -143,6 +150,7 @@ impl RemoteServerManager {
         bind_ips.push(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
 
         // Add all network interface IPs (only IPv4 for now - IPv6 link-local addresses cause binding issues)
+        log::info!("⏱️ [SERVER TIMING] Listing network interfaces... (+{}ms)", start_time.elapsed().as_millis());
         if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
             for (name, ip) in interfaces {
                 // Skip loopback and IPv6 addresses (IPv6 link-local addresses like fe80:: can't be bound without scope ID)
@@ -152,6 +160,7 @@ impl RemoteServerManager {
                 }
             }
         }
+        log::info!("⏱️ [SERVER TIMING] Found {} IPs to bind (+{}ms)", bind_ips.len(), start_time.elapsed().as_millis());
 
         log::info!(
             "[Remote Server] Starting server on {} IPs as '{}': {:?}",
@@ -163,6 +172,7 @@ impl RemoteServerManager {
         let mut binding_results = Vec::new();
 
         for ip in bind_ips {
+            let bind_start = Instant::now();
             let addr: SocketAddr = SocketAddr::new(ip, port);
             let ip_str = ip.to_string();
 
@@ -175,6 +185,7 @@ impl RemoteServerManager {
             let ip_str_clone = ip_str.clone();
 
             // Try to bind to this address using try_bind
+            log::info!("⏱️ [SERVER TIMING] Binding to {}... (+{}ms)", addr, start_time.elapsed().as_millis());
             match warp::serve(routes).try_bind_ephemeral(addr) {
                 Ok((bound_addr, server_future)) => {
                     shutdown_txs.push(shutdown_tx);
@@ -200,12 +211,12 @@ impl RemoteServerManager {
                         success: true,
                         error: None,
                     });
-                    log::info!("[Remote Server] Successfully bound to {}", bound_addr);
+                    log::info!("⏱️ [SERVER TIMING] Bound to {} in {}ms (+{}ms total)", bound_addr, bind_start.elapsed().as_millis(), start_time.elapsed().as_millis());
                 }
                 Err(e) => {
                     // Log the error but continue with other IPs
                     let error_msg = format!("{}", e);
-                    log::warn!("[Remote Server] Failed to bind to {}: {}", addr, error_msg);
+                    log::warn!("⏱️ [SERVER TIMING] Failed to bind to {} in {}ms: {}", addr, bind_start.elapsed().as_millis(), error_msg);
                     binding_results.push(BindingResult {
                         ip: ip_str,
                         success: false,
@@ -229,9 +240,9 @@ impl RemoteServerManager {
         });
 
         log::info!(
-            "[Remote Server] Server STARTED on port {} as '{}' with model '{}'",
+            "⏱️ [SERVER TIMING] Server STARTED - total: {}ms (port={}, model='{}')",
+            start_time.elapsed().as_millis(),
             port,
-            server_name,
             self.config.as_ref().map(|c| c.model_name.as_str()).unwrap_or("unknown")
         );
 

@@ -8,6 +8,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::server::RemoteServerConfig;
 
+/// Connection status from last check
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub enum ConnectionStatus {
+    #[default]
+    Unknown,
+    Online,
+    Offline,
+    AuthFailed,
+    /// This server is actually this machine (can't use self)
+    SelfConnection,
+}
+
 /// A saved connection with metadata
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SavedConnection {
@@ -23,9 +35,15 @@ pub struct SavedConnection {
     pub name: Option<String>,
     /// Timestamp when this connection was added (unix timestamp ms)
     pub created_at: u64,
-    /// Model being served by this server (cached from last connection test)
+    /// Model being served by this server (cached from last status check)
     #[serde(default)]
     pub model: Option<String>,
+    /// Cached connection status from last check
+    #[serde(default)]
+    pub status: ConnectionStatus,
+    /// Timestamp of last status check (unix timestamp ms)
+    #[serde(default)]
+    pub last_checked: u64,
 }
 
 impl SavedConnection {
@@ -84,10 +102,28 @@ impl RemoteSettings {
             name,
             created_at,
             model,
+            status: ConnectionStatus::Unknown,
+            last_checked: 0,
         };
 
         self.saved_connections.push(saved.clone());
         saved
+    }
+
+    /// Update the status of a connection after a status check
+    pub fn update_connection_status(
+        &mut self,
+        id: &str,
+        status: ConnectionStatus,
+        model: Option<String>,
+    ) {
+        if let Some(conn) = self.saved_connections.iter_mut().find(|c| c.id == id) {
+            conn.status = status;
+            conn.last_checked = current_timestamp();
+            if model.is_some() {
+                conn.model = model;
+            }
+        }
     }
 
     /// Remove a connection by ID

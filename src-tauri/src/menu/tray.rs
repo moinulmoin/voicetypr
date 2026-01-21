@@ -35,6 +35,10 @@ pub fn format_tray_model_label(
 pub async fn build_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<tauri::menu::Menu<R>, Box<dyn std::error::Error>> {
+    use std::time::Instant;
+    let build_start = Instant::now();
+    log::info!("⏱️ [TRAY BUILD TIMING] build_tray_menu called");
+
     let (current_model, selected_microphone, onboarding_done) = {
         match app.store("settings") {
             Ok(store) => {
@@ -54,30 +58,26 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             Err(_) => ("".to_string(), None, false),
         }
     };
+    log::info!("⏱️ [TRAY BUILD TIMING] Settings loaded (+{}ms)", build_start.elapsed().as_millis());
 
     // Get remote server info (active connection and saved connections)
-    // Collect: (id, display_name, model_name)
-    // For connections missing model info, fetch it via status check
+    // Use CACHED data - do NOT make HTTP calls here (that would block tray menu for seconds)
+    // The frontend/background tasks handle status polling separately
     let (active_remote_id, active_remote_display, active_remote_model, remote_connections) = {
         if let Some(remote_state) = app.try_state::<AsyncMutex<RemoteSettings>>() {
+            log::info!("⏱️ [TRAY BUILD TIMING] Acquiring remote_settings lock... (+{}ms)", build_start.elapsed().as_millis());
             let settings = remote_state.lock().await;
+            log::info!("⏱️ [TRAY BUILD TIMING] remote_settings lock acquired (+{}ms)", build_start.elapsed().as_millis());
             let active_id = settings.active_connection_id.clone();
 
-            // Build connections list, only including online/reachable servers
+            // Build connections list using cached data (no HTTP calls!)
+            // Include all servers with cached model info - let the user see what's available
             let mut connections: Vec<(String, String, Option<String>)> = Vec::new();
             for conn in settings.saved_connections.iter() {
-                // Try to fetch fresh status - only include server if reachable
-                match fetch_server_status(&conn.host, conn.port, conn.password.as_deref()).await {
-                    Ok(status) => {
-                        log::debug!("Server '{}' is online with model: {}", conn.display_name(), status.model);
-                        connections.push((conn.id.clone(), conn.display_name(), Some(status.model)));
-                    }
-                    Err(e) => {
-                        // Server is offline/unreachable - don't include in menu
-                        log::debug!("Server '{}' is offline: {}, not showing in tray menu", conn.display_name(), e);
-                    }
-                };
+                // Use cached model from saved connection data
+                connections.push((conn.id.clone(), conn.display_name(), conn.model.clone()));
             }
+            log::info!("⏱️ [TRAY BUILD TIMING] Loaded {} cached connections (+{}ms)", connections.len(), build_start.elapsed().as_millis());
 
             // Get active connection info
             let active_conn_info = active_id.as_ref().and_then(|id| {
@@ -91,6 +91,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             (None, None, None, Vec::new())
         }
     };
+    log::info!("⏱️ [TRAY BUILD TIMING] Remote server info collected (+{}ms)", build_start.elapsed().as_millis());
 
     let (available_models, whisper_models_info) = {
         // Store (name, display_name, accuracy_score, speed_score) for sorting to match UI order
@@ -438,6 +439,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         .item(&quit_i)
         .build()?;
 
+    log::info!("⏱️ [TRAY BUILD TIMING] build_tray_menu COMPLETE - total: {}ms", build_start.elapsed().as_millis());
     Ok(menu)
 }
 

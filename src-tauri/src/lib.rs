@@ -75,8 +75,9 @@ use commands::{
     remote::{
         add_remote_server, get_active_remote_server, get_firewall_status, get_local_ips,
         get_local_machine_id, get_sharing_status, list_remote_servers, open_firewall_settings,
-        remove_remote_server, set_active_remote_server, start_sharing, stop_sharing,
-        test_remote_connection, test_remote_server, transcribe_remote, update_remote_server,
+        refresh_remote_servers, remove_remote_server, set_active_remote_server, start_sharing,
+        stop_sharing, test_remote_connection, test_remote_server, transcribe_remote,
+        update_remote_server,
     },
     reset::reset_app_data,
     settings::*,
@@ -1242,6 +1243,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             set_active_remote_server,
             get_active_remote_server,
             transcribe_remote,
+            refresh_remote_servers,
         ])
         .on_window_event(|window, event| {
             match event {

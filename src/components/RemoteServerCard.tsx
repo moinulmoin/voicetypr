@@ -1,7 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { invoke } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -13,7 +12,10 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
+
+// Connection status enum matching backend
+export type ConnectionStatus = "Unknown" | "Online" | "Offline" | "AuthFailed" | "SelfConnection";
 
 export interface SavedConnection {
   id: string;
@@ -23,6 +25,8 @@ export interface SavedConnection {
   name: string | null;
   created_at: number;
   model?: string | null;
+  status?: ConnectionStatus;
+  last_checked?: number;
 }
 
 export interface StatusResponse {
@@ -39,8 +43,8 @@ interface RemoteServerCardProps {
   onSelect: (serverId: string) => void;
   onRemove: (serverId: string) => void;
   onEdit: (server: SavedConnection) => void;
-  /** Increment to force immediate status refresh */
-  refreshTrigger?: number;
+  /** Whether a global refresh is in progress */
+  isRefreshing?: boolean;
 }
 
 export function RemoteServerCard({
@@ -49,62 +53,22 @@ export function RemoteServerCard({
   onSelect,
   onRemove,
   onEdit,
-  refreshTrigger = 0,
+  isRefreshing = false,
 }: RemoteServerCardProps) {
-  const [status, setStatus] = useState<"checking" | "online" | "auth_failed" | "offline" | "self_connection">(
-    "checking"
-  );
-  const [serverInfo, setServerInfo] = useState<StatusResponse | null>(null);
   const [removing, setRemoving] = useState(false);
-  const [localMachineId, setLocalMachineId] = useState<string | null>(null);
 
-  // Fetch local machine ID once on mount
-  useEffect(() => {
-    invoke<string>("get_local_machine_id")
-      .then(setLocalMachineId)
-      .catch((err) => console.warn("Failed to get local machine ID:", err));
-  }, []);
-
-  const checkStatus = useCallback(async () => {
-    setStatus("checking");
-    try {
-      const response = await invoke<StatusResponse>("test_remote_server", {
-        serverId: server.id,
-      });
-      setServerInfo(response);
-
-      // Check for self-connection
-      if (localMachineId && response.machine_id === localMachineId) {
-        setStatus("self_connection");
-      } else {
-        setStatus("online");
-      }
-    } catch (error) {
-      setServerInfo(null);
-      // Check if it's an authentication failure vs connection failure
-      const errorMessage = typeof error === "string" ? error : "";
-      if (errorMessage.includes("Authentication failed")) {
-        setStatus("auth_failed");
-      } else {
-        setStatus("offline");
-      }
+  // Map backend ConnectionStatus to display status
+  // Status is now from cached data on server prop
+  const getDisplayStatus = (): "unknown" | "online" | "auth_failed" | "offline" | "self_connection" => {
+    switch (server.status) {
+      case "Online": return "online";
+      case "Offline": return "offline";
+      case "AuthFailed": return "auth_failed";
+      case "SelfConnection": return "self_connection";
+      default: return "unknown";
     }
-  // Include connection details so checkStatus re-runs when server is edited
-  }, [server.id, server.host, server.port, server.password, localMachineId]);
-
-  useEffect(() => {
-    checkStatus();
-    // Re-check every 30 seconds
-    const interval = setInterval(checkStatus, 30000);
-    return () => clearInterval(interval);
-  }, [checkStatus]);
-
-  // Re-check when refreshTrigger changes (used by parent to force refresh)
-  useEffect(() => {
-    if (refreshTrigger > 0) {
-      checkStatus();
-    }
-  }, [refreshTrigger, checkStatus]);
+  };
+  const status = getDisplayStatus();
 
   const handleRemove = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -123,7 +87,9 @@ export function RemoteServerCard({
 
   const displayName = server.name || `${server.host}:${server.port}`;
 
-  const isSelectable = status === "online";
+  // All servers are selectable - status is informational only
+  // (Per user request: don't block selection based on status)
+  const isSelectable = status !== "self_connection";
 
   return (
     <Card
@@ -132,7 +98,7 @@ export function RemoteServerCard({
         isSelectable ? "cursor-pointer" : "cursor-default",
         status === "self_connection"
           ? "bg-amber-500/5 border-amber-500/30"
-          : isActive
+          : isActive && (status === "online" || status === "unknown")
             ? "bg-primary/8 border-primary/50 ring-2 ring-primary/20"
             : isSelectable
               ? "border-border/50 hover:border-border"
@@ -145,25 +111,29 @@ export function RemoteServerCard({
           <div
             className={cn(
               "p-2 rounded-md",
-              isActive && status === "online"
+              isActive && (status === "online" || status === "unknown")
                 ? "bg-primary/20"
                 : status === "online"
                   ? "bg-green-500/10"
-                  : status === "auth_failed" || status === "self_connection"
-                    ? "bg-amber-500/10"
-                    : "bg-muted"
+                  : status === "unknown"
+                    ? "bg-muted"
+                    : status === "auth_failed" || status === "self_connection"
+                      ? "bg-amber-500/10"
+                      : "bg-muted"
             )}
           >
             <Server
               className={cn(
                 "h-4 w-4",
-                isActive && status === "online"
+                isActive && (status === "online" || status === "unknown")
                   ? "text-primary"
                   : status === "online"
                     ? "text-green-500"
-                    : status === "auth_failed" || status === "self_connection"
-                      ? "text-amber-500"
-                      : "text-muted-foreground"
+                    : status === "unknown"
+                      ? "text-muted-foreground"
+                      : status === "auth_failed" || status === "self_connection"
+                        ? "text-amber-500"
+                        : "text-muted-foreground"
               )}
             />
           </div>
@@ -185,22 +155,38 @@ export function RemoteServerCard({
               )}
             </div>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              {status === "checking" ? (
-                <span className="flex items-center gap-1">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Checking...
-                </span>
+              {status === "unknown" ? (
+                // Show last known model if available, otherwise show checking indicator
+                server.model ? (
+                  <>
+                    <Wifi className="h-3 w-3 text-muted-foreground" />
+                    <span className="text-muted-foreground">{server.model}</span>
+                    {isRefreshing && <Loader2 className="h-3 w-3 animate-spin ml-1" />}
+                  </>
+                ) : (
+                  <span className="flex items-center gap-1 text-muted-foreground">
+                    {isRefreshing ? (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        Checking...
+                      </>
+                    ) : (
+                      "Status unknown"
+                    )}
+                  </span>
+                )
               ) : status === "online" ? (
                 <>
                   <Wifi className="h-3 w-3 text-green-500" />
                   <span className="text-green-600 dark:text-green-400">
                     Online
                   </span>
-                  {serverInfo?.model && (
+                  {server.model && (
                     <span className="text-muted-foreground">
-                      • {serverInfo.model}
+                      • {server.model}
                     </span>
                   )}
+                  {isRefreshing && <Loader2 className="h-3 w-3 animate-spin ml-1" />}
                 </>
               ) : status === "auth_failed" ? (
                 <>
@@ -208,6 +194,7 @@ export function RemoteServerCard({
                   <span className="text-amber-600 dark:text-amber-400">
                     Auth Failed
                   </span>
+                  {isRefreshing && <Loader2 className="h-3 w-3 animate-spin ml-1" />}
                 </>
               ) : status === "self_connection" ? (
                 <>
@@ -225,6 +212,7 @@ export function RemoteServerCard({
                   <span className="text-red-600 dark:text-red-400">
                     Offline
                   </span>
+                  {isRefreshing && <Loader2 className="h-3 w-3 animate-spin ml-1" />}
                 </>
               )}
             </div>
