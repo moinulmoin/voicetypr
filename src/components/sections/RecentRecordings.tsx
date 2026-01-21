@@ -15,7 +15,7 @@ import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, FolderOpen, Server, Cpu } from "lucide-react";
+import { AlertCircle, AlertTriangle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, FolderOpen, Server, Cpu } from "lucide-react";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -510,7 +510,9 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                     <span className="text-muted-foreground/50">({items.length})</span>
                   </div>
                   <div className="space-y-2">
-                    {items.map((item) => (
+                    {items.map((item) => {
+                      const isFailed = item.status === 'failed';
+                      return (
                       <div
                         key={item.id}
                         className={cn(
@@ -518,10 +520,12 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                           "bg-card border",
                           reTranscribingIds.has(item.id)
                             ? "border-primary/50"
+                            : isFailed
+                            ? "border-amber-500/50 bg-amber-500/5"
                             : "border-border/50 hover:bg-accent/30 hover:border-border",
                           "transition-all duration-200"
                         )}
-                        onClick={() => handleCopy(item.text)}
+                        onClick={() => !isFailed && handleCopy(item.text)}
                         onMouseEnter={() => setHoveredId(item.id)}
                         onMouseLeave={() => setHoveredId(null)}
                       >
@@ -534,9 +538,116 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                             </span>
                           </div>
                         )}
+                        {/* Failed status bar */}
+                        {isFailed && !reTranscribingIds.has(item.id) && (
+                          <div className="flex items-center justify-between gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 rounded-t-lg">
+                            <div className="flex items-center gap-2">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                              <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                                Transcription failed - recording preserved
+                              </span>
+                            </div>
+                            {verifiedRecordings.has(item.id) && (
+                              <DropdownMenu onOpenChange={(open) => {
+                                setDropdownOpenId(open ? item.id : null);
+                                if (open) fetchTranscriptionSources();
+                              }}>
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-400 bg-amber-500/20 rounded hover:bg-amber-500/30 transition-colors"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    Re-transcribe
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent
+                                  align="end"
+                                  className="w-44 max-h-72 overflow-y-auto text-xs"
+                                >
+                                  <DropdownMenuLabel className="text-xs py-1.5 px-2 -mx-1 bg-zinc-100 dark:bg-zinc-800 font-medium">Re-transcribe using...</DropdownMenuLabel>
+                                  <DropdownMenuSeparator />
+                                  {loadingSources ? (
+                                    <div className="flex items-center justify-center py-2">
+                                      <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+                                    </div>
+                                  ) : transcriptionSources.length === 0 ? (
+                                    <div className="py-2 text-center text-xs text-muted-foreground">
+                                      No models available
+                                    </div>
+                                  ) : (
+                                    <>
+                                      {/* Local models */}
+                                      {transcriptionSources.filter(s => s.type === 'local').length > 0 && (
+                                        <DropdownMenuGroup>
+                                          <DropdownMenuLabel className="text-[10px] text-muted-foreground flex items-center gap-1 py-0.5">
+                                            <Cpu className="w-2.5 h-2.5" />
+                                            Local Models
+                                          </DropdownMenuLabel>
+                                          {transcriptionSources
+                                            .filter(s => s.type === 'local')
+                                            .sort((a, b) => {
+                                              const aModelName = a.id.split(':')[1];
+                                              const bModelName = b.id.split(':')[1];
+                                              const aIndex = modelOrder.indexOf(aModelName);
+                                              const bIndex = modelOrder.indexOf(bModelName);
+                                              const aOrder = aIndex === -1 ? 999 : aIndex;
+                                              const bOrder = bIndex === -1 ? 999 : bIndex;
+                                              return aOrder - bOrder;
+                                            })
+                                            .map(source => (
+                                              <DropdownMenuItem
+                                                key={source.id}
+                                                className="text-xs py-1"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleReTranscribe(item, source.id);
+                                                }}
+                                              >
+                                                {source.name}
+                                              </DropdownMenuItem>
+                                            ))}
+                                        </DropdownMenuGroup>
+                                      )}
+                                      {/* Remote servers */}
+                                      {transcriptionSources.filter(s => s.type === 'remote').length > 0 && (
+                                        <>
+                                          <DropdownMenuSeparator />
+                                          <DropdownMenuGroup>
+                                            <DropdownMenuLabel className="text-[10px] text-muted-foreground flex items-center gap-1 py-0.5">
+                                              <Server className="w-2.5 h-2.5" />
+                                              Remote Servers
+                                            </DropdownMenuLabel>
+                                            {transcriptionSources
+                                              .filter(s => s.type === 'remote')
+                                              .map(source => (
+                                                <DropdownMenuItem
+                                                  key={source.id}
+                                                  className="text-xs py-1"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleReTranscribe(item, source.id);
+                                                  }}
+                                                >
+                                                  {source.name}
+                                                </DropdownMenuItem>
+                                              ))}
+                                          </DropdownMenuGroup>
+                                        </>
+                                      )}
+                                    </>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
+                          </div>
+                        )}
                         <div className="p-4">
                           {/* Text content */}
-                          <p className="text-sm text-foreground leading-relaxed line-clamp-5">
+                          <p className={cn(
+                            "text-sm leading-relaxed line-clamp-5",
+                            isFailed ? "text-muted-foreground italic" : "text-foreground"
+                          )}>
                             {item.text}
                           </p>
                           {/* Bottom row: model name, time + action buttons */}
@@ -693,7 +804,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                           </div>
                         </div>
                       </div>
-                    ))}
+                    )})}
                   </div>
                 </div>
               ))}

@@ -298,26 +298,46 @@ impl RecordingConfig {
 impl UnwindSafe for RecordingConfig {}
 impl RefUnwindSafe for RecordingConfig {}
 
+/// Always save a recording file to persistent storage
+/// This is used for the "preserve recordings on failure" feature
+/// Returns the saved filename (not full path) if saved, None otherwise
+pub async fn save_recording(app: &AppHandle, audio_path: &Path) -> Option<String> {
+    save_recording_internal(app, audio_path, false).await
+}
+
 /// Save a recording file to persistent storage if save_recordings is enabled
 /// Returns the saved filename (not full path) if saved, None otherwise
 pub async fn maybe_save_recording(app: &AppHandle, audio_path: &Path) -> Option<String> {
-    // Check if save_recordings is enabled
+    save_recording_internal(app, audio_path, true).await
+}
+
+/// Internal function to save recording with optional settings check
+async fn save_recording_internal(app: &AppHandle, audio_path: &Path, check_settings: bool) -> Option<String> {
+    // Get settings store for retention count (always needed) and save_recordings check
     let store = match app.store("settings") {
         Ok(s) => s,
         Err(e) => {
-            log::warn!("Failed to get settings store for save_recordings check: {}", e);
-            return None;
+            log::warn!("Failed to get settings store: {}", e);
+            // If we can't get settings, still save for preservation purposes
+            if check_settings {
+                return None;
+            }
+            // For forced saves (preserve on failure), continue without store
+            // We'll skip retention cleanup in this case
+            return save_recording_without_cleanup(app, audio_path).await;
         }
     };
 
-    let save_recordings = store
-        .get("save_recordings")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    if check_settings {
+        let save_recordings = store
+            .get("save_recordings")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-    if !save_recordings {
-        log::debug!("save_recordings is disabled, skipping recording persistence");
-        return None;
+        if !save_recordings {
+            log::debug!("save_recordings is disabled, skipping recording persistence");
+            return None;
+        }
     }
 
     // Get recordings directory
@@ -356,6 +376,38 @@ pub async fn maybe_save_recording(app: &AppHandle, audio_path: &Path) -> Option<
                 cleanup_old_recordings(&recordings_dir, max_count);
             }
 
+            Some(filename)
+        }
+        Err(e) => {
+            log::error!("Failed to save recording: {}", e);
+            None
+        }
+    }
+}
+
+/// Save recording without cleanup (fallback when store is unavailable)
+async fn save_recording_without_cleanup(app: &AppHandle, audio_path: &Path) -> Option<String> {
+    let recordings_dir = match app.path().app_data_dir() {
+        Ok(dir) => dir.join("recordings"),
+        Err(e) => {
+            log::error!("Failed to get app data directory: {}", e);
+            return None;
+        }
+    };
+
+    if let Err(e) = std::fs::create_dir_all(&recordings_dir) {
+        log::error!("Failed to create recordings directory: {}", e);
+        return None;
+    }
+
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let uuid_part = uuid::Uuid::new_v4().to_string()[..8].to_string();
+    let filename = format!("{}_{}.wav", timestamp, uuid_part);
+    let dest_path = recordings_dir.join(&filename);
+
+    match std::fs::copy(audio_path, &dest_path) {
+        Ok(_) => {
+            log::info!("Saved recording (no cleanup) to: {:?}", dest_path);
             Some(filename)
         }
         Err(e) => {
@@ -2010,10 +2062,19 @@ pub async fn stop_recording(
         };
 
         // Try to save recording to persistent storage BEFORE cleanup
-        let recording_file = if transcription_result.is_ok() {
-            maybe_save_recording(&app_for_task, &audio_path_clone).await
-        } else {
-            None
+        // On success: use maybe_save_recording (respects save_recordings setting)
+        // On recoverable failure (remote server errors): always save to preserve for re-transcription
+        let recording_file = match &transcription_result {
+            Ok(_) => maybe_save_recording(&app_for_task, &audio_path_clone).await,
+            Err(e) => {
+                // For remote server errors, always preserve the recording for re-transcription
+                if e.contains("remote server") || e.contains("Remote server") || e.contains("Connection refused") {
+                    log::info!("Preserving recording for failed remote transcription");
+                    save_recording(&app_for_task, &audio_path_clone).await
+                } else {
+                    None
+                }
+            }
         };
 
         // Clean up temp file regardless of outcome
@@ -2278,7 +2339,7 @@ pub async fn stop_recording(
 
                         update_recording_state(&app_for_reset, RecordingState::Idle, None);
                     });
-                } else if e.contains("remote server") || e.contains("Remote server") {
+                } else if e.contains("remote server") || e.contains("Remote server") || e.contains("Connection refused") {
                     // Remote server error - emit specific event for system notification
                     log::warn!("Remote server error: {}", e);
 
@@ -2288,8 +2349,29 @@ pub async fn stop_recording(
                         "title": "Remote Server Unavailable"
                     }));
 
+                    // Save failed transcription to history if we preserved the recording
+                    if let Some(ref saved_recording) = recording_file {
+                        let app_for_history = app_for_task.clone();
+                        let error_msg = e.clone();
+                        let model_name = selected_model_name_for_task.clone();
+                        let recording_filename = saved_recording.clone();
+                        tokio::spawn(async move {
+                            if let Err(save_err) = save_failed_transcription(
+                                &app_for_history,
+                                error_msg,
+                                model_name,
+                                recording_filename,
+                            ).await {
+                                log::error!("Failed to save failed transcription: {}", save_err);
+                            }
+                        });
+                        // Update pill message to indicate recording was preserved
+                        pill_toast(&app_for_task, "Server unavailable - recording saved", 2000);
+                    } else {
+                        pill_toast(&app_for_task, "Remote server unavailable", 2000);
+                    }
+
                     update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
-                    pill_toast(&app_for_task, "Remote server unavailable", 2000);
 
                     // Transition back to Idle after showing the error
                     let app_for_reset = app_for_task.clone();
@@ -2518,6 +2600,44 @@ pub async fn save_transcription_with_recording(
     }
 
     log::info!("Saved transcription with {} characters", text.len());
+    Ok(())
+}
+
+/// Save a failed transcription to history with recording file preserved for re-transcription
+pub async fn save_failed_transcription(
+    app: &AppHandle,
+    error_message: String,
+    model: String,
+    recording_file: String,
+) -> Result<(), String> {
+    let store = app
+        .store("transcriptions")
+        .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let transcription_data = serde_json::json!({
+        "text": format!("Transcription failed: {}", error_message),
+        "model": model,
+        "timestamp": timestamp.clone(),
+        "recording_file": recording_file,
+        "status": "failed"
+    });
+
+    store.set(&timestamp, transcription_data.clone());
+
+    store
+        .save()
+        .map_err(|e| format!("Failed to save failed transcription: {}", e))?;
+
+    // Emit the new transcription data to frontend
+    let _ = emit_to_window(app, "main", "transcription-added", transcription_data);
+
+    // Refresh tray menu
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!("Failed to update tray menu after saving failed transcription: {}", e);
+    }
+
+    log::info!("Saved failed transcription with recording file: {}", recording_file);
     Ok(())
 }
 
