@@ -411,73 +411,84 @@ pub async fn test_remote_server(
     Ok(status)
 }
 
-/// Refresh the status of all remote servers
-/// Called when user views the Models tab or explicitly requests a refresh
-/// Updates cached status and emits event when done
+/// Check the status of a single remote server
+/// Called by frontend for each server in parallel for immediate UI updates
 #[tauri::command]
-pub async fn refresh_remote_servers(
+pub async fn check_remote_server_status(
     app: AppHandle,
+    server_id: String,
     remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
-) -> Result<Vec<SavedConnection>, String> {
-    log::info!("🔄 [REMOTE] refresh_remote_servers called");
+) -> Result<SavedConnection, String> {
+    log::debug!("🔄 [REMOTE] check_remote_server_status called for {}", server_id);
 
     // Get local machine ID for self-connection detection
     let local_machine_id = get_local_machine_id().ok();
 
-    // Get list of servers to check
-    let servers: Vec<SavedConnection> = {
+    // Get the server to check
+    let server = {
         let settings = remote_settings.lock().await;
-        settings.saved_connections.clone()
+        settings
+            .get_connection(&server_id)
+            .cloned()
+            .ok_or_else(|| format!("Server '{}' not found", server_id))?
     };
 
-    log::info!("🔄 [REMOTE] Checking {} servers...", servers.len());
+    // Check the server status
+    let check_result = test_connection(
+        &server.host,
+        server.port,
+        server.password.as_deref(),
+    )
+    .await;
 
-    // Check each server and collect results
-    for server in &servers {
-        let check_result = test_connection(
-            &server.host,
-            server.port,
-            server.password.as_deref(),
-        )
-        .await;
-
-        let (new_status, new_model) = match check_result {
-            Ok(status_response) => {
-                // Check for self-connection
-                if local_machine_id.as_ref() == Some(&status_response.machine_id) {
-                    (ConnectionStatus::SelfConnection, Some(status_response.model))
-                } else {
-                    (ConnectionStatus::Online, Some(status_response.model))
-                }
+    let (new_status, new_model) = match check_result {
+        Ok(status_response) => {
+            // Check for self-connection
+            if local_machine_id.as_ref() == Some(&status_response.machine_id) {
+                (ConnectionStatus::SelfConnection, Some(status_response.model))
+            } else {
+                (ConnectionStatus::Online, Some(status_response.model))
             }
-            Err(e) => {
-                if e.contains("Authentication failed") {
-                    (ConnectionStatus::AuthFailed, None)
-                } else {
-                    (ConnectionStatus::Offline, None)
-                }
-            }
-        };
-
-        // Update the cached status
-        {
-            let mut settings = remote_settings.lock().await;
-            settings.update_connection_status(&server.id, new_status, new_model);
-            save_remote_settings(&app, &settings)?;
         }
-    }
-
-    // Get updated list and emit event
-    let updated_servers = {
-        let settings = remote_settings.lock().await;
-        settings.saved_connections.clone()
+        Err(e) => {
+            if e.contains("Authentication failed") {
+                (ConnectionStatus::AuthFailed, None)
+            } else {
+                (ConnectionStatus::Offline, None)
+            }
+        }
     };
 
-    // Emit event so UI can update
-    let _ = app.emit("remote-servers-updated", &updated_servers);
-    log::info!("🔄 [REMOTE] refresh_remote_servers complete, emitted event");
+    // Update the cached status and return the updated server
+    let updated_server = {
+        let mut settings = remote_settings.lock().await;
+        settings.update_connection_status(&server_id, new_status.clone(), new_model.clone());
+        // Save settings (best effort - don't fail the whole operation)
+        if let Err(e) = save_remote_settings(&app, &settings) {
+            log::warn!("Failed to save remote settings: {}", e);
+        }
 
-    Ok(updated_servers)
+        settings
+            .saved_connections
+            .iter()
+            .find(|s| s.id == server_id)
+            .cloned()
+            .ok_or_else(|| format!("Server '{}' not found after update", server_id))?
+    };
+
+    log::debug!("🔄 [REMOTE] Server {} status: {:?}", server_id, new_status);
+    Ok(updated_server)
+}
+
+/// Refresh the status of all remote servers (legacy - returns list without checking)
+/// For status checks, use check_remote_server_status for each server in parallel
+#[tauri::command]
+pub async fn refresh_remote_servers(
+    remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
+) -> Result<Vec<SavedConnection>, String> {
+    log::info!("🔄 [REMOTE] refresh_remote_servers called (returning cached list)");
+    let settings = remote_settings.lock().await;
+    Ok(settings.saved_connections.clone())
 }
 
 /// Set the active remote server for transcription

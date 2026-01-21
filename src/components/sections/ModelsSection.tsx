@@ -138,13 +138,39 @@ export function ModelsSection({
     }
   }, []);
 
-  // Full refresh with status checks - called when user views the tab
+  // Full refresh with status checks - check each server in parallel for immediate UI updates
   const refreshRemoteServers = useCallback(async () => {
     setIsRefreshingServers(true);
     try {
-      // This backend call checks all servers and updates cached status
-      const servers = await invoke<SavedConnection[]>("refresh_remote_servers");
+      // First get the list of servers
+      const servers = await invoke<SavedConnection[]>("list_remote_servers");
       setRemoteServers(servers);
+
+      // Check each server in parallel - update UI as each responds
+      const checkPromises = servers.map(async (server) => {
+        try {
+          const updated = await invoke<SavedConnection>("check_remote_server_status", {
+            serverId: server.id,
+          });
+          // Update this specific server in state immediately
+          setRemoteServers((prev) => {
+            const index = prev.findIndex((s) => s.id === updated.id);
+            if (index >= 0) {
+              const newList = [...prev];
+              newList[index] = updated;
+              return newList;
+            }
+            return prev;
+          });
+          return updated;
+        } catch (error) {
+          console.error(`Failed to check server ${server.id}:`, error);
+          return server; // Keep existing data on error
+        }
+      });
+
+      // Wait for all checks to complete
+      await Promise.all(checkPromises);
     } catch (error) {
       console.error("Failed to refresh remote servers:", error);
     } finally {
@@ -169,18 +195,9 @@ export function ModelsSection({
     refreshRemoteServers();
   }, [fetchRemoteServers, fetchActiveRemoteServer, refreshRemoteServers]);
 
-  // Listen for remote-servers-updated event (from backend after status refresh)
-  useEffect(() => {
-    const unlisten = listen<SavedConnection[]>("remote-servers-updated", (event) => {
-      console.log("[ModelsSection] remote-servers-updated event received", event.payload.length, "servers");
-      setRemoteServers(event.payload);
-      setIsRefreshingServers(false);
-    });
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, []);
+  // Note: Status updates are handled via the refreshRemoteServers function
+  // which calls check_remote_server_status for each server in parallel
+  // and updates the UI immediately as each server responds
 
   // Refresh active remote server when window gains focus (handles tray menu changes)
   useEffect(() => {

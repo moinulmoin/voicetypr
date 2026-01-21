@@ -110,12 +110,12 @@ export function AppContainer() {
 
         // Listen for remote VoiceTypr errors
         registerEvent<{ title: string; message: string }>("remote-server-error", async (data) => {
-          console.error("Remote VoiceTypr error:", data);
+          console.error("Remote server error:", data);
 
-          // Show toast in the app
-          toast.error(data.title || "Remote VoiceTypr Error", {
-            description: data.message || "Failed to connect to remote VoiceTypr",
-            duration: 5000
+          // Show toast with error info and clear action
+          toast.error("Remote Server Unreachable", {
+            description: "Go to History to re-transcribe this recording, or select a different model.",
+            duration: 8000
           });
 
           // Also show system notification so user sees it even if app is not focused
@@ -127,8 +127,8 @@ export function AppContainer() {
             }
             if (permitted) {
               sendNotification({
-                title: data.title || "Remote VoiceTypr Unavailable",
-                body: data.message || "The remote VoiceTypr is not responding. Please check the connection or switch to a local model."
+                title: "Remote Server Unreachable",
+                body: "Go to History to re-transcribe, or select a different model."
               });
             }
           } catch (err) {

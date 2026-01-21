@@ -146,7 +146,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     verifyRecordings();
   }, [history]);
 
-  // Fetch available transcription sources (local models only - remote servers are too slow to test)
+  // Fetch available transcription sources (local models and all remote servers)
   const fetchTranscriptionSources = useCallback(async () => {
     setLoadingSources(true);
     const sources: TranscriptionSource[] = [];
@@ -169,20 +169,23 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       console.error("Failed to fetch local models:", error);
     }
 
-    // Add cached online remote servers (pre-checked in background)
-    for (const serverId of onlineServersRef.current.keys()) {
-      const serverInfo = onlineServersRef.current.get(serverId);
-      if (serverInfo) {
-        // Display as "ServerName - ModelName" if model is available
-        const displayName = serverInfo.model
-          ? `${serverInfo.name} - ${serverInfo.model}`
-          : serverInfo.name;
+    // Fetch all configured remote servers (not just cached online ones)
+    try {
+      const servers = await invoke<SavedConnection[]>("list_remote_servers");
+      for (const server of servers) {
+        // Use cached info if available (has model name), otherwise just show server name
+        const cachedInfo = onlineServersRef.current.get(server.id);
+        const displayName = cachedInfo?.model
+          ? `${server.name || `${server.host}:${server.port}`} - ${cachedInfo.model}`
+          : server.name || `${server.host}:${server.port}`;
         sources.push({
-          id: `remote:${serverId}`,
+          id: `remote:${server.id}`,
           name: displayName,
           type: 'remote',
         });
       }
+    } catch (error) {
+      console.error("Failed to fetch remote servers:", error);
     }
 
     setTranscriptionSources(sources);

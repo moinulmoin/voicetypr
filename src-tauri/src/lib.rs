@@ -73,11 +73,11 @@ use commands::{
         test_automation_permission,
     },
     remote::{
-        add_remote_server, get_active_remote_server, get_firewall_status, get_local_ips,
-        get_local_machine_id, get_sharing_status, list_remote_servers, open_firewall_settings,
-        refresh_remote_servers, remove_remote_server, set_active_remote_server, start_sharing,
-        stop_sharing, test_remote_connection, test_remote_server, transcribe_remote,
-        update_remote_server,
+        add_remote_server, check_remote_server_status, get_active_remote_server,
+        get_firewall_status, get_local_ips, get_local_machine_id, get_sharing_status,
+        list_remote_servers, open_firewall_settings, refresh_remote_servers, remove_remote_server,
+        set_active_remote_server, start_sharing, stop_sharing, test_remote_connection,
+        test_remote_server, transcribe_remote, update_remote_server,
     },
     reset::reset_app_data,
     settings::*,
@@ -392,7 +392,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             log::info!("🌐 Remote transcription state initialized ({} saved connections)", connection_count);
 
             // Auto-start network sharing if it was enabled before app closed
-            if sharing_was_enabled {
+            // BUT only if no remote server is active (can't share and use remote at same time)
+            if sharing_was_enabled && active_id.is_none() {
                 let app_handle_for_sharing = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     // Wait for app to fully initialize
@@ -466,6 +467,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         Err(e) => log::warn!("🌐 [STARTUP] Failed to auto-start network sharing: {}", e),
                     }
                 });
+            } else if sharing_was_enabled && active_id.is_some() {
+                log::info!(
+                    "🌐 [STARTUP] Skipping network sharing auto-start: remote server is active (id={:?})",
+                    active_id
+                );
             }
 
             // Initialize unified application state
@@ -1244,6 +1250,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_active_remote_server,
             transcribe_remote,
             refresh_remote_servers,
+            check_remote_server_status,
         ])
         .on_window_event(|window, event| {
             match event {

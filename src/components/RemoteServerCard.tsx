@@ -98,7 +98,7 @@ export function RemoteServerCard({
         isSelectable ? "cursor-pointer" : "cursor-default",
         status === "self_connection"
           ? "bg-amber-500/5 border-amber-500/30"
-          : isActive && (status === "online" || status === "unknown")
+          : isActive
             ? "bg-primary/8 border-primary/50 ring-2 ring-primary/20"
             : isSelectable
               ? "border-border/50 hover:border-border"
@@ -111,7 +111,7 @@ export function RemoteServerCard({
           <div
             className={cn(
               "p-2 rounded-md",
-              isActive && (status === "online" || status === "unknown")
+              isActive
                 ? "bg-primary/20"
                 : status === "online"
                   ? "bg-green-500/10"
@@ -125,7 +125,7 @@ export function RemoteServerCard({
             <Server
               className={cn(
                 "h-4 w-4",
-                isActive && (status === "online" || status === "unknown")
+                isActive
                   ? "text-primary"
                   : status === "online"
                     ? "text-green-500"
