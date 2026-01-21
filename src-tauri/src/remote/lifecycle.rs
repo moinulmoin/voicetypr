@@ -2,7 +2,7 @@
 //!
 //! Handles starting and stopping the HTTP server when sharing is enabled/disabled.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -14,19 +14,21 @@ use super::transcription::{RealTranscriptionContext, SharedServerState, Transcri
 
 /// Handle to a running server, used to stop it
 pub struct ServerHandle {
-    /// Channel to signal server shutdown
-    shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Channels to signal server shutdown (one per bound IP)
+    shutdown_txs: Vec<oneshot::Sender<()>>,
     /// The port the server is listening on
     pub port: u16,
+    /// The IPs the server is bound to
+    pub bound_ips: Vec<IpAddr>,
 }
 
 impl ServerHandle {
     /// Stop the server gracefully
     pub fn stop(&mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
+        for tx in self.shutdown_txs.drain(..) {
             let _ = tx.send(());
-            log::info!("[Remote Server] Shutdown signal sent for port {}", self.port);
         }
+        log::info!("[Remote Server] Shutdown signal sent for port {}", self.port);
     }
 }
 
@@ -119,36 +121,67 @@ impl RemoteServerManager {
             app_handle,
         )));
 
-        // Create routes
-        let routes = create_routes(ctx);
+        // Get all local IPs to bind to
+        // On Intel Macs, binding to 0.0.0.0 doesn't work properly for non-localhost connections,
+        // so we bind to each specific IP address instead
+        let mut bind_ips: Vec<IpAddr> = Vec::new();
 
-        // Create shutdown channel
-        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        // Always include localhost
+        bind_ips.push(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
 
-        // Bind to address
-        let addr: SocketAddr = ([0, 0, 0, 0], port).into();
+        // Add all network interface IPs (only IPv4 for now - IPv6 link-local addresses cause binding issues)
+        if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
+            for (name, ip) in interfaces {
+                // Skip loopback and IPv6 addresses (IPv6 link-local addresses like fe80:: can't be bound without scope ID)
+                if !ip.is_loopback() && ip.is_ipv4() {
+                    log::info!("[Remote Server] Found interface {}: {}", name, ip);
+                    bind_ips.push(ip);
+                }
+            }
+        }
 
         log::info!(
-            "[Remote Server] Starting server on {} as '{}'",
-            addr, server_name
+            "[Remote Server] Starting server on {} IPs as '{}': {:?}",
+            bind_ips.len(), server_name, bind_ips
         );
 
-        // Create the server with graceful shutdown
-        let (_, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
-            shutdown_rx.await.ok();
-            log::info!("[Remote Server] Received shutdown signal");
-        });
+        let mut shutdown_txs = Vec::new();
+        let mut bound_ips = Vec::new();
 
-        // Spawn the server task
-        tokio::spawn(async move {
-            server.await;
-            log::info!("[Remote Server] Server task completed");
-        });
+        for ip in bind_ips {
+            let addr: SocketAddr = SocketAddr::new(ip, port);
+
+            // Clone routes for each server instance
+            let routes = create_routes(ctx.clone());
+
+            // Create shutdown channel for this instance
+            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+            shutdown_txs.push(shutdown_tx);
+
+            let ip_str = ip.to_string();
+
+            // Create the server with graceful shutdown
+            let (_, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async move {
+                shutdown_rx.await.ok();
+                log::info!("[Remote Server] Received shutdown signal for {}", ip_str);
+            });
+
+            // Spawn the server task
+            let ip_for_log = ip;
+            tokio::spawn(async move {
+                server.await;
+                log::info!("[Remote Server] Server task completed for {}", ip_for_log);
+            });
+
+            bound_ips.push(ip);
+            log::info!("[Remote Server] Bound to {}", addr);
+        }
 
         // Store the handle
         self.handle = Some(ServerHandle {
-            shutdown_tx: Some(shutdown_tx),
+            shutdown_txs,
             port,
+            bound_ips,
         });
 
         log::info!(
