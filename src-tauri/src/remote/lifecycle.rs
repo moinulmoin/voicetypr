@@ -12,6 +12,17 @@ use warp::Filter;
 use super::http::{create_routes, ServerContext};
 use super::transcription::{RealTranscriptionContext, SharedServerState, TranscriptionServerConfig};
 
+/// Result of attempting to bind to an IP address
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BindingResult {
+    /// The IP address we attempted to bind to
+    pub ip: String,
+    /// Whether the binding was successful
+    pub success: bool,
+    /// Error message if binding failed
+    pub error: Option<String>,
+}
+
 /// Handle to a running server, used to stop it
 pub struct ServerHandle {
     /// Channels to signal server shutdown (one per bound IP)
@@ -20,6 +31,8 @@ pub struct ServerHandle {
     pub port: u16,
     /// The IPs the server is bound to
     pub bound_ips: Vec<IpAddr>,
+    /// Results of binding attempts (for UI display)
+    pub binding_results: Vec<BindingResult>,
 }
 
 impl ServerHandle {
@@ -147,34 +160,64 @@ impl RemoteServerManager {
 
         let mut shutdown_txs = Vec::new();
         let mut bound_ips = Vec::new();
+        let mut binding_results = Vec::new();
 
         for ip in bind_ips {
             let addr: SocketAddr = SocketAddr::new(ip, port);
+            let ip_str = ip.to_string();
 
             // Clone routes for each server instance
             let routes = create_routes(ctx.clone());
 
             // Create shutdown channel for this instance
             let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-            shutdown_txs.push(shutdown_tx);
 
-            let ip_str = ip.to_string();
+            let ip_str_clone = ip_str.clone();
 
-            // Create the server with graceful shutdown
-            let (_, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async move {
-                shutdown_rx.await.ok();
-                log::info!("[Remote Server] Received shutdown signal for {}", ip_str);
-            });
+            // Try to bind to this address using try_bind
+            match warp::serve(routes).try_bind_ephemeral(addr) {
+                Ok((bound_addr, server_future)) => {
+                    shutdown_txs.push(shutdown_tx);
 
-            // Spawn the server task
-            let ip_for_log = ip;
-            tokio::spawn(async move {
-                server.await;
-                log::info!("[Remote Server] Server task completed for {}", ip_for_log);
-            });
+                    // Wrap the server future with graceful shutdown
+                    let server = async move {
+                        tokio::select! {
+                            _ = server_future => {
+                                log::info!("[Remote Server] Server task completed for {}", ip_str_clone);
+                            }
+                            _ = shutdown_rx => {
+                                log::info!("[Remote Server] Received shutdown signal for {}", ip_str_clone);
+                            }
+                        }
+                    };
 
-            bound_ips.push(ip);
-            log::info!("[Remote Server] Bound to {}", addr);
+                    // Spawn the server task
+                    tokio::spawn(server);
+
+                    bound_ips.push(ip);
+                    binding_results.push(BindingResult {
+                        ip: ip_str.clone(),
+                        success: true,
+                        error: None,
+                    });
+                    log::info!("[Remote Server] Successfully bound to {}", bound_addr);
+                }
+                Err(e) => {
+                    // Log the error but continue with other IPs
+                    let error_msg = format!("{}", e);
+                    log::warn!("[Remote Server] Failed to bind to {}: {}", addr, error_msg);
+                    binding_results.push(BindingResult {
+                        ip: ip_str,
+                        success: false,
+                        error: Some(error_msg),
+                    });
+                }
+            }
+        }
+
+        // Check if we successfully bound to at least one address
+        if bound_ips.is_empty() {
+            return Err("Failed to bind to any IP address".to_string());
         }
 
         // Store the handle
@@ -182,6 +225,7 @@ impl RemoteServerManager {
             shutdown_txs,
             port,
             bound_ips,
+            binding_results,
         });
 
         log::info!(
@@ -244,6 +288,8 @@ pub struct SharingStatus {
     pub active_connections: u32,
     /// The password for authentication (if set)
     pub password: Option<String>,
+    /// Results of IP binding attempts (shows which addresses are active)
+    pub binding_results: Vec<BindingResult>,
 }
 
 impl RemoteServerManager {
@@ -258,6 +304,7 @@ impl RemoteServerManager {
                 server_name: config.map(|c| c.server_name.clone()),
                 active_connections: 0, // TODO: track actual connections
                 password: config.and_then(|c| c.password.clone()),
+                binding_results: handle.binding_results.clone(),
             }
         } else {
             SharingStatus {
@@ -267,6 +314,7 @@ impl RemoteServerManager {
                 server_name: None,
                 active_connections: 0,
                 password: None,
+                binding_results: Vec::new(),
             }
         }
     }
