@@ -582,6 +582,16 @@ impl WhisperManager {
         self.models.values().any(|info| info.downloaded)
     }
 
+    /// Get the name of the first downloaded model (for auto-selection)
+    pub fn get_first_downloaded_model(&self) -> Option<String> {
+        // Prefer recommended models first, then by speed score
+        self.models
+            .values()
+            .filter(|info| info.downloaded)
+            .max_by_key(|info| (info.recommended as u8, info.speed_score))
+            .map(|info| info.name.clone())
+    }
+
     /// Get list of downloaded model names (efficient, minimal allocation)
     pub fn get_downloaded_model_names(&self) -> Vec<String> {
         self.models

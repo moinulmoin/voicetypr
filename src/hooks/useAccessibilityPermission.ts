@@ -44,6 +44,19 @@ export function useAccessibilityPermission(options?: AccessibilityPermissionOpti
     checkPermission();
   }, [checkPermission, checkOnMount]);
 
+  // Poll for permission changes when permission is not granted
+  // This catches when user grants permission manually in System Settings
+  useEffect(() => {
+    if (!checkOnMount) return;
+    if (hasPermission === true) return; // Stop polling once granted
+
+    const interval = setInterval(() => {
+      checkPermission();
+    }, 3000); // Check every 3 seconds
+
+    return () => clearInterval(interval);
+  }, [checkOnMount, hasPermission, checkPermission]);
+
   // Listen for permission changes
   useEffect(() => {
     const unlistenGranted = listen('accessibility-granted', () => {

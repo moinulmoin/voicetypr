@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { AppErrorBoundary } from "./ErrorBoundary";
 import { Sidebar } from "./Sidebar";
 import { OnboardingDesktop } from "./onboarding/OnboardingDesktop";
@@ -105,6 +106,34 @@ export function AppContainer() {
             description,
             duration: 8000
           });
+        });
+
+        // Listen for remote VoiceTypr errors
+        registerEvent<{ title: string; message: string }>("remote-server-error", async (data) => {
+          console.error("Remote server error:", data);
+
+          // Show toast with error info and clear action
+          toast.error("Remote Server Unreachable", {
+            description: "Go to History to re-transcribe this recording, or select a different model.",
+            duration: 8000
+          });
+
+          // Also show system notification so user sees it even if app is not focused
+          try {
+            let permitted = await isPermissionGranted();
+            if (!permitted) {
+              const permission = await requestPermission();
+              permitted = permission === "granted";
+            }
+            if (permitted) {
+              sendNotification({
+                title: "Remote Server Unreachable",
+                body: "Go to History to re-transcribe, or select a different model."
+              });
+            }
+          } catch (err) {
+            console.error("Failed to send system notification:", err);
+          }
         });
 
         // Listen for license-required event and navigate to License section

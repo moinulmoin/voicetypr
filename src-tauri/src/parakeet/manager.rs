@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter};
 
 use super::error::ParakeetError;
 use super::messages::{ParakeetCommand, ParakeetResponse};
-use super::models::{ParakeetModelDefinition, AVAILABLE_MODELS};
+use super::models::{get_available_models, ParakeetModelDefinition, AVAILABLE_MODELS};
 use super::sidecar::ParakeetClient;
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,13 +51,14 @@ impl ParakeetManager {
         }
     }
 
-    /// Returns available Parakeet models.
+    /// Returns available Parakeet models for the current architecture.
     ///
     /// **Platform Support**: This returns an empty list on non-macOS platforms.
     /// Parakeet uses Apple's Neural Engine via FluidAudio, which is macOS-only.
     ///
     /// # Platform Behavior
-    /// - **macOS**: Returns all Parakeet models with download status
+    /// - **macOS (Apple Silicon)**: Returns all Parakeet models
+    /// - **macOS (Intel)**: Returns only models compatible with x86_64 (excludes V2)
     /// - **Windows/Linux**: Returns empty vector (compile-time exclusion)
     pub fn list_models(&self) -> Vec<ParakeetModelStatus> {
         // Parakeet Swift/FluidAudio integration is macOS-only
@@ -69,8 +70,9 @@ impl ParakeetManager {
 
         #[cfg(target_os = "macos")]
         {
-            AVAILABLE_MODELS
-                .iter()
+            // Use get_available_models() which filters out Apple Silicon-only models on Intel
+            get_available_models()
+                .into_iter()
                 .map(|definition| ParakeetModelStatus {
                     name: definition.id.to_string(),
                     display_name: definition.display_name.to_string(),

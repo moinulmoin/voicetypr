@@ -1,9 +1,18 @@
 use crate::audio::device_watcher::try_start_device_watcher_if_ready;
 use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_combination};
+use crate::commands::remote::save_remote_settings;
 use crate::parakeet::ParakeetManager;
+use crate::remote::lifecycle::RemoteServerManager;
+use crate::remote::settings::RemoteSettings;
 use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
 use crate::whisper::manager::WhisperManager;
 use crate::AppState;
+use tauri::async_runtime::Mutex as AsyncMutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Generation counter for tray menu updates to prevent race conditions.
+/// Each update increments this and checks if it's still current before applying.
+static TRAY_MENU_GENERATION: AtomicU64 = AtomicU64::new(0);
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
@@ -31,8 +40,17 @@ pub struct Settings {
     pub keep_transcription_in_clipboard: bool,
     // Audio feedback
     pub play_sound_on_recording: bool,
-    // Pill indicator visibility when idle
-    pub show_pill_indicator: bool,
+    pub play_sound_on_recording_end: bool,
+    // Pill indicator visibility mode: "never", "always", or "when_recording"
+    pub pill_indicator_mode: String,
+    // Pill indicator screen position: "top", "center", or "bottom"
+    pub pill_indicator_position: String,
+    // Network sharing settings
+    pub sharing_port: Option<u16>,
+    pub sharing_password: Option<String>,
+    // Recording persistence settings
+    pub save_recordings: bool,
+    pub recording_retention_count: Option<u32>, // None = unlimited
 }
 
 impl Default for Settings {
@@ -55,9 +73,40 @@ impl Default for Settings {
             ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
             keep_transcription_in_clipboard: false, // Default to restoring clipboard after paste
             play_sound_on_recording: true,        // Default to playing sound on recording start
-            show_pill_indicator: true,            // Default to showing pill indicator when idle
+            play_sound_on_recording_end: true,    // Default to playing sound on recording end
+            pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
+            pill_indicator_position: "bottom".to_string(), // Default to bottom of screen
+            sharing_port: Some(47842), // Default network sharing port
+            sharing_password: None,    // No password by default
+            save_recordings: true,     // Default to saving recordings
+            recording_retention_count: Some(25), // Default to keeping 25 recordings
         }
     }
+}
+
+/// Log a message from the frontend to the backend logs
+#[tauri::command]
+pub async fn frontend_log(message: String) {
+    log::info!("[FRONTEND] {}", message);
+}
+
+pub(crate) fn resolve_pill_indicator_mode(
+    stored_mode: Option<String>,
+    legacy_show_pill: Option<bool>,
+    default_mode: String,
+) -> String {
+    if let Some(mode) = stored_mode {
+        return mode;
+    }
+
+    if let Some(show) = legacy_show_pill {
+        if show {
+            return "always".to_string();
+        }
+        return "when_recording".to_string();
+    }
+
+    default_mode
 }
 
 #[tauri::command]
@@ -139,13 +188,38 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("play_sound_on_recording")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().play_sound_on_recording),
-        show_pill_indicator: store
-            .get("show_pill_indicator")
+        play_sound_on_recording_end: store
+            .get("play_sound_on_recording_end")
             .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| Settings::default().show_pill_indicator),
+            .unwrap_or_else(|| Settings::default().play_sound_on_recording_end),
+        // Migration: check for new pill_indicator_mode first, then fall back to old show_pill_indicator
+        pill_indicator_mode: resolve_pill_indicator_mode(
+            store
+                .get("pill_indicator_mode")
+                .and_then(|v| v.as_str().map(|s| s.to_string())),
+            store.get("show_pill_indicator").and_then(|v| v.as_bool()),
+            Settings::default().pill_indicator_mode,
+        ),
+        pill_indicator_position: store
+            .get("pill_indicator_position")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| Settings::default().pill_indicator_position),
+        sharing_port: store
+            .get("sharing_port")
+            .and_then(|v| v.as_u64().map(|n| n as u16))
+            .or(Settings::default().sharing_port),
+        sharing_password: store
+            .get("sharing_password")
+            .and_then(|v| v.as_str().map(|s| s.to_string())),
+        save_recordings: store
+            .get("save_recordings")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().save_recordings),
+        recording_retention_count: store
+            .get("recording_retention_count")
+            .and_then(|v| v.as_u64().map(|n| n as u32))
+            .or(Settings::default().recording_retention_count),
     };
-
-    // Pill position is already loaded from store, no need for duplicate state
 
     Ok(settings)
 }
@@ -154,7 +228,7 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
 pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
-    // Check if model, recording mode, and onboarding changed
+    // Check if model, recording mode, onboarding, and pill indicator mode changed
     let old_model = store
         .get("current_model")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -167,6 +241,14 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         .get("onboarding_completed")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let old_pill_indicator_mode = store
+        .get("pill_indicator_mode")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| Settings::default().pill_indicator_mode);
+    let old_pill_indicator_position = store
+        .get("pill_indicator_position")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| Settings::default().pill_indicator_position);
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
@@ -208,9 +290,34 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         json!(settings.play_sound_on_recording),
     );
     store.set(
-        "show_pill_indicator",
-        json!(settings.show_pill_indicator),
+        "play_sound_on_recording_end",
+        json!(settings.play_sound_on_recording_end),
     );
+    store.set(
+        "pill_indicator_mode",
+        json!(settings.pill_indicator_mode),
+    );
+    store.set(
+        "pill_indicator_position",
+        json!(settings.pill_indicator_position),
+    );
+    // Network sharing settings
+    if let Some(port) = settings.sharing_port {
+        store.set("sharing_port", json!(port));
+    }
+    if let Some(ref pwd) = settings.sharing_password {
+        store.set("sharing_password", json!(pwd));
+    } else {
+        store.delete("sharing_password");
+    }
+
+    // Recording persistence settings
+    store.set("save_recordings", json!(settings.save_recordings));
+    if let Some(count) = settings.recording_retention_count {
+        store.set("recording_retention_count", json!(count));
+    } else {
+        store.delete("recording_retention_count");
+    }
 
     // Save pill position if provided
     if let Some((x, y)) = settings.pill_position {
@@ -314,6 +421,35 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             log::warn!("Failed to update tray menu after model change: {}", e);
             // Don't fail the whole operation if tray update fails
         }
+
+        // Update the sharing server's model if it's running
+        {
+            use tauri::async_runtime::RwLock as AsyncRwLock;
+            let server_manager = app.state::<AsyncMutex<RemoteServerManager>>();
+            let mut server = server_manager.lock().await;
+            if server.is_running() {
+                let model_path: std::path::PathBuf = if !is_parakeet_engine && !is_cloud_engine {
+                    let whisper_state = app.state::<AsyncRwLock<WhisperManager>>();
+                    let manager = whisper_state.read().await;
+                    manager.get_model_path(&settings.current_model).unwrap_or_default()
+                } else {
+                    std::path::PathBuf::new()
+                };
+                server.update_model(model_path, settings.current_model.clone(), settings.current_model_engine.clone());
+                log::info!("Remote server model updated to: {} (engine: {})", settings.current_model, settings.current_model_engine);
+            }
+        }
+
+        // Emit model-changed event so frontend can refresh remote server status
+        if let Err(e) = app.emit(
+            "model-changed",
+            json!({
+                "model": settings.current_model,
+                "engine": settings.current_model_engine
+            }),
+        ) {
+            log::warn!("Failed to emit model-changed event: {}", e);
+        }
     }
 
     // If recording mode changed, refresh tray to update checked state
@@ -327,6 +463,75 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     if !old_onboarding_completed && settings.onboarding_completed {
         log::info!("Onboarding just completed, checking if device watcher should start");
         try_start_device_watcher_if_ready(&app).await;
+    }
+
+    // Handle pill window visibility when pill_indicator_mode setting changes
+    if old_pill_indicator_mode != settings.pill_indicator_mode {
+        let app_state = app.state::<crate::AppState>();
+        let current_state = app_state.get_current_state();
+        let is_idle = matches!(current_state, crate::RecordingState::Idle);
+        log::info!(
+            "pill_visibility: mode change '{}' -> '{}' (state={:?})",
+            old_pill_indicator_mode,
+            settings.pill_indicator_mode,
+            current_state
+        );
+
+        // Determine if pill should be visible based on new mode and current state
+        let should_show = match settings.pill_indicator_mode.as_str() {
+            "never" => false,
+            "always" => true,
+            "when_recording" => !is_idle, // Show only when recording
+            _ => !is_idle, // Default to when_recording behavior
+        };
+        log::info!(
+            "pill_visibility: mode change computed should_show={}",
+            should_show
+        );
+
+        if should_show {
+            if let Err(e) = crate::commands::window::show_pill_widget(app.clone()).await {
+                log::warn!("Failed to show pill window: {}", e);
+            }
+        } else {
+            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                log::warn!("Failed to hide pill window: {}", e);
+            }
+        }
+    }
+
+    // Handle pill window position when pill_indicator_position setting changes
+    // We need to recreate the pill window at the new position since repositioning doesn't work reliably
+    if old_pill_indicator_position != settings.pill_indicator_position {
+        log::info!("Pill indicator position changed from '{}' to '{}'", old_pill_indicator_position, settings.pill_indicator_position);
+
+        // Check if pill should be visible based on current mode
+        let should_show = match settings.pill_indicator_mode.as_str() {
+            "never" => false,
+            "always" => true,
+            "when_recording" => {
+                let app_state = app.state::<crate::AppState>();
+                let current_state = app_state.get_current_state();
+                !matches!(current_state, crate::RecordingState::Idle)
+            }
+            _ => false,
+        };
+
+        if should_show {
+            // Close and recreate the pill window at the new position
+            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                log::warn!("Failed to hide pill window for position change: {}", e);
+            }
+            if let Err(e) = crate::commands::window::show_pill_widget(app.clone()).await {
+                log::warn!("Failed to show pill window at new position: {}", e);
+            }
+            log::info!("Recreated pill window at new position: {}", settings.pill_indicator_position);
+        }
+    }
+
+    // Emit settings-changed event so all windows (including pill) can refresh their settings
+    if let Err(e) = app.emit("settings-changed", ()) {
+        log::warn!("Failed to emit settings-changed event: {}", e);
     }
 
     Ok(())
@@ -480,6 +685,115 @@ pub async fn get_supported_languages() -> Result<Vec<LanguageInfo>, String> {
 
 #[tauri::command]
 pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(), String> {
+    // Check if this is a remote server selection
+    if let Some(connection_id) = model_name.strip_prefix("remote_") {
+        log::info!("Setting active remote server from tray: {}", connection_id);
+
+        // Stop network sharing if enabled (can't share while using remote)
+        // and remember that it was active for auto-restore later
+        if let Some(server_manager) = app.try_state::<AsyncMutex<RemoteServerManager>>() {
+            let manager = server_manager.lock().await;
+            if manager.get_status().enabled {
+                drop(manager); // Release lock before calling stop
+                log::info!("🔧 [TRAY] Stopping network sharing - selecting remote server (will remember for auto-restore)");
+                let mut manager = server_manager.lock().await;
+                manager.stop();
+
+                // Set flag to remember sharing was active
+                let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+                let mut settings = remote_state.lock().await;
+                settings.sharing_was_active = true;
+                save_remote_settings(&app, &settings)?;
+                log::info!("🔧 [TRAY] Network sharing stopped, sharing_was_active flag set");
+            }
+        }
+
+        // Set the remote server as active
+        let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+        {
+            let mut settings = remote_state.lock().await;
+            settings.set_active_connection(Some(connection_id.to_string()))?;
+            save_remote_settings(&app, &settings)?;
+        }
+
+        // Update the tray menu to reflect the new selection
+        update_tray_menu(app.clone()).await?;
+
+        // Emit event to update UI
+        if let Err(e) = app.emit(
+            "model-changed",
+            json!({
+                "model": model_name,
+                "engine": "remote"
+            }),
+        ) {
+            log::warn!("Failed to emit model-changed event: {}", e);
+        }
+
+        return Ok(());
+    }
+
+    // Clear any active remote server when selecting a local model
+    // and restore sharing if it was previously active
+    let should_restore_sharing;
+    {
+        let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+        let mut settings = remote_state.lock().await;
+        should_restore_sharing = settings.sharing_was_active;
+
+        if settings.active_connection_id.is_some() {
+            log::info!("Clearing active remote server - switching to local model");
+            settings.set_active_connection(None)?;
+        }
+
+        // Clear the flag since we'll restore sharing now (if needed)
+        if should_restore_sharing {
+            settings.sharing_was_active = false;
+            log::info!("🔧 [TRAY] Will auto-restore network sharing");
+        }
+
+        save_remote_settings(&app, &settings)?;
+    }
+
+    // Restore sharing if it was previously active
+    if should_restore_sharing {
+        if let Some(server_manager) = app.try_state::<AsyncMutex<RemoteServerManager>>() {
+            // Get sharing settings from app store
+            let store = app.store("settings").map_err(|e| format!("Failed to access store: {}", e))?;
+            let port = store.get("sharing_port").and_then(|v| v.as_u64()).map(|p| p as u16).unwrap_or(47842);
+            let password = store.get("sharing_password").and_then(|v| v.as_str().map(|s| s.to_string()));
+
+            let server_name = hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "VoiceTypr Server".to_string());
+
+            log::info!("🔧 [TRAY] Auto-restoring network sharing on port {} with model {}", port, model_name);
+
+            // Determine the engine and model path for the model we're switching to
+            let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
+            let (engine, model_path) = if model_name == "soniox" {
+                ("soniox".to_string(), std::path::PathBuf::new())
+            } else {
+                let guard = whisper_state.read().await;
+                let is_whisper = guard.get_models_status().contains_key(&model_name);
+                if is_whisper {
+                    let path = guard.get_model_path(&model_name).unwrap_or_default();
+                    ("whisper".to_string(), path)
+                } else {
+                    ("parakeet".to_string(), std::path::PathBuf::new())
+                }
+            };
+
+            let mut manager = server_manager.lock().await;
+            if let Err(e) = manager.start(port, password, server_name, model_path, model_name.clone(), engine, Some(app.clone())).await {
+                log::warn!("🔧 [TRAY] Failed to auto-restore sharing: {}", e);
+            } else {
+                log::info!("🔧 [TRAY] Network sharing auto-restored successfully");
+            }
+        }
+    }
+
     // Get current settings
     let mut settings = get_settings(app.clone()).await?;
 
@@ -520,6 +834,27 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     // Save settings (this will also preload the model)
     save_settings(app.clone(), settings).await?;
 
+    // Update the sharing server's model if it's running
+    {
+        let server_manager = app.state::<AsyncMutex<RemoteServerManager>>();
+        let mut server = server_manager.lock().await;
+        if server.is_running() {
+            // Get the model path based on engine type
+            let model_path: std::path::PathBuf = if engine == "whisper" {
+                let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
+                let manager = whisper_state.read().await;
+                manager.get_model_path(&model_name).unwrap_or_default()
+            } else {
+                // For non-whisper engines (parakeet, soniox), model path is handled differently
+                // Parakeet uses a sidecar, soniox uses cloud API
+                std::path::PathBuf::new()
+            };
+
+            // Update the shared state - this takes effect immediately for new requests
+            server.update_model(model_path, model_name.clone(), engine.clone());
+        }
+    }
+
     // Update the tray menu to reflect the new selection
     update_tray_menu(app.clone()).await?;
 
@@ -539,18 +874,53 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     Ok(())
 }
 
+/// Increment the tray menu generation and return the new value.
+/// Used by callers who want to spawn background updates.
+pub fn next_tray_menu_generation() -> u64 {
+    TRAY_MENU_GENERATION.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// Get the current tray menu generation.
+pub fn current_tray_menu_generation() -> u64 {
+    TRAY_MENU_GENERATION.load(Ordering::SeqCst)
+}
+
 #[tauri::command]
 pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
+    update_tray_menu_with_generation(app, None).await
+}
+
+/// Update tray menu with optional generation check.
+/// If generation is provided, the update will be skipped if a newer generation was requested.
+pub async fn update_tray_menu_with_generation(app: AppHandle, my_generation: Option<u64>) -> Result<(), String> {
+    use std::time::Instant;
+    let start_time = Instant::now();
+
+    let gen_info = my_generation.map(|g| format!(" (gen={})", g)).unwrap_or_default();
+    log::info!("⏱️ [TRAY TIMING] update_tray_menu called{}", gen_info);
+
     // Build the new menu
+    log::info!("⏱️ [TRAY TIMING] Building tray menu...{} (+{}ms)", gen_info, start_time.elapsed().as_millis());
     let new_menu = crate::build_tray_menu(&app)
         .await
         .map_err(|e| format!("Failed to build tray menu: {}", e))?;
+    log::info!("⏱️ [TRAY TIMING] Tray menu built{} (+{}ms)", gen_info, start_time.elapsed().as_millis());
+
+    // Check if this update is still current (if generation was provided)
+    if let Some(my_gen) = my_generation {
+        let current_gen = current_tray_menu_generation();
+        if my_gen < current_gen {
+            log::info!("⏱️ [TRAY TIMING] Skipping stale tray menu update (gen={} < current={})", my_gen, current_gen);
+            return Ok(());
+        }
+    }
 
     // Update the tray menu
     if let Some(tray) = app.tray_by_id("main") {
+        log::info!("⏱️ [TRAY TIMING] Setting tray menu...{} (+{}ms)", gen_info, start_time.elapsed().as_millis());
         tray.set_menu(Some(new_menu))
             .map_err(|e| format!("Failed to set tray menu: {}", e))?;
-        log::info!("Tray menu updated successfully");
+        log::info!("⏱️ [TRAY TIMING] Tray menu set{} - total: {}ms", gen_info, start_time.elapsed().as_millis());
     } else {
         log::warn!("Tray icon not found");
     }
@@ -612,4 +982,42 @@ pub async fn set_audio_device(app: AppHandle, device_name: Option<String>) -> Re
 
     log::info!("Audio device successfully set to: {:?}", device_name);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_pill_indicator_mode;
+
+    #[test]
+    fn resolve_pill_indicator_mode_prefers_new_value() {
+        let resolved = resolve_pill_indicator_mode(
+            Some("always".to_string()),
+            Some(false),
+            "when_recording".to_string(),
+        );
+
+        assert_eq!(resolved, "always");
+    }
+
+    #[test]
+    fn resolve_pill_indicator_mode_migrates_legacy_true() {
+        let resolved = resolve_pill_indicator_mode(None, Some(true), "when_recording".to_string());
+
+        assert_eq!(resolved, "always");
+    }
+
+    #[test]
+    fn resolve_pill_indicator_mode_migrates_legacy_false() {
+        let resolved =
+            resolve_pill_indicator_mode(None, Some(false), "when_recording".to_string());
+
+        assert_eq!(resolved, "when_recording");
+    }
+
+    #[test]
+    fn resolve_pill_indicator_mode_uses_default() {
+        let resolved = resolve_pill_indicator_mode(None, None, "when_recording".to_string());
+
+        assert_eq!(resolved, "when_recording");
+    }
 }

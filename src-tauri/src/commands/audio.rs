@@ -3,13 +3,15 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
 use crate::commands::license::check_license_status_internal;
-use crate::commands::settings::get_settings;
+use crate::commands::settings::{get_settings, resolve_pill_indicator_mode, Settings};
 use crate::license::LicenseState;
 use crate::parakeet::messages::ParakeetResponse;
 use crate::parakeet::ParakeetManager;
 use crate::utils::logger::*;
 #[cfg(debug_assertions)]
 use crate::utils::system_monitor;
+use crate::remote::client::RemoteServerConnection;
+use crate::remote::settings::RemoteSettings;
 use crate::whisper::cache::TranscriberCache;
 use crate::whisper::languages::validate_language;
 use crate::whisper::manager::WhisperManager;
@@ -70,25 +72,73 @@ pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) {
     let _ = app.emit("toast", payload);
 }
 
-/// Check if pill should be hidden based on show_pill_indicator setting.
+fn should_hide_pill_when_idle(mode: &str) -> bool {
+    mode != "always"
+}
+
+/// Check if pill should be hidden based on pill_indicator_mode setting.
 /// Returns true if pill should be hidden, false if it should stay visible.
-/// When show_pill_indicator is true, the pill should remain visible in idle state.
-/// Fails open: on error, returns false (keep pill visible) for safer UX.
+/// Called when transitioning to idle state (after recording ends).
+/// - "never" → always hide (return true)
+/// - "always" → never hide (return false)
+/// - "when_recording" → hide when idle (return true)
+/// Fails open: on error, returns true (default to when_recording behavior).
+#[track_caller]
 pub async fn should_hide_pill(app: &AppHandle) -> bool {
     let store = match app.store("settings") {
         Ok(s) => s,
         Err(e) => {
             log::warn!("Failed to load settings for pill visibility: {}", e);
-            return false; // Fail open: keep pill visible on error
+            return true; // Default to when_recording behavior (hide when idle)
         }
     };
 
-    let show_pill_indicator = store
-        .get("show_pill_indicator")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true); // Default to true (show indicator)
+    let stored_mode = store
+        .get("pill_indicator_mode")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let legacy_show = store.get("show_pill_indicator").and_then(|v| v.as_bool());
+    let pill_indicator_mode = resolve_pill_indicator_mode(
+        stored_mode.clone(),
+        legacy_show,
+        Settings::default().pill_indicator_mode,
+    );
+    let caller = std::panic::Location::caller();
+    log::debug!(
+        "pill_visibility: should_hide_pill caller={} stored={:?} legacy_show={:?} resolved='{}'",
+        caller,
+        stored_mode,
+        legacy_show,
+        pill_indicator_mode
+    );
 
-    !show_pill_indicator // Hide only if show_pill_indicator is false
+    let result = should_hide_pill_when_idle(&pill_indicator_mode);
+    log::debug!(
+        "should_hide_pill: pill_indicator_mode='{}', should_hide={}",
+        pill_indicator_mode,
+        result
+    );
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_hide_pill_when_idle;
+
+    #[test]
+    fn should_hide_pill_when_idle_for_never() {
+        assert!(should_hide_pill_when_idle("never"));
+    }
+
+    #[test]
+    fn should_hide_pill_when_idle_for_when_recording() {
+        assert!(should_hide_pill_when_idle("when_recording"));
+    }
+
+    #[test]
+    fn should_hide_pill_when_idle_for_always() {
+        assert!(!should_hide_pill_when_idle("always"));
+    }
 }
 
 /// Play a system sound to confirm recording start (macOS only)
@@ -104,10 +154,14 @@ fn play_recording_start_sound() {
 /// Play a system sound to confirm recording start (Windows)
 #[cfg(target_os = "windows")]
 fn play_recording_start_sound() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
     std::thread::spawn(|| {
-        // Use PowerShell to play a system sound on Windows
+        // Use PowerShell to play a system sound on Windows (hidden console)
         let _ = std::process::Command::new("powershell")
             .args(["-c", "[console]::beep(800, 100)"])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn();
     });
 }
@@ -117,11 +171,43 @@ fn play_recording_start_sound() {
     // No-op on other platforms
 }
 
+/// Play a system sound to confirm recording end (macOS only)
+#[cfg(target_os = "macos")]
+fn play_recording_end_sound() {
+    std::thread::spawn(|| {
+        // Use a different sound for recording end - Pop sound
+        let _ = std::process::Command::new("afplay")
+            .arg("/System/Library/Sounds/Pop.aiff")
+            .spawn();
+    });
+}
+
+/// Play a system sound to confirm recording end (Windows)
+#[cfg(target_os = "windows")]
+fn play_recording_end_sound() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    std::thread::spawn(|| {
+        // Use PowerShell with a lower frequency tone for recording end (hidden console)
+        let _ = std::process::Command::new("powershell")
+            .args(["-c", "[console]::beep(600, 100)"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
+    });
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn play_recording_end_sound() {
+    // No-op on other platforms
+}
+
 /// Cached recording configuration to avoid repeated store access during transcription flow
 /// Cache is invalidated when settings change via update hooks
 #[derive(Clone, Debug)]
 pub struct RecordingConfig {
     pub show_pill_widget: bool,
+    pub pill_indicator_mode: String, // "never", "always", or "when_recording"
     pub ai_enabled: bool,
     pub ai_provider: String,
     pub ai_model: String,
@@ -142,11 +228,30 @@ impl RecordingConfig {
     pub async fn load_from_store(app: &AppHandle) -> Result<Self, String> {
         let store = app.store("settings").map_err(|e| e.to_string())?;
 
+        let show_pill_widget = store
+            .get("show_pill_widget")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let stored_mode = store
+            .get("pill_indicator_mode")
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let legacy_show = store.get("show_pill_indicator").and_then(|v| v.as_bool());
+        let pill_indicator_mode = resolve_pill_indicator_mode(
+            stored_mode.clone(),
+            legacy_show,
+            Settings::default().pill_indicator_mode,
+        );
+        log::debug!(
+            "pill_visibility: recording config loaded show_pill_widget={} pill_indicator_mode='{}' stored={:?} legacy_show={:?}",
+            show_pill_widget,
+            pill_indicator_mode,
+            stored_mode,
+            legacy_show
+        );
+
         Ok(Self {
-            show_pill_widget: store
-                .get("show_pill_widget")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
+            show_pill_widget,
+            pill_indicator_mode,
             ai_enabled: store
                 .get("ai_enabled")
                 .and_then(|v| v.as_bool())
@@ -193,6 +298,227 @@ impl RecordingConfig {
 impl UnwindSafe for RecordingConfig {}
 impl RefUnwindSafe for RecordingConfig {}
 
+/// Always save a recording file to persistent storage
+/// This is used for the "preserve recordings on failure" feature
+/// Returns the saved filename (not full path) if saved, None otherwise
+pub async fn save_recording(app: &AppHandle, audio_path: &Path) -> Option<String> {
+    save_recording_internal(app, audio_path, false).await
+}
+
+/// Save a recording file to persistent storage if save_recordings is enabled
+/// Returns the saved filename (not full path) if saved, None otherwise
+pub async fn maybe_save_recording(app: &AppHandle, audio_path: &Path) -> Option<String> {
+    save_recording_internal(app, audio_path, true).await
+}
+
+/// Internal function to save recording with optional settings check
+async fn save_recording_internal(app: &AppHandle, audio_path: &Path, check_settings: bool) -> Option<String> {
+    // Get settings store for retention count (always needed) and save_recordings check
+    let store = match app.store("settings") {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("Failed to get settings store: {}", e);
+            // If we can't get settings, still save for preservation purposes
+            if check_settings {
+                return None;
+            }
+            // For forced saves (preserve on failure), continue without store
+            // We'll skip retention cleanup in this case
+            return save_recording_without_cleanup(app, audio_path).await;
+        }
+    };
+
+    if check_settings {
+        let save_recordings = store
+            .get("save_recordings")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if !save_recordings {
+            log::debug!("save_recordings is disabled, skipping recording persistence");
+            return None;
+        }
+    }
+
+    // Get recordings directory
+    let recordings_dir = match app.path().app_data_dir() {
+        Ok(dir) => dir.join("recordings"),
+        Err(e) => {
+            log::error!("Failed to get app data directory: {}", e);
+            return None;
+        }
+    };
+
+    // Create recordings directory if it doesn't exist
+    if let Err(e) = std::fs::create_dir_all(&recordings_dir) {
+        log::error!("Failed to create recordings directory: {}", e);
+        return None;
+    }
+
+    // Generate filename: timestamp_uuid.wav
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let uuid_part = uuid::Uuid::new_v4().to_string()[..8].to_string();
+    let filename = format!("{}_{}.wav", timestamp, uuid_part);
+    let dest_path = recordings_dir.join(&filename);
+
+    // Copy the file to persistent storage
+    match std::fs::copy(audio_path, &dest_path) {
+        Ok(_) => {
+            log::info!("Saved recording to: {:?}", dest_path);
+
+            // Cleanup old recordings
+            let retention_count = store
+                .get("recording_retention_count")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize);
+
+            if let Some(max_count) = retention_count {
+                cleanup_old_recordings(&recordings_dir, max_count);
+            }
+
+            Some(filename)
+        }
+        Err(e) => {
+            log::error!("Failed to save recording: {}", e);
+            None
+        }
+    }
+}
+
+/// Save recording without cleanup (fallback when store is unavailable)
+async fn save_recording_without_cleanup(app: &AppHandle, audio_path: &Path) -> Option<String> {
+    let recordings_dir = match app.path().app_data_dir() {
+        Ok(dir) => dir.join("recordings"),
+        Err(e) => {
+            log::error!("Failed to get app data directory: {}", e);
+            return None;
+        }
+    };
+
+    if let Err(e) = std::fs::create_dir_all(&recordings_dir) {
+        log::error!("Failed to create recordings directory: {}", e);
+        return None;
+    }
+
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let uuid_part = uuid::Uuid::new_v4().to_string()[..8].to_string();
+    let filename = format!("{}_{}.wav", timestamp, uuid_part);
+    let dest_path = recordings_dir.join(&filename);
+
+    match std::fs::copy(audio_path, &dest_path) {
+        Ok(_) => {
+            log::info!("Saved recording (no cleanup) to: {:?}", dest_path);
+            Some(filename)
+        }
+        Err(e) => {
+            log::error!("Failed to save recording: {}", e);
+            None
+        }
+    }
+}
+
+/// Clean up old recordings when count exceeds retention limit
+fn cleanup_old_recordings(recordings_dir: &Path, max_count: usize) {
+    if max_count == 0 {
+        // Unlimited retention
+        return;
+    }
+
+    // Get all .wav files in the recordings directory
+    let mut recordings: Vec<_> = match std::fs::read_dir(recordings_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "wav")
+                    .unwrap_or(false)
+            })
+            .collect(),
+        Err(e) => {
+            log::warn!("Failed to read recordings directory for cleanup: {}", e);
+            return;
+        }
+    };
+
+    // Sort by creation time (oldest first)
+    recordings.sort_by(|a, b| {
+        let time_a = a.metadata().and_then(|m| m.created()).ok();
+        let time_b = b.metadata().and_then(|m| m.created()).ok();
+        time_a.cmp(&time_b)
+    });
+
+    // Delete oldest files until we're at or below the limit
+    while recordings.len() > max_count {
+        if let Some(oldest) = recordings.first() {
+            let path = oldest.path();
+            if let Err(e) = std::fs::remove_file(&path) {
+                log::warn!("Failed to remove old recording {:?}: {}", path, e);
+            } else {
+                log::info!("Cleaned up old recording: {:?}", path);
+            }
+            recordings.remove(0);
+        } else {
+            break;
+        }
+    }
+}
+
+/// Get the full path to the recordings directory
+#[tauri::command]
+pub async fn get_recordings_directory(app: AppHandle) -> Result<String, String> {
+    let recordings_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recordings");
+
+    // Create if it doesn't exist
+    std::fs::create_dir_all(&recordings_dir)
+        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+
+    Ok(recordings_dir.to_string_lossy().to_string())
+}
+
+/// Open the recordings directory in the system file manager
+#[tauri::command]
+pub async fn open_recordings_folder(app: AppHandle) -> Result<(), String> {
+    let recordings_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?
+        .join("recordings");
+
+    // Create directory if it doesn't exist
+    if !recordings_dir.exists() {
+        std::fs::create_dir_all(&recordings_dir)
+            .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+    }
+
+    // Open the directory using the system's file manager
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&recordings_dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        std::process::Command::new("explorer")
+            .arg(&recordings_dir)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    Ok(())
+}
+
 #[derive(Clone)]
 enum ActiveEngineSelection {
     Whisper {
@@ -205,6 +531,13 @@ enum ActiveEngineSelection {
     Soniox {
         model_name: String,
     },
+    Remote {
+        server_id: String,
+        server_name: String,
+        host: String,
+        port: u16,
+        password: Option<String>,
+    },
 }
 
 impl ActiveEngineSelection {
@@ -213,6 +546,7 @@ impl ActiveEngineSelection {
             ActiveEngineSelection::Whisper { .. } => "whisper",
             ActiveEngineSelection::Parakeet { .. } => "parakeet",
             ActiveEngineSelection::Soniox { .. } => "soniox",
+            ActiveEngineSelection::Remote { .. } => "remote",
         }
     }
 
@@ -221,6 +555,7 @@ impl ActiveEngineSelection {
             ActiveEngineSelection::Whisper { model_name, .. } => model_name,
             ActiveEngineSelection::Parakeet { model_name } => model_name,
             ActiveEngineSelection::Soniox { model_name } => model_name,
+            ActiveEngineSelection::Remote { server_name, .. } => server_name,
         }
     }
 }
@@ -442,7 +777,10 @@ fn select_best_fallback_model(
 
 /// Pre-recording validation using the readiness state
 async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> {
+    let validate_start = std::time::Instant::now();
+    log::info!("⏱️ [VALIDATE] starting recognition_availability_snapshot");
     let availability = crate::recognition_availability_snapshot(app).await;
+    log::info!("⏱️ [VALIDATE] recognition_availability_snapshot complete (+{}ms)", validate_start.elapsed().as_millis());
 
     if !availability.any_available() {
         log::error!("No speech recognition engines are ready");
@@ -470,74 +808,38 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
         );
     }
 
-    // Check license status (with caching to improve performance)
-    let license_status = {
-        let app_state = app.state::<AppState>();
-        let cache = app_state.license_cache.read().await;
+    // Check cached license status (populated at startup - no network call)
+    // This is fast because it only reads from memory
+    let app_state = app.state::<AppState>();
+    let cache = app_state.license_cache.read().await;
 
-        if let Some(cached) = cache.as_ref() {
-            if cached.is_valid() {
-                log::debug!("Using cached license status (age: {:?})", cached.age());
-                Some(cached.status.clone())
-            } else {
-                log::debug!(
-                    "License cache is stale (age: {:?}), will refresh",
-                    cached.age()
-                );
-                None
+    if let Some(cached) = cache.as_ref() {
+        if matches!(cached.status.status, LicenseState::Expired | LicenseState::None) {
+            log::warn!("Recording blocked: license is {:?}", cached.status.status);
+
+            // Show and focus the main window
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
             }
-        } else {
-            log::debug!("No license cache found, will perform fresh check");
-            None
+
+            // Emit error event with guidance
+            let _ = emit_to_window(
+                app,
+                "main",
+                "license-required",
+                serde_json::json!({
+                    "title": "License Required",
+                    "message": "Your trial has expired. Please purchase a license to continue",
+                    "action": "purchase"
+                }),
+            );
+            return Err("License required to record".to_string());
         }
-    };
-
-    let status = if let Some(cached_status) = license_status {
-        cached_status
-    } else {
-        // Cache miss or stale - perform fresh license check
-        match check_license_status_internal(app).await {
-            Ok(fresh_status) => {
-                // Update cache
-                let app_state = app.state::<AppState>();
-                let mut cache = app_state.license_cache.write().await;
-                *cache = Some(crate::commands::license::CachedLicense::new(
-                    fresh_status.clone(),
-                ));
-                log::debug!("License status cached for 6 hours");
-                fresh_status
-            }
-            Err(e) => {
-                log::error!("Failed to check license status: {}", e);
-                // Allow recording if license check fails (graceful degradation)
-                return Ok(());
-            }
-        }
-    };
-
-    if matches!(status.status, LicenseState::Expired | LicenseState::None) {
-        log::error!("Invalid license: {:?}", status.status);
-
-        // Show and focus the main window
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-
-        // Emit error event with guidance
-        let _ = emit_to_window(
-            app,
-            "main",
-            "license-required",
-            serde_json::json!({
-                "title": "License Required",
-                "message": "Your trial has expired. Please purchase a license to continue",
-                "action": "purchase"
-            }),
-        );
-        return Err("License required to record".to_string());
     }
+    // If no cache exists yet, allow recording (startup check hasn't completed)
 
+    log::info!("⏱️ [VALIDATE] validation complete (+{}ms)", validate_start.elapsed().as_millis());
     Ok(())
 }
 
@@ -549,6 +851,7 @@ pub async fn start_recording(
     let recording_start = Instant::now();
 
     log_start("RECORDING_START");
+    log::info!("⏱️ [REC TIMING] start_recording called (+0ms)");
     log_with_context(
         log::Level::Debug,
         "Recording command started",
@@ -567,9 +870,11 @@ pub async fn start_recording(
             Some("recover".to_string()),
         );
     }
+    log::info!("⏱️ [REC TIMING] state check complete (+{}ms)", recording_start.elapsed().as_millis());
 
     // Validate all requirements upfront
     let validation_start = Instant::now();
+    log::info!("⏱️ [REC TIMING] starting validation (+{}ms)", recording_start.elapsed().as_millis());
     match validate_recording_requirements(&app).await {
         Ok(_) => {
             log_performance(
@@ -596,6 +901,7 @@ pub async fn start_recording(
     }
 
     // All validation passed, update state to starting
+    log::info!("⏱️ [REC TIMING] validation complete (+{}ms)", recording_start.elapsed().as_millis());
     log_state_transition("RECORDING", "idle", "starting", true, None);
     update_recording_state(&app, RecordingState::Starting, None);
     // Ensure transition actually happened; if blocked, abort early
@@ -607,6 +913,7 @@ pub async fn start_recording(
     }
 
     // Play sound on recording start if enabled
+    log::info!("⏱️ [REC TIMING] about to play sound (+{}ms)", recording_start.elapsed().as_millis());
     if let Ok(store) = app.store("settings") {
         let play_sound = store
             .get("play_sound_on_recording")
@@ -614,17 +921,23 @@ pub async fn start_recording(
             .unwrap_or(true); // Default to true
         if play_sound {
             play_recording_start_sound();
+            // Delay to let sound complete before microphone initialization
+            // This helps with Bluetooth headsets (e.g., AirPods) that switch audio modes
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            log::info!("⏱️ [REC TIMING] sound played + 300ms delay (+{}ms)", recording_start.elapsed().as_millis());
         }
     }
 
     // Load recording config once to avoid repeated store access
+    log::info!("⏱️ [REC TIMING] loading recording config (+{}ms)", recording_start.elapsed().as_millis());
     let config = get_recording_config(&app).await.map_err(|e| {
         log::error!("Failed to load recording config: {}", e);
         format!("Configuration error: {}", e)
     })?;
     log::debug!(
-        "Using recording config: show_pill={}, ai_enabled={}, model={}",
+        "Using recording config: show_pill={} pill_indicator_mode='{}' ai_enabled={} model={}",
         config.show_pill_widget,
+        config.pill_indicator_mode,
         config.ai_enabled,
         config.current_model
     );
@@ -659,6 +972,7 @@ pub async fn start_recording(
         .replace(audio_path.clone());
 
     // Get selected microphone from settings (before acquiring recorder lock)
+    log::info!("⏱️ [REC TIMING] getting microphone settings (+{}ms)", recording_start.elapsed().as_millis());
     let selected_microphone = match get_settings(app.clone()).await {
         Ok(settings) => {
             if let Some(mic) = settings.selected_microphone {
@@ -679,12 +993,14 @@ pub async fn start_recording(
     };
 
     // Start recording (scoped to release mutex before async operations)
+    log::info!("⏱️ [REC TIMING] acquiring recorder lock (+{}ms)", recording_start.elapsed().as_millis());
     {
         let mut recorder = state
             .inner()
             .0
             .lock()
             .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
+        log::info!("⏱️ [REC TIMING] recorder lock acquired (+{}ms)", recording_start.elapsed().as_millis());
 
         // Check if already recording
         if recorder.is_recording() {
@@ -693,6 +1009,7 @@ pub async fn start_recording(
         }
 
         // Log the current audio device before starting
+        log::info!("⏱️ [REC TIMING] checking audio device (+{}ms)", recording_start.elapsed().as_millis());
         log_start("AUDIO_DEVICE_CHECK");
         log_with_context(
             log::Level::Debug,
@@ -728,6 +1045,7 @@ pub async fn start_recording(
         }
 
         // Try to start recording with graceful error handling
+        log::info!("⏱️ [REC TIMING] about to call recorder.start_recording (+{}ms)", recording_start.elapsed().as_millis());
         let recorder_init_start = Instant::now();
         let audio_path_str = audio_path
             .to_str()
@@ -740,6 +1058,7 @@ pub async fn start_recording(
             .start_recording(audio_path_str, selected_microphone.clone())
         {
             Ok(_) => {
+                log::info!("⏱️ [REC TIMING] recorder.start_recording returned Ok (+{}ms)", recording_start.elapsed().as_millis());
                 // Verify recording actually started
                 let is_recording = recorder.is_recording();
 
@@ -881,8 +1200,15 @@ pub async fn start_recording(
         });
     }
 
-    // Show pill widget if enabled (graceful degradation)
-    if config.show_pill_widget {
+    // Show pill widget if enabled and mode is not "never" (graceful degradation)
+    let should_show_pill = config.show_pill_widget && config.pill_indicator_mode != "never";
+    log::info!(
+        "pill_visibility: start_recording show_pill_widget={} pill_indicator_mode='{}' should_show={}",
+        config.show_pill_widget,
+        config.pill_indicator_mode,
+        should_show_pill
+    );
+    if should_show_pill {
         match crate::commands::window::show_pill_widget(app.clone()).await {
             Ok(_) => log::debug!("Pill widget shown successfully"),
             Err(e) => {
@@ -897,6 +1223,8 @@ pub async fn start_recording(
                 );
             }
         }
+    } else if config.pill_indicator_mode == "never" {
+        log::debug!("Pill widget hidden (pill_indicator_mode=never)");
     }
 
     // Also emit legacy event for compatibility
@@ -996,6 +1324,17 @@ pub async fn stop_recording(
             .stop_recording()
             .map_err(|e| format!("Failed to stop recording: {}", e))?;
         log::info!("{}", stop_message);
+
+        // Play sound on recording end if enabled
+        if let Ok(store) = app.store("settings") {
+            let play_sound = store
+                .get("play_sound_on_recording_end")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true); // Default to true
+            if play_sound {
+                play_recording_end_sound();
+            }
+        }
 
         // Monitor system resources after recording stop
         #[cfg(debug_assertions)]
@@ -1117,7 +1456,38 @@ pub async fn stop_recording(
 
     let whisper_manager = app.state::<AsyncRwLock<WhisperManager>>();
 
-    let engine_selection = match config.current_engine.as_str() {
+    // Check for active remote server FIRST - if set, use remote transcription
+    let remote_settings = app.state::<AsyncMutex<RemoteSettings>>();
+    let active_remote = {
+        let settings = remote_settings.lock().await;
+        log::info!(
+            "🔍 [REMOTE DEBUG] Checking remote settings: active_connection_id={:?}, saved_connections={}",
+            settings.active_connection_id,
+            settings.saved_connections.len()
+        );
+        let conn = settings.get_active_connection().cloned();
+        log::info!("🔍 [REMOTE DEBUG] get_active_connection returned: {:?}", conn.as_ref().map(|c| &c.id));
+        conn
+    };
+
+    log::info!("🔍 [REMOTE DEBUG] active_remote is_some={}", active_remote.is_some());
+
+    let engine_selection = if let Some(remote_conn) = active_remote {
+        log::info!(
+            "🌐 Using remote server for transcription: {} ({}:{})",
+            remote_conn.display_name(),
+            remote_conn.host,
+            remote_conn.port
+        );
+        ActiveEngineSelection::Remote {
+            server_id: remote_conn.id.clone(),
+            server_name: remote_conn.display_name(),
+            host: remote_conn.host,
+            port: remote_conn.port,
+            password: remote_conn.password,
+        }
+    } else {
+        match config.current_engine.as_str() {
         "parakeet" => {
             if config.current_model.is_empty() {
                 return abort_due_to_missing_model(
@@ -1285,12 +1655,17 @@ pub async fn stop_recording(
                 model_path,
             }
         }
+        }
     };
 
-    // For Whisper/Parakeet: normalize and duration gate; for Soniox: skip both
+    // For Whisper/Parakeet: normalize and duration gate; for Soniox/Remote: skip both
     let audio_path = match &engine_selection {
         ActiveEngineSelection::Soniox { .. } => {
             log::info!("[RECORD] Soniox selected — skipping normalization");
+            audio_path
+        }
+        ActiveEngineSelection::Remote { server_name, .. } => {
+            log::info!("[RECORD] Remote server '{}' selected — skipping normalization", server_name);
             audio_path
         }
         _ => {
@@ -1566,6 +1941,135 @@ pub async fn stop_recording(
                     Err(e) => Err(e),
                 }
             }
+            ActiveEngineSelection::Remote {
+                server_name,
+                host,
+                port,
+                password,
+                ..
+            } => {
+                // Perform remote transcription in an async block that returns Result
+                let remote_result: Result<String, String> = async {
+                    let remote_start = std::time::Instant::now();
+                    log::info!(
+                        "🌐 [Remote] Starting transcription to '{}' ({}:{})",
+                        server_name,
+                        host,
+                        port
+                    );
+
+                    // Read the audio file
+                    let audio_data = std::fs::read(&audio_path_clone)
+                        .map_err(|e| format!("Failed to read audio file: {}", e))?;
+
+                    let audio_size_kb = audio_data.len() as f64 / 1024.0;
+                    log::info!(
+                        "🌐 [Remote] Sending {:.1} KB audio to '{}' (+{}ms)",
+                        audio_size_kb,
+                        server_name,
+                        remote_start.elapsed().as_millis()
+                    );
+
+                    // Create HTTP client connection
+                    let server_conn = RemoteServerConnection::new(
+                        host.clone(),
+                        *port,
+                        password.clone(),
+                    );
+
+                    // Send transcription request with short connection timeout
+                    // Use 5 second connect timeout to fail fast on unreachable servers
+                    let client = reqwest::Client::builder()
+                        .connect_timeout(std::time::Duration::from_secs(5))
+                        .timeout(std::time::Duration::from_secs(120)) // Overall timeout for large files
+                        .build()
+                        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+                    let mut request = client
+                        .post(&server_conn.transcribe_url())
+                        .header("Content-Type", "audio/wav")
+                        .body(audio_data);
+
+                    // Add auth header if password is set
+                    if let Some(pwd) = server_conn.password.as_ref() {
+                        request = request.header("X-VoiceTypr-Key", pwd);
+                    }
+
+                    log::info!(
+                        "🌐 [Remote] Sending HTTP request to '{}' (+{}ms)",
+                        server_name,
+                        remote_start.elapsed().as_millis()
+                    );
+
+                    let response = request.send().await.map_err(|e| {
+                        log::warn!(
+                            "🌐 [Remote] Connection FAILED to '{}' after {}ms: {}",
+                            server_name,
+                            remote_start.elapsed().as_millis(),
+                            e
+                        );
+                        format!("Failed to connect to remote server: {}", e)
+                    })?;
+
+                    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                        log::warn!(
+                            "🌐 [Remote] Authentication FAILED to '{}'",
+                            server_name
+                        );
+                        return Err("Remote server authentication failed".to_string());
+                    }
+
+                    if !response.status().is_success() {
+                        log::warn!(
+                            "🌐 [Remote] Server error from '{}': {}",
+                            server_name,
+                            response.status()
+                        );
+                        return Err(format!("Remote server error: {}", response.status()));
+                    }
+
+                    let result: serde_json::Value = response.json().await.map_err(|e| {
+                        format!("Failed to parse remote response: {}", e)
+                    })?;
+
+                    let text = result
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .ok_or_else(|| "Invalid response: missing 'text' field".to_string())?;
+
+                    log::info!(
+                        "🌐 [Remote] Transcription COMPLETED from '{}': {} chars received",
+                        server_name,
+                        text.len()
+                    );
+
+                    Ok(text)
+                }
+                .await;
+
+                // Pass through the result like Soniox does
+                match remote_result {
+                    Ok(text) => Ok(text),
+                    Err(e) => Err(e),
+                }
+            }
+        };
+
+        // Try to save recording to persistent storage BEFORE cleanup
+        // On success: use maybe_save_recording (respects save_recordings setting)
+        // On recoverable failure (remote server errors): always save to preserve for re-transcription
+        let recording_file = match &transcription_result {
+            Ok(_) => maybe_save_recording(&app_for_task, &audio_path_clone).await,
+            Err(e) => {
+                // For remote server errors, always preserve the recording for re-transcription
+                if e.contains("remote server") || e.contains("Remote server") || e.contains("Connection refused") {
+                    log::info!("Preserving recording for failed remote transcription");
+                    save_recording(&app_for_task, &audio_path_clone).await
+                } else {
+                    None
+                }
+            }
         };
 
         // Clean up temp file regardless of outcome
@@ -1639,6 +2143,7 @@ pub async fn stop_recording(
                 let text_for_process = text.clone();
                 let model_for_process = selected_model_name_for_task.clone();
                 let ai_enabled_for_task = ai_enabled; // Capture from cached config
+                let recording_file_for_task = recording_file.clone(); // Capture recording file
 
                 tokio::spawn(async move {
                     // 1. Process the transcription and enhancement
@@ -1764,11 +2269,13 @@ pub async fn stop_recording(
                     let app_for_history = app_for_process.clone();
                     let history_text = final_text.clone();
                     let history_model = model_for_process.clone();
+                    let recording_file_for_history = recording_file_for_task.clone();
                     tokio::spawn(async move {
-                        match save_transcription(
+                        match save_transcription_with_recording(
                             app_for_history.clone(),
                             history_text,
                             history_model,
+                            recording_file_for_history,
                         )
                         .await
                         {
@@ -1825,6 +2332,59 @@ pub async fn stop_recording(
                             }
                         }
 
+                        update_recording_state(&app_for_reset, RecordingState::Idle, None);
+                    });
+                } else if e.contains("remote server") || e.contains("Remote server") || e.contains("Connection refused") {
+                    // Remote server error - emit specific event for system notification
+                    log::warn!("Remote server error: {}", e);
+
+                    // Save failed transcription to history if we preserved the recording
+                    if let Some(ref saved_recording) = recording_file {
+                        let app_for_history = app_for_task.clone();
+                        let error_msg = e.clone();
+                        let model_name = selected_model_name_for_task.clone();
+                        let recording_filename = saved_recording.clone();
+                        tokio::spawn(async move {
+                            if let Err(save_err) = save_failed_transcription(
+                                &app_for_history,
+                                error_msg,
+                                model_name,
+                                recording_filename,
+                            ).await {
+                                log::error!("Failed to save failed transcription: {}", save_err);
+                            }
+                        });
+
+                        // Emit event for frontend to show system notification with guidance
+                        let _ = app_for_task.emit("remote-server-error", serde_json::json!({
+                            "message": e.clone(),
+                            "title": "Remote Server Unreachable"
+                        }));
+
+                        // Update pill message to guide user to History
+                        pill_toast(&app_for_task, "Remote server unreachable. Go to History to re-transcribe, or select a different model.", 6000);
+                    } else {
+                        // Emit event for frontend - no recording saved
+                        let _ = app_for_task.emit("remote-server-error", serde_json::json!({
+                            "message": e.clone(),
+                            "title": "Remote Server Unavailable"
+                        }));
+                        pill_toast(&app_for_task, "Remote server unavailable", 2000);
+                    }
+
+                    update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
+
+                    // Transition back to Idle after showing the error
+                    let app_for_reset = app_for_task.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        if should_hide_pill(&app_for_reset).await {
+                            if let Err(e) =
+                                crate::commands::window::hide_pill_widget(app_for_reset.clone()).await
+                            {
+                                log::error!("Failed to hide pill window: {}", e);
+                            }
+                        }
                         update_recording_state(&app_for_reset, RecordingState::Idle, None);
                     });
                 } else {
@@ -1947,8 +2507,19 @@ pub async fn cleanup_old_transcriptions(app: AppHandle, days: Option<u32>) -> Re
     Ok(())
 }
 
+/// Save transcription to history without a recording file
 #[tauri::command]
 pub async fn save_transcription(app: AppHandle, text: String, model: String) -> Result<(), String> {
+    save_transcription_with_recording(app, text, model, None).await
+}
+
+/// Save transcription to history with optional recording file reference
+pub async fn save_transcription_with_recording(
+    app: AppHandle,
+    text: String,
+    model: String,
+    recording_file: Option<String>,
+) -> Result<(), String> {
     // De-dup guard: skip saving if the most recent entry matches the same text & model within a short window
     if let Ok(store) = app.store("transcriptions") {
         // Find most recent entry
@@ -2000,11 +2571,17 @@ pub async fn save_transcription(app: AppHandle, text: String, model: String) -> 
         .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
 
     let timestamp = chrono::Utc::now().to_rfc3339();
-    let transcription_data = serde_json::json!({
+    let mut transcription_data = serde_json::json!({
         "text": text.clone(),
         "model": model,
         "timestamp": timestamp.clone()
     });
+
+    // Add recording_file if present
+    if let Some(ref file) = recording_file {
+        transcription_data["recording_file"] = serde_json::json!(file);
+        log::info!("Saving transcription with recording file: {}", file);
+    }
 
     store.set(&timestamp, transcription_data.clone());
 
@@ -2024,6 +2601,45 @@ pub async fn save_transcription(app: AppHandle, text: String, model: String) -> 
     }
 
     log::info!("Saved transcription with {} characters", text.len());
+    Ok(())
+}
+
+/// Save a failed transcription to history with recording file preserved for re-transcription
+pub async fn save_failed_transcription(
+    app: &AppHandle,
+    error_message: String,
+    model: String,
+    recording_file: String,
+) -> Result<(), String> {
+    let store = app
+        .store("transcriptions")
+        .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let transcription_data = serde_json::json!({
+        "text": "Remote server unreachable - re-transcribe to get text",
+        "model": model,
+        "timestamp": timestamp.clone(),
+        "recording_file": recording_file,
+        "status": "failed",
+        "error_detail": error_message
+    });
+
+    store.set(&timestamp, transcription_data.clone());
+
+    store
+        .save()
+        .map_err(|e| format!("Failed to save failed transcription: {}", e))?;
+
+    // Emit the new transcription data to frontend
+    let _ = emit_to_window(app, "main", "transcription-added", transcription_data);
+
+    // Refresh tray menu
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!("Failed to update tray menu after saving failed transcription: {}", e);
+    }
+
+    log::info!("Saved failed transcription with recording file: {}", recording_file);
     Ok(())
 }
 
@@ -2052,6 +2668,14 @@ pub async fn get_transcription_history(
 
     // Return just the values
     Ok(entries.into_iter().map(|(_, v)| v).collect())
+}
+
+/// Get the total count of transcriptions in history
+/// This is more efficient than loading all history when only the count is needed
+#[tauri::command]
+pub async fn get_transcription_count(app: AppHandle) -> Result<usize, String> {
+    let store = app.store("transcriptions").map_err(|e| e.to_string())?;
+    Ok(store.keys().len())
 }
 
 #[tauri::command]
@@ -2194,6 +2818,110 @@ pub async fn transcribe_audio_file(
         ActiveEngineSelection::Soniox { .. } => {
             soniox_transcribe_async(&app, &wav_path, Some(&language)).await?
         }
+        ActiveEngineSelection::Remote {
+            server_name,
+            host,
+            port,
+            password,
+            ..
+        } => {
+            // Normalize to Whisper contract (16k mono s16 WAV) for remote transcription
+            log::debug!("[UPLOAD] Normalizing to Whisper WAV for remote transcription...");
+            let normalized_path = {
+                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
+                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
+                    .await
+                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+                out_path
+            };
+            log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_path);
+
+            log::info!(
+                "🌐 [Remote Upload] Starting transcription to '{}' ({}:{})",
+                server_name,
+                host,
+                port
+            );
+
+            // Read the normalized audio file
+            let audio_data = std::fs::read(&normalized_path)
+                .map_err(|e| format!("Failed to read audio file: {}", e))?;
+
+            let audio_size_kb = audio_data.len() as f64 / 1024.0;
+            log::info!(
+                "🌐 [Remote Upload] Sending {:.1} KB audio to '{}'",
+                audio_size_kb,
+                server_name
+            );
+
+            // Create HTTP client connection
+            let server_conn = RemoteServerConnection::new(host.clone(), port, password.clone());
+
+            // Send transcription request with extended timeout for large files
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300)) // 5 minute timeout for large files
+                .build()
+                .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+            let mut request = client
+                .post(&server_conn.transcribe_url())
+                .header("Content-Type", "audio/wav")
+                .body(audio_data);
+
+            // Add auth header if password is set
+            if let Some(pwd) = server_conn.password.as_ref() {
+                request = request.header("X-VoiceTypr-Key", pwd);
+            }
+
+            let response = request.send().await.map_err(|e| {
+                log::warn!(
+                    "🌐 [Remote Upload] Connection FAILED to '{}': {}",
+                    server_name,
+                    e
+                );
+                format!("Failed to connect to remote server: {}", e)
+            })?;
+
+            // Clean up normalized file
+            let _ = std::fs::remove_file(&normalized_path);
+
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                log::warn!(
+                    "🌐 [Remote Upload] Authentication FAILED to '{}'",
+                    server_name
+                );
+                return Err("Remote server authentication failed".to_string());
+            }
+
+            if !response.status().is_success() {
+                log::warn!(
+                    "🌐 [Remote Upload] Server error from '{}': {}",
+                    server_name,
+                    response.status()
+                );
+                return Err(format!("Remote server error: {}", response.status()));
+            }
+
+            let result: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse remote response: {}", e))?;
+
+            let text = result
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .ok_or_else(|| "Invalid response: missing 'text' field".to_string())?;
+
+            log::info!(
+                "🌐 [Remote Upload] Transcription COMPLETED from '{}': {} chars received",
+                server_name,
+                text.len()
+            );
+
+            text
+        }
     };
 
     log::info!(
@@ -2298,6 +3026,110 @@ pub async fn transcribe_audio(
         }
         ActiveEngineSelection::Soniox { .. } => {
             soniox_transcribe_async(&app, &temp_path, Some(&language)).await?
+        }
+        ActiveEngineSelection::Remote {
+            server_name,
+            host,
+            port,
+            password,
+            ..
+        } => {
+            // Normalize to Whisper contract (16k mono s16 WAV) for remote transcription
+            log::debug!("[CLIPBOARD] Normalizing to Whisper WAV for remote transcription...");
+            let normalized_path = {
+                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                let out_path = recordings_dir.join(format!("normalized_clipboard_{}.wav", ts));
+                crate::ffmpeg::normalize_streaming(&app, &temp_path, &out_path)
+                    .await
+                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+                out_path
+            };
+            log::info!("[CLIPBOARD] Normalized WAV at {:?}", normalized_path);
+
+            log::info!(
+                "🌐 [Remote Clipboard] Starting transcription to '{}' ({}:{})",
+                server_name,
+                host,
+                port
+            );
+
+            // Read the normalized audio file
+            let audio_data = std::fs::read(&normalized_path)
+                .map_err(|e| format!("Failed to read audio file: {}", e))?;
+
+            let audio_size_kb = audio_data.len() as f64 / 1024.0;
+            log::info!(
+                "🌐 [Remote Clipboard] Sending {:.1} KB audio to '{}'",
+                audio_size_kb,
+                server_name
+            );
+
+            // Create HTTP client connection
+            let server_conn = RemoteServerConnection::new(host.clone(), port, password.clone());
+
+            // Send transcription request with extended timeout for large files
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300)) // 5 minute timeout for large files
+                .build()
+                .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+            let mut request = client
+                .post(&server_conn.transcribe_url())
+                .header("Content-Type", "audio/wav")
+                .body(audio_data);
+
+            // Add auth header if password is set
+            if let Some(pwd) = server_conn.password.as_ref() {
+                request = request.header("X-VoiceTypr-Key", pwd);
+            }
+
+            let response = request.send().await.map_err(|e| {
+                log::warn!(
+                    "🌐 [Remote Clipboard] Connection FAILED to '{}': {}",
+                    server_name,
+                    e
+                );
+                format!("Failed to connect to remote server: {}", e)
+            })?;
+
+            // Clean up normalized file
+            let _ = std::fs::remove_file(&normalized_path);
+
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                log::warn!(
+                    "🌐 [Remote Clipboard] Authentication FAILED to '{}'",
+                    server_name
+                );
+                return Err("Remote server authentication failed".to_string());
+            }
+
+            if !response.status().is_success() {
+                log::warn!(
+                    "🌐 [Remote Clipboard] Server error from '{}': {}",
+                    server_name,
+                    response.status()
+                );
+                return Err(format!("Remote server error: {}", response.status()));
+            }
+
+            let result: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse remote response: {}", e))?;
+
+            let text = result
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .ok_or_else(|| "Invalid response: missing 'text' field".to_string())?;
+
+            log::info!(
+                "🌐 [Remote Clipboard] Transcription COMPLETED from '{}': {} chars received",
+                server_name,
+                text.len()
+            );
+
+            text
         }
     };
 
@@ -2675,4 +3507,174 @@ pub fn get_current_recording_state(app: AppHandle) -> RecordingStateResponse {
         .to_string(),
         error: None,
     }
+}
+
+/// Check if a recording file exists in the recordings directory
+#[tauri::command]
+pub async fn check_recording_exists(app: AppHandle, filename: String) -> Result<bool, String> {
+    let recordings_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recordings");
+    Ok(recordings_dir.join(&filename).exists())
+}
+
+/// Get the full path to a recording file for playback
+#[tauri::command]
+pub async fn get_recording_path(app: AppHandle, filename: String) -> Result<String, String> {
+    let recordings_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recordings");
+    let file_path = recordings_dir.join(&filename);
+    if !file_path.exists() {
+        return Err(format!("Recording file not found: {}", filename));
+    }
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+/// Save a re-transcription to history, linking to the original recording
+#[tauri::command]
+pub async fn save_retranscription(
+    app: AppHandle,
+    text: String,
+    model: String,
+    recording_file: String,
+    source_recording_id: String,
+) -> Result<(), String> {
+    // Save transcription to store with current timestamp
+    let store = app
+        .store("transcriptions")
+        .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let transcription_data = serde_json::json!({
+        "text": text.clone(),
+        "model": model,
+        "timestamp": timestamp.clone(),
+        "recording_file": recording_file,
+        "source_recording_id": source_recording_id,
+        "is_retranscription": true
+    });
+
+    store.set(&timestamp, transcription_data.clone());
+
+    store
+        .save()
+        .map_err(|e| format!("Failed to save retranscription: {}", e))?;
+
+    // Emit the new transcription data to frontend for append-only update
+    let _ = emit_to_window(&app, "main", "transcription-added", transcription_data);
+
+    // Refresh tray menu (best-effort) so Recent Transcriptions stays updated
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!(
+            "Failed to update tray menu after saving retranscription: {}",
+            e
+        );
+    }
+
+    log::info!(
+        "Saved retranscription with {} characters (source: {})",
+        text.len(),
+        source_recording_id
+    );
+    Ok(())
+}
+
+/// Update an existing transcription entry in place (for re-transcription)
+#[tauri::command]
+pub async fn update_transcription(
+    app: AppHandle,
+    timestamp: String,
+    text: String,
+    model: String,
+) -> Result<(), String> {
+    let store = app
+        .store("transcriptions")
+        .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
+
+    // Get the existing entry
+    let existing = store
+        .get(&timestamp)
+        .ok_or_else(|| format!("Transcription not found: {}", timestamp))?;
+
+    // Preserve original fields, update text, model, and status
+    let mut updated = existing.clone();
+    if let serde_json::Value::Object(ref mut map) = updated {
+        map.insert("text".to_string(), serde_json::Value::String(text.clone()));
+        map.insert("model".to_string(), serde_json::Value::String(model.clone()));
+        map.insert("status".to_string(), serde_json::Value::String("completed".to_string()));
+    }
+
+    store.set(&timestamp, updated.clone());
+
+    store
+        .save()
+        .map_err(|e| format!("Failed to save updated transcription: {}", e))?;
+
+    // Emit update event to frontend
+    let _ = emit_to_window(&app, "main", "transcription-updated", serde_json::json!({
+        "timestamp": timestamp,
+        "text": text,
+        "model": model
+    }));
+
+    // Refresh tray menu (best-effort)
+    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+        log::warn!(
+            "Failed to update tray menu after updating transcription: {}",
+            e
+        );
+    }
+
+    log::info!(
+        "Updated transcription {} with {} characters",
+        timestamp,
+        text.len()
+    );
+    Ok(())
+}
+
+/// Open the file explorer with the specified file selected
+#[tauri::command]
+pub async fn show_in_folder(path: String) -> Result<(), String> {
+    let path = std::path::Path::new(&path);
+
+    if !path.exists() {
+        return Err(format!("File not found: {}", path.display()));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Use explorer.exe /select to open folder with file selected
+        std::process::Command::new("explorer.exe")
+            .args(["/select,", &path.to_string_lossy()])
+            .spawn()
+            .map_err(|e| format!("Failed to open explorer: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Use open -R to reveal file in Finder
+        std::process::Command::new("open")
+            .args(["-R", &path.to_string_lossy()])
+            .spawn()
+            .map_err(|e| format!("Failed to open Finder: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Try xdg-open on the parent directory
+        if let Some(parent) = path.parent() {
+            std::process::Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map_err(|e| format!("Failed to open file manager: {}", e))?;
+        }
+    }
+
+    Ok(())
 }

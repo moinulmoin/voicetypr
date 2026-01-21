@@ -1,9 +1,11 @@
-use tauri::async_runtime::RwLock as AsyncRwLock;
+use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 
 use crate::audio;
+use crate::remote::server::StatusResponse;
+use crate::remote::settings::RemoteSettings;
 use crate::whisper;
 
 /// Determines if a model should appear as selected in the tray given onboarding status
@@ -33,6 +35,10 @@ pub fn format_tray_model_label(
 pub async fn build_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<tauri::menu::Menu<R>, Box<dyn std::error::Error>> {
+    use std::time::Instant;
+    let build_start = Instant::now();
+    log::info!("⏱️ [TRAY BUILD TIMING] build_tray_menu called");
+
     let (current_model, selected_microphone, onboarding_done) = {
         match app.store("settings") {
             Ok(store) => {
@@ -52,9 +58,44 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             Err(_) => ("".to_string(), None, false),
         }
     };
+    log::info!("⏱️ [TRAY BUILD TIMING] Settings loaded (+{}ms)", build_start.elapsed().as_millis());
+
+    // Get remote server info (active connection and saved connections)
+    // Use CACHED data - do NOT make HTTP calls here (that would block tray menu for seconds)
+    // The frontend/background tasks handle status polling separately
+    let (active_remote_id, active_remote_display, active_remote_model, remote_connections) = {
+        if let Some(remote_state) = app.try_state::<AsyncMutex<RemoteSettings>>() {
+            log::info!("⏱️ [TRAY BUILD TIMING] Acquiring remote_settings lock... (+{}ms)", build_start.elapsed().as_millis());
+            let settings = remote_state.lock().await;
+            log::info!("⏱️ [TRAY BUILD TIMING] remote_settings lock acquired (+{}ms)", build_start.elapsed().as_millis());
+            let active_id = settings.active_connection_id.clone();
+
+            // Build connections list using cached data (no HTTP calls!)
+            // Include all servers with cached model info - let the user see what's available
+            let mut connections: Vec<(String, String, Option<String>)> = Vec::new();
+            for conn in settings.saved_connections.iter() {
+                // Use cached model from saved connection data
+                connections.push((conn.id.clone(), conn.display_name(), conn.model.clone()));
+            }
+            log::info!("⏱️ [TRAY BUILD TIMING] Loaded {} cached connections (+{}ms)", connections.len(), build_start.elapsed().as_millis());
+
+            // Get active connection info
+            let active_conn_info = active_id.as_ref().and_then(|id| {
+                connections.iter().find(|(cid, _, _)| cid == id)
+            });
+            let active_display = active_conn_info.map(|(_, name, _)| name.clone());
+            let active_model = active_conn_info.and_then(|(_, _, model)| model.clone());
+
+            (active_id, active_display, active_model, connections)
+        } else {
+            (None, None, None, Vec::new())
+        }
+    };
+    log::info!("⏱️ [TRAY BUILD TIMING] Remote server info collected (+{}ms)", build_start.elapsed().as_millis());
 
     let (available_models, whisper_models_info) = {
-        let mut models: Vec<(String, String)> = Vec::new();
+        // Store (name, display_name, accuracy_score, speed_score) for sorting to match UI order
+        let mut models: Vec<(String, String, u8, u8)> = Vec::new();
         let mut whisper_all = std::collections::HashMap::new();
 
         if let Some(whisper_state) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
@@ -63,7 +104,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             whisper_all = manager.get_models_status();
             for (name, info) in whisper_all.iter() {
                 if info.downloaded {
-                    models.push((name.clone(), info.display_name.clone()));
+                    models.push((name.clone(), info.display_name.clone(), info.accuracy_score, info.speed_score));
                 }
             }
         } else {
@@ -73,7 +114,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         if let Some(parakeet_manager) = app.try_state::<crate::parakeet::ParakeetManager>() {
             for m in parakeet_manager.list_models().into_iter() {
                 if m.downloaded {
-                    models.push((m.name.clone(), m.display_name.clone()));
+                    models.push((m.name.clone(), m.display_name.clone(), m.accuracy_score, m.speed_score));
                 }
             }
         } else {
@@ -83,19 +124,40 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         let has_soniox =
             crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
         if has_soniox {
-            models.push(("soniox".to_string(), "Soniox (Cloud)".to_string()));
+            // Soniox is cloud, put at end with max accuracy score, min speed
+            models.push(("soniox".to_string(), "Soniox (Cloud)".to_string(), u8::MAX, 0));
         }
 
+        // Sort by accuracy_score (ascending), then by speed_score (descending) as tiebreaker
+        // Lower accuracy_score = better accuracy = shown first
+        // Higher speed_score = faster = shown first within same accuracy
+        models.sort_by(|a, b| {
+            match a.2.cmp(&b.2) {
+                std::cmp::Ordering::Equal => b.3.cmp(&a.3), // speed descending
+                other => other,
+            }
+        });
+
+        // Convert back to (name, display_name) pairs
+        let models: Vec<(String, String)> = models.into_iter().map(|(n, d, _, _)| (n, d)).collect();
+
+        // NOTE: Remote servers are added separately below with a separator
         (models, whisper_all)
     };
 
-    let model_submenu = if !available_models.is_empty() {
+    let model_submenu = if !available_models.is_empty() || !remote_connections.is_empty() {
         let mut model_items: Vec<&dyn tauri::menu::IsMenuItem<_>> = Vec::new();
         let mut model_check_items = Vec::new();
+        let mut separator_items = Vec::new();
+        let mut remote_header_items = Vec::new();
+        let mut remote_check_items = Vec::new();
 
-        for (model_name, display_name) in available_models {
-            let is_selected =
-                should_mark_model_selected(onboarding_done, &model_name, &current_model);
+        // Add local models first
+        for (model_name, display_name) in &available_models {
+            // Local model - only selected if no remote is active
+            let is_selected = active_remote_id.is_none()
+                && should_mark_model_selected(onboarding_done, model_name, &current_model);
+
             let model_item = CheckMenuItem::with_id(
                 app,
                 &format!("model_{}", model_name),
@@ -111,8 +173,59 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             model_items.push(item);
         }
 
-        let resolved_display_name = if onboarding_done && !current_model.is_empty() {
-            if let Some(info) = whisper_models_info.get(&current_model) {
+        // Add remote servers section if any exist
+        if !remote_connections.is_empty() {
+            // Add separator
+            let sep = PredefinedMenuItem::separator(app)?;
+            separator_items.push(sep);
+            for item in &separator_items {
+                model_items.push(item);
+            }
+
+            // Add "Remote VoiceTypr" header (disabled item)
+            let header = MenuItem::with_id(app, "remote_header", "Remote VoiceTypr", false, None::<&str>)?;
+            remote_header_items.push(header);
+            for item in &remote_header_items {
+                model_items.push(item);
+            }
+
+            // Add remote server items with format "ServerName - ModelName"
+            for (conn_id, conn_display, conn_model) in &remote_connections {
+                let model_id = format!("remote_{}", conn_id);
+                let display = if let Some(model) = conn_model {
+                    format!("{} - {}", conn_display, model)
+                } else {
+                    conn_display.clone()
+                };
+                let is_selected = active_remote_id.as_deref() == Some(conn_id.as_str());
+
+                let remote_item = CheckMenuItem::with_id(
+                    app,
+                    &format!("model_{}", model_id),
+                    &display,
+                    true,
+                    is_selected,
+                    None::<&str>,
+                )?;
+                remote_check_items.push(remote_item);
+            }
+
+            for item in &remote_check_items {
+                model_items.push(item);
+            }
+        }
+
+        // Resolve display name for the menu label - prioritize active remote server
+        let (effective_model, resolved_display_name) = if let Some(ref remote_display) = active_remote_display {
+            // Remote server is active - show "ServerName - ModelName"
+            let display = if let Some(ref model) = active_remote_model {
+                format!("{} - {}", remote_display, model)
+            } else {
+                remote_display.clone()
+            };
+            ("remote".to_string(), Some(display))
+        } else if onboarding_done && !current_model.is_empty() {
+            let display = if let Some(info) = whisper_models_info.get(&current_model) {
                 Some(info.display_name.clone())
             } else if let Some(parakeet_manager) =
                 app.try_state::<crate::parakeet::ParakeetManager>()
@@ -132,13 +245,14 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
                 Some("Soniox (Cloud)".to_string())
             } else {
                 Some(current_model.clone())
-            }
+            };
+            (current_model.clone(), display)
         } else {
-            None
+            (String::new(), None)
         };
 
         let current_model_display =
-            format_tray_model_label(onboarding_done, &current_model, resolved_display_name);
+            format_tray_model_label(onboarding_done || active_remote_id.is_some(), &effective_model, resolved_display_name);
 
         Some(Submenu::with_id_and_items(
             app,
@@ -325,5 +439,35 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         .item(&quit_i)
         .build()?;
 
+    log::info!("⏱️ [TRAY BUILD TIMING] build_tray_menu COMPLETE - total: {}ms", build_start.elapsed().as_millis());
     Ok(menu)
+}
+
+/// Fetch server status with a short timeout (for getting model info)
+async fn fetch_server_status(host: &str, port: u16, password: Option<&str>) -> Result<StatusResponse, String> {
+    let url = format!("http://{}:{}/api/v1/status", host, port);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let mut request = client.get(&url);
+    if let Some(pwd) = password {
+        request = request.header("X-VoiceTypr-Key", pwd);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Server error: {}", response.status()));
+    }
+
+    response
+        .json::<StatusResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))
 }

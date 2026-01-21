@@ -38,6 +38,8 @@ export const isLocalModel = (model: ModelInfo): model is LocalModelInfo =>
   model.kind === 'local';
 
 export type RecordingMode = 'toggle' | 'push_to_talk';
+export type PillIndicatorMode = 'never' | 'always' | 'when_recording';
+export type PillIndicatorPosition = 'top' | 'center' | 'bottom';
 
 export interface AppSettings {
   hotkey: string;
@@ -58,8 +60,17 @@ export interface AppSettings {
   keep_transcription_in_clipboard?: boolean;
   // Audio feedback
   play_sound_on_recording?: boolean;
-  // Pill indicator visibility
-  show_pill_indicator?: boolean;
+  play_sound_on_recording_end?: boolean;
+  // Pill indicator visibility mode
+  pill_indicator_mode?: PillIndicatorMode;
+  // Pill indicator screen position
+  pill_indicator_position?: PillIndicatorPosition;
+  // Network sharing settings
+  sharing_port?: number;
+  sharing_password?: string;
+  // Recording persistence settings
+  save_recordings?: boolean;
+  recording_retention_count?: number | null; // null = unlimited
 }
 
 export interface TranscriptionHistory {
@@ -67,6 +78,9 @@ export interface TranscriptionHistory {
   text: string;
   timestamp: Date;
   model: string;
+  recording_file?: string; // Filename of the saved recording (not full path)
+  source_recording_id?: string; // For re-transcriptions, references original transcription
+  status?: 'completed' | 'in_progress' | 'failed';
 }
 
 export interface LicenseStatus {

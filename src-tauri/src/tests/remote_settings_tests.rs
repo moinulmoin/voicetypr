@@ -1,0 +1,438 @@
+//! Tests for remote transcription settings storage
+//!
+//! These tests verify that remote server configurations and connections
+//! can be properly stored and retrieved.
+
+use crate::remote::settings::RemoteSettings;
+
+/// Test creating default remote settings
+#[test]
+fn test_remote_settings_default() {
+    let settings = RemoteSettings::default();
+
+    assert!(!settings.server_config.enabled);
+    assert_eq!(settings.server_config.port, 47842);
+    assert!(settings.server_config.password.is_none());
+    assert!(settings.saved_connections.is_empty());
+    assert!(settings.active_connection_id.is_none());
+}
+
+/// Test adding a connection to settings
+#[test]
+fn test_add_connection() {
+    let mut settings = RemoteSettings::default();
+
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+
+    assert_eq!(settings.saved_connections.len(), 1);
+    assert!(settings.get_connection(&saved.id).is_some());
+
+    let retrieved = settings.get_connection(&saved.id).unwrap();
+    assert_eq!(retrieved.host, "192.168.1.100");
+    assert_eq!(retrieved.port, 47842);
+}
+
+/// Test adding a connection with a custom name
+#[test]
+fn test_add_connection_with_name() {
+    let mut settings = RemoteSettings::default();
+
+    let saved = settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        None,
+        Some("Living Room Desktop".to_string()),
+        None,
+    );
+
+    assert_eq!(saved.name, Some("Living Room Desktop".to_string()));
+    assert_eq!(saved.display_name(), "Living Room Desktop");
+}
+
+/// Test removing a connection
+#[test]
+fn test_remove_connection() {
+    let mut settings = RemoteSettings::default();
+
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+
+    assert_eq!(settings.saved_connections.len(), 1);
+
+    let result = settings.remove_connection(&saved.id);
+    assert!(result.is_ok());
+    assert!(settings.saved_connections.is_empty());
+}
+
+/// Test removing a non-existent connection
+#[test]
+fn test_remove_nonexistent_connection() {
+    let mut settings = RemoteSettings::default();
+
+    let result = settings.remove_connection("nonexistent-id");
+    assert!(result.is_err());
+}
+
+/// Test removing the active connection clears active_connection_id
+#[test]
+fn test_remove_active_connection_clears_active() {
+    let mut settings = RemoteSettings::default();
+
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+
+    settings.set_active_connection(Some(saved.id.clone())).unwrap();
+    assert_eq!(settings.active_connection_id, Some(saved.id.clone()));
+
+    settings.remove_connection(&saved.id).unwrap();
+    assert!(settings.active_connection_id.is_none());
+}
+
+/// Test setting active connection
+#[test]
+fn test_set_active_connection() {
+    let mut settings = RemoteSettings::default();
+
+    let saved1 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+    let saved2 = settings.add_connection("192.168.1.101".to_string(), 47842, None, None, None);
+
+    settings.set_active_connection(Some(saved1.id.clone())).unwrap();
+    assert_eq!(settings.active_connection_id, Some(saved1.id.clone()));
+
+    settings.set_active_connection(Some(saved2.id.clone())).unwrap();
+    assert_eq!(settings.active_connection_id, Some(saved2.id));
+
+    settings.set_active_connection(None).unwrap();
+    assert!(settings.active_connection_id.is_none());
+}
+
+/// Test getting the active connection
+#[test]
+fn test_get_active_connection() {
+    let mut settings = RemoteSettings::default();
+
+    // No active connection
+    assert!(settings.get_active_connection().is_none());
+
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+
+    settings.set_active_connection(Some(saved.id.clone())).unwrap();
+
+    let active = settings.get_active_connection();
+    assert!(active.is_some());
+    assert_eq!(active.unwrap().host, "192.168.1.100");
+}
+
+/// Test serializing and deserializing settings
+#[test]
+fn test_remote_settings_serialization() {
+    let mut settings = RemoteSettings::default();
+
+    // Configure server
+    settings.server_config.enabled = true;
+    settings.server_config.port = 8080;
+    settings.server_config.password = Some("secret123".to_string());
+
+    // Add connections
+    let saved1 = settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        None,
+        Some("Desktop".to_string()),
+        None,
+    );
+    let _saved2 = settings.add_connection(
+        "192.168.1.101".to_string(),
+        47842,
+        Some("pass".to_string()),
+        None,
+        None,
+    );
+
+    settings.set_active_connection(Some(saved1.id.clone())).unwrap();
+
+    // Serialize and deserialize
+    let json = serde_json::to_string(&settings).unwrap();
+    let restored: RemoteSettings = serde_json::from_str(&json).unwrap();
+
+    // Verify
+    assert!(restored.server_config.enabled);
+    assert_eq!(restored.server_config.port, 8080);
+    assert_eq!(restored.server_config.password, Some("secret123".to_string()));
+    assert_eq!(restored.saved_connections.len(), 2);
+    assert_eq!(restored.active_connection_id, Some(saved1.id));
+}
+
+/// Test SavedConnection includes timestamp
+#[test]
+fn test_saved_connection_has_timestamp() {
+    let mut settings = RemoteSettings::default();
+
+    let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+
+    // Timestamp should be set to a reasonable recent value
+    assert!(saved.created_at > 0);
+}
+
+/// Test listing all connections
+#[test]
+fn test_list_connections() {
+    let mut settings = RemoteSettings::default();
+
+    settings.add_connection("192.168.1.100".to_string(), 47842, None, Some("A".to_string()), None);
+    settings.add_connection("192.168.1.101".to_string(), 47842, None, Some("B".to_string()), None);
+    settings.add_connection("192.168.1.102".to_string(), 47842, None, Some("C".to_string()), None);
+
+    let all = settings.list_connections();
+    assert_eq!(all.len(), 3);
+}
+
+/// Test connection ID generation is unique
+#[test]
+fn test_connection_ids_are_unique() {
+    let mut settings = RemoteSettings::default();
+
+    let saved1 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+    let saved2 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+
+    assert_ne!(saved1.id, saved2.id);
+}
+
+/// Test SavedConnection display_name
+#[test]
+fn test_saved_connection_display_name() {
+    let mut settings = RemoteSettings::default();
+
+    // With custom name
+    let saved1 = settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        None,
+        Some("My Desktop".to_string()),
+        None,
+    );
+    assert_eq!(saved1.display_name(), "My Desktop");
+
+    // Without custom name - should use host:port
+    let saved2 = settings.add_connection("192.168.1.101".to_string(), 8080, None, None, None);
+    assert_eq!(saved2.display_name(), "192.168.1.101:8080");
+}
+
+/// Test set_active_connection validates connection exists
+#[test]
+fn test_set_active_connection_validates() {
+    let mut settings = RemoteSettings::default();
+
+    // Try to set non-existent connection as active
+    let result = settings.set_active_connection(Some("nonexistent".to_string()));
+    assert!(result.is_err());
+
+    // Setting None should always work
+    let result = settings.set_active_connection(None);
+    assert!(result.is_ok());
+}
+
+/// Test sharing_was_active field defaults to false
+#[test]
+fn test_sharing_was_active_default() {
+    let settings = RemoteSettings::default();
+    assert!(!settings.sharing_was_active);
+}
+
+/// Test sharing_was_active field persists through serialization
+#[test]
+fn test_sharing_was_active_serialization() {
+    let mut settings = RemoteSettings::default();
+    settings.sharing_was_active = true;
+
+    let json = serde_json::to_string(&settings).unwrap();
+    let restored: RemoteSettings = serde_json::from_str(&json).unwrap();
+
+    assert!(restored.sharing_was_active);
+}
+
+/// Test adding a connection with model field
+#[test]
+fn test_add_connection_with_model() {
+    let mut settings = RemoteSettings::default();
+
+    let saved = settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        None,
+        Some("GPU Server".to_string()),
+        Some("whisper-large-v3".to_string()),
+    );
+
+    assert_eq!(saved.model, Some("whisper-large-v3".to_string()));
+
+    // Verify it persists
+    let retrieved = settings.get_connection(&saved.id).unwrap();
+    assert_eq!(retrieved.model, Some("whisper-large-v3".to_string()));
+}
+
+/// Test model field serialization
+#[test]
+fn test_connection_model_serialization() {
+    let mut settings = RemoteSettings::default();
+
+    settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        None,
+        None,
+        Some("whisper-medium".to_string()),
+    );
+
+    let json = serde_json::to_string(&settings).unwrap();
+    let restored: RemoteSettings = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(restored.saved_connections.len(), 1);
+    assert_eq!(
+        restored.saved_connections[0].model,
+        Some("whisper-medium".to_string())
+    );
+}
+
+/// Test get_connection on empty settings returns None
+#[test]
+fn test_get_connection_empty_settings() {
+    let settings = RemoteSettings::default();
+    assert!(settings.get_connection("any-id").is_none());
+}
+
+/// Test multiple connections with same host:port are allowed (different IDs)
+#[test]
+fn test_duplicate_host_port_allowed() {
+    let mut settings = RemoteSettings::default();
+
+    let saved1 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+    let saved2 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+
+    // Both should exist with different IDs
+    assert_eq!(settings.saved_connections.len(), 2);
+    assert_ne!(saved1.id, saved2.id);
+    assert!(settings.get_connection(&saved1.id).is_some());
+    assert!(settings.get_connection(&saved2.id).is_some());
+}
+
+/// Test adding connection with password
+#[test]
+fn test_add_connection_with_password() {
+    let mut settings = RemoteSettings::default();
+
+    let saved = settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        Some("secret-password".to_string()),
+        None,
+        None,
+    );
+
+    assert_eq!(saved.password, Some("secret-password".to_string()));
+}
+
+/// Test SavedConnection equality
+#[test]
+fn test_saved_connection_equality() {
+    let conn1 = crate::remote::settings::SavedConnection {
+        id: "test-id".to_string(),
+        host: "192.168.1.100".to_string(),
+        port: 47842,
+        password: None,
+        name: Some("Test".to_string()),
+        created_at: 1000,
+        model: None,
+    };
+
+    let conn2 = crate::remote::settings::SavedConnection {
+        id: "test-id".to_string(),
+        host: "192.168.1.100".to_string(),
+        port: 47842,
+        password: None,
+        name: Some("Test".to_string()),
+        created_at: 1000,
+        model: None,
+    };
+
+    let conn3 = crate::remote::settings::SavedConnection {
+        id: "different-id".to_string(),
+        host: "192.168.1.100".to_string(),
+        port: 47842,
+        password: None,
+        name: Some("Test".to_string()),
+        created_at: 1000,
+        model: None,
+    };
+
+    assert_eq!(conn1, conn2);
+    assert_ne!(conn1, conn3);
+}
+
+/// Test RemoteSettings equality
+#[test]
+fn test_remote_settings_equality() {
+    let settings1 = RemoteSettings::default();
+    let settings2 = RemoteSettings::default();
+
+    assert_eq!(settings1, settings2);
+}
+
+/// Test list_connections returns cloned data
+#[test]
+fn test_list_connections_returns_clones() {
+    let mut settings = RemoteSettings::default();
+
+    settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
+
+    let list = settings.list_connections();
+
+    // Modifying the returned list shouldn't affect the original
+    assert_eq!(list.len(), 1);
+    assert_eq!(settings.saved_connections.len(), 1);
+}
+
+/// Test deserializing settings without sharing_was_active field (migration)
+#[test]
+fn test_settings_migration_without_sharing_was_active() {
+    // Simulate old settings JSON without sharing_was_active field
+    let old_json = r#"{
+        "server_config": {
+            "port": 47842,
+            "password": null,
+            "enabled": false
+        },
+        "saved_connections": [],
+        "active_connection_id": null
+    }"#;
+
+    let settings: RemoteSettings = serde_json::from_str(old_json).unwrap();
+
+    // Should default to false
+    assert!(!settings.sharing_was_active);
+}
+
+/// Test deserializing connection without model field (migration)
+#[test]
+fn test_connection_migration_without_model() {
+    let old_json = r#"{
+        "server_config": {
+            "port": 47842,
+            "password": null,
+            "enabled": false
+        },
+        "saved_connections": [{
+            "id": "conn_123",
+            "host": "192.168.1.100",
+            "port": 47842,
+            "password": null,
+            "name": null,
+            "created_at": 1000
+        }],
+        "active_connection_id": null
+    }"#;
+
+    let settings: RemoteSettings = serde_json::from_str(old_json).unwrap();
+
+    // Model should default to None
+    assert_eq!(settings.saved_connections.len(), 1);
+    assert!(settings.saved_connections[0].model.is_none());
+}

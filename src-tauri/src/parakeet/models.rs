@@ -17,6 +17,50 @@ pub struct ParakeetModelDefinition {
     pub accuracy_score: u8,
     pub files: &'static [ParakeetModelFile],
     pub estimated_size: u64,
+    /// If true, this model has additional restrictions beyond the base Apple Silicon requirement.
+    /// Note: ALL Parakeet models require Apple Silicon (FluidAudio uses Apple Neural Engine).
+    /// This flag indicates models that have extra compatibility issues (e.g., V2 SIGFPE crashes).
+    pub apple_silicon_only: bool,
+}
+
+/// Check if running on Apple Silicon (aarch64)
+pub fn is_apple_silicon() -> bool {
+    std::env::consts::ARCH == "aarch64"
+}
+
+/// Get available models for the current architecture.
+///
+/// **Important**: FluidAudio ASR requires Apple Silicon (Apple Neural Engine).
+/// On Intel Macs, this returns an empty vector because FluidAudio throws
+/// `ASRError.unsupportedPlatform` at runtime for ALL Parakeet models.
+///
+/// Intel Mac users should use Whisper models instead (CPU-only mode).
+pub fn get_available_models() -> Vec<&'static ParakeetModelDefinition> {
+    let arch = std::env::consts::ARCH;
+
+    // FluidAudio ASR requires Apple Silicon - no Parakeet models work on Intel Macs
+    // FluidAudio throws ASRError.unsupportedPlatform("Parakeet models require Apple Silicon")
+    if !is_apple_silicon() {
+        log::info!(
+            "🚫 Parakeet unavailable on Intel Mac - FluidAudio requires Apple Neural Engine (arch: {})",
+            arch
+        );
+        return vec![];
+    }
+
+    // On Apple Silicon, filter out any models marked as having additional restrictions
+    AVAILABLE_MODELS
+        .iter()
+        .filter(|m| {
+            if m.apple_silicon_only {
+                // This flag is now only for models with extra restrictions beyond base Apple Silicon
+                // (e.g., V2 crashes with SIGFPE in Espresso on some configurations)
+                true
+            } else {
+                true
+            }
+        })
+        .collect()
 }
 
 // Parakeet models using Swift/FluidAudio sidecar
@@ -53,6 +97,7 @@ pub static AVAILABLE_MODELS: Lazy<Vec<ParakeetModelDefinition>> = Lazy::new(|| {
                 },
             ],
             estimated_size: 500_000_000, // FluidAudio CoreML model is ~500MB
+            apple_silicon_only: false,   // No additional restrictions beyond base Apple Silicon requirement
         },
         ParakeetModelDefinition {
             id: "parakeet-tdt-0.6b-v2",
@@ -81,6 +126,7 @@ pub static AVAILABLE_MODELS: Lazy<Vec<ParakeetModelDefinition>> = Lazy::new(|| {
                 },
             ],
             estimated_size: 480_000_000,
+            apple_silicon_only: true, // V2 CoreML model crashes on Intel Macs (SIGFPE in Espresso)
         },
     ]
 });

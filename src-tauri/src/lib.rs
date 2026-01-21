@@ -30,6 +30,7 @@ mod state_machine;
 mod utils;
 mod whisper;
 mod window_manager;
+mod remote;
 
 #[cfg(test)]
 mod tests;
@@ -67,9 +68,16 @@ use commands::{
         preload_model, verify_model,
     },
     permissions::{
-        check_accessibility_permission, check_microphone_permission,
+        check_accessibility_permission, check_microphone_permission, open_accessibility_settings,
         request_accessibility_permission, request_microphone_permission,
         test_automation_permission,
+    },
+    remote::{
+        add_remote_server, check_remote_server_status, get_active_remote_server,
+        get_firewall_status, get_local_ips, get_local_machine_id, get_sharing_status,
+        list_remote_servers, open_firewall_settings, refresh_remote_servers, remove_remote_server,
+        set_active_remote_server, start_sharing, stop_sharing, test_remote_connection,
+        test_remote_server, transcribe_remote, update_remote_server,
     },
     reset::reset_app_data,
     settings::*,
@@ -78,6 +86,8 @@ use commands::{
     utils::export_transcriptions,
     window::*,
 };
+use commands::remote::load_remote_settings;
+use remote::lifecycle::RemoteServerManager;
 use state::unified_state::UnifiedRecordingState;
 use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem, Submenu};
 use whisper::cache::TranscriberCache;
@@ -363,6 +373,107 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // When user switches models, old one is unloaded immediately
             app.manage(AsyncMutex::new(TranscriberCache::new()));
 
+            // Initialize remote transcription state
+            app.manage(AsyncMutex::new(RemoteServerManager::new()));
+            // Load saved remote settings from store (persists connections across restarts)
+            let remote_settings = load_remote_settings(&app.handle());
+            let connection_count = remote_settings.saved_connections.len();
+            let active_id = remote_settings.active_connection_id.clone();
+            let sharing_was_enabled = remote_settings.server_config.enabled;
+            let saved_port = remote_settings.server_config.port;
+            let saved_password = remote_settings.server_config.password.clone();
+            log::info!(
+                "🌐 [STARTUP] Remote settings loaded: {} connections, active_connection_id={:?}, sharing_enabled={}",
+                connection_count,
+                active_id,
+                sharing_was_enabled
+            );
+            app.manage(AsyncMutex::new(remote_settings));
+            log::info!("🌐 Remote transcription state initialized ({} saved connections)", connection_count);
+
+            // Auto-start network sharing if it was enabled before app closed
+            // BUT only if no remote server is active (can't share and use remote at same time)
+            if sharing_was_enabled && active_id.is_none() {
+                let app_handle_for_sharing = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    // Wait for app to fully initialize
+                    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+
+                    log::info!("🌐 [STARTUP] Auto-starting network sharing (was enabled before shutdown)");
+
+                    // Get the required state handles
+                    let server_manager = app_handle_for_sharing.state::<AsyncMutex<crate::remote::lifecycle::RemoteServerManager>>();
+                    let whisper_manager = app_handle_for_sharing.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
+
+                    // Call start_sharing logic directly (can't use command due to State extraction)
+                    let result = async {
+                        // Get server name from hostname
+                        let server_name = hostname::get()
+                            .ok()
+                            .and_then(|h| h.into_string().ok())
+                            .unwrap_or_else(|| "VoiceTypr Server".to_string());
+
+                        // Get current model from store
+                        let store = app_handle_for_sharing
+                            .store("settings")
+                            .map_err(|e| format!("Failed to access store: {}", e))?;
+
+                        let stored_model = store
+                            .get("current_model")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                            .unwrap_or_default();
+
+                        // Get current engine from settings
+                        let stored_engine = store
+                            .get("current_model_engine")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                            .unwrap_or_else(|| "whisper".to_string());
+
+                        // Get model path from whisper manager
+                        let (current_model, model_path) = {
+                            let manager = whisper_manager.read().await;
+
+                            let model_name = if stored_model.is_empty() {
+                                manager
+                                    .get_first_downloaded_model()
+                                    .ok_or("No model downloaded")?
+                            } else {
+                                stored_model
+                            };
+
+                            // Get model path for whisper, use empty path for other engines
+                            let path = if stored_engine == "whisper" {
+                                manager
+                                    .get_model_path(&model_name)
+                                    .ok_or_else(|| format!("Model '{}' not found", model_name))?
+                            } else {
+                                std::path::PathBuf::new()
+                            };
+
+                            (model_name, path)
+                        };
+
+                        // Start the server (pass app handle for Parakeet support)
+                        let mut manager = server_manager.lock().await;
+                        manager
+                            .start(saved_port, saved_password, server_name, model_path, current_model, stored_engine, Some(app_handle_for_sharing.clone()))
+                            .await?;
+
+                        Ok::<(), String>(())
+                    }.await;
+
+                    match result {
+                        Ok(()) => log::info!("🌐 [STARTUP] Network sharing auto-started successfully on port {}", saved_port),
+                        Err(e) => log::warn!("🌐 [STARTUP] Failed to auto-start network sharing: {}", e),
+                    }
+                });
+            } else if sharing_was_enabled && active_id.is_some() {
+                log::info!(
+                    "🌐 [STARTUP] Skipping network sharing auto-start: remote server is active (id={:?})",
+                    active_id
+                );
+            }
+
             // Initialize unified application state
             app.manage(AppState::new());
             log::info!("🧠 App state managed and ready");
@@ -376,6 +487,54 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 perform_startup_checks(app_handle).await;
+            });
+
+            // Show pill on startup if pill_indicator_mode is "always"
+            let app_handle_for_pill = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // Wait for frontend to be ready (Vite in dev mode, bundled files in prod)
+                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+                // Check if pill_indicator_mode setting is "always"
+                let pill_mode = if let Ok(store) = app_handle_for_pill.store("settings") {
+                    let stored_mode = store
+                        .get("pill_indicator_mode")
+                        .and_then(|v| v.as_str().map(|s| s.to_string()));
+                    let legacy_show = store.get("show_pill_indicator").and_then(|v| v.as_bool());
+                    let resolved = crate::commands::settings::resolve_pill_indicator_mode(
+                        stored_mode.clone(),
+                        legacy_show,
+                        crate::commands::settings::Settings::default().pill_indicator_mode,
+                    );
+                    log::info!(
+                        "Startup: pill_indicator_mode resolved='{}' stored={:?} legacy_show={:?}",
+                        resolved,
+                        stored_mode,
+                        legacy_show
+                    );
+                    resolved
+                } else {
+                    let default_mode = crate::commands::settings::Settings::default().pill_indicator_mode;
+                    log::info!(
+                        "Startup: pill_indicator_mode using default='{}' (settings store unavailable)",
+                        default_mode
+                    );
+                    default_mode
+                };
+
+                log::info!(
+                    "Startup: pill_indicator_mode='{}', will show pill={}",
+                    pill_mode,
+                    pill_mode == "always"
+                );
+
+                // Only show pill on startup if mode is "always"
+                if pill_mode == "always" {
+                    log::info!("Startup: Showing pill because mode is 'always'");
+                    if let Err(e) = crate::commands::window::show_pill_widget(app_handle_for_pill).await {
+                        log::warn!("Failed to show pill on startup: {}", e);
+                    }
+                }
             });
 
             // Clean up old logs on startup (keep only today's log)
@@ -832,7 +991,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
                     let pill_width = 80.0;  // Sized for 3-dot pill (active state with padding)
                     let pill_height = 40.0;
-                    let bottom_offset = 10.0;  // Distance from bottom of screen
+                    let bottom_offset = 60.0;  // Distance from bottom of screen (above taskbar)
 
                     let x = (screen_width - pill_width) / 2.0;
                     let y = screen_height - pill_height - bottom_offset;
@@ -1017,17 +1176,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             list_downloaded_models,
             cancel_download,
             cleanup_old_transcriptions,
+            get_recordings_directory,
+            open_recordings_folder,
+            check_recording_exists,
+            get_recording_path,
+            save_retranscription,
+            update_transcription,
+            show_in_folder,
             get_transcription_history,
+            get_transcription_count,
             delete_transcription_entry,
             clear_all_transcriptions,
             export_transcriptions,
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,
+            recreate_pill_widget,
             hide_toast_window,
             focus_main_window,
             check_accessibility_permission,
             request_accessibility_permission,
+            open_accessibility_settings,
             check_microphone_permission,
             request_microphone_permission,
             test_automation_permission,
@@ -1063,6 +1232,25 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_log_directory,
             open_logs_folder,
             get_device_id,
+            // Remote transcription commands
+            start_sharing,
+            stop_sharing,
+            get_sharing_status,
+            get_local_ips,
+            get_local_machine_id,
+            get_firewall_status,
+            open_firewall_settings,
+            add_remote_server,
+            remove_remote_server,
+            update_remote_server,
+            list_remote_servers,
+            test_remote_connection,
+            test_remote_server,
+            set_active_remote_server,
+            get_active_remote_server,
+            transcribe_remote,
+            refresh_remote_servers,
+            check_remote_server_status,
         ])
         .on_window_event(|window, event| {
             match event {

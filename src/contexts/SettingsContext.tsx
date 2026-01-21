@@ -27,21 +27,29 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       const error = err instanceof Error ? err : new Error('Failed to load settings');
       setError(error);
-      console.error('Failed to load settings:', error);
+      console.error('[SettingsContext] Failed to load settings:', error);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   const updateSettings = useCallback(async (updates: Partial<AppSettings>) => {
-    if (!settings) return;
-    
+    if (!settings) {
+      return;
+    }
+
+    const updatedSettings = { ...settings, ...updates };
+    const previousSettings = settings;
+
+    // Optimistic update - update state immediately so UI responds instantly
+    setSettings(updatedSettings);
+
     try {
-      const updatedSettings = { ...settings, ...updates };
       await invoke('save_settings', { settings: updatedSettings });
-      setSettings(updatedSettings);
     } catch (err) {
-      console.error('Failed to update settings:', err);
+      // Rollback on error
+      setSettings(previousSettings);
+      console.error('[SettingsContext] Failed to update settings:', err);
       throw err;
     }
   }, [settings]);
@@ -52,29 +60,24 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   }, [loadSettings]);
 
   // Listen for settings changes from other sources (e.g., tray menu)
+  // Note: We don't listen to 'settings-changed' here because it causes race conditions
+  // with the optimistic updates in updateSettings. The frontend already updates state
+  // after save_settings completes, so we don't need to reload.
   useEffect(() => {
     const unlistenModel = listen('model-changed', () => {
-      console.log('Model changed, refreshing settings');
       loadSettings();
     });
 
     const unlistenLanguage = listen('language-changed', () => {
-      console.log('Language changed, refreshing settings');
-      loadSettings();
-    });
-    
-    const unlistenAudioDevice = listen('audio-device-changed', () => {
-      console.log('Audio device changed, refreshing settings');
       loadSettings();
     });
 
-    const unlistenSettings = listen('settings-changed', () => {
-      console.log('Settings changed, refreshing');
+    const unlistenAudioDevice = listen('audio-device-changed', () => {
       loadSettings();
     });
 
     return () => {
-      Promise.all([unlistenModel, unlistenLanguage, unlistenAudioDevice, unlistenSettings]).then(unsubs => {
+      Promise.all([unlistenModel, unlistenLanguage, unlistenAudioDevice]).then(unsubs => {
         unsubs.forEach(unsub => unsub());
       });
     };

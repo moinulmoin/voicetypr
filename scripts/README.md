@@ -51,9 +51,31 @@ The recommended release process is:
 - `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` - Tauri update signing
 
 **Windows (release-windows.ps1)**:
+- `VULKAN_SDK` - Path to Vulkan SDK (required for GPU acceleration)
 - `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` - Tauri update signing
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` - Password for signing key (if needed)
 - `GITHUB_TOKEN` - GitHub authentication (usually handled by gh CLI)
+
+### Windows Build Prerequisites
+
+**1. Vulkan SDK**
+Download from https://vulkan.lunarg.com/sdk/home and ensure `VULKAN_SDK` is set.
+
+**2. FFmpeg Sidecar Binaries**
+Place the following files in `sidecar/ffmpeg/dist/`:
+- `ffmpeg.exe` and `ffprobe.exe` (base binaries)
+- `ffmpeg-x86_64-pc-windows-msvc.exe` and `ffprobe-x86_64-pc-windows-msvc.exe`
+- `ffmpeg.exe-x86_64-pc-windows-msvc.exe` and `ffprobe.exe-x86_64-pc-windows-msvc.exe`
+
+These are not tracked in git due to their size (~100MB each).
+
+**3. Windows MAX_PATH Limitation**
+Windows has a 260-character path limit. When using git worktrees or long paths, use a short target directory:
+```powershell
+$env:CARGO_TARGET_DIR = "C:\tmp\vt-target"
+cargo check
+```
+This is especially important for worktrees where paths become very long.
 
 ## Important: AppleDouble Files Fix
 
