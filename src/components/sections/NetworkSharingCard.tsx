@@ -468,9 +468,9 @@ export function NetworkSharingCard() {
                   </div>
                 ) : (
                   <>
-                    {/* Show successful bindings first */}
+                    {/* Show successful bindings first (exclude localhost - can't connect to self) */}
                     {status.binding_results
-                      .filter((result) => result.success)
+                      .filter((result) => result.success && result.ip !== "127.0.0.1")
                       .map((result, index) => (
                         <div key={`success-${index}`} className="flex items-center gap-2">
                           <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
@@ -486,9 +486,9 @@ export function NetworkSharingCard() {
                           </button>
                         </div>
                       ))}
-                    {/* Show failed bindings with tooltip */}
+                    {/* Show failed bindings with tooltip (exclude localhost) */}
                     {status.binding_results
-                      .filter((result) => !result.success)
+                      .filter((result) => !result.success && result.ip !== "127.0.0.1")
                       .map((result, index) => (
                         <div
                           key={`failed-${index}`}
@@ -505,12 +505,12 @@ export function NetworkSharingCard() {
                   </>
                 )}
               </div>
-              {status.binding_results.filter((r) => r.success).length > 0 && (
+              {status.binding_results.filter((r) => r.success && r.ip !== "127.0.0.1").length > 0 && (
                 <p className="text-xs text-muted-foreground">
                   Other VoiceTypr instances can connect using any of the addresses above
                 </p>
               )}
-              {status.binding_results.filter((r) => !r.success).length > 0 && (
+              {status.binding_results.filter((r) => !r.success && r.ip !== "127.0.0.1").length > 0 && (
                 <p className="text-xs text-amber-500">
                   Some addresses failed to bind - hover for details
                 </p>
