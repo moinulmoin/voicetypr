@@ -3,7 +3,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
 use crate::commands::license::check_license_status_internal;
-use crate::commands::settings::get_settings;
+use crate::commands::settings::{get_settings, resolve_pill_indicator_mode, Settings};
 use crate::license::LicenseState;
 use crate::parakeet::messages::ParakeetResponse;
 use crate::parakeet::ParakeetManager;
@@ -70,25 +70,73 @@ pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) {
     let _ = app.emit("toast", payload);
 }
 
-/// Check if pill should be hidden based on show_pill_indicator setting.
+fn should_hide_pill_when_idle(mode: &str) -> bool {
+    mode != "always"
+}
+
+/// Check if pill should be hidden based on pill_indicator_mode setting.
 /// Returns true if pill should be hidden, false if it should stay visible.
-/// When show_pill_indicator is true, the pill should remain visible in idle state.
-/// Fails open: on error, returns false (keep pill visible) for safer UX.
+/// Called when transitioning to idle state (after recording ends).
+/// - "never" → always hide (return true)
+/// - "always" → never hide (return false)
+/// - "when_recording" → hide when idle (return true)
+/// Fails open: on error, returns true (default to when_recording behavior).
+#[track_caller]
 pub async fn should_hide_pill(app: &AppHandle) -> bool {
     let store = match app.store("settings") {
         Ok(s) => s,
         Err(e) => {
             log::warn!("Failed to load settings for pill visibility: {}", e);
-            return false; // Fail open: keep pill visible on error
+            return true; // Default to when_recording behavior (hide when idle)
         }
     };
 
-    let show_pill_indicator = store
-        .get("show_pill_indicator")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true); // Default to true (show indicator)
+    let stored_mode = store
+        .get("pill_indicator_mode")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let legacy_show = store.get("show_pill_indicator").and_then(|v| v.as_bool());
+    let pill_indicator_mode = resolve_pill_indicator_mode(
+        stored_mode.clone(),
+        legacy_show,
+        Settings::default().pill_indicator_mode,
+    );
+    let caller = std::panic::Location::caller();
+    log::debug!(
+        "pill_visibility: should_hide_pill caller={} stored={:?} legacy_show={:?} resolved='{}'",
+        caller,
+        stored_mode,
+        legacy_show,
+        pill_indicator_mode
+    );
 
-    !show_pill_indicator // Hide only if show_pill_indicator is false
+    let result = should_hide_pill_when_idle(&pill_indicator_mode);
+    log::debug!(
+        "should_hide_pill: pill_indicator_mode='{}', should_hide={}",
+        pill_indicator_mode,
+        result
+    );
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_hide_pill_when_idle;
+
+    #[test]
+    fn should_hide_pill_when_idle_for_never() {
+        assert!(should_hide_pill_when_idle("never"));
+    }
+
+    #[test]
+    fn should_hide_pill_when_idle_for_when_recording() {
+        assert!(should_hide_pill_when_idle("when_recording"));
+    }
+
+    #[test]
+    fn should_hide_pill_when_idle_for_always() {
+        assert!(!should_hide_pill_when_idle("always"));
+    }
 }
 
 /// Play a system sound to confirm recording start (macOS only)
@@ -104,10 +152,14 @@ fn play_recording_start_sound() {
 /// Play a system sound to confirm recording start (Windows)
 #[cfg(target_os = "windows")]
 fn play_recording_start_sound() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
     std::thread::spawn(|| {
-        // Use PowerShell to play a system sound on Windows
+        // Use PowerShell to play a system sound on Windows (hidden console)
         let _ = std::process::Command::new("powershell")
             .args(["-c", "[console]::beep(800, 100)"])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn();
     });
 }
@@ -117,11 +169,43 @@ fn play_recording_start_sound() {
     // No-op on other platforms
 }
 
+/// Play a system sound to confirm recording end (macOS only)
+#[cfg(target_os = "macos")]
+fn play_recording_end_sound() {
+    std::thread::spawn(|| {
+        // Use a different sound for recording end - Pop sound
+        let _ = std::process::Command::new("afplay")
+            .arg("/System/Library/Sounds/Pop.aiff")
+            .spawn();
+    });
+}
+
+/// Play a system sound to confirm recording end (Windows)
+#[cfg(target_os = "windows")]
+fn play_recording_end_sound() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    std::thread::spawn(|| {
+        // Use PowerShell with a lower frequency tone for recording end (hidden console)
+        let _ = std::process::Command::new("powershell")
+            .args(["-c", "[console]::beep(600, 100)"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
+    });
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn play_recording_end_sound() {
+    // No-op on other platforms
+}
+
 /// Cached recording configuration to avoid repeated store access during transcription flow
 /// Cache is invalidated when settings change via update hooks
 #[derive(Clone, Debug)]
 pub struct RecordingConfig {
     pub show_pill_widget: bool,
+    pub pill_indicator_mode: String, // "never", "always", or "when_recording"
     pub ai_enabled: bool,
     pub ai_provider: String,
     pub ai_model: String,
@@ -142,11 +226,30 @@ impl RecordingConfig {
     pub async fn load_from_store(app: &AppHandle) -> Result<Self, String> {
         let store = app.store("settings").map_err(|e| e.to_string())?;
 
+        let show_pill_widget = store
+            .get("show_pill_widget")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let stored_mode = store
+            .get("pill_indicator_mode")
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let legacy_show = store.get("show_pill_indicator").and_then(|v| v.as_bool());
+        let pill_indicator_mode = resolve_pill_indicator_mode(
+            stored_mode.clone(),
+            legacy_show,
+            Settings::default().pill_indicator_mode,
+        );
+        log::debug!(
+            "pill_visibility: recording config loaded show_pill_widget={} pill_indicator_mode='{}' stored={:?} legacy_show={:?}",
+            show_pill_widget,
+            pill_indicator_mode,
+            stored_mode,
+            legacy_show
+        );
+
         Ok(Self {
-            show_pill_widget: store
-                .get("show_pill_widget")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
+            show_pill_widget,
+            pill_indicator_mode,
             ai_enabled: store
                 .get("ai_enabled")
                 .and_then(|v| v.as_bool())
@@ -614,6 +717,9 @@ pub async fn start_recording(
             .unwrap_or(true); // Default to true
         if play_sound {
             play_recording_start_sound();
+            // Delay to let sound complete before microphone initialization
+            // This helps with Bluetooth headsets (e.g., AirPods) that switch audio modes
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
     }
 
@@ -623,8 +729,9 @@ pub async fn start_recording(
         format!("Configuration error: {}", e)
     })?;
     log::debug!(
-        "Using recording config: show_pill={}, ai_enabled={}, model={}",
+        "Using recording config: show_pill={} pill_indicator_mode='{}' ai_enabled={} model={}",
         config.show_pill_widget,
+        config.pill_indicator_mode,
         config.ai_enabled,
         config.current_model
     );
@@ -881,8 +988,15 @@ pub async fn start_recording(
         });
     }
 
-    // Show pill widget if enabled (graceful degradation)
-    if config.show_pill_widget {
+    // Show pill widget if enabled and mode is not "never" (graceful degradation)
+    let should_show_pill = config.show_pill_widget && config.pill_indicator_mode != "never";
+    log::info!(
+        "pill_visibility: start_recording show_pill_widget={} pill_indicator_mode='{}' should_show={}",
+        config.show_pill_widget,
+        config.pill_indicator_mode,
+        should_show_pill
+    );
+    if should_show_pill {
         match crate::commands::window::show_pill_widget(app.clone()).await {
             Ok(_) => log::debug!("Pill widget shown successfully"),
             Err(e) => {
@@ -897,6 +1011,8 @@ pub async fn start_recording(
                 );
             }
         }
+    } else if config.pill_indicator_mode == "never" {
+        log::debug!("Pill widget hidden (pill_indicator_mode=never)");
     }
 
     // Also emit legacy event for compatibility
@@ -996,6 +1112,17 @@ pub async fn stop_recording(
             .stop_recording()
             .map_err(|e| format!("Failed to stop recording: {}", e))?;
         log::info!("{}", stop_message);
+
+        // Play sound on recording end if enabled
+        if let Ok(store) = app.store("settings") {
+            let play_sound = store
+                .get("play_sound_on_recording_end")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true); // Default to true
+            if play_sound {
+                play_recording_end_sound();
+            }
+        }
 
         // Monitor system resources after recording stop
         #[cfg(debug_assertions)]

@@ -183,8 +183,27 @@ impl AudioRecorder {
             let writer = Arc::new(Mutex::new(Some(
                 hound::WavWriter::create(&output_path, spec).map_err(|e| e.to_string())?,
             )));
-            let err_fn = |err| log::error!("Stream error: {}", err);
+            // Error callback that triggers stop on device errors (e.g., disconnection)
+            let stop_tx_for_error = stop_tx_clone.clone();
             let error_occurred = Arc::new(Mutex::new(None::<String>));
+            let error_occurred_for_callback = error_occurred.clone();
+            let err_fn = move |err: cpal::StreamError| {
+                // Detailed logging for audio device errors
+                log::error!("═══════════════════════════════════════════════════════");
+                log::error!("🔴 AUDIO DEVICE ERROR DETECTED");
+                log::error!("═══════════════════════════════════════════════════════");
+                log::error!("Error type: {:?}", err);
+                log::error!("Error message: {}", err);
+                log::error!("Action: Triggering graceful recording stop");
+                log::error!("═══════════════════════════════════════════════════════");
+
+                // Store the error
+                if let Ok(mut guard) = error_occurred_for_callback.lock() {
+                    *guard = Some(format!("Audio device error: {}", err));
+                }
+                // Signal the recording thread to stop
+                let _ = stop_tx_for_error.send(RecorderCommand::Stop);
+            };
 
             // Shared state for size tracking
             let bytes_written = Arc::new(Mutex::new(0u64));
@@ -329,8 +348,29 @@ impl AudioRecorder {
             // Wait for stop signal
             let stop_reason = stop_rx.recv().ok();
 
-            // Stop and finalize
-            drop(stream);
+            // Stop and finalize the audio stream
+            // First pause the stream to stop audio capture (quick operation)
+            if let Err(e) = stream.pause() {
+                log::warn!("Failed to pause audio stream: {}", e);
+            }
+
+            // Platform-specific stream cleanup
+            // On Windows, some USB/wireless audio devices (e.g., Astro A50) can hang
+            // indefinitely during drop(). We use mem::forget to prevent app freeze.
+            // On macOS/Linux, drop() is reliable so we clean up properly.
+            #[cfg(target_os = "windows")]
+            {
+                // Intentionally leak the stream to prevent potential driver hang
+                // Resources will be reclaimed when the process exits
+                std::mem::forget(stream);
+                log::info!("Audio stream released (Windows: leaked to prevent potential driver hang)");
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                drop(stream);
+                log::info!("Audio stream stopped");
+            }
 
             // Check if any errors occurred during recording
             if let Ok(guard) = error_occurred.lock() {

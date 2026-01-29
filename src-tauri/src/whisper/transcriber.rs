@@ -49,18 +49,37 @@ impl Transcriber {
         let mut gpu_used = false;
 
         // macOS: Try Metal first, fallback to CPU if it fails
+        // Note: Metal GPU acceleration only works on Apple Silicon (aarch64), not Intel Macs
         #[cfg(target_os = "macos")]
         {
-            ctx_params.use_gpu(true);
+            let is_apple_silicon = std::env::consts::ARCH == "aarch64";
+
+            if !is_apple_silicon {
+                log_with_context(
+                    log::Level::Info,
+                    "🎮 METAL_SKIP",
+                    &[
+                        ("reason", "Intel Mac detected"),
+                        ("arch", std::env::consts::ARCH),
+                        ("fallback_to", "CPU"),
+                    ],
+                );
+                log::info!("⚠️ Intel Mac detected - using CPU-only mode (Metal GPU not supported)");
+                ctx_params.use_gpu(false);
+            } else {
+                ctx_params.use_gpu(true);
+            }
+
             let metal_start = Instant::now();
 
             log_with_context(
                 log::Level::Info,
                 "🎮 METAL_INIT",
                 &[
-                    ("backend", "Metal"),
+                    ("backend", if is_apple_silicon { "Metal" } else { "CPU" }),
                     ("platform", "macOS"),
-                    ("attempt", "gpu_first"),
+                    ("arch", std::env::consts::ARCH),
+                    ("attempt", if is_apple_silicon { "gpu_first" } else { "cpu_only" }),
                 ],
             );
 

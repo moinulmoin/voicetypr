@@ -51,7 +51,7 @@ export function FeedbackToast() {
 
   return (
     <div className="fixed inset-0 flex items-center justify-center">
-      <div className="bg-black text-white text-sm px-4 py-2 rounded-lg shadow-lg flex items-start gap-2 min-w-[200px] max-w-[400px]">
+      <div className="bg-black text-white text-sm px-4 py-2 rounded-lg shadow-lg ring-1 ring-white/30 flex items-start gap-2 min-w-[200px] max-w-[400px]">
         <img src="/AppIcon.png" alt="" className="w-4 h-4 rounded-sm flex-shrink-0 mt-0.5" />
         <span className="text-white/30 flex-shrink-0">|</span>
         <span className="break-words whitespace-pre-wrap">{message}</span>
