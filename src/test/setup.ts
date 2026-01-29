@@ -35,7 +35,7 @@ const defaultIpcHandler = (cmd: string) => {
         play_sound_on_recording: true,
         play_sound_on_recording_end: true,
         pill_indicator_mode: 'when_recording',
-        pill_indicator_position: 'bottom'
+        pill_indicator_position: 'bottom-center'
       };
 
     case 'save_settings':

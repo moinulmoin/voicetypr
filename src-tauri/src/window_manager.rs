@@ -12,13 +12,24 @@ pub struct WindowManager {
 fn calculate_pill_position(position: &str, screen_width: f64, screen_height: f64) -> (f64, f64) {
     let pill_width = 80.0;
     let pill_height = 40.0;
-    let edge_offset = 10.0; // Distance from top/bottom edge
+    let edge_offset = 10.0; // Distance from screen edges
 
-    let x = (screen_width - pill_width) / 2.0;
-    let y = match position {
-        "top" => edge_offset,
-        "center" => (screen_height - pill_height) / 2.0,
-        "bottom" | _ => screen_height - pill_height - edge_offset,
+    // Horizontal position: left, center, or right
+    let x = if position.ends_with("-left") {
+        edge_offset
+    } else if position.ends_with("-right") {
+        screen_width - pill_width - edge_offset
+    } else {
+        // center (default)
+        (screen_width - pill_width) / 2.0
+    };
+
+    // Vertical position: top or bottom
+    let y = if position.starts_with("top-") {
+        edge_offset
+    } else {
+        // bottom (default)
+        screen_height - pill_height - edge_offset
     };
 
     (x, y)
@@ -703,29 +714,54 @@ impl WindowManager {
 mod tests {
     use super::calculate_pill_position;
 
+    // Screen: 1920x1080, pill: 80x40, edge_offset: 10
+    // x_left = 10, x_center = 920, x_right = 1830
+    // y_top = 10, y_bottom = 1030
+
     #[test]
-    fn calculate_pill_position_top() {
-        let (x, y) = calculate_pill_position("top", 1920.0, 1080.0);
+    fn calculate_pill_position_top_left() {
+        let (x, y) = calculate_pill_position("top-left", 1920.0, 1080.0);
+        assert_eq!(x, 10.0);
+        assert_eq!(y, 10.0);
+    }
+
+    #[test]
+    fn calculate_pill_position_top_center() {
+        let (x, y) = calculate_pill_position("top-center", 1920.0, 1080.0);
         assert_eq!(x, 920.0);
         assert_eq!(y, 10.0);
     }
 
     #[test]
-    fn calculate_pill_position_center() {
-        let (x, y) = calculate_pill_position("center", 1920.0, 1080.0);
-        assert_eq!(x, 920.0);
-        assert_eq!(y, 520.0);
+    fn calculate_pill_position_top_right() {
+        let (x, y) = calculate_pill_position("top-right", 1920.0, 1080.0);
+        assert_eq!(x, 1830.0);
+        assert_eq!(y, 10.0);
     }
 
     #[test]
-    fn calculate_pill_position_bottom() {
-        let (x, y) = calculate_pill_position("bottom", 1920.0, 1080.0);
+    fn calculate_pill_position_bottom_left() {
+        let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0);
+        assert_eq!(x, 10.0);
+        assert_eq!(y, 1030.0);
+    }
+
+    #[test]
+    fn calculate_pill_position_bottom_center() {
+        let (x, y) = calculate_pill_position("bottom-center", 1920.0, 1080.0);
         assert_eq!(x, 920.0);
         assert_eq!(y, 1030.0);
     }
 
     #[test]
-    fn calculate_pill_position_defaults_to_bottom() {
+    fn calculate_pill_position_bottom_right() {
+        let (x, y) = calculate_pill_position("bottom-right", 1920.0, 1080.0);
+        assert_eq!(x, 1830.0);
+        assert_eq!(y, 1030.0);
+    }
+
+    #[test]
+    fn calculate_pill_position_defaults_to_bottom_center() {
         let (x, y) = calculate_pill_position("unknown", 1920.0, 1080.0);
         assert_eq!(x, 920.0);
         assert_eq!(y, 1030.0);

@@ -60,7 +60,7 @@ impl Default for Settings {
             play_sound_on_recording: true,        // Default to playing sound on recording start
             play_sound_on_recording_end: true,    // Default to playing sound on recording end
             pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
-            pill_indicator_position: "bottom".to_string(), // Default to bottom of screen
+            pill_indicator_position: "bottom-center".to_string(), // Default to bottom center of screen
         }
     }
 }

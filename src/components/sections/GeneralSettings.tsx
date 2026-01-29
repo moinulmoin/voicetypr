@@ -415,7 +415,7 @@ export function GeneralSettings() {
                     </p>
                   </div>
                   <Select
-                    value={settings.pill_indicator_position ?? "bottom"}
+                    value={settings.pill_indicator_position ?? "bottom-center"}
                     onValueChange={async (value: PillIndicatorPosition) => {
                       await updateSettings({
                         pill_indicator_position: value,
@@ -426,9 +426,12 @@ export function GeneralSettings() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="top">Top</SelectItem>
-                      <SelectItem value="center">Center</SelectItem>
-                      <SelectItem value="bottom">Bottom</SelectItem>
+                      <SelectItem value="top-left">Top Left</SelectItem>
+                      <SelectItem value="top-center">Top Center</SelectItem>
+                      <SelectItem value="top-right">Top Right</SelectItem>
+                      <SelectItem value="bottom-left">Bottom Left</SelectItem>
+                      <SelectItem value="bottom-center">Bottom Center</SelectItem>
+                      <SelectItem value="bottom-right">Bottom Right</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

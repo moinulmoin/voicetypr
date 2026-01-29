@@ -39,7 +39,7 @@ mod tests {
             play_sound_on_recording: true,
             play_sound_on_recording_end: true,
             pill_indicator_mode: "when_recording".to_string(),
-            pill_indicator_position: "bottom".to_string(),
+            pill_indicator_position: "bottom-center".to_string(),
         };
 
         // Test serialization
@@ -100,7 +100,7 @@ mod tests {
             play_sound_on_recording: false,
             play_sound_on_recording_end: false,
             pill_indicator_mode: "never".to_string(),
-            pill_indicator_position: "top".to_string(),
+            pill_indicator_position: "top-center".to_string(),
         };
 
         let cloned = settings.clone();
