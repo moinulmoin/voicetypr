@@ -63,13 +63,13 @@ export function RecordingPill() {
 
     const events = [
       { name: "enhancing-started", handler: () => {
-        isMounted && setIsFormatting(true);
+        if (isMounted) setIsFormatting(true);
       }},
       { name: "enhancing-completed", handler: () => {
-        isMounted && setIsFormatting(false);
+        if (isMounted) setIsFormatting(false);
       }},
       { name: "enhancing-failed", handler: () => {
-        isMounted && setIsFormatting(false);
+        if (isMounted) setIsFormatting(false);
       }},
     ];
 

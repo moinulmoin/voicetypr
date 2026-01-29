@@ -12,7 +12,7 @@ pub struct WindowManager {
 fn calculate_pill_position(position: &str, screen_width: f64, screen_height: f64) -> (f64, f64) {
     let pill_width = 80.0;
     let pill_height = 40.0;
-    let edge_offset = 60.0; // Distance from top/bottom edge
+    let edge_offset = 10.0; // Distance from top/bottom edge
 
     let x = (screen_width - pill_width) / 2.0;
     let y = match position {
@@ -707,7 +707,7 @@ mod tests {
     fn calculate_pill_position_top() {
         let (x, y) = calculate_pill_position("top", 1920.0, 1080.0);
         assert_eq!(x, 920.0);
-        assert_eq!(y, 60.0);
+        assert_eq!(y, 10.0);
     }
 
     #[test]
@@ -721,13 +721,13 @@ mod tests {
     fn calculate_pill_position_bottom() {
         let (x, y) = calculate_pill_position("bottom", 1920.0, 1080.0);
         assert_eq!(x, 920.0);
-        assert_eq!(y, 980.0);
+        assert_eq!(y, 1030.0);
     }
 
     #[test]
     fn calculate_pill_position_defaults_to_bottom() {
         let (x, y) = calculate_pill_position("unknown", 1920.0, 1080.0);
         assert_eq!(x, 920.0);
-        assert_eq!(y, 980.0);
+        assert_eq!(y, 1030.0);
     }
 }
