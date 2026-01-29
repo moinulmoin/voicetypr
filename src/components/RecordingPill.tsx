@@ -105,7 +105,7 @@ export function RecordingPill() {
     <div className="fixed inset-0 flex items-center justify-center">
       {/* Solid black pill - grows when active */}
       <motion.div
-        className="flex items-center justify-center rounded-full select-none bg-black shadow-lg ring-1 ring-white/30"
+        className="flex items-center justify-center rounded-full select-none bg-black shadow-lg"
         animate={{
           // ~1.4x growth from idle to active
           paddingLeft: isActive ? 14 : 10,
