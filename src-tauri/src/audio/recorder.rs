@@ -348,38 +348,28 @@ impl AudioRecorder {
             // Wait for stop signal
             let stop_reason = stop_rx.recv().ok();
 
-            // Stop and finalize - use timeout to prevent hanging on problematic audio devices
-            // Some audio devices (especially USB/wireless like Astro A50) can hang indefinitely
-            // during stream cleanup on Windows. We wrap drop(stream) in a timeout thread.
-            // Using 1 second timeout - normal cleanup is <100ms, anything longer indicates a problem.
-            let stream_drop_timeout = Duration::from_secs(1);
-            let stream_drop_handle = std::thread::spawn(move || {
-                drop(stream);
-            });
-
-            // Wait for stream drop with timeout
-            let drop_start = std::time::Instant::now();
-            while drop_start.elapsed() < stream_drop_timeout {
-                if stream_drop_handle.is_finished() {
-                    let _ = stream_drop_handle.join();
-                    log::info!("Audio stream dropped successfully");
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(50));
+            // Stop and finalize the audio stream
+            // First pause the stream to stop audio capture (quick operation)
+            if let Err(e) = stream.pause() {
+                log::warn!("Failed to pause audio stream: {}", e);
             }
 
-            if drop_start.elapsed() >= stream_drop_timeout {
-                // Stream drop timed out - abandon the thread and continue
-                // The OS will clean up the resources when the process exits
-                log::warn!("═══════════════════════════════════════════════════════");
-                log::warn!("⚠️ AUDIO STREAM DROP TIMEOUT");
-                log::warn!("═══════════════════════════════════════════════════════");
-                log::warn!("Timeout: {}ms", stream_drop_timeout.as_millis());
-                log::warn!("Elapsed: {}ms", drop_start.elapsed().as_millis());
-                log::warn!("Cause: Audio device driver not responding to cleanup");
-                log::warn!("Impact: Recording will continue, orphaned thread abandoned");
-                log::warn!("Resolution: Device may need to be unplugged/replugged");
-                log::warn!("═══════════════════════════════════════════════════════");
+            // Platform-specific stream cleanup
+            // On Windows, some USB/wireless audio devices (e.g., Astro A50) can hang
+            // indefinitely during drop(). We use mem::forget to prevent app freeze.
+            // On macOS/Linux, drop() is reliable so we clean up properly.
+            #[cfg(target_os = "windows")]
+            {
+                // Intentionally leak the stream to prevent potential driver hang
+                // Resources will be reclaimed when the process exits
+                std::mem::forget(stream);
+                log::info!("Audio stream released (Windows: leaked to prevent potential driver hang)");
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                drop(stream);
+                log::info!("Audio stream stopped");
             }
 
             // Check if any errors occurred during recording
