@@ -880,7 +880,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
                     let pill_width = 80.0;  // Sized for 3-dot pill (active state with padding)
                     let pill_height = 40.0;
-                    let bottom_offset = 60.0;  // Distance from bottom of screen (above taskbar)
+                    let bottom_offset = 10.0;  // Distance from bottom of screen
 
                     let x = (screen_width - pill_width) / 2.0;
                     let y = screen_height - pill_height - bottom_offset;
