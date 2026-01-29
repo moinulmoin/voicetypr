@@ -950,6 +950,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .always_on_top(true)
                     .skip_taskbar(true)
                     .transparent(true)
+                    .shadow(false) // Prevent window shadow/outline on macOS
                     .inner_size(toast_width, toast_height)
                     .position(toast_x, toast_y)
                     .visible(false); // Starts hidden
