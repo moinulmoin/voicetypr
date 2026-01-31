@@ -71,6 +71,46 @@ pub async fn frontend_log(message: String) {
     log::info!("[FRONTEND] {}", message);
 }
 
+/// Validate that the stored microphone selection still exists.
+/// If the selected microphone is no longer available, resets to default.
+/// Returns true if the microphone was reset, false if it was valid or already default.
+#[tauri::command]
+pub async fn validate_microphone_selection(app: AppHandle) -> Result<bool, String> {
+    use crate::audio::recorder::AudioRecorder;
+
+    let settings = get_settings(app.clone()).await?;
+
+    // If no microphone is selected (using default), nothing to validate
+    let Some(selected_mic) = settings.selected_microphone else {
+        log::debug!("No microphone selected, using system default");
+        return Ok(false);
+    };
+
+    // Get available devices
+    let available_devices = AudioRecorder::get_devices();
+
+    // Check if selected mic still exists
+    if available_devices.contains(&selected_mic) {
+        log::debug!(
+            "Selected microphone '{}' is available",
+            selected_mic
+        );
+        return Ok(false);
+    }
+
+    // Selected mic no longer exists - reset to default
+    log::info!(
+        "Selected microphone '{}' is no longer available (available: {:?}), resetting to default",
+        selected_mic,
+        available_devices
+    );
+
+    // Clear the selection
+    set_audio_device(app.clone(), None).await?;
+
+    Ok(true)
+}
+
 pub(crate) fn resolve_pill_indicator_mode(
     stored_mode: Option<String>,
     legacy_show_pill: Option<bool>,

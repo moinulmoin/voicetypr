@@ -1057,6 +1057,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_settings,
             save_settings,
             set_audio_device,
+            validate_microphone_selection,
             set_global_shortcut,
             get_supported_languages,
             set_model_from_tray,

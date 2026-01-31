@@ -22,6 +22,7 @@ mod tests {
             text: "".to_string(),
             context: None,
             options: None,
+            language: None,
         };
         assert!(request.validate().is_err());
 
@@ -30,6 +31,7 @@ mod tests {
             text: "   \n\t  ".to_string(),
             context: None,
             options: None,
+            language: None,
         };
         assert!(request.validate().is_err());
 
@@ -38,6 +40,7 @@ mod tests {
             text: "Hello, world!".to_string(),
             context: None,
             options: None,
+            language: None,
         };
         assert!(request.validate().is_ok());
 
@@ -46,6 +49,7 @@ mod tests {
             text: "a".repeat(MAX_TEXT_LENGTH),
             context: None,
             options: None,
+            language: None,
         };
         assert!(request.validate().is_ok());
 
@@ -54,6 +58,7 @@ mod tests {
             text: "a".repeat(MAX_TEXT_LENGTH + 1),
             context: None,
             options: None,
+            language: None,
         };
         assert!(request.validate().is_err());
     }
@@ -102,18 +107,27 @@ mod tests {
     fn test_enhancement_prompt_generation() {
         use crate::ai::prompts::{build_enhancement_prompt, EnhancementOptions};
 
-        // Test with default options
+        // Test with default options (English)
         let options = EnhancementOptions::default();
-        let prompt = build_enhancement_prompt("hello world", None, &options);
+        let prompt = build_enhancement_prompt("hello world", None, &options, None);
 
         assert!(prompt.contains("hello world"));
         assert!(prompt.contains("post-processor for voice transcripts"));
+        assert!(prompt.contains("written English")); // Default language
 
         // Test with context
         let prompt_with_context =
-            build_enhancement_prompt("hello world", Some("Casual conversation"), &options);
+            build_enhancement_prompt("hello world", Some("Casual conversation"), &options, None);
 
         assert!(prompt_with_context.contains("Context: Casual conversation"));
+
+        // Test with Spanish language
+        let prompt_spanish = build_enhancement_prompt("hola mundo", None, &options, Some("es"));
+        assert!(prompt_spanish.contains("written Spanish"));
+
+        // Test with French language
+        let prompt_french = build_enhancement_prompt("bonjour monde", None, &options, Some("fr"));
+        assert!(prompt_french.contains("written French"));
     }
 
     #[test]
@@ -124,25 +138,25 @@ mod tests {
 
         // Test Default preset
         let default_options = EnhancementOptions::default();
-        let default_prompt = build_enhancement_prompt(text, None, &default_options);
+        let default_prompt = build_enhancement_prompt(text, None, &default_options, None);
         assert!(default_prompt.contains("post-processor for voice transcripts"));
 
         // Test Prompts preset
         let mut prompts_options = EnhancementOptions::default();
         prompts_options.preset = EnhancementPreset::Prompts;
-        let prompts_prompt = build_enhancement_prompt(text, None, &prompts_options);
+        let prompts_prompt = build_enhancement_prompt(text, None, &prompts_options, None);
         assert!(prompts_prompt.contains("transform the cleaned text into a concise AI prompt"));
 
         // Test Email preset
         let mut email_options = EnhancementOptions::default();
         email_options.preset = EnhancementPreset::Email;
-        let email_prompt = build_enhancement_prompt(text, None, &email_options);
+        let email_prompt = build_enhancement_prompt(text, None, &email_options, None);
         assert!(email_prompt.contains("format the cleaned text as an email"));
 
         // Test Commit preset
         let mut commit_options = EnhancementOptions::default();
         commit_options.preset = EnhancementPreset::Commit;
-        let commit_prompt = build_enhancement_prompt(text, None, &commit_options);
+        let commit_prompt = build_enhancement_prompt(text, None, &commit_options, None);
         assert!(commit_prompt.contains("convert the cleaned text to a Conventional Commit"));
     }
 
@@ -163,7 +177,7 @@ mod tests {
         for preset in presets {
             let mut options = EnhancementOptions::default();
             options.preset = preset.clone();
-            let prompt = build_enhancement_prompt(test_text, None, &options);
+            let prompt = build_enhancement_prompt(test_text, None, &options, None);
 
             // All prompts should include self-correction rules
             assert!(
@@ -191,7 +205,7 @@ mod tests {
         for preset in presets {
             let mut options = EnhancementOptions::default();
             options.preset = preset.clone();
-            let prompt = build_enhancement_prompt(test_text, None, &options);
+            let prompt = build_enhancement_prompt(test_text, None, &options, None);
 
             // All should include self-correction rules
             assert!(
@@ -224,7 +238,7 @@ mod tests {
 
         let test_text = "test transcription";
         let options = EnhancementOptions::default();
-        let prompt = build_enhancement_prompt(test_text, None, &options);
+        let prompt = build_enhancement_prompt(test_text, None, &options, None);
 
         // Test that Default prompt includes all comprehensive features
 
@@ -269,5 +283,54 @@ mod tests {
         assert!(json.contains("test-model"));
         assert!(json.contains("Test Model"));
         assert!(json.contains("A test model"));
+    }
+
+    #[test]
+    fn test_language_name_mapping() {
+        use crate::ai::prompts::get_language_name;
+
+        // Test common languages
+        assert_eq!(get_language_name("en"), "English");
+        assert_eq!(get_language_name("es"), "Spanish");
+        assert_eq!(get_language_name("fr"), "French");
+        assert_eq!(get_language_name("de"), "German");
+        assert_eq!(get_language_name("ja"), "Japanese");
+        assert_eq!(get_language_name("zh"), "Chinese");
+        assert_eq!(get_language_name("ar"), "Arabic");
+        assert_eq!(get_language_name("hi"), "Hindi");
+        assert_eq!(get_language_name("pt"), "Portuguese");
+        assert_eq!(get_language_name("ru"), "Russian");
+
+        // Test case insensitivity
+        assert_eq!(get_language_name("EN"), "English");
+        assert_eq!(get_language_name("Es"), "Spanish");
+
+        // Test fallback for unknown language codes
+        assert_eq!(get_language_name("xyz"), "English");
+        assert_eq!(get_language_name(""), "English");
+    }
+
+    #[test]
+    fn test_language_aware_prompts() {
+        use crate::ai::prompts::{build_enhancement_prompt, EnhancementOptions};
+
+        let options = EnhancementOptions::default();
+        let text = "test text";
+
+        // English (default)
+        let prompt_en = build_enhancement_prompt(text, None, &options, Some("en"));
+        assert!(prompt_en.contains("written English"));
+
+        // Spanish
+        let prompt_es = build_enhancement_prompt(text, None, &options, Some("es"));
+        assert!(prompt_es.contains("written Spanish"));
+
+        // Japanese
+        let prompt_ja = build_enhancement_prompt(text, None, &options, Some("ja"));
+        assert!(prompt_ja.contains("written Japanese"));
+
+        // None defaults to English
+        let prompt_none = build_enhancement_prompt(text, None, &options, None);
+        assert!(prompt_none.contains("written English"));
     }
 }

@@ -202,6 +202,7 @@ impl AIProvider for GroqProvider {
             &request.text,
             request.context.as_deref(),
             &request.options.unwrap_or_default(),
+            request.language.as_deref(),
         );
 
         // Log API request details (only if logging is enabled)

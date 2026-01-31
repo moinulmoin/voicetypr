@@ -610,12 +610,21 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
     // Load enhancement options
     let enhancement_options = get_enhancement_options(app.clone()).await.ok();
 
+    // Get the user's selected language for formatting output
+    let language = {
+        let lang_store = app.store("settings").map_err(|e| e.to_string())?;
+        lang_store
+            .get("language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+    };
+
     log::info!(
-        "Enhancing text with {} model {} (length: {}, options: {:?})",
+        "Enhancing text with {} model {} (length: {}, options: {:?}, language: {:?})",
         provider,
         model,
         text.len(),
-        enhancement_options
+        enhancement_options,
+        language
     );
 
     // Create provider config
@@ -635,6 +644,7 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
         text: text.clone(),
         context: None,
         options: enhancement_options,
+        language,
     };
 
     match provider.enhance_text(request).await {

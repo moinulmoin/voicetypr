@@ -31,6 +31,9 @@ pub struct AIEnhancementRequest {
     pub context: Option<String>,
     #[serde(default)]
     pub options: Option<EnhancementOptions>,
+    /// ISO 639-1 language code for output language (e.g., "en", "es", "fr")
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 impl AIEnhancementRequest {

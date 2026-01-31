@@ -169,6 +169,7 @@ impl AIProvider for GeminiProvider {
             &request.text,
             request.context.as_deref(),
             &request.options.unwrap_or_default(),
+            request.language.as_deref(),
         );
 
         let temperature = self
