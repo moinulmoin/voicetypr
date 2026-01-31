@@ -19,8 +19,8 @@ function Slider({
         ? value
         : Array.isArray(defaultValue)
           ? defaultValue
-          : [min, max],
-    [value, defaultValue, min, max]
+          : [min],  // Single thumb at min, not range slider
+    [value, defaultValue, min]
   )
 
   return (

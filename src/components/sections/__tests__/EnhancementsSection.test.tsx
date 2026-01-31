@@ -135,7 +135,7 @@ describe('EnhancementsSection', () => {
       return Promise.resolve(provider === 'gemini');
     });
     
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, _args?: Record<string, unknown>) => {
       if (cmd === 'get_ai_settings') {
         return Promise.resolve({
           enabled: false,
@@ -171,7 +171,7 @@ describe('EnhancementsSection', () => {
       return Promise.resolve(provider === 'gemini');
     });
     
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, _args?: Record<string, unknown>) => {
       if (cmd === 'get_ai_settings') {
         return Promise.resolve({
           enabled: false,
