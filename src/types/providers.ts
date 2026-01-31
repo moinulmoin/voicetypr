@@ -29,7 +29,6 @@ export const AI_PROVIDERS: AIProviderConfig[] = [
     models: [
       { id: "gpt-5-nano", name: "GPT-5 Nano", description: "Fastest, most cost-efficient" },
       { id: "gpt-5-mini", name: "GPT-5 Mini", description: "Fast, cost-effective" },
-      { id: "gpt-4o-mini", name: "GPT-4o Mini", description: "Great balance of speed & quality" },
     ],
   },
   {
@@ -53,17 +52,15 @@ export const AI_PROVIDERS: AIProviderConfig[] = [
       { id: "gemini-3-flash", name: "Gemini 3 Flash", description: "Latest & fastest" },
     ],
   },
+  {
+    id: "custom",
+    name: "Custom (OpenAI-compatible)",
+    color: "text-purple-600",
+    apiKeyUrl: "",
+    isCustom: true,
+    models: [], // Models are user-defined via configuration
+  },
 ];
-
-// Custom provider placeholder
-export const CUSTOM_PROVIDER: AIProviderConfig = {
-  id: "custom",
-  name: "Custom Provider",
-  color: "text-purple-600",
-  apiKeyUrl: "",
-  isCustom: true,
-  models: [], // Models are user-defined
-};
 
 export function getProviderById(id: string): AIProviderConfig | undefined {
   return AI_PROVIDERS.find(p => p.id === id);

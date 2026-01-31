@@ -5,11 +5,9 @@ import { ProviderCard } from "@/components/ProviderCard";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import type { EnhancementOptions } from "@/types/ai";
 import { fromBackendOptions, toBackendOptions } from "@/types/ai";
-import { AI_PROVIDERS, CUSTOM_PROVIDER } from "@/types/providers";
+import { AI_PROVIDERS } from "@/types/providers";
 import { hasApiKey, removeApiKey, saveApiKey, getApiKey, keyringSet } from "@/utils/keyring";
 import { getErrorMessage } from "@/utils/error";
 import { useReadinessState } from "@/contexts/ReadinessContext";
@@ -17,7 +15,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
-import { Info, Settings2 } from "lucide-react";
+import { Info } from "lucide-react";
 
 interface AISettings {
   enabled: boolean;
@@ -39,6 +37,7 @@ export function EnhancementsSection() {
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [showOpenAIConfig, setShowOpenAIConfig] = useState(false);
   const [openAIDefaultBaseUrl, setOpenAIDefaultBaseUrl] = useState("https://api.openai.com/v1");
+  const [customModelName, setCustomModelName] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [providerApiKeys, setProviderApiKeys] = useState<Record<string, boolean>>({});
@@ -63,29 +62,47 @@ export function EnhancementsSection() {
   const loadAISettings = useCallback(async () => {
     try {
       // Check and cache API keys for all providers
-      const allProviders = [...AI_PROVIDERS.map(p => p.id), "custom"];
+      const allProviders = AI_PROVIDERS.map(p => p.id);
       const keyStatus: Record<string, boolean> = {};
 
       await Promise.all(allProviders.map(async (providerId) => {
-        const hasKey = await hasApiKey(providerId);
+        // For custom provider, check 'custom' key
+        const keyId = providerId === 'custom' ? 'custom' : providerId;
+        const hasKey = await hasApiKey(keyId);
         keyStatus[providerId] = hasKey;
         if (hasKey) {
-          console.log(`[AI Settings] Found ${providerId} API key in keyring, caching to backend`);
+          console.log(`[AI Settings] Found ${keyId} API key in keyring, caching to backend`);
           try {
-            const apiKey = await getApiKey(providerId);
+            const apiKey = await getApiKey(keyId);
             if (apiKey) {
-              await invoke('cache_ai_api_key', { args: { provider: providerId, apiKey } });
+              // For custom provider, cache as 'openai' since backend uses OpenAI-compatible API
+              const cacheProvider = providerId === 'custom' ? 'openai' : providerId;
+              await invoke('cache_ai_api_key', { args: { provider: cacheProvider, apiKey } });
             }
           } catch (error) {
-            console.error(`Failed to cache ${providerId} API key:`, error);
+            console.error(`Failed to cache ${keyId} API key:`, error);
           }
         }
       }));
 
       setProviderApiKeys(keyStatus);
 
+      // Load custom provider config
+      try {
+        const customConfig = await invoke<{ baseUrl: string }>('get_openai_config');
+        setOpenAIDefaultBaseUrl(customConfig.baseUrl || "https://api.openai.com/v1");
+      } catch (error) {
+        console.error('Failed to load custom config:', error);
+      }
+
       // Load AI settings from backend
       const settings = await invoke<AISettings>("get_ai_settings");
+      
+      // If using custom provider (openai with non-default base URL), track model name
+      if (settings.provider === 'openai' && keyStatus['custom']) {
+        setCustomModelName(settings.model);
+      }
+      
       setAISettings(settings);
 
       // If readiness state shows AI is ready, update the provider key status
@@ -295,11 +312,20 @@ export function EnhancementsSection() {
 
   // Check if any provider has a valid API key
   const hasAnyValidConfig = Object.values(providerApiKeys).some(v => v);
-  const hasSelectedModel = Boolean(aiSettings.provider && aiSettings.model && providerApiKeys[aiSettings.provider]);
+  
+  // Check if we have a selected model - handle custom provider specially
+  const isUsingCustomProvider = aiSettings.provider === 'openai' && providerApiKeys['custom'];
+  const hasSelectedModel = Boolean(
+    aiSettings.provider && 
+    aiSettings.model && 
+    (isUsingCustomProvider || providerApiKeys[aiSettings.provider])
+  );
 
   // Get active model name for display
   const activeProvider = AI_PROVIDERS.find(p => p.id === aiSettings.provider);
-  const activeModel = activeProvider?.models.find(m => m.id === aiSettings.model);
+  const activeModelName = isUsingCustomProvider 
+    ? customModelName 
+    : activeProvider?.models.find(m => m.id === aiSettings.model)?.name;
 
   return (
     <div className="h-full flex flex-col">
@@ -333,54 +359,44 @@ export function EnhancementsSection() {
             <div className="flex items-center gap-2">
               <h2 className="text-base font-semibold">AI Providers</h2>
               <div className="h-px bg-border/50 flex-1" />
-              {activeModel && (
+              {activeModelName && aiSettings.enabled && (
                 <span className="text-sm text-muted-foreground">
-                  Active: <span className="text-amber-600 dark:text-amber-500">{activeModel.name}</span>
+                  Active: <span className="text-amber-600 dark:text-amber-500">{activeModelName}</span>
                 </span>
               )}
             </div>
             
             <div className="grid gap-3">
-              {AI_PROVIDERS.map((provider) => (
-                <ProviderCard
-                  key={provider.id}
-                  provider={provider}
-                  hasApiKey={providerApiKeys[provider.id] || false}
-                  isActive={aiSettings.provider === provider.id && aiSettings.enabled}
-                  selectedModel={aiSettings.provider === provider.id ? aiSettings.model : null}
-                  onSetupApiKey={() => handleSetupApiKey(provider.id)}
-                  onRemoveApiKey={() => handleRemoveApiKey(provider.id)}
-                  onSelectModel={(modelId) => handleSelectModel(provider.id, modelId)}
-                />
-              ))}
+              {AI_PROVIDERS.map((provider) => {
+                // For custom provider, check if it's active (backend uses 'openai' but UI tracks 'custom')
+                const isCustomActive = Boolean(
+                  provider.isCustom && 
+                  aiSettings.provider === 'openai' && 
+                  providerApiKeys['custom'] && 
+                  aiSettings.enabled
+                );
+                const isActive = provider.isCustom 
+                  ? isCustomActive
+                  : Boolean(aiSettings.provider === provider.id && aiSettings.enabled);
+                
+                return (
+                  <ProviderCard
+                    key={provider.id}
+                    provider={provider}
+                    hasApiKey={providerApiKeys[provider.id] || false}
+                    isActive={isActive}
+                    selectedModel={provider.isCustom 
+                      ? (isCustomActive ? customModelName : null)
+                      : (aiSettings.provider === provider.id ? aiSettings.model : null)
+                    }
+                    onSetupApiKey={() => handleSetupApiKey(provider.id)}
+                    onRemoveApiKey={() => handleRemoveApiKey(provider.id)}
+                    onSelectModel={(modelId) => handleSelectModel(provider.id, modelId)}
+                    customModelName={provider.isCustom ? customModelName : undefined}
+                  />
+                );
+              })}
             </div>
-          </div>
-
-          {/* Custom Provider Section */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-semibold">Custom Provider</h2>
-              <div className="h-px bg-border/50 flex-1" />
-            </div>
-            
-            <Card className="p-4">
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex-1">
-                  <h3 className={`font-semibold ${CUSTOM_PROVIDER.color}`}>{CUSTOM_PROVIDER.name}</h3>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Configure any OpenAI-compatible API endpoint (Ollama, LM Studio, etc.)
-                  </p>
-                </div>
-                <Button
-                  onClick={() => handleSetupApiKey("custom")}
-                  variant="outline"
-                  size="sm"
-                >
-                  <Settings2 className="w-3.5 h-3.5 mr-1.5" />
-                  Configure
-                </Button>
-              </div>
-            </Card>
           </div>
 
           {/* Formatting Options */}
@@ -434,7 +450,7 @@ export function EnhancementsSection() {
       <OpenAICompatConfigModal
         isOpen={showOpenAIConfig}
         defaultBaseUrl={openAIDefaultBaseUrl}
-        defaultModel={aiSettings.provider === 'openai' || aiSettings.provider === 'custom' ? aiSettings.model : ''}
+        defaultModel={customModelName || ''}
         onClose={() => setShowOpenAIConfig(false)}
         onSubmit={async ({ baseUrl, model, apiKey }) => {
           try {
@@ -443,19 +459,24 @@ export function EnhancementsSection() {
             const trimmedModel = model.trim();
             const trimmedKey = apiKey?.trim() || '';
 
-            // Save OpenAI config
+            // Save OpenAI-compatible config (base URL)
             await invoke('set_openai_config', { args: { baseUrl: trimmedBase } });
 
-            // Save API key if provided
+            // Save API key under 'custom' provider
             if (trimmedKey) {
-              await keyringSet('ai_api_key_openai', trimmedKey);
+              await keyringSet('ai_api_key_custom', trimmedKey);
+              // Cache to backend as 'openai' since that's what the backend uses
               await invoke('cache_ai_api_key', { args: { provider: 'openai', apiKey: trimmedKey } });
             }
 
-            // Update settings
+            // Update settings - backend uses 'openai' provider for OpenAI-compatible APIs
             const nextEnabled = aiSettings.enabled || !aiSettings.model;
             await invoke('update_ai_settings', { enabled: nextEnabled, provider: 'openai', model: trimmedModel });
 
+            // Update local state
+            setCustomModelName(trimmedModel);
+            setOpenAIDefaultBaseUrl(trimmedBase);
+            
             setAISettings(prev => ({
               ...prev,
               enabled: nextEnabled,
@@ -464,9 +485,10 @@ export function EnhancementsSection() {
               hasApiKey: true
             }));
 
-            setProviderApiKeys(prev => ({ ...prev, openai: true }));
+            // Mark custom as configured (not openai)
+            setProviderApiKeys(prev => ({ ...prev, custom: true }));
 
-            toast.success('Configuration saved');
+            toast.success('Custom provider configured');
             setShowOpenAIConfig(false);
           } catch (error) {
             const message = getErrorMessage(error, 'Failed to save configuration');

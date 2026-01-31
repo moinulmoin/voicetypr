@@ -1,5 +1,5 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Check, ChevronDown, ExternalLink, Key, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, Key, Settings2, Trash2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import {
@@ -18,6 +18,8 @@ interface ProviderCardProps {
   onSetupApiKey: () => void;
   onRemoveApiKey: () => void;
   onSelectModel: (modelId: string) => void;
+  /** For custom providers - the configured model name to display */
+  customModelName?: string;
 }
 
 export function ProviderCard({
@@ -28,8 +30,10 @@ export function ProviderCard({
   onSetupApiKey,
   onRemoveApiKey,
   onSelectModel,
+  customModelName,
 }: ProviderCardProps) {
   const selectedModelData = provider.models.find((m) => m.id === selectedModel);
+  const isCustom = provider.isCustom;
 
   return (
     <Card
@@ -49,8 +53,8 @@ export function ProviderCard({
             )}
           </div>
 
-          {/* Model Selection Dropdown */}
-          {hasApiKey && (
+          {/* Model Selection Dropdown - for standard providers */}
+          {hasApiKey && !isCustom && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -99,9 +103,17 @@ export function ProviderCard({
             </DropdownMenu>
           )}
 
+          {/* Custom provider - show configured model or prompt */}
+          {isCustom && hasApiKey && customModelName && (
+            <p className="text-sm text-muted-foreground">
+              Model: <span className="text-foreground">{customModelName}</span>
+            </p>
+          )}
+
+          {/* Not configured prompt */}
           {!hasApiKey && (
             <p className="text-sm text-muted-foreground">
-              Add API key to enable
+              {isCustom ? "Configure endpoint to enable" : "Add API key to enable"}
             </p>
           )}
         </div>
@@ -109,36 +121,59 @@ export function ProviderCard({
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
           {hasApiKey ? (
-            <Button
-              onClick={async () => {
-                const confirmed = await ask(
-                  `Remove API key for ${provider.name}?`,
-                  { title: "Remove API Key", kind: "warning" }
-                );
-                if (confirmed) {
-                  onRemoveApiKey();
-                }
-              }}
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground hover:text-destructive"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </Button>
-          ) : (
             <>
+              {/* For custom providers, show Configure button to edit */}
+              {isCustom && (
+                <Button onClick={onSetupApiKey} variant="ghost" size="sm">
+                  <Settings2 className="w-3.5 h-3.5" />
+                </Button>
+              )}
               <Button
-                onClick={() => window.open(provider.apiKeyUrl, "_blank")}
+                onClick={async () => {
+                  const message = isCustom 
+                    ? `Remove configuration for ${provider.name}?`
+                    : `Remove API key for ${provider.name}?`;
+                  const confirmed = await ask(message, { 
+                    title: isCustom ? "Remove Configuration" : "Remove API Key", 
+                    kind: "warning" 
+                  });
+                  if (confirmed) {
+                    onRemoveApiKey();
+                  }
+                }}
                 variant="ghost"
                 size="sm"
-                className="text-muted-foreground"
-                title={`Get ${provider.name} API Key`}
+                className="text-muted-foreground hover:text-destructive"
               >
-                <ExternalLink className="w-3.5 h-3.5" />
+                <Trash2 className="w-3.5 h-3.5" />
               </Button>
+            </>
+          ) : (
+            <>
+              {/* External link only for standard providers */}
+              {!isCustom && provider.apiKeyUrl && (
+                <Button
+                  onClick={() => window.open(provider.apiKeyUrl, "_blank")}
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground"
+                  title={`Get ${provider.name} API Key`}
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </Button>
+              )}
               <Button onClick={onSetupApiKey} variant="outline" size="sm">
-                <Key className="w-3.5 h-3.5 mr-1.5" />
-                Add Key
+                {isCustom ? (
+                  <>
+                    <Settings2 className="w-3.5 h-3.5 mr-1.5" />
+                    Configure
+                  </>
+                ) : (
+                  <>
+                    <Key className="w-3.5 h-3.5 mr-1.5" />
+                    Add Key
+                  </>
+                )}
               </Button>
             </>
           )}

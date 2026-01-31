@@ -67,10 +67,9 @@ describe('EnhancementsSection', () => {
       expect(screen.getByText('Google Gemini')).toBeInTheDocument();
     }, { timeout: 5000 });
     
-    // Custom Provider is in a separate section
+    // Custom Provider is now in the same list
     await waitFor(() => {
-      const customProviderHeading = screen.getByRole('heading', { level: 2, name: /Custom Provider/i });
-      expect(customProviderHeading).toBeInTheDocument();
+      expect(screen.getByText('Custom (OpenAI-compatible)')).toBeInTheDocument();
     }, { timeout: 3000 });
   });
 
