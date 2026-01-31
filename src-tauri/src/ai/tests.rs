@@ -66,8 +66,8 @@ mod tests {
     #[test]
     fn test_ai_provider_config_serialization() {
         let config = AIProviderConfig {
-            provider: "groq".to_string(),
-            model: "llama-3.3-70b-versatile".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-4o-mini".to_string(),
             api_key: "secret_key".to_string(),
             enabled: true,
             options: HashMap::new(),
@@ -76,8 +76,8 @@ mod tests {
         // API key should not be serialized
         let serialized = serde_json::to_string(&config).unwrap();
         assert!(!serialized.contains("secret_key"));
-        assert!(serialized.contains("groq"));
-        assert!(serialized.contains("llama-3.3-70b-versatile"));
+        assert!(serialized.contains("openai"));
+        assert!(serialized.contains("gpt-4o-mini"));
     }
 
     #[test]

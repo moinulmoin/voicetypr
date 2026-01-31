@@ -5,7 +5,6 @@ use std::collections::HashMap;
 pub mod anthropic;
 pub mod config;
 pub mod gemini;
-pub mod groq;
 pub mod openai;
 pub mod prompts;
 
@@ -110,11 +109,6 @@ impl AIProviderFactory {
         }
 
         match config.provider.as_str() {
-            "groq" => Ok(Box::new(groq::GroqProvider::new(
-                config.api_key.clone(),
-                config.model.clone(),
-                config.options.clone(),
-            )?)),
             "gemini" => Ok(Box::new(gemini::GeminiProvider::new(
                 config.api_key.clone(),
                 config.model.clone(),
@@ -135,6 +129,6 @@ impl AIProviderFactory {
     }
 
     fn is_valid_provider(provider: &str) -> bool {
-        matches!(provider, "groq" | "gemini" | "openai" | "anthropic")
+        matches!(provider, "gemini" | "openai" | "anthropic")
     }
 }

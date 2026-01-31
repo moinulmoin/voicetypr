@@ -1,10 +1,12 @@
 use crate::ai::{AIEnhancementRequest, AIProviderConfig, AIProviderFactory, EnhancementOptions};
 use crate::commands::audio::pill_toast;
 use once_cell::sync::Lazy;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri_plugin_store::StoreExt;
 
 // In-memory cache for API keys to avoid system password prompts
@@ -50,7 +52,7 @@ lazy_static::lazy_static! {
 }
 
 // Supported AI providers
-const ALLOWED_PROVIDERS: &[&str] = &["groq", "gemini", "openai", "anthropic"];
+const ALLOWED_PROVIDERS: &[&str] = &["gemini", "openai", "anthropic"];
 
 fn validate_provider_name(provider: &str) -> Result<(), String> {
     // First check format
@@ -81,7 +83,7 @@ pub async fn get_ai_settings(app: tauri::AppHandle) -> Result<AISettings, String
     let provider = store
         .get("ai_provider")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "groq".to_string());
+        .unwrap_or_default(); // Empty by default, user must select
 
     let model = store
         .get("ai_model")
@@ -537,17 +539,17 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
     let provider = store
         .get("ai_provider")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "groq".to_string());
+        .unwrap_or_default(); // Empty by default
 
     let model = store
         .get("ai_model")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "".to_string()); // Empty by default
 
-    // Don't enhance if no model selected
-    if model.is_empty() {
+    // Don't enhance if no model or provider selected
+    if model.is_empty() || provider.is_empty() {
         log::warn!(
-            "AI enhancement enabled but no model selected. Provider: {}",
+            "AI enhancement enabled but no model/provider selected. Provider: {}",
             provider
         );
         return Ok(text);
@@ -585,7 +587,7 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
         opts.insert("no_auth".into(), serde_json::Value::Bool(cached.is_none()));
 
         (cached.unwrap_or_default(), opts)
-    } else if provider == "groq" || provider == "gemini" {
+    } else if provider == "gemini" || provider == "anthropic" {
         // Require API key from in-memory cache
         let cache = API_KEY_CACHE
             .lock()
@@ -715,19 +717,365 @@ pub async fn get_openai_config(app: tauri::AppHandle) -> Result<OpenAIConfig, St
     Ok(OpenAIConfig { base_url, no_auth })
 }
 
+// ============================================================================
+// Dynamic Model List API
+// ============================================================================
+
+/// A model available from a provider
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProviderModel {
+    pub id: String,
+    pub name: String,
+    pub recommended: bool,
+}
+
+/// Check if a model should be marked as recommended based on its ID
+fn is_recommended_model(provider: &str, model_id: &str) -> bool {
+    let id_lower = model_id.to_lowercase();
+    match provider {
+        "openai" => {
+            // Recommend mini/nano variants (cost-effective, fast)
+            (id_lower.contains("gpt-4o-mini") || id_lower.contains("gpt-4o-audio"))
+                || (id_lower.contains("gpt-5") && (id_lower.contains("mini") || id_lower.contains("nano")))
+        }
+        "anthropic" => {
+            // Recommend haiku (fast) and sonnet (balanced)
+            id_lower.contains("haiku") || id_lower.contains("sonnet")
+        }
+        "gemini" => {
+            // Recommend flash variants (fast, cost-effective)
+            id_lower.contains("flash") && !id_lower.contains("thinking")
+        }
+        _ => false,
+    }
+}
+
+/// Convert model ID to a display name
+fn model_id_to_display_name(provider: &str, model_id: &str) -> String {
+    match provider {
+        "openai" => {
+            // e.g., "gpt-4o-mini" -> "GPT-4o Mini"
+            model_id
+                .replace("gpt-", "GPT-")
+                .replace("-mini", " Mini")
+                .replace("-nano", " Nano")
+                .replace("-turbo", " Turbo")
+                .replace("-preview", " Preview")
+        }
+        "anthropic" => {
+            // e.g., "claude-3-5-sonnet-20241022" -> "Claude 3.5 Sonnet"
+            let parts: Vec<&str> = model_id.split('-').collect();
+            if parts.len() >= 4 {
+                let version = if parts.len() > 2 && parts[2].parse::<u32>().is_ok() {
+                    format!("{}.{}", parts[1], parts[2])
+                } else {
+                    parts[1].to_string()
+                };
+                let variant = parts.iter()
+                    .find(|p| ["haiku", "sonnet", "opus"].contains(&p.to_lowercase().as_str()))
+                    .map(|s| {
+                        let mut c = s.chars();
+                        match c.next() {
+                            None => String::new(),
+                            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                        }
+                    })
+                    .unwrap_or_default();
+                format!("Claude {} {}", version, variant)
+            } else {
+                model_id.to_string()
+            }
+        }
+        "gemini" => {
+            // e.g., "gemini-1.5-flash" -> "Gemini 1.5 Flash"
+            model_id
+                .replace("gemini-", "Gemini ")
+                .replace("-flash", " Flash")
+                .replace("-pro", " Pro")
+                .replace("-exp", " (Experimental)")
+                .replace("-preview", " Preview")
+                .replace("-lite", " Lite")
+        }
+        _ => model_id.to_string(),
+    }
+}
+
+/// Fetch models from OpenAI API
+async fn fetch_openai_models(api_key: &str) -> Result<Vec<ProviderModel>, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get("https://api.openai.com/v1/models")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch models: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("API error {}: {}", status, body.chars().take(200).collect::<String>()));
+    }
+
+    #[derive(Deserialize)]
+    struct OpenAIModelsResponse {
+        data: Vec<OpenAIModel>,
+    }
+
+    #[derive(Deserialize)]
+    struct OpenAIModel {
+        id: String,
+    }
+
+    let models_response: OpenAIModelsResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    // Filter to only GPT models suitable for chat/text formatting
+    let mut models: Vec<ProviderModel> = models_response
+        .data
+        .into_iter()
+        .filter(|m| {
+            let id = m.id.to_lowercase();
+            // Include GPT models, exclude embedding/whisper/dall-e/tts models
+            (id.starts_with("gpt-") || id.starts_with("o1") || id.starts_with("o3"))
+                && !id.contains("instruct")
+                && !id.contains("vision")
+                && !id.contains("realtime")
+        })
+        .map(|m| ProviderModel {
+            name: model_id_to_display_name("openai", &m.id),
+            recommended: is_recommended_model("openai", &m.id),
+            id: m.id,
+        })
+        .collect();
+
+    // Sort: recommended first, then alphabetically
+    models.sort_by(|a, b| {
+        b.recommended.cmp(&a.recommended).then_with(|| a.id.cmp(&b.id))
+    });
+
+    Ok(models)
+}
+
+/// Fetch models from Anthropic API
+async fn fetch_anthropic_models(api_key: &str) -> Result<Vec<ProviderModel>, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get("https://api.anthropic.com/v1/models")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch models: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("API error {}: {}", status, body.chars().take(200).collect::<String>()));
+    }
+
+    #[derive(Deserialize)]
+    struct AnthropicModelsResponse {
+        data: Vec<AnthropicModel>,
+    }
+
+    #[derive(Deserialize)]
+    struct AnthropicModel {
+        id: String,
+        #[serde(default)]
+        display_name: Option<String>,
+    }
+
+    let models_response: AnthropicModelsResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    let mut models: Vec<ProviderModel> = models_response
+        .data
+        .into_iter()
+        .filter(|m| m.id.starts_with("claude-"))
+        .map(|m| ProviderModel {
+            name: m.display_name.unwrap_or_else(|| model_id_to_display_name("anthropic", &m.id)),
+            recommended: is_recommended_model("anthropic", &m.id),
+            id: m.id,
+        })
+        .collect();
+
+    // Sort: recommended first, then alphabetically
+    models.sort_by(|a, b| {
+        b.recommended.cmp(&a.recommended).then_with(|| a.id.cmp(&b.id))
+    });
+
+    Ok(models)
+}
+
+/// Fetch models from Google Gemini API
+async fn fetch_gemini_models(api_key: &str) -> Result<Vec<ProviderModel>, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models?key={}",
+        api_key
+    );
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch models: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("API error {}: {}", status, body.chars().take(200).collect::<String>()));
+    }
+
+    #[derive(Deserialize)]
+    struct GeminiModelsResponse {
+        models: Vec<GeminiModel>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct GeminiModel {
+        name: String,
+        #[serde(default)]
+        display_name: Option<String>,
+        #[serde(default)]
+        supported_generation_methods: Vec<String>,
+    }
+
+    let models_response: GeminiModelsResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    let mut models: Vec<ProviderModel> = models_response
+        .models
+        .into_iter()
+        .filter(|m| {
+            // Only include models that support generateContent (chat/text generation)
+            // and are gemini models (not embedding, etc.)
+            let name_lower = m.name.to_lowercase();
+            name_lower.contains("gemini")
+                && m.supported_generation_methods.iter().any(|method| method == "generateContent")
+                && !name_lower.contains("embedding")
+                && !name_lower.contains("aqa")
+        })
+        .map(|m| {
+            // Extract model ID from "models/gemini-1.5-flash" -> "gemini-1.5-flash"
+            let id = m.name.strip_prefix("models/").unwrap_or(&m.name).to_string();
+            ProviderModel {
+                name: m.display_name.unwrap_or_else(|| model_id_to_display_name("gemini", &id)),
+                recommended: is_recommended_model("gemini", &id),
+                id,
+            }
+        })
+        .collect();
+
+    // Sort: recommended first, then alphabetically
+    models.sort_by(|a, b| {
+        b.recommended.cmp(&a.recommended).then_with(|| a.id.cmp(&b.id))
+    });
+
+    Ok(models)
+}
+
+/// List available models for a provider
+/// Requires API key to be cached first
+#[tauri::command]
+pub async fn list_provider_models(
+    provider: String,
+    _app: tauri::AppHandle,
+) -> Result<Vec<ProviderModel>, String> {
+    // Validate provider
+    if !["openai", "anthropic", "gemini"].contains(&provider.as_str()) {
+        return Err(format!("Unsupported provider for model listing: {}", provider));
+    }
+
+    // Get API key from cache
+    let api_key = {
+        let cache = API_KEY_CACHE
+            .lock()
+            .map_err(|_| "Failed to access cache".to_string())?;
+        let key_name = format!("ai_api_key_{}", provider);
+        cache.get(&key_name).cloned()
+    };
+
+    let api_key = api_key.ok_or_else(|| {
+        format!("No API key found for {}. Please add an API key first.", provider)
+    })?;
+
+    log::info!("Fetching models for provider: {}", provider);
+
+    let models = match provider.as_str() {
+        "openai" => fetch_openai_models(&api_key).await?,
+        "anthropic" => fetch_anthropic_models(&api_key).await?,
+        "gemini" => fetch_gemini_models(&api_key).await?,
+        _ => return Err("Unsupported provider".to_string()),
+    };
+
+    log::info!("Found {} models for provider {}", models.len(), provider);
+
+    Ok(models)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_provider_validation() {
-        assert!(validate_provider_name("groq").is_ok());
+        // Valid providers
         assert!(validate_provider_name("gemini").is_ok());
         assert!(validate_provider_name("openai").is_ok());
+        assert!(validate_provider_name("anthropic").is_ok());
+        
+        // Groq is no longer supported
+        assert!(validate_provider_name("groq").is_err());
+        
+        // Invalid formats
         assert!(validate_provider_name("test-provider").is_err());
         assert!(validate_provider_name("test_provider").is_err());
         assert!(validate_provider_name("test provider").is_err());
         assert!(validate_provider_name("test@provider").is_err());
         assert!(validate_provider_name("").is_err());
+    }
+
+    #[test]
+    fn test_is_recommended_model() {
+        // OpenAI
+        assert!(is_recommended_model("openai", "gpt-4o-mini"));
+        assert!(is_recommended_model("openai", "gpt-5-nano"));
+        assert!(!is_recommended_model("openai", "gpt-4-turbo"));
+        
+        // Anthropic
+        assert!(is_recommended_model("anthropic", "claude-3-5-haiku-20241022"));
+        assert!(is_recommended_model("anthropic", "claude-3-5-sonnet-20241022"));
+        assert!(!is_recommended_model("anthropic", "claude-3-opus-20240229"));
+        
+        // Gemini
+        assert!(is_recommended_model("gemini", "gemini-1.5-flash"));
+        assert!(is_recommended_model("gemini", "gemini-2.0-flash-exp"));
+        assert!(!is_recommended_model("gemini", "gemini-1.5-pro"));
+    }
+
+    #[test]
+    fn test_model_id_to_display_name() {
+        assert_eq!(model_id_to_display_name("openai", "gpt-4o-mini"), "GPT-4o Mini");
+        assert_eq!(model_id_to_display_name("gemini", "gemini-1.5-flash"), "Gemini 1.5 Flash");
     }
 }

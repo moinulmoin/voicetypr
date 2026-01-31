@@ -1,14 +1,15 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Check, ChevronDown, ExternalLink, Key, Settings2, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, Key, Loader2, RefreshCw, Settings2, Star, Trash2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
-import type { AIProviderConfig } from "@/types/providers";
+import type { AIProviderConfig, AIProviderModel } from "@/types/providers";
 
 interface ProviderCardProps {
   provider: AIProviderConfig;
@@ -18,6 +19,14 @@ interface ProviderCardProps {
   onSetupApiKey: () => void;
   onRemoveApiKey: () => void;
   onSelectModel: (modelId: string) => void;
+  /** Dynamic models fetched from API */
+  models: AIProviderModel[];
+  /** Loading state for model fetch */
+  modelsLoading: boolean;
+  /** Error state for model fetch */
+  modelsError: string | null;
+  /** Callback to refresh models */
+  onRefreshModels: () => void;
   /** For custom providers - the configured model name to display */
   customModelName?: string;
 }
@@ -30,10 +39,21 @@ export function ProviderCard({
   onSetupApiKey,
   onRemoveApiKey,
   onSelectModel,
+  models,
+  modelsLoading,
+  modelsError,
+  onRefreshModels,
   customModelName,
 }: ProviderCardProps) {
-  const selectedModelData = provider.models.find((m) => m.id === selectedModel);
+  const selectedModelData = models.find((m) => m.id === selectedModel);
   const isCustom = provider.isCustom;
+
+  // Handle dropdown open - fetch models if not already loaded
+  const handleDropdownOpenChange = (open: boolean) => {
+    if (open && hasApiKey && !isCustom && models.length === 0 && !modelsLoading) {
+      onRefreshModels();
+    }
+  };
 
   return (
     <Card
@@ -55,15 +75,23 @@ export function ProviderCard({
 
           {/* Model Selection Dropdown - for standard providers */}
           {hasApiKey && !isCustom && (
-            <DropdownMenu>
+            <DropdownMenu onOpenChange={handleDropdownOpenChange}>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="sm"
                   className="h-7 px-2 text-sm text-muted-foreground hover:text-foreground"
                 >
-                  {selectedModelData ? (
+                  {modelsLoading ? (
                     <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                      Loading...
+                    </>
+                  ) : selectedModelData ? (
+                    <>
+                      {selectedModelData.recommended && (
+                        <Star className="w-3 h-3 text-amber-500 fill-amber-500 mr-1" />
+                      )}
                       <span className="truncate max-w-[180px]">
                         {selectedModelData.name}
                       </span>
@@ -77,8 +105,65 @@ export function ProviderCard({
                   )}
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-64">
-                {provider.models.map((model) => (
+              <DropdownMenuContent align="start" className="w-72">
+                {/* Refresh button header */}
+                <div className="flex items-center justify-between px-2 py-1.5">
+                  <span className="text-xs text-muted-foreground font-medium">
+                    Available Models
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onRefreshModels();
+                    }}
+                    disabled={modelsLoading}
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${modelsLoading ? 'animate-spin' : ''}`} />
+                  </Button>
+                </div>
+                <DropdownMenuSeparator />
+
+                {/* Loading state */}
+                {modelsLoading && models.length === 0 && (
+                  <div className="flex items-center justify-center py-4 text-muted-foreground">
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    <span className="text-sm">Loading models...</span>
+                  </div>
+                )}
+
+                {/* Error state */}
+                {modelsError && (
+                  <div className="px-2 py-3 text-center">
+                    <p className="text-sm text-destructive">{modelsError}</p>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mt-2"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onRefreshModels();
+                      }}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 mr-1" />
+                      Retry
+                    </Button>
+                  </div>
+                )}
+
+                {/* Empty state */}
+                {!modelsLoading && !modelsError && models.length === 0 && (
+                  <div className="px-2 py-3 text-center text-sm text-muted-foreground">
+                    No models available
+                  </div>
+                )}
+
+                {/* Model list */}
+                {models.map((model) => (
                   <DropdownMenuItem
                     key={model.id}
                     onClick={() => onSelectModel(model.id)}
@@ -86,16 +171,17 @@ export function ProviderCard({
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="font-medium">{model.name}</span>
+                        {model.recommended && (
+                          <Star className="w-3 h-3 text-amber-500 fill-amber-500 flex-shrink-0" />
+                        )}
+                        <span className="font-medium truncate">{model.name}</span>
                         {selectedModel === model.id && (
-                          <Check className="w-3.5 h-3.5 text-primary" />
+                          <Check className="w-3.5 h-3.5 text-primary flex-shrink-0" />
                         )}
                       </div>
-                      {model.description && (
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {model.description}
-                        </p>
-                      )}
+                      <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                        {model.id}
+                      </p>
                     </div>
                   </DropdownMenuItem>
                 ))}

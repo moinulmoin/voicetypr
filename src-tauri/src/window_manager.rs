@@ -1,3 +1,4 @@
+use crate::commands::settings::{DEFAULT_INDICATOR_OFFSET, MAX_INDICATOR_OFFSET, MIN_INDICATOR_OFFSET};
 use crate::utils::logger::*;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -602,10 +603,10 @@ impl WindowManager {
             store
                 .get("pill_indicator_offset")
                 .and_then(|v| v.as_u64())
-                .map(|v| v.clamp(10, 100) as f64)
-                .unwrap_or(10.0)
+                .map(|v| v.clamp(MIN_INDICATOR_OFFSET as u64, MAX_INDICATOR_OFFSET as u64) as f64)
+                .unwrap_or(DEFAULT_INDICATOR_OFFSET as f64)
         } else {
-            10.0
+            DEFAULT_INDICATOR_OFFSET as f64
         }
     }
 

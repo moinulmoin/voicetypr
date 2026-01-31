@@ -52,8 +52,8 @@ use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
         get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
-        set_openai_config, test_openai_endpoint, update_ai_settings, update_enhancement_options,
-        validate_and_cache_api_key,
+        list_provider_models, set_openai_config, test_openai_endpoint, update_ai_settings,
+        update_enhancement_options, validate_and_cache_api_key,
     },
     audio::*,
     clipboard::{copy_image_to_clipboard, save_image_to_file},
@@ -1104,6 +1104,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             disable_ai_enhancement,
             get_enhancement_options,
             update_enhancement_options,
+            list_provider_models,
             keyring_set,
             keyring_get,
             keyring_delete,

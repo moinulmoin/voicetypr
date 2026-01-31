@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import type { EnhancementOptions } from "@/types/ai";
 import { fromBackendOptions, toBackendOptions } from "@/types/ai";
 import { AI_PROVIDERS } from "@/types/providers";
+import { useAllProviderModels } from "@/hooks/useProviderModels";
 import { hasApiKey, removeApiKey, saveApiKey, getApiKey, keyringSet } from "@/utils/keyring";
 import { getErrorMessage } from "@/utils/error";
 import { useReadinessState } from "@/contexts/ReadinessContext";
@@ -26,6 +27,7 @@ interface AISettings {
 
 export function EnhancementsSection() {
   const readiness = useReadinessState();
+  const { fetchModels, getModels, isLoading: isModelsLoading, getError, clearModels } = useAllProviderModels();
   
   const [aiSettings, setAISettings] = useState<AISettings>({
     enabled: false,
@@ -136,7 +138,7 @@ export function EnhancementsSection() {
       const settings = await invoke<AISettings>("get_ai_settings");
       setAISettings(settings);
       
-      const provider = (event.payload as any).provider;
+      const provider = (event.payload as { provider?: string }).provider;
       if (provider) {
         setProviderApiKeys(prev => ({ ...prev, [provider]: true }));
       }
@@ -145,6 +147,9 @@ export function EnhancementsSection() {
     const unlistenApiKeyRemoved = listen<{ provider: string }>('api-key-removed', async (event) => {
       console.log('[AI Settings] API key removed:', event.payload.provider);
       setProviderApiKeys(prev => ({ ...prev, [event.payload.provider]: false }));
+      
+      // Clear cached models for removed provider
+      clearModels(event.payload.provider);
       
       // If removed provider is currently selected, clear selection
       if (aiSettings.provider === event.payload.provider) {
@@ -165,7 +170,7 @@ export function EnhancementsSection() {
     });
 
     const unlistenFormattingError = listen<string>('formatting-error', async (event) => {
-      const msg = (event.payload as any) || 'Formatting failed';
+      const msg = event.payload || 'Formatting failed';
       toast.error(typeof msg === 'string' ? msg : 'Formatting failed');
     });
 
@@ -174,7 +179,7 @@ export function EnhancementsSection() {
         fns.forEach(fn => fn());
       });
     };
-  }, [settingsLoaded, aiSettings.provider]);
+  }, [settingsLoaded, aiSettings.provider, clearModels]);
 
   const handleEnhancementOptionsChange = async (newOptions: typeof enhancementOptions) => {
     setEnhancementOptions(newOptions);
@@ -236,28 +241,13 @@ export function EnhancementsSection() {
       // Update provider key status
       setProviderApiKeys(prev => ({ ...prev, [selectedProvider]: true }));
 
-      // Find the provider's first model to auto-select
-      const provider = AI_PROVIDERS.find(p => p.id === selectedProvider);
-      const firstModel = provider?.models[0];
-
-      if (firstModel) {
-        // Auto-select first model and enable if not already set
-        const shouldEnable = aiSettings.enabled || !aiSettings.model;
-        
-        await invoke("update_ai_settings", {
-          enabled: shouldEnable,
-          provider: selectedProvider,
-          model: firstModel.id
-        });
-
-        setAISettings(prev => ({
-          ...prev,
-          enabled: shouldEnable,
-          provider: selectedProvider,
-          model: firstModel.id,
-          hasApiKey: true
-        }));
-      }
+      // Don't auto-select model - user will do it from dropdown
+      // Just update the provider
+      setAISettings(prev => ({
+        ...prev,
+        provider: selectedProvider,
+        hasApiKey: true
+      }));
 
       setShowApiKeyModal(false);
       toast.success("API key saved securely");
@@ -272,6 +262,8 @@ export function EnhancementsSection() {
   const handleRemoveApiKey = async (providerId: string) => {
     try {
       await removeApiKey(providerId);
+      // Clear cached models
+      clearModels(providerId);
       toast.success("API key removed");
     } catch (error) {
       const message = getErrorMessage(error, "Failed to remove API key");
@@ -322,10 +314,9 @@ export function EnhancementsSection() {
   );
 
   // Get active model name for display
-  const activeProvider = AI_PROVIDERS.find(p => p.id === aiSettings.provider);
   const activeModelName = isUsingCustomProvider 
     ? customModelName 
-    : activeProvider?.models.find(m => m.id === aiSettings.model)?.name;
+    : getModels(aiSettings.provider).find(m => m.id === aiSettings.model)?.name || aiSettings.model;
 
   return (
     <div className="h-full flex flex-col">
@@ -392,6 +383,10 @@ export function EnhancementsSection() {
                     onSetupApiKey={() => handleSetupApiKey(provider.id)}
                     onRemoveApiKey={() => handleRemoveApiKey(provider.id)}
                     onSelectModel={(modelId) => handleSelectModel(provider.id, modelId)}
+                    models={getModels(provider.id)}
+                    modelsLoading={isModelsLoading(provider.id)}
+                    modelsError={getError(provider.id)}
+                    onRefreshModels={() => fetchModels(provider.id)}
                     customModelName={provider.isCustom ? customModelName : undefined}
                   />
                 );

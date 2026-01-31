@@ -10,6 +10,11 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use tauri_plugin_store::StoreExt;
 
+// Recording indicator offset constants (in pixels)
+pub const MIN_INDICATOR_OFFSET: u32 = 10;
+pub const MAX_INDICATOR_OFFSET: u32 = 50;
+pub const DEFAULT_INDICATOR_OFFSET: u32 = 10;
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub hotkey: String,
@@ -63,7 +68,7 @@ impl Default for Settings {
             play_sound_on_recording_end: true,    // Default to playing sound on recording end
             pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
             pill_indicator_position: "bottom-center".to_string(), // Default to bottom center of screen
-            pill_indicator_offset: 10, // Default 10 pixels from screen edge
+            pill_indicator_offset: DEFAULT_INDICATOR_OFFSET,
         }
     }
 }
@@ -231,7 +236,7 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
         pill_indicator_offset: store
             .get("pill_indicator_offset")
             .and_then(|v| v.as_u64())
-            .map(|v| v.clamp(10, 100) as u32)
+            .map(|v| v.clamp(MIN_INDICATOR_OFFSET as u64, MAX_INDICATOR_OFFSET as u64) as u32)
             .unwrap_or_else(|| Settings::default().pill_indicator_offset),
     };
 
@@ -317,7 +322,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     );
     store.set(
         "pill_indicator_offset",
-        json!(settings.pill_indicator_offset.clamp(10, 100)),
+        json!(settings.pill_indicator_offset.clamp(MIN_INDICATOR_OFFSET, MAX_INDICATOR_OFFSET)),
     );
 
     // Save pill position if provided

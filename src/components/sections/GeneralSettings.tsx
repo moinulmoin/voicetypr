@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
@@ -450,21 +451,18 @@ export function GeneralSettings() {
                         Distance from screen edge ({settings.pill_indicator_offset ?? 10}px)
                       </p>
                     </div>
-                    <div className="flex items-center gap-3 w-[160px]">
-                      <input
+                    <div className="flex items-center gap-3 w-[140px]">
+                      <Slider
                         id="pill-indicator-offset"
-                        type="range"
                         min={10}
-                        max={100}
+                        max={50}
                         step={5}
-                        value={settings.pill_indicator_offset ?? 10}
-                        onChange={async (e) => {
-                          const value = parseInt(e.target.value, 10);
+                        value={[settings.pill_indicator_offset ?? 10]}
+                        onValueChange={async ([value]) => {
                           await updateSettings({
                             pill_indicator_offset: value,
                           });
                         }}
-                        className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
                       />
                     </div>
                   </div>
