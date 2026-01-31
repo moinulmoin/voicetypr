@@ -65,6 +65,8 @@ export interface AppSettings {
   pill_indicator_mode?: PillIndicatorMode;
   // Pill indicator screen position
   pill_indicator_position?: PillIndicatorPosition;
+  // Pill indicator offset from screen edge in pixels (10-100)
+  pill_indicator_offset?: number;
 }
 
 export interface TranscriptionHistory {

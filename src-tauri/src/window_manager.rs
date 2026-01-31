@@ -9,10 +9,14 @@ pub struct WindowManager {
     pill_window: Arc<Mutex<Option<WebviewWindow>>>,
 }
 
-fn calculate_pill_position(position: &str, screen_width: f64, screen_height: f64) -> (f64, f64) {
+fn calculate_pill_position(
+    position: &str,
+    screen_width: f64,
+    screen_height: f64,
+    edge_offset: f64,
+) -> (f64, f64) {
     let pill_width = 80.0;
     let pill_height = 40.0;
-    let edge_offset = 10.0; // Distance from screen edges
 
     // Horizontal position: left, center, or right
     let x = if position.ends_with("-left") {
@@ -585,26 +589,42 @@ impl WindowManager {
             store
                 .get("pill_indicator_position")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| "bottom".to_string())
+                .unwrap_or_else(|| "bottom-center".to_string())
         } else {
-            "bottom".to_string()
+            "bottom-center".to_string()
+        }
+    }
+
+    /// Get the current pill indicator offset from settings (in pixels)
+    fn get_pill_offset_setting(&self) -> f64 {
+        use tauri_plugin_store::StoreExt;
+        if let Ok(store) = self.app_handle.store("settings") {
+            store
+                .get("pill_indicator_offset")
+                .and_then(|v| v.as_u64())
+                .map(|v| v.clamp(10, 100) as f64)
+                .unwrap_or(10.0)
+        } else {
+            10.0
         }
     }
 
     /// Calculate position for pill window based on position setting
     /// position: "top", "center", or "bottom"
     fn calculate_position_for(&self, position: &str) -> (f64, f64) {
-        // Get screen dimensions
+        // Get screen dimensions and offset
         let (screen_width, screen_height) = self.get_screen_dimensions();
-        let (x, y) = calculate_pill_position(position, screen_width, screen_height);
+        let edge_offset = self.get_pill_offset_setting();
+        let (x, y) = calculate_pill_position(position, screen_width, screen_height, edge_offset);
 
         log::info!(
-            "Calculated pill position: ({}, {}) for '{}' on {}x{} screen",
+            "Calculated pill position: ({}, {}) for '{}' on {}x{} screen with offset {}",
             x,
             y,
             position,
             screen_width,
-            screen_height
+            screen_height,
+            edge_offset
         );
         (x, y)
     }
@@ -720,50 +740,58 @@ mod tests {
 
     #[test]
     fn calculate_pill_position_top_left() {
-        let (x, y) = calculate_pill_position("top-left", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("top-left", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 10.0);
         assert_eq!(y, 10.0);
     }
 
     #[test]
     fn calculate_pill_position_top_center() {
-        let (x, y) = calculate_pill_position("top-center", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("top-center", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 920.0);
         assert_eq!(y, 10.0);
     }
 
     #[test]
     fn calculate_pill_position_top_right() {
-        let (x, y) = calculate_pill_position("top-right", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("top-right", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 1830.0);
         assert_eq!(y, 10.0);
     }
 
     #[test]
     fn calculate_pill_position_bottom_left() {
-        let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 10.0);
         assert_eq!(y, 1030.0);
     }
 
     #[test]
     fn calculate_pill_position_bottom_center() {
-        let (x, y) = calculate_pill_position("bottom-center", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("bottom-center", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 920.0);
         assert_eq!(y, 1030.0);
     }
 
     #[test]
     fn calculate_pill_position_bottom_right() {
-        let (x, y) = calculate_pill_position("bottom-right", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("bottom-right", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 1830.0);
         assert_eq!(y, 1030.0);
     }
 
     #[test]
     fn calculate_pill_position_defaults_to_bottom_center() {
-        let (x, y) = calculate_pill_position("unknown", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("unknown", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 920.0);
         assert_eq!(y, 1030.0);
+    }
+
+    #[test]
+    fn calculate_pill_position_with_custom_offset() {
+        // Test with 50px offset
+        let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0, 50.0);
+        assert_eq!(x, 50.0);
+        assert_eq!(y, 990.0); // 1080 - 40 - 50
     }
 }

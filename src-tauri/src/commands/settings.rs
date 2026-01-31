@@ -36,6 +36,8 @@ pub struct Settings {
     pub pill_indicator_mode: String,
     // Pill indicator screen position: "top", "center", or "bottom"
     pub pill_indicator_position: String,
+    // Pill indicator offset from screen edge in pixels (10-100)
+    pub pill_indicator_offset: u32,
 }
 
 impl Default for Settings {
@@ -61,6 +63,7 @@ impl Default for Settings {
             play_sound_on_recording_end: true,    // Default to playing sound on recording end
             pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
             pill_indicator_position: "bottom-center".to_string(), // Default to bottom center of screen
+            pill_indicator_offset: 10, // Default 10 pixels from screen edge
         }
     }
 }
@@ -225,6 +228,11 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("pill_indicator_position")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().pill_indicator_position),
+        pill_indicator_offset: store
+            .get("pill_indicator_offset")
+            .and_then(|v| v.as_u64())
+            .map(|v| v.clamp(10, 100) as u32)
+            .unwrap_or_else(|| Settings::default().pill_indicator_offset),
     };
 
     Ok(settings)
@@ -306,6 +314,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set(
         "pill_indicator_position",
         json!(settings.pill_indicator_position),
+    );
+    store.set(
+        "pill_indicator_offset",
+        json!(settings.pill_indicator_offset.clamp(10, 100)),
     );
 
     // Save pill position if provided
@@ -486,6 +498,28 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
                 log::warn!("Failed to show pill window at new position: {}", e);
             }
             log::info!("Recreated pill window at new position: {}", settings.pill_indicator_position);
+        }
+    }
+
+    // Handle pill window offset change - reposition the pill window
+    let old_pill_indicator_offset = store
+        .get("pill_indicator_offset")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or_else(|| Settings::default().pill_indicator_offset);
+
+    if old_pill_indicator_offset != settings.pill_indicator_offset {
+        log::info!(
+            "Pill indicator offset changed from {} to {}",
+            old_pill_indicator_offset,
+            settings.pill_indicator_offset
+        );
+
+        // Reposition the pill window if it's currently visible
+        let window_manager = app.state::<crate::WindowManager>();
+        if window_manager.has_pill_window() {
+            window_manager.reposition_floating_windows_with_position(&settings.pill_indicator_position);
+            log::info!("Repositioned pill window with new offset: {}", settings.pill_indicator_offset);
         }
     }
 

@@ -9,7 +9,8 @@ const baseSettings = {
   keep_transcription_in_clipboard: false,
   play_sound_on_recording: true,
   pill_indicator_mode: 'when_recording',
-  pill_indicator_position: 'bottom-center'
+  pill_indicator_position: 'bottom-center',
+  pill_indicator_offset: 10
 };
 
 let mockSettings = { ...baseSettings };
