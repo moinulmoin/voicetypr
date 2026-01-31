@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeneralSettings } from '../GeneralSettings';
 
@@ -9,7 +9,7 @@ const baseSettings = {
   keep_transcription_in_clipboard: false,
   play_sound_on_recording: true,
   pill_indicator_mode: 'when_recording',
-  pill_indicator_position: 'bottom'
+  pill_indicator_position: 'bottom-center'
 };
 
 let mockSettings = { ...baseSettings };
@@ -57,11 +57,17 @@ vi.mock('@/components/ui/toggle-group', () => ({
 }));
 
 vi.mock('@/components/ui/select', () => ({
-  Select: ({ children }: { children: any }) => <div>{children}</div>,
-  SelectTrigger: ({ children }: { children: any }) => <div>{children}</div>,
+  Select: ({ children, value, onValueChange }: { children: any; value?: string; onValueChange?: (v: string) => void }) => (
+    <div data-testid="select" data-value={value} onClick={() => onValueChange?.('top-center')}>
+      {children}
+    </div>
+  ),
+  SelectTrigger: ({ children }: { children: any }) => <div data-testid="select-trigger">{children}</div>,
   SelectContent: ({ children }: { children: any }) => <div>{children}</div>,
-  SelectItem: ({ children }: { children: any }) => <div>{children}</div>,
-  SelectValue: () => <div />
+  SelectItem: ({ children, value }: { children: any; value: string }) => (
+    <div data-testid={`select-item-${value}`}>{children}</div>
+  ),
+  SelectValue: () => <div data-testid="select-value" />
 }));
 
 vi.mock('@/components/MicrophoneSelection', () => ({
@@ -90,5 +96,27 @@ describe('GeneralSettings recording indicator', () => {
     await waitFor(() => {
       expect(screen.getByText('Indicator Position')).toBeInTheDocument();
     });
+  });
+
+  it('calls updateSettings when position is changed', async () => {
+    mockSettings.pill_indicator_mode = 'always';
+    render(<GeneralSettings />);
+    
+    await waitFor(() => {
+      expect(screen.getByText('Indicator Position')).toBeInTheDocument();
+    });
+
+    // Find the position select (second select on the page, after visibility mode)
+    const selects = screen.getAllByTestId('select');
+    const positionSelect = selects.find(s => s.getAttribute('data-value')?.includes('center'));
+    
+    if (positionSelect) {
+      fireEvent.click(positionSelect);
+      await waitFor(() => {
+        expect(mockUpdateSettings).toHaveBeenCalledWith({
+          pill_indicator_position: 'top-center'
+        });
+      });
+    }
   });
 });
