@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod anthropic;
 pub mod config;
 pub mod gemini;
 pub mod groq;
@@ -124,11 +125,16 @@ impl AIProviderFactory {
                 config.model.clone(),
                 config.options.clone(),
             )?)),
+            "anthropic" => Ok(Box::new(anthropic::AnthropicProvider::new(
+                config.api_key.clone(),
+                config.model.clone(),
+                config.options.clone(),
+            )?)),
             provider => Err(AIError::ProviderNotFound(provider.to_string())),
         }
     }
 
     fn is_valid_provider(provider: &str) -> bool {
-        matches!(provider, "groq" | "gemini" | "openai")
+        matches!(provider, "groq" | "gemini" | "openai" | "anthropic")
     }
 }

@@ -50,7 +50,7 @@ lazy_static::lazy_static! {
 }
 
 // Supported AI providers
-const ALLOWED_PROVIDERS: &[&str] = &["groq", "gemini", "openai"];
+const ALLOWED_PROVIDERS: &[&str] = &["groq", "gemini", "openai", "anthropic"];
 
 fn validate_provider_name(provider: &str) -> Result<(), String> {
     // First check format

@@ -6,37 +6,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-// Supported Gemini models
-const SUPPORTED_MODELS: &[&str] = &[
-    "gemini-2.0-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-3-flash",
-    "gemini-3-flash-preview",
-];
-
-pub struct GeminiProvider {
-    #[allow(dead_code)]
+pub struct AnthropicProvider {
     api_key: String,
     model: String,
     client: Client,
-    base_url: String,
     options: HashMap<String, serde_json::Value>,
 }
 
-impl GeminiProvider {
+impl AnthropicProvider {
     pub fn new(
         api_key: String,
         model: String,
         options: HashMap<String, serde_json::Value>,
     ) -> Result<Self, AIError> {
-        // Validate model
-        if !SUPPORTED_MODELS.contains(&model.as_str()) {
-            return Err(AIError::ValidationError(format!(
-                "Unsupported model: {}",
-                model
-            )));
-        }
-
         // Validate API key format (basic check)
         if api_key.trim().is_empty() || api_key.len() < MIN_API_KEY_LENGTH {
             return Err(AIError::ValidationError(
@@ -53,15 +35,14 @@ impl GeminiProvider {
             api_key,
             model,
             client,
-            base_url: "https://generativelanguage.googleapis.com/v1beta/models".to_string(),
             options,
         })
     }
 
     async fn make_request_with_retry(
         &self,
-        request: &GeminiRequest,
-    ) -> Result<GeminiResponse, AIError> {
+        request: &AnthropicRequest,
+    ) -> Result<AnthropicResponse, AIError> {
         let mut last_error = None;
 
         for attempt in 1..=MAX_RETRIES {
@@ -86,14 +67,13 @@ impl GeminiProvider {
 
     async fn make_single_request(
         &self,
-        request: &GeminiRequest,
-    ) -> Result<GeminiResponse, AIError> {
-        let url = format!("{}/{}:generateContent", self.base_url, self.model);
-
+        request: &AnthropicRequest,
+    ) -> Result<AnthropicResponse, AIError> {
         let response = self
             .client
-            .post(&url)
-            .header("x-goog-api-key", &self.api_key)
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
             .header("Content-Type", "application/json")
             .json(request)
             .send()
@@ -102,7 +82,6 @@ impl GeminiProvider {
 
         let status = response.status();
 
-        // Handle rate limiting
         if status.as_u16() == 429 {
             return Err(AIError::RateLimitExceeded);
         }
@@ -126,48 +105,40 @@ impl GeminiProvider {
 }
 
 #[derive(Serialize)]
-struct GeminiRequest {
-    contents: Vec<Content>,
+struct AnthropicRequest {
+    model: String,
+    max_tokens: u32,
+    messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    generation_config: Option<GenerationConfig>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Content {
-    parts: Vec<Part>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Part {
-    text: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GenerationConfig {
+    system: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_output_tokens: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Message {
+    role: String,
+    content: String,
 }
 
 #[derive(Deserialize)]
-struct GeminiResponse {
-    candidates: Vec<Candidate>,
+struct AnthropicResponse {
+    content: Vec<ContentBlock>,
 }
 
 #[derive(Deserialize)]
-struct Candidate {
-    content: Content,
+struct ContentBlock {
+    #[serde(rename = "type")]
+    content_type: String,
+    text: Option<String>,
 }
 
 #[async_trait]
-impl AIProvider for GeminiProvider {
+impl AIProvider for AnthropicProvider {
     async fn enhance_text(
         &self,
         request: AIEnhancementRequest,
     ) -> Result<AIEnhancementResponse, AIError> {
-        // Validate request
         request.validate()?;
 
         let prompt = prompts::build_enhancement_prompt(
@@ -188,35 +159,32 @@ impl AIProvider for GeminiProvider {
             .options
             .get("max_tokens")
             .and_then(|v| v.as_u64())
-            .map(|v| v as u32);
+            .map(|v| v as u32)
+            .unwrap_or(4096);
 
-        let generation_config = GenerationConfig {
-            temperature: Some(temperature.clamp(0.0, 2.0)),
-            max_output_tokens: max_tokens,
-        };
-
-        let gemini_request = GeminiRequest {
-            contents: vec![Content {
-                parts: vec![Part { text: prompt }],
+        let request_body = AnthropicRequest {
+            model: self.model.clone(),
+            max_tokens,
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: prompt,
             }],
-            generation_config: Some(generation_config),
+            system: Some("You are a careful text formatter that only returns the cleaned text per the provided rules.".to_string()),
+            temperature: Some(temperature.clamp(0.0, 1.0)),
         };
 
-        let gemini_response = self.make_request_with_retry(&gemini_request).await?;
+        let api_response = self.make_request_with_retry(&request_body).await?;
 
-        let enhanced_text = gemini_response
-            .candidates
-            .first()
-            .ok_or_else(|| AIError::InvalidResponse("No candidates in response".to_string()))?
+        let enhanced_text = api_response
             .content
-            .parts
-            .first()
-            .ok_or_else(|| AIError::InvalidResponse("No parts in response".to_string()))?
-            .text
+            .iter()
+            .filter(|c| c.content_type == "text")
+            .filter_map(|c| c.text.as_deref())
+            .collect::<Vec<_>>()
+            .join("")
             .trim()
             .to_string();
 
-        // Validate that we got a reasonable response
         if enhanced_text.is_empty() {
             return Err(AIError::InvalidResponse(
                 "Empty response from API".to_string(),
@@ -232,7 +200,7 @@ impl AIProvider for GeminiProvider {
     }
 
     fn name(&self) -> &str {
-        "gemini"
+        "anthropic"
     }
 }
 
@@ -242,23 +210,12 @@ mod tests {
 
     #[test]
     fn test_provider_creation() {
-        let result = GeminiProvider::new(
-            "".to_string(),
-            "gemini-1.5-flash".to_string(),
-            HashMap::new(),
-        );
+        let result = AnthropicProvider::new("".to_string(), "claude-haiku-4-5".to_string(), HashMap::new());
         assert!(result.is_err());
 
-        let result = GeminiProvider::new(
+        let result = AnthropicProvider::new(
             "test_key_12345".to_string(),
-            "invalid-model".to_string(),
-            HashMap::new(),
-        );
-        assert!(result.is_err());
-
-        let result = GeminiProvider::new(
-            "test_key_12345".to_string(),
-            "gemini-2.5-flash-lite".to_string(),
+            "claude-haiku-4-5".to_string(),
             HashMap::new(),
         );
         assert!(result.is_ok());

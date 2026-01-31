@@ -21,13 +21,14 @@ vi.mock('@/utils/keyring', () => ({
   hasApiKey: vi.fn().mockResolvedValue(false),
   removeApiKey: vi.fn().mockResolvedValue(undefined),
   getApiKey: vi.fn().mockResolvedValue(null),
+  keyringSet: vi.fn().mockResolvedValue(undefined),
 }));
 
 describe('EnhancementsSection', () => {
   const mockAISettings = {
     enabled: false,
-    provider: 'groq',
-    model: '',  // Empty by default
+    provider: '',
+    model: '',
     hasApiKey: false,
   };
 
@@ -49,48 +50,52 @@ describe('EnhancementsSection', () => {
     
     expect(screen.getByText('AI Formatting')).toBeInTheDocument();
     
-    // Wait for models to load
+    // Wait for providers to load - now we have provider cards
     await waitFor(() => {
-      expect(screen.getByText('Gemini 2.5 Flash Lite')).toBeInTheDocument();
+      expect(screen.getByText('AI Providers')).toBeInTheDocument();
     });
   });
 
-  it('displays all available models', async () => {
+  it('displays all available providers', async () => {
+    render(<EnhancementsSection />);
+    
+    // Wait for providers section to load - all providers should render together
+    await waitFor(() => {
+      expect(screen.getByText('AI Providers')).toBeInTheDocument();
+      expect(screen.getByText('OpenAI')).toBeInTheDocument();
+      expect(screen.getByText('Anthropic')).toBeInTheDocument();
+      expect(screen.getByText('Google Gemini')).toBeInTheDocument();
+    }, { timeout: 5000 });
+    
+    // Custom Provider is in a separate section
+    await waitFor(() => {
+      const customProviderHeading = screen.getByRole('heading', { level: 2, name: /Custom Provider/i });
+      expect(customProviderHeading).toBeInTheDocument();
+    }, { timeout: 3000 });
+  });
+
+  it('shows Add Key button when no API key is set', async () => {
     render(<EnhancementsSection />);
     
     await waitFor(() => {
-      expect(screen.getByText('Gemini 2.5 Flash Lite')).toBeInTheDocument();
-      expect(screen.getByText('OpenAI Compatible')).toBeInTheDocument();
+      // Look for "Add Key" buttons
+      const addKeyButtons = screen.getAllByText('Add Key');
+      expect(addKeyButtons.length).toBeGreaterThan(0);
     });
   });
 
-  it('shows key icon when no API key is set', async () => {
+  it('opens API key modal when Add Key is clicked', async () => {
     render(<EnhancementsSection />);
     
     await waitFor(() => {
-      // Look for buttons that contain the key icon (these are the API key buttons)
-      const allButtons = screen.getAllByRole('button');
-      const keyButtons = allButtons.filter(button => 
-        button.querySelector('svg.lucide-key')
-      );
-      expect(keyButtons.length).toBeGreaterThan(0);
-    });
-  });
-
-  it('opens API key modal when key icon is clicked', async () => {
-    render(<EnhancementsSection />);
-    
-    await waitFor(() => {
-      const keyButtons = screen.getAllByRole('button');
-      const keyButton = keyButtons.find(btn => btn.querySelector('svg'));
-      if (keyButton) {
-        fireEvent.click(keyButton);
-      }
+      const addKeyButtons = screen.getAllByText('Add Key');
+      expect(addKeyButtons.length).toBeGreaterThan(0);
+      fireEvent.click(addKeyButtons[0]); // Click first "Add Key" button (OpenAI)
     });
     
     await waitFor(() => {
-      // The modal title will vary based on which provider's key button was clicked
-      const modalTitle = screen.getByText(/Add (Groq|Gemini) API Key/);
+      // The modal title will show the provider name
+      const modalTitle = screen.getByText(/Add OpenAI API Key/);
       expect(modalTitle).toBeInTheDocument();
     });
   });
@@ -118,7 +123,7 @@ describe('EnhancementsSection', () => {
         return Promise.resolve({
           enabled: false,
           provider: 'gemini',
-          model: 'gemini-2.5-flash-lite',  // Model is selected
+          model: 'gemini-2.0-flash',
           hasApiKey: true,
         });
       }
@@ -126,7 +131,7 @@ describe('EnhancementsSection', () => {
         return Promise.resolve({
           enabled: false,
           provider: args?.provider || 'gemini',
-          model: 'gemini-2.5-flash-lite',
+          model: 'gemini-2.0-flash',
           hasApiKey: true,
         });
       }
@@ -156,7 +161,7 @@ describe('EnhancementsSection', () => {
         return Promise.resolve({
           enabled: false,
           provider: 'gemini',
-          model: 'gemini-2.5-flash-lite',
+          model: 'gemini-2.0-flash',
           hasApiKey: true,
         });
       }
@@ -164,7 +169,7 @@ describe('EnhancementsSection', () => {
         return Promise.resolve({
           enabled: false,
           provider: args?.provider || 'gemini',
-          model: 'gemini-2.5-flash-lite',
+          model: 'gemini-2.0-flash',
           hasApiKey: true,
         });
       }
@@ -173,7 +178,7 @@ describe('EnhancementsSection', () => {
     
     render(<EnhancementsSection />);
     
-    // Wait for the component to load and fetch API key status
+    // Wait for the component to load
     await waitFor(() => {
       expect(screen.getByText('AI Formatting')).toBeInTheDocument();
     });
@@ -189,43 +194,32 @@ describe('EnhancementsSection', () => {
       expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
         enabled: true,
         provider: 'gemini',
-        model: 'gemini-2.5-flash-lite',
+        model: 'gemini-2.0-flash',
       });
       expect(toast.success).toHaveBeenCalledWith('AI formatting enabled');
     });
   });
 
-  it('displays and allows model selection', async () => {
-    // Setup: User has an API key
+  it('displays provider cards with model selection', async () => {
+    // Setup: User has an API key for Anthropic
     const { hasApiKey } = await import('@/utils/keyring');
-    (hasApiKey as any).mockResolvedValue(true);
+    (hasApiKey as any).mockImplementation((provider: string) => {
+      return Promise.resolve(provider === 'anthropic');
+    });
     
     (invoke as any).mockImplementation((cmd: string) => {
       if (cmd === 'get_ai_settings') {
         return Promise.resolve({
           enabled: false,
-          provider: 'gemini',
-          model: '',
-          hasApiKey: true,
-        });
-      }
-      if (cmd === 'get_ai_settings_for_provider') {
-        return Promise.resolve({
-          enabled: false,
-          provider: 'gemini',
-          model: '',
+          provider: 'anthropic',
+          model: 'claude-haiku-4-5',
           hasApiKey: true,
         });
       }
       if (cmd === 'get_enhancement_options') {
         return Promise.resolve({
-          preset: 'default',
-          tone: 'professional',
-          fixGrammar: true,
-          improveClarity: true,
-          makeConcise: false,
-          expandIdeas: false,
-          customInstructions: '',
+          preset: 'Default',
+          custom_vocabulary: [],
         });
       }
       return Promise.resolve();
@@ -233,19 +227,17 @@ describe('EnhancementsSection', () => {
     
     render(<EnhancementsSection />);
     
-    // User should see the AI Formatting section
+    // User should see the AI Providers section
     await waitFor(() => {
-      expect(screen.getByText('AI Formatting')).toBeInTheDocument();
+      expect(screen.getByText('AI Providers')).toBeInTheDocument();
     });
     
-    // User should see available models
+    // User should see all provider cards
     await waitFor(() => {
-      const models = screen.getAllByText(/Gemini|OpenAI Compatible/);
-      expect(models.length).toBeGreaterThan(0);
+      expect(screen.getByText('OpenAI')).toBeInTheDocument();
+      expect(screen.getByText('Anthropic')).toBeInTheDocument();
+      expect(screen.getByText('Google Gemini')).toBeInTheDocument();
     });
-    
-    // That's the key user behavior - they can see the section and models
-    // Whether clicking works is an integration test, not a unit test
   });
 
   it('handles API key submission', async () => {
@@ -254,50 +246,47 @@ describe('EnhancementsSection', () => {
     
     render(<EnhancementsSection />);
     
-    // Open modal by clicking the first key button found
+    // Open modal by clicking the first Add Key button
     await waitFor(() => {
-      const keyButtons = screen.getAllByRole('button');
-      const keyButton = keyButtons.find(btn => btn.querySelector('svg'));
-      expect(keyButton).toBeTruthy();
-      if (keyButton) {
-        fireEvent.click(keyButton);
-      }
+      const addKeyButtons = screen.getAllByText('Add Key');
+      expect(addKeyButtons.length).toBeGreaterThan(0);
+      fireEvent.click(addKeyButtons[0]); // Click OpenAI's Add Key
     });
     
-    // Wait for modal to open and check it's visible
+    // Wait for modal to open
     await waitFor(() => {
-      const modalTitle = screen.getByText(/Add Gemini API Key/);
+      const modalTitle = screen.getByText(/Add OpenAI API Key/);
       expect(modalTitle).toBeInTheDocument();
     });
     
     // Enter API key
-    const input = screen.getByPlaceholderText(/Enter your Gemini API key/);
-    fireEvent.change(input, { target: { value: 'test-api-key-12345' } });
+    const input = screen.getByPlaceholderText(/Enter your OpenAI API key/);
+    fireEvent.change(input, { target: { value: 'sk-test-api-key-12345' } });
     
     // Submit
     const submitButton = screen.getByText('Save API Key');
     fireEvent.click(submitButton);
     
-    // Just verify that our mocked saveApiKey was called
+    // Verify saveApiKey was called
     await waitFor(() => {
       expect(saveApiKey).toHaveBeenCalled();
     });
   });
 
-  it('shows error when enabling without API key', async () => {
+  it('shows Quick Setup guide when AI is disabled', async () => {
     render(<EnhancementsSection />);
     
-    // Wait for initial load
     await waitFor(() => {
-      const toggle = screen.getByRole('switch');
-      expect(toggle).toBeDisabled();
+      expect(screen.getByText('Quick Setup')).toBeInTheDocument();
+      expect(screen.getByText(/Choose a provider above/)).toBeInTheDocument();
     });
+  });
+
+  it('shows Formatting Options section', async () => {
+    render(<EnhancementsSection />);
     
-    // Try to enable through the handler directly
-    const component = screen.getByText('AI Formatting').closest('div');
-    expect(component).toBeInTheDocument();
-    
-    // The switch is disabled, so we can't actually click it to trigger the error
-    // This test validates that the switch is properly disabled when no API key exists
+    await waitFor(() => {
+      expect(screen.getByText('Formatting Options')).toBeInTheDocument();
+    });
   });
 });
