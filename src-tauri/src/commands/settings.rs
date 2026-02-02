@@ -268,6 +268,11 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         .get("pill_indicator_position")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| Settings::default().pill_indicator_position);
+    let old_pill_indicator_offset = store
+        .get("pill_indicator_offset")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or_else(|| Settings::default().pill_indicator_offset);
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
@@ -507,12 +512,6 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     }
 
     // Handle pill window offset change - reposition the pill window
-    let old_pill_indicator_offset = store
-        .get("pill_indicator_offset")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32)
-        .unwrap_or_else(|| Settings::default().pill_indicator_offset);
-
     if old_pill_indicator_offset != settings.pill_indicator_offset {
         log::info!(
             "Pill indicator offset changed from {} to {}",

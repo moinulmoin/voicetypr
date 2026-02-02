@@ -111,10 +111,16 @@ export function EnhancementsSection() {
       if (readiness?.ai_ready && settings.provider) {
         setProviderApiKeys(prev => ({ ...prev, [settings.provider]: true }));
       }
+
+      // Pre-fetch models for all providers with API keys (list is static, so this is fast)
+      const providersWithKeys = allProviders.filter(p => keyStatus[p] && p !== 'custom');
+      providersWithKeys.forEach(providerId => {
+        fetchModels(providerId);
+      });
     } catch (error) {
       console.error("Failed to load AI settings:", error);
     }
-  }, [readiness]);
+  }, [readiness, fetchModels]);
 
   // Load settings when component mounts
   useEffect(() => {
@@ -152,7 +158,11 @@ export function EnhancementsSection() {
       clearModels(event.payload.provider);
       
       // If removed provider is currently selected, clear selection
-      if (aiSettings.provider === event.payload.provider) {
+      // Handle custom provider: backend stores as 'openai' but UI tracks as 'custom'
+      const isCustomProviderRemoved = event.payload.provider === 'custom' && aiSettings.provider === 'openai';
+      const isCurrentProviderRemoved = aiSettings.provider === event.payload.provider || isCustomProviderRemoved;
+      
+      if (isCurrentProviderRemoved) {
         setAISettings(prev => ({
           ...prev,
           enabled: false,
@@ -297,11 +307,6 @@ export function EnhancementsSection() {
     }
   };
 
-  const getProviderDisplayName = (providerId: string) => {
-    const provider = AI_PROVIDERS.find(p => p.id === providerId);
-    return provider?.name || providerId;
-  };
-
   // Check if any provider has a valid API key
   const hasAnyValidConfig = Object.values(providerApiKeys).some(v => v);
   
@@ -438,7 +443,7 @@ export function EnhancementsSection() {
         isOpen={showApiKeyModal}
         onClose={() => setShowApiKeyModal(false)}
         onSubmit={handleApiKeySubmit}
-        providerName={getProviderDisplayName(selectedProvider)}
+        providerName={selectedProvider}
         isLoading={isLoading}
       />
       

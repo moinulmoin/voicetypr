@@ -257,7 +257,7 @@ impl RecordingConfig {
             ai_provider: store
                 .get("ai_provider")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| "groq".to_string()),
+                .unwrap_or_default(),
             ai_model: store
                 .get("ai_model")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))

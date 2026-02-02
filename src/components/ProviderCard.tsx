@@ -97,6 +97,14 @@ export function ProviderCard({
                       </span>
                       <ChevronDown className="w-3.5 h-3.5 ml-1 flex-shrink-0" />
                     </>
+                  ) : selectedModel ? (
+                    <>
+                      {/* Show model ID as fallback when model data not loaded */}
+                      <span className="truncate max-w-[180px]">
+                        {selectedModel}
+                      </span>
+                      <ChevronDown className="w-3.5 h-3.5 ml-1 flex-shrink-0" />
+                    </>
                   ) : (
                     <>
                       Select model

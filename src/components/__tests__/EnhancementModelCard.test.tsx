@@ -10,9 +10,9 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 describe('EnhancementModelCard', () => {
   const mockModel = {
-    id: 'llama-3.3-70b-versatile',
-    name: 'Llama 3.3 70B',
-    provider: 'groq',
+    id: 'gemini-2.0-flash',
+    name: 'Gemini 2.0 Flash',
+    provider: 'gemini',
     description: 'Fast and versatile language model',
   };
 
@@ -28,8 +28,8 @@ describe('EnhancementModelCard', () => {
   it('renders model information', () => {
     render(<EnhancementModelCard {...defaultProps} />);
     
-    expect(screen.getByText('Llama 3.3 70B')).toBeInTheDocument();
-    expect(screen.getByText('Groq')).toBeInTheDocument();
+    expect(screen.getByText('Gemini 2.0 Flash')).toBeInTheDocument();
+    expect(screen.getByText('Gemini')).toBeInTheDocument();
   });
 
   it('shows key icon when no API key', () => {
@@ -53,7 +53,7 @@ describe('EnhancementModelCard', () => {
     
     // User should see the model card is rendered and selectable
     // The actual visual styling is an implementation detail
-    expect(screen.getByText('Llama 3.3 70B')).toBeInTheDocument();
+    expect(screen.getByText('Gemini 2.0 Flash')).toBeInTheDocument();
   });
 
   it('calls onSetupApiKey when key button is clicked', () => {
@@ -70,7 +70,7 @@ describe('EnhancementModelCard', () => {
     const onSelect = vi.fn();
     render(<EnhancementModelCard {...defaultProps} hasApiKey={true} onSelect={onSelect} />);
     
-    const card = screen.getByText('Llama 3.3 70B').closest('.transition-all');
+    const card = screen.getByText('Gemini 2.0 Flash').closest('.transition-all');
     if (card) {
       fireEvent.click(card);
     }
@@ -82,7 +82,7 @@ describe('EnhancementModelCard', () => {
     const onSelect = vi.fn();
     render(<EnhancementModelCard {...defaultProps} onSelect={onSelect} />);
     
-    const card = screen.getByText('Llama 3.3 70B').closest('.transition-all');
+    const card = screen.getByText('Gemini 2.0 Flash').closest('.transition-all');
     if (card) {
       fireEvent.click(card);
     }
@@ -105,8 +105,8 @@ describe('EnhancementModelCard', () => {
   it('displays correct provider color', () => {
     render(<EnhancementModelCard {...defaultProps} />);
     
-    const providerText = screen.getByText('Groq');
-    expect(providerText).toHaveClass('text-orange-600');
+    const providerText = screen.getByText('Gemini');
+    expect(providerText).toHaveClass('text-blue-600');
   });
 
   it('calls onRemoveApiKey when remove button is clicked and confirmed', async () => {
@@ -120,7 +120,7 @@ describe('EnhancementModelCard', () => {
     
     await waitFor(() => {
       expect(ask).toHaveBeenCalledWith(
-        'Remove API key for Groq?',
+        'Remove API key for Gemini?',
         { title: 'Remove API Key', kind: 'warning' }
       );
       expect(onRemoveApiKey).toHaveBeenCalledTimes(1);

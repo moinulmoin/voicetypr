@@ -149,6 +149,9 @@ struct OpenAIRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    /// For GPT-5 models: set reasoning effort to minimal for fast text formatting
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -195,6 +198,13 @@ impl AIProvider for OpenAIProvider {
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
 
+        // For GPT-5 models, use minimal reasoning effort for fast text formatting
+        let reasoning_effort = if self.model.starts_with("gpt-5") {
+            Some("minimal".to_string())
+        } else {
+            None
+        };
+
         let request_body = OpenAIRequest {
             model: self.model.clone(),
             messages: vec![
@@ -209,6 +219,7 @@ impl AIProvider for OpenAIProvider {
             ],
             temperature: Some(temperature.clamp(0.0, 2.0)),
             max_tokens,
+            reasoning_effort,
         };
 
         let api_response = self.make_request_with_retry(&request_body).await?;

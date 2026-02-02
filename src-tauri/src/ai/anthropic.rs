@@ -104,6 +104,13 @@ impl AnthropicProvider {
     }
 }
 
+/// Config to disable extended thinking for fast text formatting
+#[derive(Serialize)]
+struct ThinkingConfig {
+    /// Set to 0 to disable extended thinking
+    budget_tokens: u32,
+}
+
 #[derive(Serialize)]
 struct AnthropicRequest {
     model: String,
@@ -113,6 +120,9 @@ struct AnthropicRequest {
     system: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    /// Disable extended thinking for simple text formatting tasks
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingConfig>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -171,6 +181,8 @@ impl AIProvider for AnthropicProvider {
             }],
             system: Some("You are a careful text formatter that only returns the cleaned text per the provided rules.".to_string()),
             temperature: Some(temperature.clamp(0.0, 1.0)),
+            // Omit thinking parameter to disable extended thinking for fast text formatting
+            thinking: None,
         };
 
         let api_response = self.make_request_with_retry(&request_body).await?;

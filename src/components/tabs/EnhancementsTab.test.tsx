@@ -19,7 +19,7 @@ vi.mock('@/utils/keyring', () => ({
 vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
     settings: {
-      ai_provider: 'groq',
+      ai_provider: '',
       ai_enhancement_enabled: false
     }
   })
