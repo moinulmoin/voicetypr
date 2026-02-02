@@ -19,6 +19,7 @@ mod audio;
 mod commands;
 mod ffmpeg;
 mod license;
+mod media;
 mod menu;
 mod parakeet;
 mod recognition;

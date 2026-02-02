@@ -373,6 +373,29 @@ export function GeneralSettings() {
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label
+                    htmlFor="pause-media"
+                    className="text-sm font-medium"
+                  >
+                    Pause Media During Recording
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Automatically pause playing music/videos when recording
+                  </p>
+                </div>
+                <Switch
+                  id="pause-media"
+                  checked={settings.pause_media_during_recording ?? false}
+                  onCheckedChange={async (checked) =>
+                    await updateSettings({
+                      pause_media_during_recording: checked,
+                    })
+                  }
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label
                     htmlFor="pill-indicator-mode"
                     className="text-sm font-medium"
                   >

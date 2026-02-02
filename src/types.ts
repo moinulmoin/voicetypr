@@ -67,6 +67,8 @@ export interface AppSettings {
   pill_indicator_position?: PillIndicatorPosition;
   // Pill indicator offset from screen edge in pixels (10-100)
   pill_indicator_offset?: number;
+  // Pause system media during recording
+  pause_media_during_recording?: boolean;
 }
 
 export interface TranscriptionHistory {

@@ -5,6 +5,7 @@ use crate::audio::recorder::AudioRecorder;
 use crate::commands::license::check_license_status_internal;
 use crate::commands::settings::{get_settings, resolve_pill_indicator_mode, Settings};
 use crate::license::LicenseState;
+use crate::media::MediaPauseController;
 use crate::parakeet::messages::ParakeetResponse;
 use crate::parakeet::ParakeetManager;
 use crate::utils::logger::*;
@@ -15,6 +16,7 @@ use crate::whisper::languages::validate_language;
 use crate::whisper::manager::WhisperManager;
 use crate::{emit_to_window, update_recording_state, AppState, RecordingMode, RecordingState};
 use cpal::traits::{DeviceTrait, HostTrait};
+use once_cell::sync::Lazy;
 use serde_json;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{Path, PathBuf};
@@ -26,6 +28,9 @@ use tauri_plugin_store::StoreExt;
 
 /// Atomic counter for toast IDs to prevent race conditions
 static TOAST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Global media pause controller for pausing/resuming system media during recording
+static MEDIA_CONTROLLER: Lazy<MediaPauseController> = Lazy::new(MediaPauseController::new);
 
 /// Payload for pill toast messages
 #[derive(serde::Serialize, Clone)]
@@ -723,6 +728,18 @@ pub async fn start_recording(
         }
     }
 
+    // Pause system media if enabled
+    if let Ok(store) = app.store("settings") {
+        let pause_media = store
+            .get("pause_media_during_recording")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if pause_media {
+            log::info!("🎵 Pause media during recording is enabled");
+            MEDIA_CONTROLLER.pause_if_playing();
+        }
+    }
+
     // Load recording config once to avoid repeated store access
     let config = get_recording_config(&app).await.map_err(|e| {
         log::error!("Failed to load recording config: {}", e);
@@ -1123,6 +1140,9 @@ pub async fn stop_recording(
                 play_recording_end_sound();
             }
         }
+
+        // Resume system media if we paused it
+        MEDIA_CONTROLLER.resume_if_we_paused();
 
         // Monitor system resources after recording stop
         #[cfg(debug_assertions)]
@@ -2655,6 +2675,9 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
             }
         }
     }
+
+    // Resume system media if we paused it
+    MEDIA_CONTROLLER.resume_if_we_paused();
 
     // Unregister ESC key
     match "Escape".parse::<tauri_plugin_global_shortcut::Shortcut>() {

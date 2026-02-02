@@ -69,6 +69,7 @@ tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 tauri-plugin-macos-permissions = "2"
 core-graphics = "0.24"
+media-remote = "0.3"
 
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
 whisper-rs = { version = "0.15.1", features = ["vulkan"] }
@@ -80,6 +81,7 @@ whisper-rs = { version = "0.15.1" }
 windows = { version = "0.51", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
 ] }
 
 [dev-dependencies]

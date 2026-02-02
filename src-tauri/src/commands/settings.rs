@@ -43,6 +43,8 @@ pub struct Settings {
     pub pill_indicator_position: String,
     // Pill indicator offset from screen edge in pixels (10-100)
     pub pill_indicator_offset: u32,
+    // Pause system media during recording
+    pub pause_media_during_recording: bool,
 }
 
 impl Default for Settings {
@@ -69,6 +71,7 @@ impl Default for Settings {
             pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
             pill_indicator_position: "bottom-center".to_string(), // Default to bottom center of screen
             pill_indicator_offset: DEFAULT_INDICATOR_OFFSET,
+            pause_media_during_recording: false, // Default to not pausing media
         }
     }
 }
@@ -238,6 +241,10 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .and_then(|v| v.as_u64())
             .map(|v| v.clamp(MIN_INDICATOR_OFFSET as u64, MAX_INDICATOR_OFFSET as u64) as u32)
             .unwrap_or_else(|| Settings::default().pill_indicator_offset),
+        pause_media_during_recording: store
+            .get("pause_media_during_recording")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().pause_media_during_recording),
     };
 
     Ok(settings)
@@ -328,6 +335,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set(
         "pill_indicator_offset",
         json!(settings.pill_indicator_offset.clamp(MIN_INDICATOR_OFFSET, MAX_INDICATOR_OFFSET)),
+    );
+    store.set(
+        "pause_media_during_recording",
+        json!(settings.pause_media_during_recording),
     );
 
     // Save pill position if provided
