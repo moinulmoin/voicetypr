@@ -78,10 +78,12 @@ whisper-rs = { version = "0.15.1", features = ["vulkan"] }
 whisper-rs = { version = "0.15.1" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.51", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Media_Control",
+    "Foundation",
 ] }
 
 [dev-dependencies]

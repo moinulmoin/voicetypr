@@ -285,12 +285,14 @@ impl WindowManager {
         // Apply Windows-specific window flags to prevent focus stealing
         #[cfg(target_os = "windows")]
         {
+            use std::ffi::c_void;
             use windows::Win32::Foundation::HWND;
             use windows::Win32::UI::WindowsAndMessaging::*;
 
             if let Ok(hwnd) = pill_window.hwnd() {
                 unsafe {
-                    let hwnd = HWND(hwnd.0 as isize);
+                    // windows crate 0.62+: HWND wraps *mut c_void instead of isize
+                    let hwnd = HWND(hwnd.0 as *mut c_void);
 
                     // Validate HWND before using it
                     if IsWindow(hwnd).as_bool() {
@@ -298,14 +300,16 @@ impl WindowManager {
                         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
 
                         // Add tool window and no-activate flags, remove from Alt-Tab
-                        let new_style =
-                            (style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize)
-                                & !(WS_EX_APPWINDOW.0 as isize);
+                        // WINDOW_EX_STYLE.0 gives the underlying u32 value
+                        let new_style = (style
+                            | WS_EX_TOOLWINDOW.0 as isize
+                            | WS_EX_NOACTIVATE.0 as isize)
+                            & !(WS_EX_APPWINDOW.0 as isize);
 
                         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
 
                         // Force window to update with new styles
-                        SetWindowPos(
+                        let _ = SetWindowPos(
                             hwnd,
                             HWND_TOPMOST,
                             0,

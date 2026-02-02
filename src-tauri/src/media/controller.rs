@@ -129,85 +129,140 @@ impl MediaPauseController {
 }
 
 // ============================================
-// Windows Implementation (Media Key Simulation)
+// Windows Implementation (GSMTC - Global System Media Transport Controls)
 // ============================================
-// Note: Windows implementation uses key simulation (VK_MEDIA_PLAY_PAUSE)
-// which toggles playback. Unlike macOS, we can't detect if media was playing,
-// so this may accidentally start paused media. This is a known limitation.
+// Uses Windows.Media.Control APIs to properly detect playback state
+// and use explicit pause/play (not toggle). Requires Windows 10 1809+.
 #[cfg(target_os = "windows")]
 impl MediaPauseController {
     fn pause_if_playing_windows(&self) -> bool {
-        log::info!("🎵 Sending media pause key (Windows)...");
-        
-        // On Windows, we can't reliably detect if media is playing without complex WinRT APIs
-        // So we just send the play/pause key and hope for the best
-        // We always mark as "was playing" so we'll toggle back on resume
-        self.was_playing_before_recording.store(true, Ordering::SeqCst);
-        
-        if self.send_media_play_pause_key() {
-            log::info!("✅ Media play/pause key sent");
-            true
-        } else {
-            log::warn!("⚠️ Failed to send media key");
+        use windows::Media::Control::{
+            GlobalSystemMediaTransportControlsSessionManager,
+            GlobalSystemMediaTransportControlsSessionPlaybackStatus,
+        };
+
+        // Get the session manager (blocking wait with .join())
+        let manager = match GlobalSystemMediaTransportControlsSessionManager::RequestAsync() {
+            Ok(op) => match op.join() {
+                Ok(mgr) => mgr,
+                Err(e) => {
+                    log::warn!("Failed to get GSMTC session manager: {:?}", e);
+                    return false;
+                }
+            },
+            Err(e) => {
+                log::warn!("Failed to request GSMTC session manager: {:?}", e);
+                return false;
+            }
+        };
+
+        // Get current session (the app currently controlling media)
+        let session = match manager.GetCurrentSession() {
+            Ok(s) => s,
+            Err(_) => {
+                log::debug!("No active media session found");
+                return false;
+            }
+        };
+
+        // Check playback status
+        let is_playing = match session.GetPlaybackInfo() {
+            Ok(info) => match info.PlaybackStatus() {
+                Ok(status) => {
+                    status == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing
+                }
+                Err(_) => false,
+            },
+            Err(_) => false,
+        };
+
+        if !is_playing {
+            log::debug!("Media not playing, nothing to pause");
             self.was_playing_before_recording.store(false, Ordering::SeqCst);
-            false
+            return false;
+        }
+
+        log::info!("Media is playing, pausing for recording...");
+        self.was_playing_before_recording.store(true, Ordering::SeqCst);
+
+        // Use explicit pause (not toggle!)
+        match session.TryPauseAsync() {
+            Ok(op) => match op.join() {
+                Ok(success) => {
+                    if success {
+                        log::info!("Media paused successfully via GSMTC");
+                        true
+                    } else {
+                        log::warn!("GSMTC TryPauseAsync returned false");
+                        self.was_playing_before_recording.store(false, Ordering::SeqCst);
+                        false
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to pause media: {:?}", e);
+                    self.was_playing_before_recording.store(false, Ordering::SeqCst);
+                    false
+                }
+            },
+            Err(e) => {
+                log::warn!("Failed to request pause: {:?}", e);
+                self.was_playing_before_recording.store(false, Ordering::SeqCst);
+                false
+            }
         }
     }
 
     fn resume_windows(&self) -> bool {
-        log::info!("🎵 Sending media play key (Windows)...");
-        
-        if self.send_media_play_pause_key() {
-            log::info!("✅ Media play/pause key sent");
-            true
-        } else {
-            log::warn!("⚠️ Failed to send media key");
-            false
+        use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
+
+        log::info!("Resuming media playback via GSMTC...");
+
+        // Get the session manager (blocking wait with .join())
+        let manager = match GlobalSystemMediaTransportControlsSessionManager::RequestAsync() {
+            Ok(op) => match op.join() {
+                Ok(mgr) => mgr,
+                Err(e) => {
+                    log::warn!("Failed to get GSMTC session manager for resume: {:?}", e);
+                    return false;
+                }
+            },
+            Err(e) => {
+                log::warn!("Failed to request GSMTC session manager for resume: {:?}", e);
+                return false;
+            }
+        };
+
+        // Get current session
+        let session = match manager.GetCurrentSession() {
+            Ok(s) => s,
+            Err(_) => {
+                log::warn!("No active media session found for resume");
+                return false;
+            }
+        };
+
+        // Use explicit play (not toggle!)
+        match session.TryPlayAsync() {
+            Ok(op) => match op.join() {
+                Ok(success) => {
+                    if success {
+                        log::info!("Media resumed successfully via GSMTC");
+                        true
+                    } else {
+                        log::warn!("GSMTC TryPlayAsync returned false");
+                        false
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to resume media: {:?}", e);
+                    false
+                }
+            },
+            Err(e) => {
+                log::warn!("Failed to request play: {:?}", e);
+                false
+            }
         }
-    }
-
-    fn send_media_play_pause_key(&self) -> bool {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{
-            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-            KEYEVENTF_KEYUP, VIRTUAL_KEY,
-        };
-
-        const VK_MEDIA_PLAY_PAUSE: u16 = 0xB3;
-
-        let mut inputs = [
-            // Key down
-            INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: VIRTUAL_KEY(VK_MEDIA_PLAY_PAUSE),
-                        wScan: 0,
-                        dwFlags: KEYBD_EVENT_FLAGS(0),
-                        time: 0,
-                        dwExtraInfo: 0,
-                    },
-                },
-            },
-            // Key up
-            INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: VIRTUAL_KEY(VK_MEDIA_PLAY_PAUSE),
-                        wScan: 0,
-                        dwFlags: KEYEVENTF_KEYUP,
-                        time: 0,
-                        dwExtraInfo: 0,
-                    },
-                },
-            },
-        ];
-
-        let sent = unsafe {
-            SendInput(&mut inputs, std::mem::size_of::<INPUT>() as i32)
-        };
-
-        sent == 2
     }
 }
 
@@ -222,10 +277,30 @@ mod tests {
     }
 
     #[test]
+    fn test_default_impl() {
+        let controller = MediaPauseController::default();
+        assert!(!controller.was_playing_before_recording.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn test_resume_without_pause_does_nothing() {
         let controller = MediaPauseController::new();
         // Should return false since we didn't pause anything
         assert!(!controller.resume_if_we_paused());
+    }
+
+    #[test]
+    fn test_resume_clears_was_playing_flag() {
+        let controller = MediaPauseController::new();
+        // Manually set the flag to true
+        controller.was_playing_before_recording.store(true, Ordering::SeqCst);
+        
+        // Resume should clear the flag (swap returns old value)
+        // Note: actual resume behavior depends on platform APIs
+        let _ = controller.resume_if_we_paused();
+        
+        // Flag should be cleared after resume attempt
+        assert!(!controller.was_playing_before_recording.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -234,5 +309,37 @@ mod tests {
         controller.was_playing_before_recording.store(true, Ordering::SeqCst);
         controller.reset();
         assert!(!controller.was_playing_before_recording.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_multiple_resets_are_safe() {
+        let controller = MediaPauseController::new();
+        controller.reset();
+        controller.reset();
+        controller.reset();
+        assert!(!controller.was_playing_before_recording.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_was_playing_flag_is_atomic() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let controller = Arc::new(MediaPauseController::new());
+        let mut handles = vec![];
+
+        // Spawn multiple threads toggling the flag
+        for i in 0..10 {
+            let c = Arc::clone(&controller);
+            handles.push(thread::spawn(move || {
+                c.was_playing_before_recording.store(i % 2 == 0, Ordering::SeqCst);
+                c.was_playing_before_recording.load(Ordering::SeqCst)
+            }));
+        }
+
+        // All threads should complete without panic
+        for handle in handles {
+            let _ = handle.join().unwrap();
+        }
     }
 }
