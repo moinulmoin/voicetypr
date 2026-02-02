@@ -728,15 +728,18 @@ pub async fn start_recording(
         }
     }
 
-    // Pause system media if enabled
+    // Pause system media if enabled (default: true)
     if let Ok(store) = app.store("settings") {
         let pause_media = store
             .get("pause_media_during_recording")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true); // Default to true
         if pause_media {
             log::info!("🎵 Pause media during recording is enabled");
-            MEDIA_CONTROLLER.pause_if_playing();
+            let paused = MEDIA_CONTROLLER.pause_if_playing();
+            log::debug!("🎵 Media pause result: {}", paused);
+        } else {
+            log::debug!("🎵 Pause media during recording is disabled");
         }
     }
 
