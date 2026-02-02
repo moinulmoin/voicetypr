@@ -3,12 +3,171 @@
 //! Pauses system media when recording starts and resumes when recording stops.
 //! Only resumes if WE paused it (not if user manually paused during recording).
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
+
+#[cfg(target_os = "macos")]
+use once_cell::sync::Lazy;
+
+#[cfg(target_os = "macos")]
+use std::{
+    io::Write,
+    process::{Command as ProcessCommand, Stdio},
+};
+
+#[cfg(target_os = "macos")]
+static MEDIA_REMOTE_NOTIFICATIONS: Lazy<()> = Lazy::new(|| {
+    media_remote::register_for_now_playing_notifications();
+});
+
+#[cfg(target_os = "macos")]
+const NOW_PLAYING_JXA_SCRIPT: &str = r#"
+function run() {
+  const MediaRemote = $.NSBundle.bundleWithPath(
+    "/System/Library/PrivateFrameworks/MediaRemote.framework/",
+  );
+  MediaRemote.load;
+
+  const MRNowPlayingRequest = $.NSClassFromString("MRNowPlayingRequest");
+  const client = MRNowPlayingRequest.localNowPlayingPlayerPath.client;
+  const clientConverted = {
+    bundleIdentifier: client.bundleIdentifier.js,
+    parentApplicationBundleIdentifier:
+      client.parentApplicationBundleIdentifier.js,
+  };
+
+  const infoDict = MRNowPlayingRequest.localNowPlayingItem.nowPlayingInfo;
+  const infoConverted = {};
+  for (const key in infoDict.js) {
+    const value = infoDict.valueForKey(key).js;
+    if (typeof value !== "object") {
+      infoConverted[key] = value;
+    } else if (value && typeof value.getTime === "function") {
+      try {
+        infoConverted[key] = value.getTime();
+      } catch (e) {
+        infoConverted[key] = value.toString();
+      }
+    } else {
+      infoConverted[key] = value.toString();
+    }
+  }
+
+  return JSON.stringify({
+    isPlaying: MRNowPlayingRequest.localIsPlaying,
+    client: clientConverted,
+    info: infoConverted,
+  });
+}
+"#;
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone)]
+struct NowPlayingSnapshot {
+    is_playing: Option<bool>,
+    bundle_id: Option<String>,
+    title: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+fn now_playing_snapshot_via_osascript() -> Option<NowPlayingSnapshot> {
+    let mut child = ProcessCommand::new("/usr/bin/osascript")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .arg("-l")
+        .arg("JavaScript")
+        .spawn()
+        .ok()?;
+
+    {
+        let stdin = child.stdin.as_mut()?;
+        stdin.write_all(NOW_PLAYING_JXA_SCRIPT.as_bytes()).ok()?;
+    }
+
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        if log::log_enabled!(log::Level::Debug) {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            let stderr = stderr.trim();
+            let stdout = stdout.trim();
+
+            let stderr_trunc: String = stderr.chars().take(400).collect();
+            let stdout_trunc: String = stdout.chars().take(400).collect();
+
+            log::debug!(
+                "osascript now playing query failed | status={:?} stdout={:?} stderr={:?}",
+                output.status,
+                stdout_trunc,
+                stderr_trunc
+            );
+        }
+        return None;
+    }
+
+    let raw: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+        Ok(value) => value,
+        Err(err) => {
+            if log::log_enabled!(log::Level::Debug) {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout);
+
+                let stderr = stderr.trim();
+                let stdout = stdout.trim();
+
+                let stderr_trunc: String = stderr.chars().take(400).collect();
+                let stdout_trunc: String = stdout.chars().take(400).collect();
+
+                log::debug!(
+                    "osascript now playing JSON parse failed | error={:?} stdout={:?} stderr={:?}",
+                    err,
+                    stdout_trunc,
+                    stderr_trunc
+                );
+            }
+
+            return None;
+        }
+    };
+    let is_playing = raw.get("isPlaying").and_then(|v| v.as_bool());
+
+    let bundle_id = raw
+        .get("client")
+        .and_then(|c| c.get("parentApplicationBundleIdentifier"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            raw.get("client")
+                .and_then(|c| c.get("bundleIdentifier"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
+
+    let title = raw
+        .get("info")
+        .and_then(|info| info.get("kMRMediaRemoteNowPlayingInfoTitle"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Some(NowPlayingSnapshot {
+        is_playing,
+        bundle_id,
+        title,
+    })
+}
 
 /// Controller for pausing/resuming system media during voice recording.
 pub struct MediaPauseController {
     /// Tracks if we paused the media (so we know whether to resume)
     was_playing_before_recording: AtomicBool,
+
+    /// On Windows, track which media session we paused so we only resume the same session.
+    #[cfg(target_os = "windows")]
+    paused_session_source_app_user_model_id: Mutex<Option<String>>,
 }
 
 impl Default for MediaPauseController {
@@ -21,6 +180,8 @@ impl MediaPauseController {
     pub fn new() -> Self {
         Self {
             was_playing_before_recording: AtomicBool::new(false),
+            #[cfg(target_os = "windows")]
+            paused_session_source_app_user_model_id: Mutex::new(None),
         }
     }
 
@@ -70,6 +231,14 @@ impl MediaPauseController {
     /// Reset state without resuming (e.g., if app is closing)
     pub fn reset(&self) {
         self.was_playing_before_recording.store(false, Ordering::SeqCst);
+
+        #[cfg(target_os = "windows")]
+        {
+            *self
+                .paused_session_source_app_user_model_id
+                .lock()
+                .unwrap() = None;
+        }
     }
 }
 
@@ -79,46 +248,168 @@ impl MediaPauseController {
 #[cfg(target_os = "macos")]
 impl MediaPauseController {
     fn pause_if_playing_macos(&self) -> bool {
-        use media_remote::{Controller, NowPlayingPerl};
-
-        let now_playing = NowPlayingPerl::new();
-
-        // Check if media is currently playing
-        let is_playing = {
-            let guard = now_playing.get_info();
-            if let Some(info) = guard.as_ref() {
-                info.is_playing == Some(true)
-            } else {
-                false
-            }
+        use media_remote::{
+            get_now_playing_application_is_playing, get_now_playing_application_pid,
+            get_now_playing_client_bundle_identifier,
+            get_now_playing_client_parent_app_bundle_identifier, get_now_playing_info,
+            send_command, Command,
         };
 
-        if is_playing {
-            log::info!("🎵 Media is playing, pausing for recording...");
-            self.was_playing_before_recording.store(true, Ordering::SeqCst);
+        // Ensure MediaRemote is initialized.
+        Lazy::force(&MEDIA_REMOTE_NOTIFICATIONS);
 
-            if now_playing.pause() {
-                log::info!("✅ Media paused successfully");
-                true
-            } else {
+        let is_playing_raw = get_now_playing_application_is_playing();
+        let is_playing = is_playing_raw.unwrap_or(false);
+
+        if !is_playing {
+            let bundle_id = get_now_playing_client_parent_app_bundle_identifier()
+                .or_else(get_now_playing_client_bundle_identifier);
+            let pid = get_now_playing_application_pid();
+
+            let info = get_now_playing_info();
+            let title = info.as_ref().and_then(|info| {
+                info.get("kMRMediaRemoteNowPlayingInfoTitle")
+                    .and_then(|v| match v {
+                        media_remote::InfoTypes::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
+            });
+
+            // Fallback: some clients seem to expose metadata but `...IsPlaying` is unreliable.
+            // Try to infer the playing state from the now playing info dictionary.
+            let inferred_is_playing = info.as_ref().and_then(|info| {
+                const PLAYBACK_RATE_KEYS: [&str; 3] = [
+                    "kMRMediaRemoteNowPlayingInfoPlaybackRate",
+                    "kMRMediaRemoteNowPlayingInfoDefaultPlaybackRate",
+                    "kMRMediaRemoteNowPlayingInfoRate",
+                ];
+
+                for key in PLAYBACK_RATE_KEYS {
+                    if let Some(media_remote::InfoTypes::Number(media_remote::Number::Floating(
+                        rate,
+                    ))) = info.get(key)
+                    {
+                        return Some(rate > &0.0);
+                    }
+                }
+
+                if let Some(media_remote::InfoTypes::Number(num)) =
+                    info.get("kMRMediaRemoteNowPlayingInfoIsPlaying")
+                {
+                    match num {
+                        media_remote::Number::Signed(v) => return Some(*v != 0),
+                        media_remote::Number::Unsigned(v) => return Some(*v != 0),
+                        media_remote::Number::Floating(v) => return Some(*v != 0.0),
+                    }
+                }
+
+                None
+            });
+
+            let osa_snapshot = now_playing_snapshot_via_osascript();
+            let osa_is_playing = osa_snapshot
+                .as_ref()
+                .and_then(|s| s.is_playing)
+                .unwrap_or(false);
+
+            // Diagnostics for cases where MediaRemote reports false while user expects playback.
+            if log::log_enabled!(log::Level::Debug) {
+                let mut keys = info
+                    .as_ref()
+                    .map(|info| {
+                        let mut keys: Vec<&str> = info.keys().map(|k| k.as_str()).collect();
+                        keys.sort_unstable();
+                        keys
+                    })
+                    .unwrap_or_default();
+
+                // Keep the log line reasonably sized.
+                if keys.len() > 40 {
+                    keys.truncate(40);
+                    keys.push("…");
+                }
+
+                let keys_str = if keys.is_empty() {
+                    "<none>".to_string()
+                } else {
+                    keys.join(", ")
+                };
+
+                log::debug!(
+                    "MediaRemote says not playing | is_playing={:?} inferred_is_playing={:?} bundle_id={:?} pid={:?} title={:?} keys=[{}] osa_is_playing={:?} osa_bundle_id={:?} osa_title={:?}",
+                    is_playing_raw,
+                    inferred_is_playing,
+                    bundle_id,
+                    pid,
+                    title,
+                    keys_str,
+                    osa_snapshot.as_ref().and_then(|s| s.is_playing),
+                    osa_snapshot
+                        .as_ref()
+                        .and_then(|s| s.bundle_id.as_deref()),
+                    osa_snapshot.as_ref().and_then(|s| s.title.as_deref())
+                );
+            }
+
+            let should_attempt_pause = inferred_is_playing == Some(true) || osa_is_playing;
+
+            if should_attempt_pause {
+                let reason = if inferred_is_playing == Some(true) {
+                    "inferred"
+                } else {
+                    "osascript"
+                };
+
+                log::info!(
+                    "🎵 Media appears to be playing ({}), pausing for recording...",
+                    reason
+                );
+
+                if send_command(Command::Pause) {
+                    log::info!("✅ Media paused successfully");
+                    self.was_playing_before_recording.store(true, Ordering::SeqCst);
+                    return true;
+                }
+
                 log::warn!("⚠️ Failed to pause media");
                 self.was_playing_before_recording.store(false, Ordering::SeqCst);
-                false
+                return false;
             }
-        } else {
+
             log::debug!("No media playing, nothing to pause");
+            self.was_playing_before_recording.store(false, Ordering::SeqCst);
+            return false;
+        }
+
+        log::info!("🎵 Media is playing, pausing for recording...");
+
+        if send_command(Command::Pause) {
+            log::info!("✅ Media paused successfully");
+            self.was_playing_before_recording.store(true, Ordering::SeqCst);
+            true
+        } else {
+            log::warn!("⚠️ Failed to pause media");
             self.was_playing_before_recording.store(false, Ordering::SeqCst);
             false
         }
     }
 
     fn resume_macos(&self) -> bool {
-        use media_remote::{Controller, NowPlayingPerl};
+        use media_remote::{send_command, Command};
+
+        // Ensure MediaRemote is initialized.
+        Lazy::force(&MEDIA_REMOTE_NOTIFICATIONS);
+
+        if now_playing_snapshot_via_osascript()
+            .and_then(|s| s.is_playing)
+            .unwrap_or(false)
+        {
+            log::debug!("Media already playing (osascript), skipping resume");
+            return false;
+        }
 
         log::info!("🎵 Resuming media playback...");
-        let now_playing = NowPlayingPerl::new();
-
-        if now_playing.play() {
+        if send_command(Command::Play) {
             log::info!("✅ Media resumed successfully");
             true
         } else {
@@ -136,7 +427,9 @@ impl MediaPauseController {
 #[cfg(target_os = "windows")]
 impl MediaPauseController {
     fn pause_if_playing_windows(&self) -> bool {
+        use std::{thread, time::Duration};
         use windows::Media::Control::{
+            GlobalSystemMediaTransportControlsSession,
             GlobalSystemMediaTransportControlsSessionManager,
             GlobalSystemMediaTransportControlsSessionPlaybackStatus,
         };
@@ -156,34 +449,150 @@ impl MediaPauseController {
             }
         };
 
-        // Get current session (the app currently controlling media)
-        let session = match manager.GetCurrentSession() {
-            Ok(s) => s,
-            Err(_) => {
-                log::debug!("No active media session found");
-                return false;
-            }
-        };
+        fn is_pausable(session: &GlobalSystemMediaTransportControlsSession) -> bool {
+            let playback_info = match session.GetPlaybackInfo() {
+                Ok(info) => info,
+                Err(_) => return false,
+            };
 
-        // Check playback status
-        let is_playing = match session.GetPlaybackInfo() {
-            Ok(info) => match info.PlaybackStatus() {
-                Ok(status) => {
-                    status == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing
-                }
-                Err(_) => false,
-            },
-            Err(_) => false,
-        };
+            let controls = match playback_info.Controls() {
+                Ok(controls) => controls,
+                Err(_) => return false,
+            };
 
-        if !is_playing {
-            log::debug!("Media not playing, nothing to pause");
-            self.was_playing_before_recording.store(false, Ordering::SeqCst);
-            return false;
+            controls.IsPauseEnabled().unwrap_or(false)
         }
 
+        fn is_playing(session: &GlobalSystemMediaTransportControlsSession) -> bool {
+            let playback_info = match session.GetPlaybackInfo() {
+                Ok(info) => info,
+                Err(_) => return false,
+            };
+
+            let status = match playback_info.PlaybackStatus() {
+                Ok(status) => status,
+                Err(_) => return false,
+            };
+
+            status == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing
+        }
+
+        fn timeline_position_ticks(session: &GlobalSystemMediaTransportControlsSession) -> Option<i64> {
+            let timeline = session.GetTimelineProperties().ok()?;
+            Some(timeline.Position().ok()?.Duration)
+        }
+
+        let mut candidate_session = manager
+            .GetCurrentSession()
+            .ok()
+            .filter(|session| is_playing(session) && is_pausable(session));
+
+        if candidate_session.is_none() {
+            if let Ok(sessions) = manager.GetSessions() {
+                if let Ok(size) = sessions.Size() {
+                    for i in 0..size {
+                        let session = match sessions.GetAt(i) {
+                            Ok(session) => session,
+                            Err(_) => continue,
+                        };
+
+                        if !is_playing(&session) {
+                            continue;
+                        }
+
+                        if !is_pausable(&session) {
+                            continue;
+                        }
+
+                        candidate_session = Some(session);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Fallback: some sessions occasionally report non-Playing states even while audio is
+        // progressing. If we can observe timeline position advancing over a short interval,
+        // treat it as playing and pause it.
+        if candidate_session.is_none() {
+            let current_session_id = manager
+                .GetCurrentSession()
+                .ok()
+                .and_then(|s| s.SourceAppUserModelId().ok().map(|id| id.to_string()));
+
+            let mut candidates: Vec<(String, GlobalSystemMediaTransportControlsSession, i64)> =
+                Vec::new();
+
+            if let Ok(sessions) = manager.GetSessions() {
+                if let Ok(size) = sessions.Size() {
+                    for i in 0..size {
+                        let session = match sessions.GetAt(i) {
+                            Ok(session) => session,
+                            Err(_) => continue,
+                        };
+
+                        if !is_pausable(&session) {
+                            continue;
+                        }
+
+                        let id = match session.SourceAppUserModelId() {
+                            Ok(id) => id.to_string(),
+                            Err(_) => continue,
+                        };
+
+                        let pos = timeline_position_ticks(&session).unwrap_or(0);
+                        candidates.push((id, session, pos));
+                    }
+                }
+            }
+
+            if !candidates.is_empty() {
+                if let Some(current_session_id) = current_session_id {
+                    if let Some(idx) = candidates.iter().position(|(id, _, _)| id == &current_session_id)
+                    {
+                        let current = candidates.remove(idx);
+                        candidates.insert(0, current);
+                    }
+                }
+
+                thread::sleep(Duration::from_millis(120));
+
+                // 1 tick = 100ns, so 50ms = 500_000 ticks.
+                const DELTA_THRESHOLD_TICKS: i64 = 50 * 10_000;
+
+                for (id, session, before) in candidates {
+                    let after = timeline_position_ticks(&session).unwrap_or(before);
+                    let delta = after.saturating_sub(before);
+
+                    if delta > DELTA_THRESHOLD_TICKS {
+                        log::debug!(
+                            "Inferred playing session via timeline movement | source_app_id={} delta_ms={}",
+                            id,
+                            delta / 10_000
+                        );
+                        candidate_session = Some(session);
+                        break;
+                    }
+                }
+            }
+        }
+
+        let Some(session) = candidate_session else {
+            log::debug!("No playing, pausable media session found");
+            self.was_playing_before_recording.store(false, Ordering::SeqCst);
+            *self
+                .paused_session_source_app_user_model_id
+                .lock()
+                .unwrap() = None;
+            return false;
+        };
+
         log::info!("Media is playing, pausing for recording...");
-        self.was_playing_before_recording.store(true, Ordering::SeqCst);
+
+        let source_app_id = session
+            .SourceAppUserModelId()
+            .ok()
+            .map(|id| id.to_string());
 
         // Use explicit pause (not toggle!)
         match session.TryPauseAsync() {
@@ -191,22 +600,39 @@ impl MediaPauseController {
                 Ok(success) => {
                     if success {
                         log::info!("Media paused successfully via GSMTC");
+                        self.was_playing_before_recording.store(true, Ordering::SeqCst);
+                        *self
+                            .paused_session_source_app_user_model_id
+                            .lock()
+                            .unwrap() = source_app_id;
                         true
                     } else {
                         log::warn!("GSMTC TryPauseAsync returned false");
                         self.was_playing_before_recording.store(false, Ordering::SeqCst);
+                        *self
+                            .paused_session_source_app_user_model_id
+                            .lock()
+                            .unwrap() = None;
                         false
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to pause media: {:?}", e);
                     self.was_playing_before_recording.store(false, Ordering::SeqCst);
+                    *self
+                        .paused_session_source_app_user_model_id
+                        .lock()
+                        .unwrap() = None;
                     false
                 }
             },
             Err(e) => {
                 log::warn!("Failed to request pause: {:?}", e);
                 self.was_playing_before_recording.store(false, Ordering::SeqCst);
+                *self
+                    .paused_session_source_app_user_model_id
+                    .lock()
+                    .unwrap() = None;
                 false
             }
         }
@@ -232,14 +658,76 @@ impl MediaPauseController {
             }
         };
 
-        // Get current session
-        let session = match manager.GetCurrentSession() {
-            Ok(s) => s,
-            Err(_) => {
-                log::warn!("No active media session found for resume");
-                return false;
+        let paused_id = self
+            .paused_session_source_app_user_model_id
+            .lock()
+            .unwrap()
+            .take();
+
+        let session = if let Some(paused_id) = paused_id {
+            let sessions = match manager.GetSessions() {
+                Ok(sessions) => sessions,
+                Err(e) => {
+                    log::warn!("Failed to enumerate GSMTC sessions for resume: {:?}", e);
+                    return false;
+                }
+            };
+
+            let size = match sessions.Size() {
+                Ok(size) => size,
+                Err(e) => {
+                    log::warn!("Failed to read GSMTC sessions size for resume: {:?}", e);
+                    return false;
+                }
+            };
+
+            let mut found = None;
+            for i in 0..size {
+                let session = match sessions.GetAt(i) {
+                    Ok(session) => session,
+                    Err(_) => continue,
+                };
+
+                let session_id = match session.SourceAppUserModelId() {
+                    Ok(id) => id.to_string(),
+                    Err(_) => continue,
+                };
+
+                if session_id == paused_id {
+                    found = Some(session);
+                    break;
+                }
+            }
+
+            match found {
+                Some(session) => session,
+                None => {
+                    log::debug!(
+                        "Paused media session is no longer available; skipping resume"
+                    );
+                    return false;
+                }
+            }
+        } else {
+            match manager.GetCurrentSession() {
+                Ok(session) => session,
+                Err(_) => {
+                    log::warn!("No active media session found for resume");
+                    return false;
+                }
             }
         };
+
+        // If it is already playing, don't send play.
+        if let Ok(playback_info) = session.GetPlaybackInfo() {
+            if let Ok(status) = playback_info.PlaybackStatus() {
+                use windows::Media::Control::GlobalSystemMediaTransportControlsSessionPlaybackStatus;
+                if status == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing {
+                    log::debug!("Media already playing, skipping resume");
+                    return false;
+                }
+            }
+        }
 
         // Use explicit play (not toggle!)
         match session.TryPlayAsync() {
