@@ -14,6 +14,12 @@ struct UnifiedStateInner {
     current: RecordingState,
 }
 
+impl Default for UnifiedRecordingState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UnifiedRecordingState {
     pub fn new() -> Self {
         Self {

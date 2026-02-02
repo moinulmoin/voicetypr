@@ -41,7 +41,6 @@ export function CrashReportDialog({
 
   useEffect(() => {
     if (isOpen && error) {
-      setIsLoading(true);
       gatherCrashReportData(error, componentStack, currentModel)
         .then(setCrashData)
         .catch(console.error)

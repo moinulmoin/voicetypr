@@ -85,8 +85,7 @@ fn should_hide_pill_when_idle(mode: &str) -> bool {
 /// - "never" → always hide (return true)
 /// - "always" → never hide (return false)
 /// - "when_recording" → hide when idle (return true)
-/// Fails open: on error, returns true (default to when_recording behavior).
-#[track_caller]
+///   Fails open: on error, returns true (default to when_recording behavior).
 pub async fn should_hide_pill(app: &AppHandle) -> bool {
     let store = match app.store("settings") {
         Ok(s) => s,
@@ -523,7 +522,7 @@ fn select_best_fallback_model(
     if !requested.is_empty() {
         // If requested "large-v3", try other large variants first
         for model in available_models {
-            if model.starts_with(&requested.split('-').next().unwrap_or(requested)) {
+            if model.starts_with(requested.split('-').next().unwrap_or(requested)) {
                 return model.clone();
             }
         }
@@ -538,8 +537,7 @@ fn select_best_fallback_model(
 
     // If no priority model found, return first available
     available_models
-        .first()
-        .map(|s| s.clone())
+        .first().cloned()
         .unwrap_or_else(|| {
             log::error!("No models available for fallback selection");
             // This should never happen as we check for empty models before calling this function
@@ -695,7 +693,7 @@ pub async fn start_recording(
                     ("stage", "validation"),
                     (
                         "validation_time_ms",
-                        &validation_start.elapsed().as_millis().to_string().as_str(),
+                        validation_start.elapsed().as_millis().to_string().as_str(),
                     ),
                 ],
             );
@@ -827,7 +825,7 @@ pub async fn start_recording(
             &[("stage", "pre_recording")],
         );
 
-        if let Ok(host) = std::panic::catch_unwind(|| cpal::default_host()) {
+        if let Ok(host) = std::panic::catch_unwind(cpal::default_host) {
             if let Some(device) = host.default_input_device() {
                 if let Ok(name) = device.name() {
                     log::info!("🎙️ Audio device available: {}", name);
@@ -886,7 +884,7 @@ pub async fn start_recording(
                             ("audio_path", audio_path_str),
                             (
                                 "init_time_ms",
-                                &recorder_init_start
+                                recorder_init_start
                                     .elapsed()
                                     .as_millis()
                                     .to_string()
@@ -929,7 +927,7 @@ pub async fn start_recording(
                         ("audio_path", audio_path_str),
                         (
                             "init_time_ms",
-                            &recorder_init_start
+                            recorder_init_start
                                 .elapsed()
                                 .as_millis()
                                 .to_string()
@@ -1047,7 +1045,7 @@ pub async fn start_recording(
         log::Level::Debug,
         "Recording started successfully",
         &[
-            ("audio_path", &format!("{:?}", audio_path).as_str()),
+            ("audio_path", format!("{:?}", audio_path).as_str()),
             ("state", "recording"),
         ],
     );
@@ -1073,7 +1071,7 @@ pub async fn start_recording(
     }
 
     // Register the ESC key globally
-    match app.global_shortcut().register(escape_shortcut.clone()) {
+    match app.global_shortcut().register(escape_shortcut) {
         Ok(_) => {
             log::info!("Successfully registered global ESC key for recording cancellation");
         }
@@ -1100,7 +1098,7 @@ pub async fn stop_recording(
         "Stop recording command",
         &[
             ("command", "stop_recording"),
-            ("timestamp", &chrono::Utc::now().to_rfc3339().as_str()),
+            ("timestamp", chrono::Utc::now().to_rfc3339().as_str()),
         ],
     );
 
@@ -1350,7 +1348,7 @@ pub async fn stop_recording(
                 "Selecting model",
                 &[(
                     "available_count",
-                    &downloaded_models.len().to_string().as_str(),
+                    downloaded_models.len().to_string().as_str(),
                 )],
             );
 
@@ -1499,11 +1497,11 @@ pub async fn stop_recording(
                     log::Level::Info,
                     "NORMALIZED_AUDIO",
                     &[
-                        ("path", &format!("{:?}", normalized_path).as_str()),
-                        ("sample_rate", &spec.sample_rate.to_string().as_str()),
-                        ("channels", &spec.channels.to_string().as_str()),
-                        ("bits", &spec.bits_per_sample.to_string().as_str()),
-                        ("duration_s", &format!("{:.2}", duration).as_str()),
+                        ("path", format!("{:?}", normalized_path).as_str()),
+                        ("sample_rate", spec.sample_rate.to_string().as_str()),
+                        ("channels", spec.channels.to_string().as_str()),
+                        ("bits", spec.bits_per_sample.to_string().as_str()),
+                        ("duration_s", format!("{:.2}", duration).as_str()),
                     ],
                 );
                 Ok(duration < min_duration_s_f32)
@@ -1533,7 +1531,7 @@ pub async fn stop_recording(
         log::Level::Debug,
         "Proceeding to transcription",
         &[
-            ("audio_path", &format!("{:?}", audio_path).as_str()),
+            ("audio_path", format!("{:?}", audio_path).as_str()),
             ("stage", "pre_transcription"),
         ],
     );

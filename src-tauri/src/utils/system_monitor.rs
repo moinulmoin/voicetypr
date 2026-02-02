@@ -230,7 +230,7 @@ pub fn log_gpu_memory() {
     {
         // Use Metal performance shaders info if available
         if let Ok(output) = std::process::Command::new("system_profiler")
-            .args(&["SPDisplaysDataType", "-json"])
+            .args(["SPDisplaysDataType", "-json"])
             .output()
         {
             if let Ok(_json) = String::from_utf8(output.stdout) {

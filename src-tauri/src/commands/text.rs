@@ -148,7 +148,7 @@ fn insert_via_clipboard(
 
                 // Fallback to AppleScript
                 let paste_result =
-                    panic::catch_unwind(AssertUnwindSafe(|| try_paste_with_applescript()));
+                    panic::catch_unwind(AssertUnwindSafe(try_paste_with_applescript));
 
                 match paste_result {
                     Ok(Ok(_)) => {

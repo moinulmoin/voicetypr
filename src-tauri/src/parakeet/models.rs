@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use once_cell::sync::Lazy;
 
 #[derive(Debug, Clone)]

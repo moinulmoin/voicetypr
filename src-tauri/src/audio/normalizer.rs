@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::audio::resampler::resample_to_16khz;
 use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 use rand::Rng;

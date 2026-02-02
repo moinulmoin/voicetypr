@@ -1,31 +1,31 @@
-use std::collections::HashMap;
+//! Structured logging utilities for VoiceTypr debugging.
+//!
+//! This module provides consistent logging patterns across the application
+//! to help diagnose production issues, performance bottlenecks, and silent failures.
+//!
+//! ## Performance Strategy
+//!
+//! This module uses a **selective performance optimization** approach:
+//!
+//! ### Production Logging (What Users See)
+//! - **Major operations**: ALWAYS logged (recording, transcription, errors)
+//! - **Hot paths**: Sampled at 1% or disabled
+//! - **Debug details**: Only when explicitly enabled via log level
+//!
+//! ### Performance Optimizations
+//! 1. **Log level checking**: Skip expensive ops if logs filtered out
+//! 2. **Sampling**: Hot paths use `log_context_sampled!` (1% sample rate)
+//! 3. **Lazy evaluation**: Only format strings if actually logging
+//!
+//! ### Usage Guidelines
+//!
+//! For different code paths:
+//! - **User operations** (record/transcribe): Use normal logging
+//! - **Hot paths** (audio processing): Use `log_simple!` or sampling
+//! - **Error paths**: ALWAYS log with full context
+//! - **Performance tests**: Use specialized test macros
 
-/// Structured logging utilities for VoiceTypr debugging
-///
-/// This module provides consistent logging patterns across the application
-/// to help diagnose production issues, performance bottlenecks, and silent failures.
-///
-/// ## Performance Strategy
-///
-/// This module uses a **selective performance optimization** approach:
-///
-/// ### Production Logging (What Users See)
-/// - **Major operations**: ALWAYS logged (recording, transcription, errors)
-/// - **Hot paths**: Sampled at 1% or disabled
-/// - **Debug details**: Only when explicitly enabled via log level
-///
-/// ### Performance Optimizations
-/// 1. **Log level checking**: Skip expensive ops if logs filtered out
-/// 2. **Sampling**: Hot paths use `log_context_sampled!` (1% sample rate)
-/// 3. **Lazy evaluation**: Only format strings if actually logging
-///
-/// ### Usage Guidelines
-///
-/// For different code paths:
-/// - **User operations** (record/transcribe): Use normal logging
-/// - **Hot paths** (audio processing): Use `log_simple!` or sampling
-/// - **Error paths**: ALWAYS log with full context
-/// - **Performance tests**: Use specialized test macros
+use std::collections::HashMap;
 
 // NOTE: LogEvent enums and complex structures have been removed
 // We now use simple logging functions (log_start, log_complete, log_failed, log_with_context)

@@ -1,12 +1,10 @@
 use crate::ai::{AIEnhancementRequest, AIProviderConfig, AIProviderFactory, EnhancementOptions};
 use crate::commands::audio::pill_toast;
 use once_cell::sync::Lazy;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Duration;
 use tauri_plugin_store::StoreExt;
 
 // In-memory cache for API keys to avoid system password prompts

@@ -29,13 +29,12 @@ impl OpenAIProvider {
             .unwrap_or(false);
 
         // Validate API key format (basic check) only if auth is required
-        if !no_auth {
-            if api_key.trim().is_empty() || api_key.len() < MIN_API_KEY_LENGTH {
+        if !no_auth
+            && (api_key.trim().is_empty() || api_key.len() < MIN_API_KEY_LENGTH) {
                 return Err(AIError::ValidationError(
                     "Invalid API key format".to_string(),
                 ));
             }
-        }
 
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))

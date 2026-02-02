@@ -98,7 +98,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
                 should_mark_model_selected(onboarding_done, &model_name, &current_model);
             let model_item = CheckMenuItem::with_id(
                 app,
-                &format!("model_{}", model_name),
+                format!("model_{}", model_name),
                 display_name,
                 true,
                 is_selected,
@@ -175,7 +175,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             let is_selected = selected_microphone.as_ref() == Some(device_name);
             let mic_item = CheckMenuItem::with_id(
                 app,
-                &format!("microphone_{}", device_name),
+                format!("microphone_{}", device_name),
                 device_name,
                 true,
                 is_selected,
@@ -242,7 +242,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
 
                 let item = tauri::menu::MenuItem::with_id(
                     app,
-                    &format!("recent_copy_{}", ts),
+                    format!("recent_copy_{}", ts),
                     label,
                     true,
                     None::<&str>,

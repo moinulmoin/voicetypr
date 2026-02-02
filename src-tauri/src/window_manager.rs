@@ -58,7 +58,7 @@ impl WindowManager {
             &[
                 (
                     "main_window_available",
-                    &main_available.to_string().as_str(),
+                    main_available.to_string().as_str(),
                 ),
                 ("pill_window_created", "false"),
             ],

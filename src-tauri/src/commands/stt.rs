@@ -2,6 +2,7 @@ use reqwest::StatusCode;
 use tauri::AppHandle;
 
 #[tauri::command]
+#[allow(non_snake_case)]
 pub async fn validate_and_cache_soniox_key(
     api_key: Option<String>,
     apiKey: Option<String>,

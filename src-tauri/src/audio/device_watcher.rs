@@ -70,6 +70,7 @@ impl DeviceWatcher {
     }
 
     /// Check if the watcher is currently running.
+    #[allow(dead_code)]
     pub fn is_running(&self) -> bool {
         self.started.load(Ordering::Relaxed)
     }

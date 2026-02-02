@@ -135,7 +135,7 @@ impl TranscriberCache {
                     ("operation", "MODEL_CLEANUP"),
                     ("model_path", &key),
                     ("reason", "cache_eviction"),
-                    ("cache_size", &self.map.len().to_string().as_str()),
+                    ("cache_size", self.map.len().to_string().as_str()),
                 ],
             );
 
@@ -148,7 +148,7 @@ impl TranscriberCache {
                     &[
                         ("operation", "MODEL_CLEANUP"),
                         ("model_path", &key),
-                        ("ref_count_before_drop", &ref_count.to_string().as_str()),
+                        ("ref_count_before_drop", ref_count.to_string().as_str()),
                         ("cleanup_result", "success"),
                     ],
                 );

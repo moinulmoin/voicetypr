@@ -425,11 +425,11 @@ impl WhisperManager {
             match model_info.sha256.len() {
                 40 => {
                     // SHA1 checksum (legacy from whisper.cpp)
-                    Self::verify_sha1_checksum(&output_path, &model_info.sha256).await?;
+                    Self::verify_sha1_checksum(output_path, &model_info.sha256).await?;
                 }
                 64 => {
                     // SHA256 checksum (preferred)
-                    Self::verify_sha256_checksum(&output_path, &model_info.sha256).await?;
+                    Self::verify_sha256_checksum(output_path, &model_info.sha256).await?;
                 }
                 _ => {
                     log::warn!(

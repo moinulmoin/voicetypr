@@ -6,7 +6,7 @@ use std::str::FromStr;
 pub fn normalize_shortcut_keys(shortcut: &str) -> String {
     shortcut
         .split('+')
-        .map(|key_str| normalize_single_key(key_str))
+        .map(normalize_single_key)
         .collect::<Vec<_>>()
         .join("+")
 }
@@ -101,7 +101,7 @@ fn normalize_single_key(key: &str) -> String {
             k if k.starts_with('F') && k.len() <= 3 => {
                 // Validate it's a function key F1-F24
                 if let Ok(num) = k[1..].parse::<u8>() {
-                    if num >= 1 && num <= 24 {
+                    if (1..=24).contains(&num) {
                         return key.to_string(); // Valid function key
                     }
                 }

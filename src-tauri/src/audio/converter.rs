@@ -10,6 +10,7 @@ use symphonia::core::probe::Hint;
 
 /// Convert any audio file to WAV format (16kHz, mono, 16-bit PCM)
 /// Returns the path to the converted WAV file
+#[allow(dead_code)]
 pub fn convert_to_wav(input_path: &Path, output_dir: &Path) -> Result<PathBuf, String> {
     // Check if input is already a WAV file
     if input_path

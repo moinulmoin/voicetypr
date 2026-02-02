@@ -118,7 +118,7 @@ impl WindowsCommandRunner for RealWindowsCommandRunner {
 fn get_macos_uuid() -> Result<String, String> {
     // Get hardware UUID on macOS
     let output = Command::new("ioreg")
-        .args(&["-d2", "-c", "IOPlatformExpertDevice"])
+        .args(["-d2", "-c", "IOPlatformExpertDevice"])
         .output()
         .map_err(|e| format!("Failed to execute ioreg: {}", e))?;
 

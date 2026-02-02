@@ -93,6 +93,7 @@ pub trait AIProvider: Send + Sync {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct AIModel {
     pub id: String,
     pub name: String,

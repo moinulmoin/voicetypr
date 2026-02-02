@@ -101,7 +101,7 @@ impl Transcriber {
                         log::Level::Info,
                         "🎮 METAL_SUCCESS",
                         &[
-                            ("init_time_ms", &init_time.to_string().as_str()),
+                            ("init_time_ms", init_time.to_string().as_str()),
                             ("acceleration", "enabled"),
                         ],
                     );
@@ -120,11 +120,11 @@ impl Transcriber {
                         log::Level::Info,
                         "🎮 METAL_FALLBACK",
                         &[
-                            ("error", &gpu_err.to_string().as_str()),
+                            ("error", gpu_err.to_string().as_str()),
                             ("fallback_to", "CPU"),
                             (
                                 "attempt_time_ms",
-                                &metal_start.elapsed().as_millis().to_string().as_str(),
+                                metal_start.elapsed().as_millis().to_string().as_str(),
                             ),
                         ],
                     );
@@ -286,8 +286,8 @@ impl Transcriber {
             "🎮 WHISPER_BACKEND",
             &[
                 ("backend", backend_type),
-                ("gpu_used", &gpu_used.to_string().as_str()),
-                ("init_time_ms", &cpu_time.to_string().as_str()),
+                ("gpu_used", gpu_used.to_string().as_str()),
+                ("init_time_ms", cpu_time.to_string().as_str()),
             ],
         );
 
@@ -298,7 +298,7 @@ impl Transcriber {
             &[
                 ("backend", backend_type),
                 ("model_path", model_path_str),
-                ("gpu_acceleration", &gpu_used.to_string().as_str()),
+                ("gpu_acceleration", gpu_used.to_string().as_str()),
             ],
         );
 
@@ -317,7 +317,7 @@ impl Transcriber {
                 ("supports_multilingual", "true"), // Whisper models are multilingual
                 (
                     "model_size_mb",
-                    &(std::fs::metadata(model_path)
+                    (std::fs::metadata(model_path)
                         .map(|m| m.len() / 1024 / 1024)
                         .unwrap_or(0)
                         .to_string())
@@ -362,8 +362,8 @@ impl Transcriber {
             &[
                 ("audio_path", &audio_path_str),
                 ("language", language.unwrap_or("auto")),
-                ("translate", &translate.to_string().as_str()),
-                ("timestamp", &chrono::Utc::now().to_rfc3339().as_str()),
+                ("translate", translate.to_string().as_str()),
+                ("timestamp", chrono::Utc::now().to_rfc3339().as_str()),
             ],
         );
 
@@ -514,11 +514,11 @@ impl Transcriber {
             &[
                 (
                     "preprocessing_time_ms",
-                    &preprocessing_time.to_string().as_str(),
+                    preprocessing_time.to_string().as_str(),
                 ),
                 ("sample_rate", "16000"),
                 ("channels", "1"),
-                ("samples", &resampled_audio.len().to_string().as_str()),
+                ("samples", resampled_audio.len().to_string().as_str()),
             ],
         );
 
@@ -648,7 +648,7 @@ impl Transcriber {
 
         // Check minimum duration (0.5 seconds)
         if duration_seconds < 0.5 {
-            let error = format!("Recording too short");
+            let error = "Recording too short".to_string();
             log::warn!("[TRANSCRIPTION_DEBUG] {}", error);
             return Err(error);
         }
@@ -661,13 +661,13 @@ impl Transcriber {
             log::Level::Debug,
             "Starting Whisper inference",
             &[
-                ("samples", &samples_count.to_string().as_str()),
+                ("samples", samples_count.to_string().as_str()),
                 (
                     "duration_seconds",
-                    &format!("{:.2}", duration_seconds).as_str(),
+                    format!("{:.2}", duration_seconds).as_str(),
                 ),
                 ("language", language.unwrap_or("auto")),
-                ("translate", &translate.to_string().as_str()),
+                ("translate", translate.to_string().as_str()),
             ],
         );
 
@@ -697,14 +697,14 @@ impl Transcriber {
                     log::Level::Debug,
                     "Inference failed",
                     &[
-                        ("samples", &samples_count.to_string().as_str()),
+                        ("samples", samples_count.to_string().as_str()),
                         (
                             "duration_seconds",
-                            &format!("{:.2}", duration_seconds).as_str(),
+                            format!("{:.2}", duration_seconds).as_str(),
                         ),
                         (
                             "inference_time_ms",
-                            &inference_start.elapsed().as_millis().to_string().as_str(),
+                            inference_start.elapsed().as_millis().to_string().as_str(),
                         ),
                     ],
                 );
@@ -759,10 +759,10 @@ impl Transcriber {
                 log::Level::Debug,
                 "Empty result",
                 &[
-                    ("segments", &num_segments.to_string().as_str()),
+                    ("segments", num_segments.to_string().as_str()),
                     (
                         "total_time_ms",
-                        &total_time.as_millis().to_string().as_str(),
+                        total_time.as_millis().to_string().as_str(),
                     ),
                 ],
             );
@@ -773,10 +773,10 @@ impl Transcriber {
                 "No speech",
                 &[
                     ("result", "[SOUND]"),
-                    ("segments", &num_segments.to_string().as_str()),
+                    ("segments", num_segments.to_string().as_str()),
                     (
                         "total_time_ms",
-                        &total_time.as_millis().to_string().as_str(),
+                        total_time.as_millis().to_string().as_str(),
                     ),
                 ],
             );
@@ -786,11 +786,11 @@ impl Transcriber {
                 log::Level::Debug,
                 "Transcription complete",
                 &[
-                    ("result_length", &result.len().to_string().as_str()),
-                    ("segments", &num_segments.to_string().as_str()),
+                    ("result_length", result.len().to_string().as_str()),
+                    ("segments", num_segments.to_string().as_str()),
                     (
                         "audio_duration_seconds",
-                        &format!("{:.2}", duration_seconds).as_str(),
+                        format!("{:.2}", duration_seconds).as_str(),
                     ),
                 ],
             );

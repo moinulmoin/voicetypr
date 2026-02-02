@@ -3,10 +3,7 @@
 //! Pauses system media when recording starts and resumes when recording stops.
 //! Only resumes if WE paused it (not if user manually paused during recording).
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Mutex,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(target_os = "macos")]
 use once_cell::sync::Lazy;
@@ -211,7 +208,7 @@ impl MediaPauseController {
         if self.was_playing_before_recording.swap(false, Ordering::SeqCst) {
             #[cfg(target_os = "macos")]
             {
-                return self.resume_macos();
+                self.resume_macos()
             }
 
             #[cfg(target_os = "windows")]
@@ -229,6 +226,7 @@ impl MediaPauseController {
     }
 
     /// Reset state without resuming (e.g., if app is closing)
+    #[allow(dead_code)]
     pub fn reset(&self) {
         self.was_playing_before_recording.store(false, Ordering::SeqCst);
 

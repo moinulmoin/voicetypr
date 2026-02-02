@@ -78,6 +78,7 @@ impl Default for Settings {
 
 /// Log a message from the frontend to the backend logs
 #[tauri::command]
+#[allow(dead_code)]
 pub async fn frontend_log(message: String) {
     log::info!("[FRONTEND] {}", message);
 }
@@ -373,13 +374,13 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
                 // Unregister old PTT shortcut if exists
                 if let Ok(ptt_guard) = app_state.ptt_shortcut.lock() {
-                    if let Some(old_ptt) = ptt_guard.clone() {
+                    if let Some(old_ptt) = *ptt_guard {
                         let _ = shortcuts.unregister(old_ptt);
                     }
                 }
 
                 // Register new PTT shortcut
-                match shortcuts.register(ptt_shortcut.clone()) {
+                match shortcuts.register(ptt_shortcut) {
                     Ok(_) => {
                         if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
                             *ptt_guard = Some(ptt_shortcut);
@@ -395,7 +396,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     } else {
         // Clear PTT shortcut if not using different key
         if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
-            if let Some(old_ptt) = ptt_guard.clone() {
+            if let Some(old_ptt) = *ptt_guard {
                 let _ = app.global_shortcut().unregister(old_ptt);
             }
             *ptt_guard = None;
@@ -486,10 +487,8 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             if let Err(e) = crate::commands::window::show_pill_widget(app.clone()).await {
                 log::warn!("Failed to show pill window: {}", e);
             }
-        } else {
-            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-                log::warn!("Failed to hide pill window: {}", e);
-            }
+        } else if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+            log::warn!("Failed to hide pill window: {}", e);
         }
     }
 
@@ -590,7 +589,7 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
         .recording_shortcut
         .lock()
         .ok()
-        .and_then(|guard| guard.clone());
+        .and_then(|guard| *guard);
 
     if let Some(old) = old_shortcut {
         log::debug!("Unregistering old shortcut: {:?}", old);
@@ -607,7 +606,7 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
     log::debug!("Registering new shortcut: {}", normalized_shortcut);
 
     // Attempt registration - according to docs, ANY error means hotkey won't work
-    let registration_result = shortcuts.register(new_shortcut.clone());
+    let registration_result = shortcuts.register(new_shortcut);
 
     match registration_result {
         Ok(_) => {
@@ -628,9 +627,9 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
                 || error_lower.contains("conflict")
                 || error_lower.contains("in use")
             {
-                format!("Hotkey is already in use by another application. Please choose a different combination.")
+                "Hotkey is already in use by another application. Please choose a different combination.".to_string()
             } else if error_lower.contains("parse") || error_lower.contains("invalid") {
-                format!("Invalid hotkey combination. Please use a valid key combination.")
+                "Invalid hotkey combination. Please use a valid key combination.".to_string()
             } else {
                 format!("Failed to register hotkey: {}", e)
             };
