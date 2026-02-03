@@ -86,6 +86,10 @@ jobs:
   # ===========================================
   build-windows:
     runs-on: windows-latest
+    env:
+      # whisper.cpp/ggml Vulkan build generates very deep paths; keep Windows paths short to
+      # avoid MSBuild/FileTracker failures.
+      CARGO_TARGET_DIR: D:\cargo-target
     steps:
       - uses: actions/checkout@v4
 
@@ -98,6 +102,10 @@ jobs:
         uses: pnpm/action-setup@v3
         with:
           version: 9
+
+      - name: Prepare cargo target dir
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path $env:CARGO_TARGET_DIR | Out-Null
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
