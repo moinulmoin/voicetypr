@@ -48,8 +48,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Rust version
+        run: |
+          rustc -Vv
+          cargo -V
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -70,8 +72,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Rust version
+        shell: pwsh
+        run: |
+          rustc -Vv
+          cargo -V
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -110,8 +115,10 @@ jobs:
         with:
           version: 9
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Rust version
+        run: |
+          rustc -Vv
+          cargo -V
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
