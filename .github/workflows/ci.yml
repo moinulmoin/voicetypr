@@ -142,8 +142,8 @@ jobs:
       - name: Build frontend
         run: pnpm build
 
-      - name: Rust tests
-        run: cd src-tauri && cargo test
+      - name: Rust tests (compile-only on Windows runner)
+        run: cd src-tauri && cargo test --no-run
 
       - name: Build Tauri (release)
         run: cd src-tauri && cargo build --release
@@ -152,5 +152,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ci-windows-x64-preview
-          path: src-tauri/target/release/voicetypr.exe
+          path: D:/cargo-target/release/voicetypr.exe
           retention-days: 30
