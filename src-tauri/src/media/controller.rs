@@ -5,6 +5,9 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(target_os = "windows")]
+use std::sync::Mutex;
+
 #[cfg(target_os = "macos")]
 use once_cell::sync::Lazy;
 

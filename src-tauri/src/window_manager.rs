@@ -295,7 +295,7 @@ impl WindowManager {
                     let hwnd = HWND(hwnd.0 as *mut c_void);
 
                     // Validate HWND before using it
-                    if IsWindow(hwnd).as_bool() {
+                    if IsWindow(Some(hwnd)).as_bool() {
                         // Get current window style
                         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
 
@@ -311,7 +311,7 @@ impl WindowManager {
                         // Force window to update with new styles
                         let _ = SetWindowPos(
                             hwnd,
-                            HWND_TOPMOST,
+                            Some(HWND_TOPMOST),
                             0,
                             0,
                             0,
