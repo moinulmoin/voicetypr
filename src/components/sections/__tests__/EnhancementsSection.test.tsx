@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EnhancementsSection } from '../EnhancementsSection';
 import { invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 
 // Mock dependencies
@@ -55,6 +56,14 @@ describe('EnhancementsSection', () => {
         return Promise.resolve({
           preset: 'Default',
           custom_vocabulary: []
+        });
+      }
+      if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider || '';
+        return Promise.resolve({
+          ...mockAISettings,
+          provider,
+          hasApiKey: false,
         });
       }
       if (cmd === 'list_provider_models') {
@@ -158,6 +167,86 @@ describe('EnhancementsSection', () => {
     
     render(<EnhancementsSection />);
     
+    await waitFor(() => {
+      const toggle = screen.getByRole('switch');
+      expect(toggle).toBeEnabled();
+    });
+  });
+
+  it('enables enhancement toggle for custom no-auth config without keyring key', async () => {
+    const { hasApiKey } = await import('@/utils/keyring');
+
+    (hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_ai_settings') {
+        return Promise.resolve({
+          enabled: false,
+          provider: 'custom',
+          model: 'local-model',
+          hasApiKey: true,
+        });
+      }
+      if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider;
+        return Promise.resolve({
+          enabled: false,
+          provider,
+          model: 'local-model',
+          hasApiKey: provider === 'custom',
+        });
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://custom.endpoint/v1' });
+      }
+      return Promise.resolve();
+    });
+
+    render(<EnhancementsSection />);
+
+    await waitFor(() => {
+      const toggle = screen.getByRole('switch');
+      expect(toggle).toBeEnabled();
+    });
+  });
+
+  it('enables enhancement toggle for legacy openai-compatible config without keyring key', async () => {
+    const { hasApiKey } = await import('@/utils/keyring');
+
+    (hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_ai_settings') {
+        return Promise.resolve({
+          enabled: false,
+          provider: 'openai',
+          model: 'legacy-model',
+          hasApiKey: true,
+        });
+      }
+      if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider;
+        return Promise.resolve({
+          enabled: false,
+          provider,
+          model: 'legacy-model',
+          hasApiKey: provider === 'openai',
+        });
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://legacy.endpoint/v1' });
+      }
+      return Promise.resolve();
+    });
+
+    render(<EnhancementsSection />);
+
     await waitFor(() => {
       const toggle = screen.getByRole('switch');
       expect(toggle).toBeEnabled();
@@ -292,6 +381,115 @@ describe('EnhancementsSection', () => {
     
     await waitFor(() => {
       expect(screen.getByText('Formatting Options')).toBeInTheDocument();
+    });
+  });
+
+  it('does not clear active OpenAI selection when custom key is removed', async () => {
+    const { hasApiKey } = await import('@/utils/keyring');
+
+    (hasApiKey as ReturnType<typeof vi.fn>).mockImplementation((provider: string) => {
+      return Promise.resolve(provider === 'openai' || provider === 'custom');
+    });
+
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_ai_settings') {
+        return Promise.resolve({
+          enabled: true,
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          hasApiKey: true,
+        });
+      }
+      if (cmd === 'list_provider_models') {
+        const provider = (args as { provider: string })?.provider;
+        return Promise.resolve(mockModels[provider as keyof typeof mockModels] || []);
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://custom.endpoint/v1' });
+      }
+      if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider;
+        return Promise.resolve({
+          enabled: true,
+          provider,
+          model: 'gpt-4o-mini',
+          hasApiKey: provider === 'custom',
+        });
+      }
+      return Promise.resolve();
+    });
+
+    render(<EnhancementsSection />);
+
+    await waitFor(() => {
+      expect(screen.getByText('AI Providers')).toBeInTheDocument();
+    });
+
+    await emit('api-key-removed', { provider: 'custom' });
+
+    await waitFor(() => {
+      expect(invoke).not.toHaveBeenCalledWith('update_ai_settings', {
+        enabled: false,
+        provider: '',
+        model: '',
+      });
+    });
+  });
+
+  it('does not clear active OpenAI selection when openai key is removed but legacy config exists', async () => {
+    const { hasApiKey } = await import('@/utils/keyring');
+
+    // No keyring key, but backend reports legacy config is usable.
+    (hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_ai_settings') {
+        return Promise.resolve({
+          enabled: true,
+          provider: 'openai',
+          model: 'legacy-model',
+          hasApiKey: true,
+        });
+      }
+      if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider;
+        return Promise.resolve({
+          enabled: true,
+          provider,
+          model: 'legacy-model',
+          hasApiKey: provider === 'openai',
+        });
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://legacy.endpoint/v1' });
+      }
+      if (cmd === 'list_provider_models') {
+        const provider = (args as { provider: string })?.provider;
+        return Promise.resolve(mockModels[provider as keyof typeof mockModels] || []);
+      }
+      return Promise.resolve();
+    });
+
+    render(<EnhancementsSection />);
+
+    await waitFor(() => {
+      expect(screen.getByText('AI Providers')).toBeInTheDocument();
+    });
+
+    await emit('api-key-removed', { provider: 'openai' });
+
+    await waitFor(() => {
+      expect(invoke).not.toHaveBeenCalledWith('update_ai_settings', {
+        enabled: false,
+        provider: '',
+        model: '',
+      });
     });
   });
 });
