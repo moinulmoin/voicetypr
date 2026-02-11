@@ -208,7 +208,10 @@ impl MediaPauseController {
     /// Resume media if we paused it. Call when recording stops.
     /// Returns true if media was resumed.
     pub fn resume_if_we_paused(&self) -> bool {
-        if self.was_playing_before_recording.swap(false, Ordering::SeqCst) {
+        if self
+            .was_playing_before_recording
+            .swap(false, Ordering::SeqCst)
+        {
             #[cfg(target_os = "macos")]
             {
                 self.resume_macos()
@@ -231,14 +234,12 @@ impl MediaPauseController {
     /// Reset state without resuming (e.g., if app is closing)
     #[allow(dead_code)]
     pub fn reset(&self) {
-        self.was_playing_before_recording.store(false, Ordering::SeqCst);
+        self.was_playing_before_recording
+            .store(false, Ordering::SeqCst);
 
         #[cfg(target_os = "windows")]
         {
-            *self
-                .paused_session_source_app_user_model_id
-                .lock()
-                .unwrap() = None;
+            *self.paused_session_source_app_user_model_id.lock().unwrap() = None;
         }
     }
 }
@@ -368,17 +369,20 @@ impl MediaPauseController {
 
                 if send_command(Command::Pause) {
                     log::info!("✅ Media paused successfully");
-                    self.was_playing_before_recording.store(true, Ordering::SeqCst);
+                    self.was_playing_before_recording
+                        .store(true, Ordering::SeqCst);
                     return true;
                 }
 
                 log::warn!("⚠️ Failed to pause media");
-                self.was_playing_before_recording.store(false, Ordering::SeqCst);
+                self.was_playing_before_recording
+                    .store(false, Ordering::SeqCst);
                 return false;
             }
 
             log::debug!("No media playing, nothing to pause");
-            self.was_playing_before_recording.store(false, Ordering::SeqCst);
+            self.was_playing_before_recording
+                .store(false, Ordering::SeqCst);
             return false;
         }
 
@@ -386,11 +390,13 @@ impl MediaPauseController {
 
         if send_command(Command::Pause) {
             log::info!("✅ Media paused successfully");
-            self.was_playing_before_recording.store(true, Ordering::SeqCst);
+            self.was_playing_before_recording
+                .store(true, Ordering::SeqCst);
             true
         } else {
             log::warn!("⚠️ Failed to pause media");
-            self.was_playing_before_recording.store(false, Ordering::SeqCst);
+            self.was_playing_before_recording
+                .store(false, Ordering::SeqCst);
             false
         }
     }
@@ -478,7 +484,9 @@ impl MediaPauseController {
             status == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing
         }
 
-        fn timeline_position_ticks(session: &GlobalSystemMediaTransportControlsSession) -> Option<i64> {
+        fn timeline_position_ticks(
+            session: &GlobalSystemMediaTransportControlsSession,
+        ) -> Option<i64> {
             let timeline = session.GetTimelineProperties().ok()?;
             Some(timeline.Position().ok()?.Duration)
         }
@@ -549,7 +557,9 @@ impl MediaPauseController {
 
             if !candidates.is_empty() {
                 if let Some(current_session_id) = current_session_id {
-                    if let Some(idx) = candidates.iter().position(|(id, _, _)| id == &current_session_id)
+                    if let Some(idx) = candidates
+                        .iter()
+                        .position(|(id, _, _)| id == &current_session_id)
                     {
                         let current = candidates.remove(idx);
                         candidates.insert(0, current);
@@ -580,20 +590,15 @@ impl MediaPauseController {
 
         let Some(session) = candidate_session else {
             log::debug!("No playing, pausable media session found");
-            self.was_playing_before_recording.store(false, Ordering::SeqCst);
-            *self
-                .paused_session_source_app_user_model_id
-                .lock()
-                .unwrap() = None;
+            self.was_playing_before_recording
+                .store(false, Ordering::SeqCst);
+            *self.paused_session_source_app_user_model_id.lock().unwrap() = None;
             return false;
         };
 
         log::info!("Media is playing, pausing for recording...");
 
-        let source_app_id = session
-            .SourceAppUserModelId()
-            .ok()
-            .map(|id| id.to_string());
+        let source_app_id = session.SourceAppUserModelId().ok().map(|id| id.to_string());
 
         // Use explicit pause (not toggle!)
         match session.TryPauseAsync() {
@@ -601,39 +606,32 @@ impl MediaPauseController {
                 Ok(success) => {
                     if success {
                         log::info!("Media paused successfully via GSMTC");
-                        self.was_playing_before_recording.store(true, Ordering::SeqCst);
-                        *self
-                            .paused_session_source_app_user_model_id
-                            .lock()
-                            .unwrap() = source_app_id;
+                        self.was_playing_before_recording
+                            .store(true, Ordering::SeqCst);
+                        *self.paused_session_source_app_user_model_id.lock().unwrap() =
+                            source_app_id;
                         true
                     } else {
                         log::warn!("GSMTC TryPauseAsync returned false");
-                        self.was_playing_before_recording.store(false, Ordering::SeqCst);
-                        *self
-                            .paused_session_source_app_user_model_id
-                            .lock()
-                            .unwrap() = None;
+                        self.was_playing_before_recording
+                            .store(false, Ordering::SeqCst);
+                        *self.paused_session_source_app_user_model_id.lock().unwrap() = None;
                         false
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to pause media: {:?}", e);
-                    self.was_playing_before_recording.store(false, Ordering::SeqCst);
-                    *self
-                        .paused_session_source_app_user_model_id
-                        .lock()
-                        .unwrap() = None;
+                    self.was_playing_before_recording
+                        .store(false, Ordering::SeqCst);
+                    *self.paused_session_source_app_user_model_id.lock().unwrap() = None;
                     false
                 }
             },
             Err(e) => {
                 log::warn!("Failed to request pause: {:?}", e);
-                self.was_playing_before_recording.store(false, Ordering::SeqCst);
-                *self
-                    .paused_session_source_app_user_model_id
-                    .lock()
-                    .unwrap() = None;
+                self.was_playing_before_recording
+                    .store(false, Ordering::SeqCst);
+                *self.paused_session_source_app_user_model_id.lock().unwrap() = None;
                 false
             }
         }
@@ -654,7 +652,10 @@ impl MediaPauseController {
                 }
             },
             Err(e) => {
-                log::warn!("Failed to request GSMTC session manager for resume: {:?}", e);
+                log::warn!(
+                    "Failed to request GSMTC session manager for resume: {:?}",
+                    e
+                );
                 return false;
             }
         };
@@ -703,9 +704,7 @@ impl MediaPauseController {
             match found {
                 Some(session) => session,
                 None => {
-                    log::debug!(
-                        "Paused media session is no longer available; skipping resume"
-                    );
+                    log::debug!("Paused media session is no longer available; skipping resume");
                     return false;
                 }
             }
@@ -762,13 +761,17 @@ mod tests {
     #[test]
     fn test_controller_creation() {
         let controller = MediaPauseController::new();
-        assert!(!controller.was_playing_before_recording.load(Ordering::SeqCst));
+        assert!(!controller
+            .was_playing_before_recording
+            .load(Ordering::SeqCst));
     }
 
     #[test]
     fn test_default_impl() {
         let controller = MediaPauseController::default();
-        assert!(!controller.was_playing_before_recording.load(Ordering::SeqCst));
+        assert!(!controller
+            .was_playing_before_recording
+            .load(Ordering::SeqCst));
     }
 
     #[test]
@@ -782,22 +785,30 @@ mod tests {
     fn test_resume_clears_was_playing_flag() {
         let controller = MediaPauseController::new();
         // Manually set the flag to true
-        controller.was_playing_before_recording.store(true, Ordering::SeqCst);
-        
+        controller
+            .was_playing_before_recording
+            .store(true, Ordering::SeqCst);
+
         // Resume should clear the flag (swap returns old value)
         // Note: actual resume behavior depends on platform APIs
         let _ = controller.resume_if_we_paused();
-        
+
         // Flag should be cleared after resume attempt
-        assert!(!controller.was_playing_before_recording.load(Ordering::SeqCst));
+        assert!(!controller
+            .was_playing_before_recording
+            .load(Ordering::SeqCst));
     }
 
     #[test]
     fn test_reset() {
         let controller = MediaPauseController::new();
-        controller.was_playing_before_recording.store(true, Ordering::SeqCst);
+        controller
+            .was_playing_before_recording
+            .store(true, Ordering::SeqCst);
         controller.reset();
-        assert!(!controller.was_playing_before_recording.load(Ordering::SeqCst));
+        assert!(!controller
+            .was_playing_before_recording
+            .load(Ordering::SeqCst));
     }
 
     #[test]
@@ -806,7 +817,9 @@ mod tests {
         controller.reset();
         controller.reset();
         controller.reset();
-        assert!(!controller.was_playing_before_recording.load(Ordering::SeqCst));
+        assert!(!controller
+            .was_playing_before_recording
+            .load(Ordering::SeqCst));
     }
 
     #[test]
@@ -821,7 +834,8 @@ mod tests {
         for i in 0..10 {
             let c = Arc::clone(&controller);
             handles.push(thread::spawn(move || {
-                c.was_playing_before_recording.store(i % 2 == 0, Ordering::SeqCst);
+                c.was_playing_before_recording
+                    .store(i % 2 == 0, Ordering::SeqCst);
                 c.was_playing_before_recording.load(Ordering::SeqCst)
             }));
         }

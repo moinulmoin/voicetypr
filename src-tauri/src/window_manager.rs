@@ -1,4 +1,6 @@
-use crate::commands::settings::{DEFAULT_INDICATOR_OFFSET, MAX_INDICATOR_OFFSET, MIN_INDICATOR_OFFSET};
+use crate::commands::settings::{
+    DEFAULT_INDICATOR_OFFSET, MAX_INDICATOR_OFFSET, MIN_INDICATOR_OFFSET,
+};
 use crate::utils::logger::*;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -56,10 +58,7 @@ impl WindowManager {
             log::Level::Debug,
             "Window manager setup",
             &[
-                (
-                    "main_window_available",
-                    main_available.to_string().as_str(),
-                ),
+                ("main_window_available", main_available.to_string().as_str()),
                 ("pill_window_created", "false"),
             ],
         );
@@ -301,10 +300,9 @@ impl WindowManager {
 
                         // Add tool window and no-activate flags, remove from Alt-Tab
                         // WINDOW_EX_STYLE.0 gives the underlying u32 value
-                        let new_style = (style
-                            | WS_EX_TOOLWINDOW.0 as isize
-                            | WS_EX_NOACTIVATE.0 as isize)
-                            & !(WS_EX_APPWINDOW.0 as isize);
+                        let new_style =
+                            (style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize)
+                                & !(WS_EX_APPWINDOW.0 as isize);
 
                         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
 
@@ -496,8 +494,7 @@ impl WindowManager {
             // Skip visibility check for performance
 
             // Check if window is visible or if it's a critical event
-            let is_critical =
-                matches!(event, "recording-state-changed" | "transcription-complete");
+            let is_critical = matches!(event, "recording-state-changed" | "transcription-complete");
 
             // Check if window is visible or if it's a critical event
 
@@ -533,8 +530,7 @@ impl WindowManager {
                 window_id
             );
             // For critical events when window not found, try app-wide emission
-            let is_critical =
-                matches!(event, "recording-state-changed" | "transcription-complete");
+            let is_critical = matches!(event, "recording-state-changed" | "transcription-complete");
 
             // Queue critical pill events so they can be delivered when the pill window is created
             if is_critical && window_id == "pill" {
@@ -708,7 +704,12 @@ impl WindowManager {
             if let Err(e) = pill.set_position(LogicalPosition::new(pill_x, pill_y)) {
                 log::warn!("Failed to reposition pill window: {}", e);
             } else {
-                log::info!("Repositioned pill window to ({}, {}) for position '{}'", pill_x, pill_y, position);
+                log::info!(
+                    "Repositioned pill window to ({}, {}) for position '{}'",
+                    pill_x,
+                    pill_y,
+                    position
+                );
             }
         }
 

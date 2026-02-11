@@ -81,12 +81,12 @@ use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
 
 use menu::build_tray_menu;
+pub use recognition::{
+    auto_select_model_if_needed, recognition_availability_snapshot, RecognitionAvailabilitySnapshot,
+};
 pub use state::{
     emit_to_all, emit_to_window, flush_pill_event_queue, get_recording_state,
     update_recording_state, AppState, QueuedPillEvent, RecordingMode, RecordingState,
-};
-pub use recognition::{
-    auto_select_model_if_needed, recognition_availability_snapshot, RecognitionAvailabilitySnapshot,
 };
 
 // Setup logging with daily rotation

@@ -103,10 +103,7 @@ pub async fn validate_microphone_selection(app: AppHandle) -> Result<bool, Strin
 
     // Check if selected mic still exists
     if available_devices.contains(&selected_mic) {
-        log::debug!(
-            "Selected microphone '{}' is available",
-            selected_mic
-        );
+        log::debug!("Selected microphone '{}' is available", selected_mic);
         return Ok(false);
     }
 
@@ -325,17 +322,16 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         "play_sound_on_recording_end",
         json!(settings.play_sound_on_recording_end),
     );
-    store.set(
-        "pill_indicator_mode",
-        json!(settings.pill_indicator_mode),
-    );
+    store.set("pill_indicator_mode", json!(settings.pill_indicator_mode));
     store.set(
         "pill_indicator_position",
         json!(settings.pill_indicator_position),
     );
     store.set(
         "pill_indicator_offset",
-        json!(settings.pill_indicator_offset.clamp(MIN_INDICATOR_OFFSET, MAX_INDICATOR_OFFSET)),
+        json!(settings
+            .pill_indicator_offset
+            .clamp(MIN_INDICATOR_OFFSET, MAX_INDICATOR_OFFSET)),
     );
     store.set(
         "pause_media_during_recording",
@@ -476,7 +472,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             "never" => false,
             "always" => true,
             "when_recording" => !is_idle, // Show only when recording
-            _ => !is_idle, // Default to when_recording behavior
+            _ => !is_idle,                // Default to when_recording behavior
         };
         log::info!(
             "pill_visibility: mode change computed should_show={}",
@@ -495,7 +491,11 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     // Handle pill window position when pill_indicator_position setting changes
     // We need to recreate the pill window at the new position since repositioning doesn't work reliably
     if old_pill_indicator_position != settings.pill_indicator_position {
-        log::info!("Pill indicator position changed from '{}' to '{}'", old_pill_indicator_position, settings.pill_indicator_position);
+        log::info!(
+            "Pill indicator position changed from '{}' to '{}'",
+            old_pill_indicator_position,
+            settings.pill_indicator_position
+        );
 
         // Check if pill should be visible based on current mode
         let should_show = match settings.pill_indicator_mode.as_str() {
@@ -517,7 +517,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             if let Err(e) = crate::commands::window::show_pill_widget(app.clone()).await {
                 log::warn!("Failed to show pill window at new position: {}", e);
             }
-            log::info!("Recreated pill window at new position: {}", settings.pill_indicator_position);
+            log::info!(
+                "Recreated pill window at new position: {}",
+                settings.pill_indicator_position
+            );
         }
     }
 
@@ -532,8 +535,12 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         // Reposition the pill window if it's currently visible
         let window_manager = app.state::<crate::WindowManager>();
         if window_manager.has_pill_window() {
-            window_manager.reposition_floating_windows_with_position(&settings.pill_indicator_position);
-            log::info!("Repositioned pill window with new offset: {}", settings.pill_indicator_offset);
+            window_manager
+                .reposition_floating_windows_with_position(&settings.pill_indicator_position);
+            log::info!(
+                "Repositioned pill window with new offset: {}",
+                settings.pill_indicator_offset
+            );
         }
     }
 
@@ -851,8 +858,7 @@ mod tests {
 
     #[test]
     fn resolve_pill_indicator_mode_migrates_legacy_false() {
-        let resolved =
-            resolve_pill_indicator_mode(None, Some(false), "when_recording".to_string());
+        let resolved = resolve_pill_indicator_mode(None, Some(false), "when_recording".to_string());
 
         assert_eq!(resolved, "when_recording");
     }

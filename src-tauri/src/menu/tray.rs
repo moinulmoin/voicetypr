@@ -57,7 +57,8 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         let mut models: Vec<(String, String)> = Vec::new();
         let mut whisper_all = std::collections::HashMap::new();
 
-        if let Some(whisper_state) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
+        if let Some(whisper_state) =
+            app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
         {
             let manager = whisper_state.read().await;
             whisper_all = manager.get_models_status();

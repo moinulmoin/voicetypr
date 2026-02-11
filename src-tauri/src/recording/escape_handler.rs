@@ -1,4 +1,4 @@
-use crate::{AppState, RecordingState, cancel_recording, get_recording_state};
+use crate::{cancel_recording, get_recording_state, AppState, RecordingState};
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::ShortcutState;
@@ -16,7 +16,10 @@ pub async fn handle_escape_key_press(
 ) {
     // Only react to ESC key press events (ignore key release)
     if event_state != ShortcutState::Pressed {
-        log::debug!("Ignoring ESC event since it is not a key press: {:?}", event_state);
+        log::debug!(
+            "Ignoring ESC event since it is not a key press: {:?}",
+            event_state
+        );
         return;
     }
 

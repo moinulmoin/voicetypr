@@ -363,7 +363,9 @@ impl AudioRecorder {
                 // Intentionally leak the stream to prevent potential driver hang
                 // Resources will be reclaimed when the process exits
                 std::mem::forget(stream);
-                log::info!("Audio stream released (Windows: leaked to prevent potential driver hang)");
+                log::info!(
+                    "Audio stream released (Windows: leaked to prevent potential driver hang)"
+                );
             }
 
             #[cfg(not(target_os = "windows"))]

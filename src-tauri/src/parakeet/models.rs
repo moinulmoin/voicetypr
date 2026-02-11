@@ -88,7 +88,7 @@ pub static AVAILABLE_MODELS: Lazy<Vec<ParakeetModelDefinition>> = Lazy::new(|| {
                 },
             ],
             estimated_size: 500_000_000, // FluidAudio CoreML model is ~500MB
-            apple_silicon_only: false,   // No additional restrictions beyond base Apple Silicon requirement
+            apple_silicon_only: false, // No additional restrictions beyond base Apple Silicon requirement
         },
         ParakeetModelDefinition {
             id: "parakeet-tdt-0.6b-v2",

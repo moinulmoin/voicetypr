@@ -79,7 +79,14 @@ impl Transcriber {
                     ("backend", if is_apple_silicon { "Metal" } else { "CPU" }),
                     ("platform", "macOS"),
                     ("arch", std::env::consts::ARCH),
-                    ("attempt", if is_apple_silicon { "gpu_first" } else { "cpu_only" }),
+                    (
+                        "attempt",
+                        if is_apple_silicon {
+                            "gpu_first"
+                        } else {
+                            "cpu_only"
+                        },
+                    ),
                 ],
             );
 
@@ -145,7 +152,9 @@ impl Transcriber {
             if is_arm64 {
                 // Windows ARM64: Skip Vulkan GPU, use CPU-only mode
                 // Vulkan is unstable on Qualcomm Snapdragon and causes crashes during inference
-                log::warn!("⚠️ Windows ARM64 detected: Using CPU-only mode (Vulkan unstable on ARM)");
+                log::warn!(
+                    "⚠️ Windows ARM64 detected: Using CPU-only mode (Vulkan unstable on ARM)"
+                );
                 log_with_context(
                     log::Level::Info,
                     "🎮 GPU_SKIP",
@@ -163,8 +172,8 @@ impl Transcriber {
             let vulkan_start = Instant::now();
 
             // Check if Vulkan runtime is available (only relevant for x86_64)
-            let vulkan_available = !is_arm64
-                && std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
+            let vulkan_available =
+                !is_arm64 && std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
 
             if !is_arm64 {
                 log_with_context(
@@ -760,10 +769,7 @@ impl Transcriber {
                 "Empty result",
                 &[
                     ("segments", num_segments.to_string().as_str()),
-                    (
-                        "total_time_ms",
-                        total_time.as_millis().to_string().as_str(),
-                    ),
+                    ("total_time_ms", total_time.as_millis().to_string().as_str()),
                 ],
             );
         } else if result == "[SOUND]" {
@@ -774,10 +780,7 @@ impl Transcriber {
                 &[
                     ("result", "[SOUND]"),
                     ("segments", num_segments.to_string().as_str()),
-                    (
-                        "total_time_ms",
-                        total_time.as_millis().to_string().as_str(),
-                    ),
+                    ("total_time_ms", total_time.as_millis().to_string().as_str()),
                 ],
             );
         } else {

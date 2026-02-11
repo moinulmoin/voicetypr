@@ -9,8 +9,7 @@ use crate::state::unified_state::UnifiedRecordingState;
 use crate::window_manager::WindowManager;
 
 /// Recording state enum matching frontend
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, Default)]
 pub enum RecordingState {
     #[default]
     Idle,
@@ -20,7 +19,6 @@ pub enum RecordingState {
     Transcribing,
     Error,
 }
-
 
 /// Recording mode enum to distinguish between toggle and push-to-talk
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
