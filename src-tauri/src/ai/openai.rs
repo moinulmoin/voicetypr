@@ -9,7 +9,6 @@ use std::time::Duration;
 pub struct OpenAIProvider {
     api_key: String,
     model: String,
-    client: Client,
     base_url: String,
     options: HashMap<String, serde_json::Value>,
 }
@@ -29,17 +28,11 @@ impl OpenAIProvider {
             .unwrap_or(false);
 
         // Validate API key format (basic check) only if auth is required
-        if !no_auth
-            && (api_key.trim().is_empty() || api_key.len() < MIN_API_KEY_LENGTH) {
-                return Err(AIError::ValidationError(
-                    "Invalid API key format".to_string(),
-                ));
-            }
-
-        let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+        if !no_auth && (api_key.trim().is_empty() || api_key.len() < MIN_API_KEY_LENGTH) {
+            return Err(AIError::ValidationError(
+                "Invalid API key format".to_string(),
+            ));
+        }
 
         // Resolve base URL: expect versioned base (e.g., https://api.openai.com/v1) and append only /chat/completions
         let base_root = options
@@ -58,10 +51,16 @@ impl OpenAIProvider {
         Ok(Self {
             api_key,
             model,
-            client,
             base_url,
             options,
         })
+    }
+
+    fn create_http_client() -> Result<Client, AIError> {
+        Client::builder()
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))
     }
 
     async fn make_request_with_retry(
@@ -101,8 +100,9 @@ impl OpenAIProvider {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let mut req = self
-            .client
+        let client = Self::create_http_client()?;
+
+        let mut req = client
             .post(&self.base_url)
             .header("Content-Type", "application/json")
             .json(request);

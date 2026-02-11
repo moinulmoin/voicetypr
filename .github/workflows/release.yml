@@ -33,7 +33,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
         with:
-          version: 9
+          version: 10.13.1
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -133,7 +133,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
         with:
-          version: 9
+          version: 10.13.1
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -224,7 +224,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
         with:
-          version: 9
+          version: 10.13.1
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -251,6 +251,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CARGO_TARGET_DIR: t
         run: |
           pnpm tauri build --ci
 
@@ -260,7 +261,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         shell: pwsh
         run: |
-          $installer = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" | Select-Object -First 1
+          $installer = Get-ChildItem "t\release\bundle\nsis\*.exe" | Select-Object -First 1
           $env:TAURI_SIGNING_PRIVATE_KEY | Out-File -FilePath "$env:TEMP\tauri.key" -Encoding ascii
           pnpm tauri signer sign -f "$env:TEMP\tauri.key" -p "$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD" $installer.FullName
           Remove-Item "$env:TEMP\tauri.key"
@@ -269,8 +270,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts
-          Copy-Item "src-tauri\target\release\bundle\nsis\*.exe" artifacts\
-          Copy-Item "src-tauri\target\release\bundle\nsis\*.exe.sig" artifacts\ -ErrorAction SilentlyContinue
+          Copy-Item "t\release\bundle\nsis\*.exe" artifacts\
+          Copy-Item "t\release\bundle\nsis\*.exe.sig" artifacts\
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -321,7 +322,7 @@ jobs:
           
           # Windows x64
           cp artifacts/windows-x64/*.exe "release/VoiceTypr_${VERSION}_x64-setup.exe"
-          cp artifacts/windows-x64/*.exe.sig "release/VoiceTypr_${VERSION}_x64-setup.exe.sig" || true
+          cp artifacts/windows-x64/*.exe.sig "release/VoiceTypr_${VERSION}_x64-setup.exe.sig"
 
       - name: Generate latest.json
         run: |
@@ -331,9 +332,14 @@ jobs:
           # Read signatures
           AARCH64_SIG=$(cat "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig" | tr -d '\n')
           X86_64_SIG=$(cat "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig" | tr -d '\n')
-          WINDOWS_SIG=""
-          if [ -f "release/VoiceTypr_${VERSION}_x64-setup.exe.sig" ]; then
-            WINDOWS_SIG=$(cat "release/VoiceTypr_${VERSION}_x64-setup.exe.sig" | tr -d '\n')
+          if [ ! -f "release/VoiceTypr_${VERSION}_x64-setup.exe.sig" ]; then
+            echo "Missing Windows updater signature file" >&2
+            exit 1
+          fi
+          WINDOWS_SIG=$(cat "release/VoiceTypr_${VERSION}_x64-setup.exe.sig" | tr -d '\n')
+          if [ -z "$WINDOWS_SIG" ]; then
+            echo "Windows updater signature is empty" >&2
+            exit 1
           fi
           
           # Create latest.json

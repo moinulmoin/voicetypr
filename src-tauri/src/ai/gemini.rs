@@ -19,7 +19,6 @@ pub struct GeminiProvider {
     #[allow(dead_code)]
     api_key: String,
     model: String,
-    client: Client,
     base_url: String,
     options: HashMap<String, serde_json::Value>,
 }
@@ -45,18 +44,19 @@ impl GeminiProvider {
             ));
         }
 
-        let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
-
         Ok(Self {
             api_key,
             model,
-            client,
             base_url: "https://generativelanguage.googleapis.com/v1beta/models".to_string(),
             options,
         })
+    }
+
+    fn create_http_client() -> Result<Client, AIError> {
+        Client::builder()
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))
     }
 
     async fn make_request_with_retry(
@@ -91,8 +91,9 @@ impl GeminiProvider {
     ) -> Result<GeminiResponse, AIError> {
         let url = format!("{}/{}:generateContent", self.base_url, self.model);
 
-        let response = self
-            .client
+        let client = Self::create_http_client()?;
+
+        let response = client
             .post(&url)
             .header("x-goog-api-key", &self.api_key)
             .header("Content-Type", "application/json")

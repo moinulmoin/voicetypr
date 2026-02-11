@@ -9,7 +9,6 @@ use std::time::Duration;
 pub struct AnthropicProvider {
     api_key: String,
     model: String,
-    client: Client,
     options: HashMap<String, serde_json::Value>,
 }
 
@@ -26,17 +25,18 @@ impl AnthropicProvider {
             ));
         }
 
-        let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
-
         Ok(Self {
             api_key,
             model,
-            client,
             options,
         })
+    }
+
+    fn create_http_client() -> Result<Client, AIError> {
+        Client::builder()
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))
     }
 
     async fn make_request_with_retry(
@@ -69,8 +69,9 @@ impl AnthropicProvider {
         &self,
         request: &AnthropicRequest,
     ) -> Result<AnthropicResponse, AIError> {
-        let response = self
-            .client
+        let client = Self::create_http_client()?;
+
+        let response = client
             .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
@@ -222,7 +223,11 @@ mod tests {
 
     #[test]
     fn test_provider_creation() {
-        let result = AnthropicProvider::new("".to_string(), "claude-haiku-4-5".to_string(), HashMap::new());
+        let result = AnthropicProvider::new(
+            "".to_string(),
+            "claude-haiku-4-5".to_string(),
+            HashMap::new(),
+        );
         assert!(result.is_err());
 
         let result = AnthropicProvider::new(
