@@ -78,7 +78,7 @@ impl RecordingStateMachine {
             Err(StateTransitionError {
                 from: self.current_state,
                 to: new_state,
-                message: format!("Transition not allowed by state machine rules"),
+                message: "Transition not allowed by state machine rules".to_string(),
             })
         }
     }

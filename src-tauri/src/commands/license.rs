@@ -268,7 +268,7 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                     let _ = scache::set(
                         &app,
                         LAST_VALIDATION_KEY,
-                        serde_json::to_value(&validation_time).unwrap_or_default(),
+                        serde_json::to_value(validation_time).unwrap_or_default(),
                         None,
                     );
 
@@ -415,7 +415,7 @@ async fn check_license_status_impl(app: AppHandle) -> Result<LicenseStatus, Stri
                 if let Err(e) = scache::set(
                     &app,
                     LAST_TRIAL_VALIDATION_KEY,
-                    serde_json::to_value(&validation_time).unwrap_or_default(),
+                    serde_json::to_value(validation_time).unwrap_or_default(),
                     None, // No TTL for validation timestamp
                 ) {
                     log::warn!("Failed to set trial validation timestamp: {}", e);
@@ -637,7 +637,7 @@ pub async fn restore_license(app: AppHandle) -> Result<LicenseStatus, String> {
                 if let Err(e) = scache::set(
                     &app,
                     LAST_VALIDATION_KEY,
-                    serde_json::to_value(&validation_time).unwrap_or_default(),
+                    serde_json::to_value(validation_time).unwrap_or_default(),
                     None, // No TTL for validation timestamp
                 ) {
                     log::warn!(
@@ -762,7 +762,7 @@ async fn activate_license_internal(
                 if let Err(e) = scache::set(
                     &app,
                     LAST_VALIDATION_KEY,
-                    serde_json::to_value(&validation_time).unwrap_or_default(),
+                    serde_json::to_value(validation_time).unwrap_or_default(),
                     None, // No TTL for validation timestamp
                 ) {
                     log::warn!("Failed to set last validation timestamp: {}", e);

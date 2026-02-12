@@ -70,7 +70,7 @@ export const removeApiKey = async (provider: string): Promise<void> => {
   const key = `ai_api_key_${provider}`;
   await keyringDelete(key);
   
-  // Clear backend cache
+  // Clear backend cache for the same provider key
   await invoke('clear_ai_api_key_cache', { provider });
   
   console.log(`[Keyring] API key removed for ${provider}`);
@@ -81,7 +81,7 @@ export const removeApiKey = async (provider: string): Promise<void> => {
 
 // Load all API keys to backend cache (for app startup)
 export const loadApiKeysToCache = async (): Promise<void> => {
-  const providers = ['groq', 'gemini', 'openai'];
+  const providers = ['gemini', 'openai', 'anthropic', 'custom'];
   
   for (const provider of providers) {
     try {

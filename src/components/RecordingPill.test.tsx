@@ -4,7 +4,8 @@ import { RecordingPill } from './RecordingPill';
 
 const mockRecording: { state: string } = { state: 'idle' };
 const mockSettings: Record<string, unknown> = {
-  pill_indicator_mode: 'when_recording'
+  pill_indicator_mode: 'when_recording',
+  pill_indicator_offset: 10
 };
 
 vi.mock('@/components/AudioDots', () => ({

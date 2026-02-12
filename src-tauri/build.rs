@@ -20,7 +20,7 @@ fn main() {
             let output = Command::new("bash")
                 .arg("build.sh")
                 .arg("release")
-                .current_dir(&sidecar_dir)
+                .current_dir(sidecar_dir)
                 .output();
 
             match output {

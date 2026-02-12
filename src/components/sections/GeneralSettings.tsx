@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
@@ -372,6 +373,29 @@ export function GeneralSettings() {
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label
+                    htmlFor="pause-media"
+                    className="text-sm font-medium"
+                  >
+                    Pause Media During Recording
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Automatically pause playing music/videos when recording
+                  </p>
+                </div>
+                <Switch
+                  id="pause-media"
+                  checked={settings.pause_media_during_recording ?? true}
+                  onCheckedChange={async (checked) =>
+                    await updateSettings({
+                      pause_media_during_recording: checked,
+                    })
+                  }
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label
                     htmlFor="pill-indicator-mode"
                     className="text-sm font-medium"
                   >
@@ -402,39 +426,70 @@ export function GeneralSettings() {
 
               {/* Only show position selector when indicator is visible (not "never") */}
               {settings.pill_indicator_mode !== "never" && (
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label
-                      htmlFor="pill-indicator-position"
-                      className="text-sm font-medium"
+                <>
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label
+                        htmlFor="pill-indicator-position"
+                        className="text-sm font-medium"
+                      >
+                        Indicator Position
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Where to display the recording indicator on screen
+                      </p>
+                    </div>
+                    <Select
+                      value={settings.pill_indicator_position ?? "bottom-center"}
+                      onValueChange={async (value: PillIndicatorPosition) => {
+                        await updateSettings({
+                          pill_indicator_position: value,
+                        });
+                      }}
                     >
-                      Indicator Position
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      Where to display the recording indicator on screen
-                    </p>
+                      <SelectTrigger className="w-[160px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="top-left">Top Left</SelectItem>
+                        <SelectItem value="top-center">Top Center</SelectItem>
+                        <SelectItem value="top-right">Top Right</SelectItem>
+                        <SelectItem value="bottom-left">Bottom Left</SelectItem>
+                        <SelectItem value="bottom-center">Bottom Center</SelectItem>
+                        <SelectItem value="bottom-right">Bottom Right</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <Select
-                    value={settings.pill_indicator_position ?? "bottom-center"}
-                    onValueChange={async (value: PillIndicatorPosition) => {
-                      await updateSettings({
-                        pill_indicator_position: value,
-                      });
-                    }}
-                  >
-                    <SelectTrigger className="w-[160px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="top-left">Top Left</SelectItem>
-                      <SelectItem value="top-center">Top Center</SelectItem>
-                      <SelectItem value="top-right">Top Right</SelectItem>
-                      <SelectItem value="bottom-left">Bottom Left</SelectItem>
-                      <SelectItem value="bottom-center">Bottom Center</SelectItem>
-                      <SelectItem value="bottom-right">Bottom Right</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                  
+                  {/* Indicator edge offset slider */}
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label
+                        htmlFor="pill-indicator-offset"
+                        className="text-sm font-medium"
+                      >
+                        Edge Offset
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Distance from screen edge ({settings.pill_indicator_offset ?? 10}px)
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 w-[140px]">
+                      <Slider
+                        id="pill-indicator-offset"
+                        min={10}
+                        max={50}
+                        step={5}
+                        value={[settings.pill_indicator_offset ?? 10]}
+                        onValueChange={async ([value]) => {
+                          await updateSettings({
+                            pill_indicator_offset: value,
+                          });
+                        }}
+                      />
+                    </div>
+                  </div>
+                </>
               )}
             </div>
 

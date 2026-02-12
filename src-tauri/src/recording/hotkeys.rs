@@ -193,7 +193,13 @@ fn handle_ptt_mode(
         }
         ShortcutState::Released => {
             log::info!("PTT: Key released");
-            app_state.ptt_key_held.store(false, Ordering::Relaxed);
+
+            // Debounce: swap returns previous value, skip if already false (duplicate release)
+            // This prevents race conditions when multiple release events fire rapidly
+            if !app_state.ptt_key_held.swap(false, Ordering::SeqCst) {
+                log::debug!("PTT: Ignoring duplicate key release");
+                return;
+            }
 
             if matches!(
                 current_state,

@@ -14,6 +14,8 @@ use std::time::Instant;
 use tauri::async_runtime::RwLock;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+type ActiveDownloadsState<'a> = State<'a, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ModelEngine {
     Whisper,
@@ -41,7 +43,7 @@ pub async fn download_model(
     model_name: String,
     whisper_state: State<'_, RwLock<WhisperManager>>,
     parakeet_manager: State<'_, ParakeetManager>,
-    active_downloads: State<'_, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>,
+    active_downloads: ActiveDownloadsState<'_>,
 ) -> Result<(), String> {
     let download_start = Instant::now();
 
@@ -560,7 +562,7 @@ fn collect_cloud_models(app: &AppHandle) -> Vec<UnifiedModelInfo> {
 #[tauri::command]
 pub async fn cancel_download(
     model_name: String,
-    active_downloads: State<'_, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>,
+    active_downloads: ActiveDownloadsState<'_>,
 ) -> Result<(), String> {
     log::info!("Cancelling download for model: {}", model_name);
 

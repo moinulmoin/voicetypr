@@ -6,14 +6,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-// Supported Gemini models
-const SUPPORTED_MODELS: &[&str] = &["gemini-2.5-flash-lite"];
+// Supported Gemini models (curated for text formatting)
+const SUPPORTED_MODELS: &[&str] = &[
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    // Legacy support
+    "gemini-2.0-flash",
+];
 
 pub struct GeminiProvider {
     #[allow(dead_code)]
     api_key: String,
     model: String,
-    client: Client,
     base_url: String,
     options: HashMap<String, serde_json::Value>,
 }
@@ -39,18 +44,19 @@ impl GeminiProvider {
             ));
         }
 
-        let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
-
         Ok(Self {
             api_key,
             model,
-            client,
             base_url: "https://generativelanguage.googleapis.com/v1beta/models".to_string(),
             options,
         })
+    }
+
+    fn create_http_client() -> Result<Client, AIError> {
+        Client::builder()
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))
     }
 
     async fn make_request_with_retry(
@@ -85,8 +91,9 @@ impl GeminiProvider {
     ) -> Result<GeminiResponse, AIError> {
         let url = format!("{}/{}:generateContent", self.base_url, self.model);
 
-        let response = self
-            .client
+        let client = Self::create_http_client()?;
+
+        let response = client
             .post(&url)
             .header("x-goog-api-key", &self.api_key)
             .header("Content-Type", "application/json")
@@ -137,6 +144,20 @@ struct Part {
     text: String,
 }
 
+/// Thinking config to minimize reasoning overhead for text formatting
+/// For Gemini 3: use thinkingLevel "LOW"
+/// For Gemini 2.x: use thinkingBudget 0
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThinkingConfig {
+    /// For Gemini 3 models: "LOW", "MEDIUM", "HIGH"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_level: Option<String>,
+    /// For Gemini 2.x models: 0 to disable thinking
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_budget: Option<u32>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GenerationConfig {
@@ -144,6 +165,9 @@ struct GenerationConfig {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
+    /// Thinking config to minimize reasoning for text formatting
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_config: Option<ThinkingConfig>,
 }
 
 #[derive(Deserialize)]
@@ -169,6 +193,7 @@ impl AIProvider for GeminiProvider {
             &request.text,
             request.context.as_deref(),
             &request.options.unwrap_or_default(),
+            request.language.as_deref(),
         );
 
         let temperature = self
@@ -184,9 +209,26 @@ impl AIProvider for GeminiProvider {
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
 
+        // Determine thinking config based on model version
+        // Gemini 3: use thinkingLevel "LOW" (minimal)
+        // Gemini 2.x: use thinkingBudget 0 (disabled)
+        let thinking_config = if self.model.contains("gemini-3") {
+            Some(ThinkingConfig {
+                thinking_level: Some("LOW".to_string()),
+                thinking_budget: None,
+            })
+        } else {
+            // Gemini 2.x or other versions - disable thinking with budget 0
+            Some(ThinkingConfig {
+                thinking_level: None,
+                thinking_budget: Some(0),
+            })
+        };
+
         let generation_config = GenerationConfig {
             temperature: Some(temperature.clamp(0.0, 2.0)),
             max_output_tokens: max_tokens,
+            thinking_config,
         };
 
         let gemini_request = GeminiRequest {
@@ -238,7 +280,7 @@ mod tests {
     fn test_provider_creation() {
         let result = GeminiProvider::new(
             "".to_string(),
-            "gemini-1.5-flash".to_string(),
+            "gemini-3-flash-preview".to_string(),
             HashMap::new(),
         );
         assert!(result.is_err());
@@ -252,7 +294,7 @@ mod tests {
 
         let result = GeminiProvider::new(
             "test_key_12345".to_string(),
-            "gemini-2.5-flash-lite".to_string(),
+            "gemini-2.5-flash".to_string(),
             HashMap::new(),
         );
         assert!(result.is_ok());

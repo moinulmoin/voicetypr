@@ -9,20 +9,15 @@ use crate::state::unified_state::UnifiedRecordingState;
 use crate::window_manager::WindowManager;
 
 /// Recording state enum matching frontend
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, Default)]
 pub enum RecordingState {
+    #[default]
     Idle,
     Starting,
     Recording,
     Stopping,
     Transcribing,
     Error,
-}
-
-impl Default for RecordingState {
-    fn default() -> Self {
-        RecordingState::Idle
-    }
 }
 
 /// Recording mode enum to distinguish between toggle and push-to-talk
@@ -58,6 +53,12 @@ pub struct AppState {
     pub license_cache: Arc<tokio::sync::RwLock<Option<crate::commands::license::CachedLicense>>>,
     pub pill_event_queue: Arc<Mutex<Vec<QueuedPillEvent>>>,
     pub last_toggle_press: Arc<Mutex<Option<Instant>>>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AppState {

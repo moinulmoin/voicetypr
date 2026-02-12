@@ -30,12 +30,13 @@ const defaultIpcHandler = (cmd: string) => {
         onboarding_completed: true,
         auto_launch: true,
         microphone_device: null,
-        ai_provider: 'groq',
+        ai_provider: '',
         ai_enhancement_enabled: false,
         play_sound_on_recording: true,
         play_sound_on_recording_end: true,
         pill_indicator_mode: 'when_recording',
-        pill_indicator_position: 'bottom-center'
+        pill_indicator_position: 'bottom-center',
+        pill_indicator_offset: 10
       };
 
     case 'save_settings':
@@ -108,7 +109,7 @@ const defaultIpcHandler = (cmd: string) => {
       return { state: 'idle', error: null };
 
     case 'get_ai_settings':
-      return { enabled: false, provider: 'groq', model: '', hasApiKey: false };
+      return { enabled: false, provider: '', model: '', hasApiKey: false };
 
     case 'get_enhancement_options':
       return { preset: 'Default', custom_vocabulary: [] };

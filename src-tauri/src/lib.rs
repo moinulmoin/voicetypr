@@ -1,13 +1,11 @@
 use chrono::Local;
-use serde_json;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri::{Emitter, Manager};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
 use tauri_plugin_store::StoreExt;
 
@@ -19,6 +17,7 @@ mod audio;
 mod commands;
 mod ffmpeg;
 mod license;
+mod media;
 mod menu;
 mod parakeet;
 mod recognition;
@@ -52,8 +51,8 @@ use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
         get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
-        set_openai_config, test_openai_endpoint, update_ai_settings, update_enhancement_options,
-        validate_and_cache_api_key,
+        list_provider_models, set_openai_config, test_openai_endpoint, update_ai_settings,
+        update_enhancement_options, validate_and_cache_api_key,
     },
     audio::*,
     clipboard::{copy_image_to_clipboard, save_image_to_file},
@@ -78,18 +77,16 @@ use commands::{
     utils::export_transcriptions,
     window::*,
 };
-use state::unified_state::UnifiedRecordingState;
-use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem, Submenu};
 use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
 
 use menu::build_tray_menu;
+pub use recognition::{
+    auto_select_model_if_needed, recognition_availability_snapshot, RecognitionAvailabilitySnapshot,
+};
 pub use state::{
     emit_to_all, emit_to_window, flush_pill_event_queue, get_recording_state,
     update_recording_state, AppState, QueuedPillEvent, RecordingMode, RecordingState,
-};
-pub use recognition::{
-    auto_select_model_if_needed, recognition_availability_snapshot, RecognitionAvailabilitySnapshot,
 };
 
 // Setup logging with daily rotation
@@ -280,7 +277,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(deleted) => {
                         log_complete("LOG_CLEANUP", cleanup_start.elapsed().as_millis() as u64);
                         log_with_context(log::Level::Debug, "Log cleanup complete", &[
-                            ("files_deleted", &deleted.to_string().as_str())
+                            ("files_deleted", deleted.to_string().as_str())
                         ]);
                         if deleted > 0 {
                             log::info!("🧹 Cleaned up {} old log files", deleted);
@@ -312,8 +309,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Clear license cache on app start to ensure fresh checks
             {
                 use crate::simple_cache;
-                let _ = simple_cache::remove(&app.app_handle(), "license_status");
-                let _ = simple_cache::remove(&app.app_handle(), "last_license_validation");
+                let _ = simple_cache::remove(app.app_handle(), "license_status");
+                let _ = simple_cache::remove(app.app_handle(), "last_license_validation");
             }
 
             // Initialize whisper manager
@@ -322,7 +319,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             log_start("WHISPER_MANAGER_INIT");
             log_with_context(log::Level::Debug, "Initializing Whisper manager", &[
-                ("models_dir", &format!("{:?}", models_dir).as_str())
+                ("models_dir", format!("{:?}", models_dir).as_str())
             ]);
 
             // Ensure the models directory exists
@@ -333,7 +330,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => {
                     let error_msg = format!("Failed to create models directory: {}", e);
                     log_file_operation("CREATE_DIR", &format!("{:?}", models_dir), false, None, Some(&e.to_string()));
-                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, error_msg)));
+                    return Err(Box::new(std::io::Error::other(error_msg)));
                 }
             }
 
@@ -347,7 +344,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let Err(e) = std::fs::create_dir_all(&parakeet_dir) {
                 let error_msg = format!("Failed to create parakeet models directory: {}", e);
                 log_file_operation("CREATE_DIR", &format!("{:?}", parakeet_dir), false, None, Some(&e.to_string()));
-                return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, error_msg)));
+                return Err(Box::new(std::io::Error::other(error_msg)));
             }
 
             log_file_operation("CREATE_DIR", &format!("{:?}", parakeet_dir), true, None, None);
@@ -467,7 +464,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // Build the tray menu using our helper function
             // Note: We need to block here since setup is sync
-            let menu = tauri::async_runtime::block_on(build_tray_menu(&app.app_handle()))?;
+            let menu = tauri::async_runtime::block_on(build_tray_menu(app.app_handle()))?;
 
 
             // Use default window icon for tray
@@ -726,13 +723,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Store the recording shortcut in managed state
             let app_state = app.state::<AppState>();
             if let Ok(mut shortcut_guard) = app_state.recording_shortcut.lock() {
-                *shortcut_guard = Some(shortcut.clone());
+                *shortcut_guard = Some(shortcut);
             }
 
             // Try to register global shortcut with panic protection
             let registration_start = Instant::now();
             let registration_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                app.global_shortcut().register(shortcut.clone())
+                app.global_shortcut().register(shortcut)
             }));
 
             match registration_result {
@@ -798,11 +795,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         // Store PTT shortcut in AppState
                         let app_state = app.state::<AppState>();
                         if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
-                            *ptt_guard = Some(ptt_shortcut.clone());
+                            *ptt_guard = Some(ptt_shortcut);
                         }
 
                         // Try to register PTT shortcut
-                        match app.global_shortcut().register(ptt_shortcut.clone()) {
+                        match app.global_shortcut().register(ptt_shortcut) {
                             Ok(_) => {
                                 log::info!("✅ Successfully registered PTT hotkey: {}", ptt_key);
                             }
@@ -993,10 +990,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 if let Err(e) = autolaunch.enable() {
                                     log::warn!("Failed to enable autostart: {}", e);
                                 }
-                            } else {
-                                if let Err(e) = autolaunch.disable() {
-                                    log::warn!("Failed to disable autostart: {}", e);
-                                }
+                            } else if let Err(e) = autolaunch.disable() {
+                                log::warn!("Failed to disable autostart: {}", e);
                             }
                         }
                     }
@@ -1024,12 +1019,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 // Keep dock icon hidden when main window is hidden
                 #[cfg(target_os = "macos")]
-                hide_dock_icon(&app.app_handle());
+                hide_dock_icon(app.app_handle());
             } else {
                 log::info!("👋 First launch or no model configured - keeping main window visible");
                 // Show dock icon when main window is visible
                 #[cfg(target_os = "macos")]
-                show_dock_icon(&app.app_handle());
+                show_dock_icon(app.app_handle());
             }
 
             // Log setup completion
@@ -1057,6 +1052,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_settings,
             save_settings,
             set_audio_device,
+            validate_microphone_selection,
             set_global_shortcut,
             get_supported_languages,
             set_model_from_tray,
@@ -1103,6 +1099,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             disable_ai_enhancement,
             get_enhancement_options,
             update_enhancement_options,
+            list_provider_models,
             keyring_set,
             keyring_get,
             keyring_delete,
@@ -1114,22 +1111,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_device_id,
         ])
         .on_window_event(|window, event| {
-            match event {
-                tauri::WindowEvent::CloseRequested { api, .. } => {
-                    // Only hide the window instead of closing it (except for pill)
-                    if window.label() == "main" {
-                        api.prevent_close();
-                        if let Err(e) = window.hide() {
-                            log::error!("Failed to hide main window: {}", e);
-                        } else {
-                            log::info!("Main window hidden instead of closed");
-                            // Hide dock icon when main window is hidden
-                            #[cfg(target_os = "macos")]
-                            hide_dock_icon(&window.app_handle());
-                        }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Only hide the window instead of closing it (except for pill)
+                if window.label() == "main" {
+                    api.prevent_close();
+                    if let Err(e) = window.hide() {
+                        log::error!("Failed to hide main window: {}", e);
+                    } else {
+                        log::info!("Main window hidden instead of closed");
+                        // Hide dock icon when main window is hidden
+                        #[cfg(target_os = "macos")]
+                        hide_dock_icon(window.app_handle());
                     }
                 }
-                _ => {}
             }
         })
         .build(tauri::generate_context!())
@@ -1137,7 +1131,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             log_failed("APPLICATION_BUILD", &format!("Critical error building Tauri application: {}", e));
             log_with_context(log::Level::Error, "Application build failed", &[
                 ("stage", "application_build"),
-                ("total_startup_time_ms", &app_start.elapsed().as_millis().to_string().as_str())
+                ("total_startup_time_ms", app_start.elapsed().as_millis().to_string().as_str())
             ]);
             eprintln!("VoiceTypr failed to start: {}", e);
             Box::new(e)
@@ -1212,7 +1206,7 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
             let provider = store
                 .get("ai_provider")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| "groq".to_string());
+                .unwrap_or_default();
 
             let model = store
                 .get("ai_model")

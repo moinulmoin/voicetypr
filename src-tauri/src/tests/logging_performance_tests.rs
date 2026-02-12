@@ -18,10 +18,27 @@ struct PerformanceBenchmark {
 
 impl PerformanceBenchmark {
     fn new(name: &str, iterations: usize, duration_limit_ms: u64) -> Self {
+        let mut limit_ms = duration_limit_ms;
+
+        // Performance tests are inherently noisy on shared CI runners.
+        // Keep them meaningful by enforcing limits, but relax thresholds in CI.
+        let is_ci = std::env::var("CI")
+            .map(|v| {
+                let v = v.to_lowercase();
+                v != "0" && v != "false" && !v.is_empty()
+            })
+            .unwrap_or(false);
+
+        if is_ci {
+            // Windows runners tend to have higher variance than macOS/Linux.
+            let scale = if cfg!(windows) { 4 } else { 3 };
+            limit_ms = limit_ms.saturating_mul(scale);
+        }
+
         Self {
             name: name.to_string(),
             iterations,
-            duration_limit: Duration::from_millis(duration_limit_ms),
+            duration_limit: Duration::from_millis(limit_ms),
         }
     }
 

@@ -10,6 +10,11 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use tauri_plugin_store::StoreExt;
 
+// Recording indicator offset constants (in pixels)
+pub const MIN_INDICATOR_OFFSET: u32 = 10;
+pub const MAX_INDICATOR_OFFSET: u32 = 50;
+pub const DEFAULT_INDICATOR_OFFSET: u32 = 10;
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub hotkey: String,
@@ -36,6 +41,10 @@ pub struct Settings {
     pub pill_indicator_mode: String,
     // Pill indicator screen position: "top", "center", or "bottom"
     pub pill_indicator_position: String,
+    // Pill indicator offset from screen edge in pixels (10-100)
+    pub pill_indicator_offset: u32,
+    // Pause system media during recording
+    pub pause_media_during_recording: bool,
 }
 
 impl Default for Settings {
@@ -61,14 +70,54 @@ impl Default for Settings {
             play_sound_on_recording_end: true,    // Default to playing sound on recording end
             pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
             pill_indicator_position: "bottom-center".to_string(), // Default to bottom center of screen
+            pill_indicator_offset: DEFAULT_INDICATOR_OFFSET,
+            pause_media_during_recording: true, // Default to pausing media during recording
         }
     }
 }
 
 /// Log a message from the frontend to the backend logs
 #[tauri::command]
+#[allow(dead_code)]
 pub async fn frontend_log(message: String) {
     log::info!("[FRONTEND] {}", message);
+}
+
+/// Validate that the stored microphone selection still exists.
+/// If the selected microphone is no longer available, resets to default.
+/// Returns true if the microphone was reset, false if it was valid or already default.
+#[tauri::command]
+pub async fn validate_microphone_selection(app: AppHandle) -> Result<bool, String> {
+    use crate::audio::recorder::AudioRecorder;
+
+    let settings = get_settings(app.clone()).await?;
+
+    // If no microphone is selected (using default), nothing to validate
+    let Some(selected_mic) = settings.selected_microphone else {
+        log::debug!("No microphone selected, using system default");
+        return Ok(false);
+    };
+
+    // Get available devices
+    let available_devices = AudioRecorder::get_devices();
+
+    // Check if selected mic still exists
+    if available_devices.contains(&selected_mic) {
+        log::debug!("Selected microphone '{}' is available", selected_mic);
+        return Ok(false);
+    }
+
+    // Selected mic no longer exists - reset to default
+    log::info!(
+        "Selected microphone '{}' is no longer available (available: {:?}), resetting to default",
+        selected_mic,
+        available_devices
+    );
+
+    // Clear the selection
+    set_audio_device(app.clone(), None).await?;
+
+    Ok(true)
 }
 
 pub(crate) fn resolve_pill_indicator_mode(
@@ -185,6 +234,15 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("pill_indicator_position")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().pill_indicator_position),
+        pill_indicator_offset: store
+            .get("pill_indicator_offset")
+            .and_then(|v| v.as_u64())
+            .map(|v| v.clamp(MIN_INDICATOR_OFFSET as u64, MAX_INDICATOR_OFFSET as u64) as u32)
+            .unwrap_or_else(|| Settings::default().pill_indicator_offset),
+        pause_media_during_recording: store
+            .get("pause_media_during_recording")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().pause_media_during_recording),
     };
 
     Ok(settings)
@@ -215,6 +273,11 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         .get("pill_indicator_position")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| Settings::default().pill_indicator_position);
+    let old_pill_indicator_offset = store
+        .get("pill_indicator_offset")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or_else(|| Settings::default().pill_indicator_offset);
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
@@ -259,13 +322,20 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         "play_sound_on_recording_end",
         json!(settings.play_sound_on_recording_end),
     );
-    store.set(
-        "pill_indicator_mode",
-        json!(settings.pill_indicator_mode),
-    );
+    store.set("pill_indicator_mode", json!(settings.pill_indicator_mode));
     store.set(
         "pill_indicator_position",
         json!(settings.pill_indicator_position),
+    );
+    store.set(
+        "pill_indicator_offset",
+        json!(settings
+            .pill_indicator_offset
+            .clamp(MIN_INDICATOR_OFFSET, MAX_INDICATOR_OFFSET)),
+    );
+    store.set(
+        "pause_media_during_recording",
+        json!(settings.pause_media_during_recording),
     );
 
     // Save pill position if provided
@@ -300,13 +370,13 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
                 // Unregister old PTT shortcut if exists
                 if let Ok(ptt_guard) = app_state.ptt_shortcut.lock() {
-                    if let Some(old_ptt) = ptt_guard.clone() {
+                    if let Some(old_ptt) = *ptt_guard {
                         let _ = shortcuts.unregister(old_ptt);
                     }
                 }
 
                 // Register new PTT shortcut
-                match shortcuts.register(ptt_shortcut.clone()) {
+                match shortcuts.register(ptt_shortcut) {
                     Ok(_) => {
                         if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
                             *ptt_guard = Some(ptt_shortcut);
@@ -322,7 +392,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     } else {
         // Clear PTT shortcut if not using different key
         if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
-            if let Some(old_ptt) = ptt_guard.clone() {
+            if let Some(old_ptt) = *ptt_guard {
                 let _ = app.global_shortcut().unregister(old_ptt);
             }
             *ptt_guard = None;
@@ -402,7 +472,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             "never" => false,
             "always" => true,
             "when_recording" => !is_idle, // Show only when recording
-            _ => !is_idle, // Default to when_recording behavior
+            _ => !is_idle,                // Default to when_recording behavior
         };
         log::info!(
             "pill_visibility: mode change computed should_show={}",
@@ -413,17 +483,19 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             if let Err(e) = crate::commands::window::show_pill_widget(app.clone()).await {
                 log::warn!("Failed to show pill window: {}", e);
             }
-        } else {
-            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
-                log::warn!("Failed to hide pill window: {}", e);
-            }
+        } else if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+            log::warn!("Failed to hide pill window: {}", e);
         }
     }
 
     // Handle pill window position when pill_indicator_position setting changes
     // We need to recreate the pill window at the new position since repositioning doesn't work reliably
     if old_pill_indicator_position != settings.pill_indicator_position {
-        log::info!("Pill indicator position changed from '{}' to '{}'", old_pill_indicator_position, settings.pill_indicator_position);
+        log::info!(
+            "Pill indicator position changed from '{}' to '{}'",
+            old_pill_indicator_position,
+            settings.pill_indicator_position
+        );
 
         // Check if pill should be visible based on current mode
         let should_show = match settings.pill_indicator_mode.as_str() {
@@ -445,7 +517,30 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             if let Err(e) = crate::commands::window::show_pill_widget(app.clone()).await {
                 log::warn!("Failed to show pill window at new position: {}", e);
             }
-            log::info!("Recreated pill window at new position: {}", settings.pill_indicator_position);
+            log::info!(
+                "Recreated pill window at new position: {}",
+                settings.pill_indicator_position
+            );
+        }
+    }
+
+    // Handle pill window offset change - reposition the pill window
+    if old_pill_indicator_offset != settings.pill_indicator_offset {
+        log::info!(
+            "Pill indicator offset changed from {} to {}",
+            old_pill_indicator_offset,
+            settings.pill_indicator_offset
+        );
+
+        // Reposition the pill window if it's currently visible
+        let window_manager = app.state::<crate::WindowManager>();
+        if window_manager.has_pill_window() {
+            window_manager
+                .reposition_floating_windows_with_position(&settings.pill_indicator_position);
+            log::info!(
+                "Repositioned pill window with new offset: {}",
+                settings.pill_indicator_offset
+            );
         }
     }
 
@@ -501,7 +596,7 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
         .recording_shortcut
         .lock()
         .ok()
-        .and_then(|guard| guard.clone());
+        .and_then(|guard| *guard);
 
     if let Some(old) = old_shortcut {
         log::debug!("Unregistering old shortcut: {:?}", old);
@@ -518,7 +613,7 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
     log::debug!("Registering new shortcut: {}", normalized_shortcut);
 
     // Attempt registration - according to docs, ANY error means hotkey won't work
-    let registration_result = shortcuts.register(new_shortcut.clone());
+    let registration_result = shortcuts.register(new_shortcut);
 
     match registration_result {
         Ok(_) => {
@@ -539,9 +634,9 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
                 || error_lower.contains("conflict")
                 || error_lower.contains("in use")
             {
-                format!("Hotkey is already in use by another application. Please choose a different combination.")
+                "Hotkey is already in use by another application. Please choose a different combination.".to_string()
             } else if error_lower.contains("parse") || error_lower.contains("invalid") {
-                format!("Invalid hotkey combination. Please use a valid key combination.")
+                "Invalid hotkey combination. Please use a valid key combination.".to_string()
             } else {
                 format!("Failed to register hotkey: {}", e)
             };
@@ -763,8 +858,7 @@ mod tests {
 
     #[test]
     fn resolve_pill_indicator_mode_migrates_legacy_false() {
-        let resolved =
-            resolve_pill_indicator_mode(None, Some(false), "when_recording".to_string());
+        let resolved = resolve_pill_indicator_mode(None, Some(false), "when_recording".to_string());
 
         assert_eq!(resolved, "when_recording");
     }

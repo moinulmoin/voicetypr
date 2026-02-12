@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "ci:mac": "bash ./scripts/ci-local-macos.sh",
+    "ci:win": "powershell -ExecutionPolicy Bypass -File .\\scripts\\ci-local-windows.ps1",
+    "ci:win:full": "powershell -ExecutionPolicy Bypass -File .\\scripts\\ci-local-windows.ps1 -Full",
     "sidecar:ensure-ffmpeg": "node scripts/ensure-ffmpeg-sidecar.cjs",
     "sidecar:build": "bash ./scripts/build-parakeet-sidecar.sh",
     "build": "tsc && vite build",

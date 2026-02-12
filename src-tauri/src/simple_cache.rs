@@ -6,6 +6,7 @@ use tauri_plugin_store::StoreExt;
 // Minimal replacement for tauri-plugin-cache with TTL support using tauri-plugin-store
 
 #[derive(Clone, Debug, Default)]
+#[allow(dead_code)]
 pub struct SetItemOptions {
     pub ttl: Option<u64>,                   // seconds
     pub compress: Option<bool>,             // ignored

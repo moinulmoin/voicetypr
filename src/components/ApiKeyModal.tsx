@@ -56,12 +56,29 @@ export function ApiKeyModal({
     }
   }, [isOpen]);
 
+  const getProviderDisplayName = () => {
+    switch (providerName.toLowerCase()) {
+      case 'gemini':
+        return 'Gemini';
+      case 'openai':
+        return 'OpenAI';
+      case 'anthropic':
+        return 'Anthropic';
+      case 'soniox':
+        return 'Soniox';
+      default:
+        return providerName;
+    }
+  };
+
   const getProviderUrl = () => {
     switch (providerName.toLowerCase()) {
-      case 'groq':
-        return 'https://console.groq.com/keys';
       case 'gemini':
         return 'https://aistudio.google.com/apikey';
+      case 'openai':
+        return 'https://platform.openai.com/api-keys';
+      case 'anthropic':
+        return 'https://console.anthropic.com/settings/keys';
       case 'soniox':
         return 'https://soniox.com/docs/stt/get-started';
       default:
@@ -69,11 +86,12 @@ export function ApiKeyModal({
     }
   };
 
+  const displayName = getProviderDisplayName();
   const providerUrl = docsUrl ?? getProviderUrl();
-  const resolvedTitle = title ?? `Add ${providerName} API Key`;
+  const resolvedTitle = title ?? `Add ${displayName} API Key`;
   const resolvedDescription =
     description ??
-    `Enter your API key to enable ${providerName}. Your key is stored securely in the system keychain.`;
+    `Enter your API key to enable ${displayName}. Your key is stored securely in the system keychain.`;
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
@@ -92,7 +110,7 @@ export function ApiKeyModal({
               <Input
                 id="apiKey"
                 type="password"
-                placeholder={`Enter your ${providerName} API key`}
+                placeholder={`Enter your ${displayName} API key`}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 disabled={isLoading}
@@ -108,7 +126,7 @@ export function ApiKeyModal({
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 hover:underline"
                 >
-                  Get your {providerName} API key
+                  Get your {displayName} API key
                   <ExternalLink className="h-3 w-3" />
                 </a>
               </div>

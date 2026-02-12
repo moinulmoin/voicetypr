@@ -57,7 +57,8 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         let mut models: Vec<(String, String)> = Vec::new();
         let mut whisper_all = std::collections::HashMap::new();
 
-        if let Some(whisper_state) = app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
+        if let Some(whisper_state) =
+            app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
         {
             let manager = whisper_state.read().await;
             whisper_all = manager.get_models_status();
@@ -98,7 +99,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
                 should_mark_model_selected(onboarding_done, &model_name, &current_model);
             let model_item = CheckMenuItem::with_id(
                 app,
-                &format!("model_{}", model_name),
+                format!("model_{}", model_name),
                 display_name,
                 true,
                 is_selected,
@@ -175,7 +176,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             let is_selected = selected_microphone.as_ref() == Some(device_name);
             let mic_item = CheckMenuItem::with_id(
                 app,
-                &format!("microphone_{}", device_name),
+                format!("microphone_{}", device_name),
                 device_name,
                 true,
                 is_selected,
@@ -242,7 +243,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
 
                 let item = tauri::menu::MenuItem::with_id(
                     app,
-                    &format!("recent_copy_{}", ts),
+                    format!("recent_copy_{}", ts),
                     label,
                     true,
                     None::<&str>,

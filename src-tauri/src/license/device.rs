@@ -90,9 +90,9 @@ impl WindowsCommandRunner for RealWindowsCommandRunner {
                 Ok(None) => {
                     if start.elapsed() >= timeout {
                         let _ = child.kill();
-                        break child
-                            .wait()
-                            .map_err(|e| format!("Failed to wait for {} after kill: {}", program, e))?;
+                        break child.wait().map_err(|e| {
+                            format!("Failed to wait for {} after kill: {}", program, e)
+                        })?;
                     }
                     thread::sleep(Duration::from_millis(50));
                 }
@@ -118,7 +118,7 @@ impl WindowsCommandRunner for RealWindowsCommandRunner {
 fn get_macos_uuid() -> Result<String, String> {
     // Get hardware UUID on macOS
     let output = Command::new("ioreg")
-        .args(&["-d2", "-c", "IOPlatformExpertDevice"])
+        .args(["-d2", "-c", "IOPlatformExpertDevice"])
         .output()
         .map_err(|e| format!("Failed to execute ioreg: {}", e))?;
 
@@ -148,9 +148,7 @@ fn get_windows_uuid() -> Result<String, String> {
 #[cfg(target_os = "windows")]
 fn get_windows_uuid_with_runner(runner: &dyn WindowsCommandRunner) -> Result<String, String> {
     fn normalize_uuid(value: &str) -> Option<String> {
-        let trimmed = value
-            .trim()
-            .trim_matches(&['{', '}', '"', '\''][..]);
+        let trimmed = value.trim().trim_matches(&['{', '}', '"', '\''][..]);
         if trimmed.is_empty() {
             return None;
         }
@@ -322,10 +320,13 @@ mod tests {
         }
 
         impl WindowsCommandRunner for StubRunner {
-            fn run(&self, _program: &str, _args: &[&str], _timeout_ms: u64) -> Result<Output, String> {
-                self.responses
-                    .borrow_mut()
-                    .remove(0)
+            fn run(
+                &self,
+                _program: &str,
+                _args: &[&str],
+                _timeout_ms: u64,
+            ) -> Result<Output, String> {
+                self.responses.borrow_mut().remove(0)
             }
         }
 
@@ -358,10 +359,13 @@ mod tests {
         }
 
         impl WindowsCommandRunner for StubRunner {
-            fn run(&self, _program: &str, _args: &[&str], _timeout_ms: u64) -> Result<Output, String> {
-                self.responses
-                    .borrow_mut()
-                    .remove(0)
+            fn run(
+                &self,
+                _program: &str,
+                _args: &[&str],
+                _timeout_ms: u64,
+            ) -> Result<Output, String> {
+                self.responses.borrow_mut().remove(0)
             }
         }
 

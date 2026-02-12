@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::utils::logger::*;
 
 /// Network error types for enhanced diagnostics
@@ -85,7 +87,7 @@ pub fn log_network_error_with_duration(error: NetworkError, duration_ms: Option<
     };
 
     // For timeout errors, use the duration from the error if not provided
-    let final_duration = duration_ms.unwrap_or_else(|| {
+    let final_duration = duration_ms.unwrap_or({
         if let NetworkError::Timeout { duration_ms } = &error {
             *duration_ms
         } else {
@@ -169,7 +171,7 @@ pub fn log_connectivity_check(host: &str, success: bool, duration_ms: u64) {
                 ("operation", "CONNECTIVITY_CHECK"),
                 ("host", host),
                 ("result", "success"),
-                ("duration_ms", &duration_ms.to_string().as_str()),
+                ("duration_ms", duration_ms.to_string().as_str()),
             ],
         );
         log::info!(
@@ -185,7 +187,7 @@ pub fn log_connectivity_check(host: &str, success: bool, duration_ms: u64) {
                 ("operation", "CONNECTIVITY_CHECK"),
                 ("host", host),
                 ("result", "failed"),
-                ("duration_ms", &duration_ms.to_string().as_str()),
+                ("duration_ms", duration_ms.to_string().as_str()),
             ],
         );
         log::error!(

@@ -12,6 +12,12 @@ use tauri_plugin_store::StoreExt;
 static API_KEY_CACHE: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const CUSTOM_BASE_URL_KEY: &str = "ai_custom_base_url";
+const CUSTOM_NO_AUTH_KEY: &str = "ai_custom_no_auth";
+const LEGACY_OPENAI_BASE_URL_KEY: &str = "ai_openai_base_url";
+const LEGACY_OPENAI_NO_AUTH_KEY: &str = "ai_openai_no_auth";
+
 // Helper: determine if we should consider that the app "has an API key" for a provider
 // For OpenAI-compatible providers, a configured no_auth=true also counts as "has key"
 fn check_has_api_key<R: tauri::Runtime>(
@@ -20,7 +26,10 @@ fn check_has_api_key<R: tauri::Runtime>(
     cache: &HashMap<String, String>,
 ) -> bool {
     if provider == "openai" {
-        let configured_base = store.get("ai_openai_base_url").is_some();
+        cache.contains_key("ai_api_key_openai") || store.get(LEGACY_OPENAI_BASE_URL_KEY).is_some()
+    } else if provider == "custom" {
+        let configured_base = store.get(CUSTOM_BASE_URL_KEY).is_some()
+            || store.get(LEGACY_OPENAI_BASE_URL_KEY).is_some();
         configured_base || cache.contains_key(&format!("ai_api_key_{}", provider))
     } else {
         cache.contains_key(&format!("ai_api_key_{}", provider))
@@ -50,7 +59,7 @@ lazy_static::lazy_static! {
 }
 
 // Supported AI providers
-const ALLOWED_PROVIDERS: &[&str] = &["groq", "gemini", "openai"];
+const ALLOWED_PROVIDERS: &[&str] = &["gemini", "openai", "anthropic", "custom"];
 
 fn validate_provider_name(provider: &str) -> Result<(), String> {
     // First check format
@@ -81,7 +90,7 @@ pub async fn get_ai_settings(app: tauri::AppHandle) -> Result<AISettings, String
     let provider = store
         .get("ai_provider")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "groq".to_string());
+        .unwrap_or_default(); // Empty by default, user must select
 
     let model = store
         .get("ai_model")
@@ -219,13 +228,21 @@ pub async fn validate_and_cache_api_key(
     let provided_key = api_key.clone().unwrap_or_default();
     let inferred_no_auth = no_auth.unwrap_or(false) || provided_key.trim().is_empty();
 
-    if provider == "openai" {
+    if provider == "openai" || provider == "custom" {
         let store = app.store("settings").map_err(|e| e.to_string())?;
         if let Some(url) = base_url.clone() {
-            store.set("ai_openai_base_url", serde_json::Value::String(url));
+            if provider == "custom" {
+                store.set(CUSTOM_BASE_URL_KEY, serde_json::Value::String(url));
+            } else {
+                store.set(LEGACY_OPENAI_BASE_URL_KEY, serde_json::Value::String(url));
+            }
         }
         store.set(
-            "ai_openai_no_auth",
+            if provider == "custom" {
+                CUSTOM_NO_AUTH_KEY
+            } else {
+                LEGACY_OPENAI_NO_AUTH_KEY
+            },
             serde_json::Value::Bool(inferred_no_auth),
         );
         if let Some(m) = model.clone() {
@@ -236,10 +253,28 @@ pub async fn validate_and_cache_api_key(
             .map_err(|e| format!("Failed to save AI settings: {}", e))?;
     }
 
-    if provider == "openai" {
+    if provider == "openai" || provider == "custom" {
+        let store = app.store("settings").map_err(|e| e.to_string())?;
+
         let base = base_url
             .clone()
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+            .or_else(|| {
+                if provider == "custom" {
+                    store
+                        .get(CUSTOM_BASE_URL_KEY)
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .or_else(|| {
+                            store
+                                .get(LEGACY_OPENAI_BASE_URL_KEY)
+                                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        })
+                } else {
+                    store
+                        .get(LEGACY_OPENAI_BASE_URL_KEY)
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                }
+            })
+            .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
         let validate_url = normalize_chat_completions_url(&base);
 
         let client = reqwest::Client::new();
@@ -404,19 +439,37 @@ pub async fn update_ai_settings(
 
     // Check if API key exists when enabling
     if enabled {
-        if provider == "openai" {
+        if provider == "custom" {
             let store = app.store("settings").map_err(|e| e.to_string())?;
             let cache_has_key = {
                 let cache = API_KEY_CACHE
                     .lock()
                     .map_err(|_| "Failed to access cache".to_string())?;
-                cache.contains_key(&format!("ai_api_key_{}", provider))
+                cache.contains_key("ai_api_key_custom")
             };
-            let configured_base = store.get("ai_openai_base_url").is_some();
+            let configured_base = store.get(CUSTOM_BASE_URL_KEY).is_some()
+                || store.get(LEGACY_OPENAI_BASE_URL_KEY).is_some();
 
             if !(cache_has_key || configured_base) {
                 log::warn!(
                     "Attempted to enable AI enhancement without cached API key or configured base URL for provider: {}",
+                    provider
+                );
+                return Err("API key not found. Please add an API key first.".to_string());
+            }
+        } else if provider == "openai" {
+            let store = app.store("settings").map_err(|e| e.to_string())?;
+            let cache_has_key = {
+                let cache = API_KEY_CACHE
+                    .lock()
+                    .map_err(|_| "Failed to access cache".to_string())?;
+                cache.contains_key("ai_api_key_openai")
+            };
+            let legacy_custom_config = store.get(LEGACY_OPENAI_BASE_URL_KEY).is_some();
+
+            if !(cache_has_key || legacy_custom_config) {
+                log::warn!(
+                    "Attempted to enable AI enhancement without cached API key for provider: {}",
                     provider
                 );
                 return Err("API key not found. Please add an API key first.".to_string());
@@ -537,42 +590,90 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
     let provider = store
         .get("ai_provider")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "groq".to_string());
+        .unwrap_or_default(); // Empty by default
 
     let model = store
         .get("ai_model")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "".to_string()); // Empty by default
 
-    // Don't enhance if no model selected
-    if model.is_empty() {
+    // Don't enhance if no model or provider selected
+    if model.is_empty() || provider.is_empty() {
         log::warn!(
-            "AI enhancement enabled but no model selected. Provider: {}",
+            "AI enhancement enabled but no model/provider selected. Provider: {}",
             provider
         );
         return Ok(text);
     }
 
     // Determine provider-specific config
-    let (api_key, options) = if provider == "openai" {
-        let base_url = store
-            .get("ai_openai_base_url")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-
-        // Send Authorization only if a key is cached
+    let (factory_provider, api_key, options) = if provider == "openai" {
         let cache = API_KEY_CACHE.lock().map_err(|e| {
             log::error!("Failed to access API key cache: {}", e);
             "Failed to access cache".to_string()
         })?;
-        let key_name = format!("ai_api_key_{}", provider);
-        let cached = cache.get(&key_name).cloned();
 
-        // Log detailed information about API key lookup
-        if cached.is_some() {
-            log::info!("Using cached API key for OpenAI provider");
+        let openai_cached = cache.get("ai_api_key_openai").cloned();
+        let custom_cached = cache.get("ai_api_key_custom").cloned();
+        drop(cache);
+
+        if let Some(cached) = openai_cached {
+            let mut opts = std::collections::HashMap::new();
+            opts.insert(
+                "base_url".into(),
+                serde_json::Value::String(DEFAULT_OPENAI_BASE_URL.to_string()),
+            );
+            opts.insert("no_auth".into(), serde_json::Value::Bool(false));
+
+            ("openai".to_string(), cached, opts)
+        } else if let Some(legacy_base_url) = store
+            .get(LEGACY_OPENAI_BASE_URL_KEY)
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+        {
+            log::warn!("Using legacy OpenAI-compatible configuration for openai provider");
+            let mut opts = std::collections::HashMap::new();
+            opts.insert(
+                "base_url".into(),
+                serde_json::Value::String(legacy_base_url),
+            );
+            opts.insert(
+                "no_auth".into(),
+                serde_json::Value::Bool(custom_cached.is_none()),
+            );
+
+            (
+                "openai".to_string(),
+                custom_cached.unwrap_or_default(),
+                opts,
+            )
         } else {
-            log::warn!("No cached API key found for OpenAI provider, using no-auth mode");
+            log::error!(
+                "API key not found in cache for OpenAI provider. Cache keys unavailable for OpenAI path"
+            );
+            return Err("API key not found in cache".to_string());
+        }
+    } else if provider == "custom" {
+        let base_url = store
+            .get(CUSTOM_BASE_URL_KEY)
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .or_else(|| {
+                store
+                    .get(LEGACY_OPENAI_BASE_URL_KEY)
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+            })
+            .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
+
+        let cache = API_KEY_CACHE.lock().map_err(|e| {
+            log::error!("Failed to access API key cache: {}", e);
+            "Failed to access cache".to_string()
+        })?;
+
+        let cached = cache.get("ai_api_key_custom").cloned();
+
+        if cached.is_some() {
+            log::info!("Using cached API key for custom provider");
+        } else {
+            log::warn!("No cached API key found for custom provider, using no-auth mode");
             log::debug!(
                 "Available cache keys: {:?}",
                 cache.keys().collect::<Vec<_>>()
@@ -584,8 +685,8 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
         opts.insert("base_url".into(), serde_json::Value::String(base_url));
         opts.insert("no_auth".into(), serde_json::Value::Bool(cached.is_none()));
 
-        (cached.unwrap_or_default(), opts)
-    } else if provider == "groq" || provider == "gemini" {
+        ("openai".to_string(), cached.unwrap_or_default(), opts)
+    } else if provider == "gemini" || provider == "anthropic" {
         // Require API key from in-memory cache
         let cache = API_KEY_CACHE
             .lock()
@@ -600,7 +701,7 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
             "API key not found in cache".to_string()
         })?;
 
-        (api_key, std::collections::HashMap::new())
+        (provider.clone(), api_key, std::collections::HashMap::new())
     } else {
         return Err("Unsupported provider".to_string());
     };
@@ -610,17 +711,26 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
     // Load enhancement options
     let enhancement_options = get_enhancement_options(app.clone()).await.ok();
 
+    // Get the user's selected language for formatting output
+    let language = {
+        let lang_store = app.store("settings").map_err(|e| e.to_string())?;
+        lang_store
+            .get("language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+    };
+
     log::info!(
-        "Enhancing text with {} model {} (length: {}, options: {:?})",
+        "Enhancing text with {} model {} (length: {}, options: {:?}, language: {:?})",
         provider,
         model,
         text.len(),
-        enhancement_options
+        enhancement_options,
+        language
     );
 
     // Create provider config
     let config = AIProviderConfig {
-        provider,
+        provider: factory_provider,
         model,
         api_key,
         enabled: true,
@@ -635,6 +745,7 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
         text: text.clone(),
         context: None,
         options: enhancement_options,
+        language,
     };
 
     match provider.enhance_text(request).await {
@@ -678,12 +789,12 @@ pub async fn set_openai_config(
 ) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
     store.set(
-        "ai_openai_base_url",
+        CUSTOM_BASE_URL_KEY,
         serde_json::Value::String(args.base_url),
     );
     if let Some(no_auth) = args.no_auth {
         // Backward-compatibility: accept but not required
-        store.set("ai_openai_no_auth", serde_json::Value::Bool(no_auth));
+        store.set(CUSTOM_NO_AUTH_KEY, serde_json::Value::Bool(no_auth));
     }
     store
         .save()
@@ -695,14 +806,102 @@ pub async fn set_openai_config(
 pub async fn get_openai_config(app: tauri::AppHandle) -> Result<OpenAIConfig, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
     let base_url = store
-        .get("ai_openai_base_url")
+        .get(CUSTOM_BASE_URL_KEY)
         .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        .or_else(|| {
+            store
+                .get(LEGACY_OPENAI_BASE_URL_KEY)
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        })
+        .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
     let no_auth = store
-        .get("ai_openai_no_auth")
+        .get(CUSTOM_NO_AUTH_KEY)
         .and_then(|v| v.as_bool())
+        .or_else(|| {
+            store
+                .get(LEGACY_OPENAI_NO_AUTH_KEY)
+                .and_then(|v| v.as_bool())
+        })
         .unwrap_or(false);
     Ok(OpenAIConfig { base_url, no_auth })
+}
+
+// ============================================================================
+// Curated Model List (Static - No API Fetching)
+// ============================================================================
+
+/// A model available from a provider
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProviderModel {
+    pub id: String,
+    pub name: String,
+    pub recommended: bool,
+}
+
+/// Curated list of OpenAI models for text formatting
+/// Using GPT-5 nano/mini with minimal reasoning for fast, cost-effective formatting
+const OPENAI_MODELS: &[(&str, &str, bool)] = &[
+    ("gpt-5-nano", "GPT-5 Nano", true),
+    ("gpt-5-mini", "GPT-5 Mini", true),
+];
+
+/// Curated list of Anthropic Claude models for text formatting
+/// Using Claude 4.5 Haiku/Sonnet - fast and balanced options
+const ANTHROPIC_MODELS: &[(&str, &str, bool)] = &[
+    ("claude-haiku-4-5-latest", "Claude 4.5 Haiku", true),
+    ("claude-sonnet-4-5-latest", "Claude 4.5 Sonnet", true),
+];
+
+/// Curated list of Google Gemini models for text formatting
+/// Using Flash variants - optimized for speed and cost
+const GEMINI_MODELS: &[(&str, &str, bool)] = &[
+    ("gemini-3-flash-preview", "Gemini 3 Flash", true),
+    ("gemini-2.5-flash", "Gemini 2.5 Flash", true),
+    ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite", true),
+];
+
+/// Get curated models for a provider (no API call needed)
+fn get_curated_models(provider: &str) -> Vec<ProviderModel> {
+    let models: &[(&str, &str, bool)] = match provider {
+        "openai" => OPENAI_MODELS,
+        "anthropic" => ANTHROPIC_MODELS,
+        "gemini" => GEMINI_MODELS,
+        _ => return vec![],
+    };
+
+    models
+        .iter()
+        .map(|(id, name, recommended)| ProviderModel {
+            id: id.to_string(),
+            name: name.to_string(),
+            recommended: *recommended,
+        })
+        .collect()
+}
+
+/// List available models for a provider
+/// Returns curated static list - no API call needed
+#[tauri::command]
+pub async fn list_provider_models(
+    provider: String,
+    _app: tauri::AppHandle,
+) -> Result<Vec<ProviderModel>, String> {
+    // Validate provider
+    if !["openai", "anthropic", "gemini"].contains(&provider.as_str()) {
+        return Err(format!(
+            "Unsupported provider for model listing: {}",
+            provider
+        ));
+    }
+
+    let models = get_curated_models(&provider);
+    log::info!(
+        "Returning {} curated models for provider {}",
+        models.len(),
+        provider
+    );
+
+    Ok(models)
 }
 
 #[cfg(test)]
@@ -711,13 +910,54 @@ mod tests {
 
     #[test]
     fn test_provider_validation() {
-        assert!(validate_provider_name("groq").is_ok());
+        // Valid providers
         assert!(validate_provider_name("gemini").is_ok());
         assert!(validate_provider_name("openai").is_ok());
+        assert!(validate_provider_name("anthropic").is_ok());
+        assert!(validate_provider_name("custom").is_ok());
+
+        // Groq is no longer supported
+        assert!(validate_provider_name("groq").is_err());
+
+        // Invalid formats
         assert!(validate_provider_name("test-provider").is_err());
         assert!(validate_provider_name("test_provider").is_err());
         assert!(validate_provider_name("test provider").is_err());
         assert!(validate_provider_name("test@provider").is_err());
         assert!(validate_provider_name("").is_err());
+    }
+
+    #[test]
+    fn test_curated_models() {
+        // OpenAI models
+        let openai_models = get_curated_models("openai");
+        assert_eq!(openai_models.len(), 2);
+        assert!(openai_models.iter().any(|m| m.id == "gpt-5-nano"));
+        assert!(openai_models.iter().any(|m| m.id == "gpt-5-mini"));
+
+        // Anthropic models
+        let anthropic_models = get_curated_models("anthropic");
+        assert_eq!(anthropic_models.len(), 2);
+        assert!(anthropic_models
+            .iter()
+            .any(|m| m.id == "claude-haiku-4-5-latest"));
+        assert!(anthropic_models
+            .iter()
+            .any(|m| m.id == "claude-sonnet-4-5-latest"));
+
+        // Gemini models
+        let gemini_models = get_curated_models("gemini");
+        assert_eq!(gemini_models.len(), 3);
+        assert!(gemini_models
+            .iter()
+            .any(|m| m.id == "gemini-3-flash-preview"));
+        assert!(gemini_models.iter().any(|m| m.id == "gemini-2.5-flash"));
+        assert!(gemini_models
+            .iter()
+            .any(|m| m.id == "gemini-2.5-flash-lite"));
+
+        // Unknown provider returns empty list
+        let unknown_models = get_curated_models("unknown");
+        assert!(unknown_models.is_empty());
     }
 }

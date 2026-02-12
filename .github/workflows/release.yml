@@ -1,0 +1,375 @@
+name: Release
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (build only, no release)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ===========================================
+  # Build macOS (aarch64 - Apple Silicon)
+  # ===========================================
+  build-macos-aarch64:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.13.1
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Import Apple Certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p actions build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
+          rm certificate.p12
+
+      - name: Build Parakeet sidecar (Apple Silicon only)
+        run: |
+          cd sidecar/parakeet-swift
+          swift build -c release --arch arm64
+          mkdir -p dist
+          cp .build/arm64-apple-macosx/release/ParakeetSidecar dist/parakeet-sidecar-aarch64-apple-darwin
+          chmod +x dist/parakeet-sidecar-aarch64-apple-darwin
+          ln -sfn parakeet-sidecar-aarch64-apple-darwin dist/parakeet-sidecar
+
+      - name: Ensure FFmpeg sidecar
+        run: pnpm run sidecar:ensure-ffmpeg
+
+      - name: Build Tauri app
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          # Create config override for signing identity (matches release-separate.sh)
+          TAURI_CONFIG_OVERRIDE=$(jq -nc --arg identity "$APPLE_SIGNING_IDENTITY" '{bundle:{macOS:{signingIdentity:$identity}}}')
+          pnpm tauri build --target aarch64-apple-darwin --bundles app,dmg --config "$TAURI_CONFIG_OVERRIDE" --ci
+
+      - name: Create app.tar.gz for updater
+        run: |
+          cd src-tauri/target/aarch64-apple-darwin/release/bundle/macos
+          APP_NAME=$(ls -d *.app | head -1)
+          COPYFILE_DISABLE=1 tar -czf app.tar.gz --exclude='._*' --exclude='.DS_Store' "$APP_NAME"
+
+      - name: Sign update artifact
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          echo "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/tauri.key
+          pnpm tauri signer sign -f /tmp/tauri.key -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz
+          rm /tmp/tauri.key
+
+      - name: Stage artifacts for upload
+        run: |
+          mkdir -p artifacts
+          cp src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg artifacts/
+          cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz artifacts/
+          cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz.sig artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-aarch64
+          path: artifacts/
+          retention-days: 5
+
+  # ===========================================
+  # Build macOS (x86_64 - Intel)
+  # ===========================================
+  build-macos-x86_64:
+    runs-on: macos-13
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.13.1
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Import Apple Certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p actions build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
+          rm certificate.p12
+
+      - name: Ensure FFmpeg sidecar
+        run: pnpm run sidecar:ensure-ffmpeg
+
+      - name: Build Tauri app
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          # Create config override for signing identity (matches release-separate.sh)
+          TAURI_CONFIG_OVERRIDE=$(jq -nc --arg identity "$APPLE_SIGNING_IDENTITY" '{bundle:{macOS:{signingIdentity:$identity}}}')
+          pnpm tauri build --target x86_64-apple-darwin --bundles app,dmg --config "$TAURI_CONFIG_OVERRIDE" --ci
+
+      - name: Create app.tar.gz for updater
+        run: |
+          cd src-tauri/target/x86_64-apple-darwin/release/bundle/macos
+          APP_NAME=$(ls -d *.app | head -1)
+          COPYFILE_DISABLE=1 tar -czf app.tar.gz --exclude='._*' --exclude='.DS_Store' "$APP_NAME"
+
+      - name: Sign update artifact
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          echo "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/tauri.key
+          pnpm tauri signer sign -f /tmp/tauri.key -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
+            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz
+          rm /tmp/tauri.key
+
+      - name: Stage artifacts for upload
+        run: |
+          mkdir -p artifacts
+          cp src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg artifacts/
+          cp src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz artifacts/
+          cp src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz.sig artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: artifacts/
+          retention-days: 5
+
+  # ===========================================
+  # Build Windows (x64 with Vulkan GPU support)
+  # ===========================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.13.1
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.3.290.0
+          install_runtime: true
+          cache: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Ensure FFmpeg sidecar
+        run: pnpm run sidecar:ensure-ffmpeg
+
+      - name: Build Tauri app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CARGO_TARGET_DIR: t
+        run: |
+          pnpm tauri build --ci
+
+      - name: Sign installer for updates
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "t\release\bundle\nsis\*.exe" | Select-Object -First 1
+          $env:TAURI_SIGNING_PRIVATE_KEY | Out-File -FilePath "$env:TEMP\tauri.key" -Encoding ascii
+          pnpm tauri signer sign -f "$env:TEMP\tauri.key" -p "$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD" $installer.FullName
+          Remove-Item "$env:TEMP\tauri.key"
+
+      - name: Stage artifacts for upload
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts
+          Copy-Item "t\release\bundle\nsis\*.exe" artifacts\
+          Copy-Item "t\release\bundle\nsis\*.exe.sig" artifacts\
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: artifacts/
+          retention-days: 5
+
+  # ===========================================
+  # Create Release (after all builds succeed)
+  # ===========================================
+  release:
+    needs: [build-macos-aarch64, build-macos-x86_64, build-windows]
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.dry_run }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' package.json)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          # macOS aarch64
+          cp artifacts/macos-aarch64/*.dmg "release/VoiceTypr_${VERSION}_aarch64.dmg"
+          cp artifacts/macos-aarch64/app.tar.gz "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz"
+          cp artifacts/macos-aarch64/app.tar.gz.sig "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig"
+          
+          # macOS x86_64
+          cp artifacts/macos-x86_64/*.dmg "release/VoiceTypr_${VERSION}_x86_64.dmg"
+          cp artifacts/macos-x86_64/app.tar.gz "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz"
+          cp artifacts/macos-x86_64/app.tar.gz.sig "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig"
+          
+          # Windows x64
+          cp artifacts/windows-x64/*.exe "release/VoiceTypr_${VERSION}_x64-setup.exe"
+          cp artifacts/windows-x64/*.exe.sig "release/VoiceTypr_${VERSION}_x64-setup.exe.sig"
+
+      - name: Generate latest.json
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          
+          # Read signatures
+          AARCH64_SIG=$(cat "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig" | tr -d '\n')
+          X86_64_SIG=$(cat "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig" | tr -d '\n')
+          if [ ! -f "release/VoiceTypr_${VERSION}_x64-setup.exe.sig" ]; then
+            echo "Missing Windows updater signature file" >&2
+            exit 1
+          fi
+          WINDOWS_SIG=$(cat "release/VoiceTypr_${VERSION}_x64-setup.exe.sig" | tr -d '\n')
+          if [ -z "$WINDOWS_SIG" ]; then
+            echo "Windows updater signature is empty" >&2
+            exit 1
+          fi
+          
+          # Create latest.json
+          cat > release/latest.json << EOF
+          {
+            "version": "$TAG",
+            "notes": "See the release notes for $TAG",
+            "pub_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "platforms": {
+              "darwin-aarch64": {
+                "signature": "$AARCH64_SIG",
+                "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/VoiceTypr_${VERSION}_aarch64.app.tar.gz"
+              },
+              "darwin-x86_64": {
+                "signature": "$X86_64_SIG",
+                "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/VoiceTypr_${VERSION}_x86_64.app.tar.gz"
+              },
+              "windows-x86_64": {
+                "signature": "$WINDOWS_SIG",
+                "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/VoiceTypr_${VERSION}_x64-setup.exe"
+              }
+            }
+          }
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: VoiceTypr ${{ steps.version.outputs.tag }}
+          draft: true
+          generate_release_notes: true
+          files: release/*

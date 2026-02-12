@@ -148,7 +148,7 @@ fn insert_via_clipboard(
 
                 // Fallback to AppleScript
                 let paste_result =
-                    panic::catch_unwind(AssertUnwindSafe(|| try_paste_with_applescript()));
+                    panic::catch_unwind(AssertUnwindSafe(try_paste_with_applescript));
 
                 match paste_result {
                     Ok(Ok(_)) => {
@@ -158,7 +158,11 @@ fn insert_via_clipboard(
                         log::warn!("AppleScript paste failed: {}, text remains in clipboard", e);
                         // Notify user through pill toast that paste failed but text is in clipboard
                         if let Some(app) = &app_handle {
-                            crate::commands::audio::pill_toast(app, "Paste failed - copied to clipboard", 1500);
+                            crate::commands::audio::pill_toast(
+                                app,
+                                "Paste failed - copied to clipboard",
+                                1500,
+                            );
                         }
                         // Don't fail - text is still in clipboard for manual paste
                     }
@@ -169,7 +173,11 @@ fn insert_via_clipboard(
                         );
                         // Notify user through pill toast about the failure
                         if let Some(app) = &app_handle {
-                            crate::commands::audio::pill_toast(app, "Paste failed - copied to clipboard", 1500);
+                            crate::commands::audio::pill_toast(
+                                app,
+                                "Paste failed - copied to clipboard",
+                                1500,
+                            );
                         }
                         // Don't fail - text is still in clipboard for manual paste
                     }

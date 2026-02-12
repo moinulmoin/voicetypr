@@ -9,7 +9,6 @@ use std::time::Duration;
 pub struct OpenAIProvider {
     api_key: String,
     model: String,
-    client: Client,
     base_url: String,
     options: HashMap<String, serde_json::Value>,
 }
@@ -29,18 +28,11 @@ impl OpenAIProvider {
             .unwrap_or(false);
 
         // Validate API key format (basic check) only if auth is required
-        if !no_auth {
-            if api_key.trim().is_empty() || api_key.len() < MIN_API_KEY_LENGTH {
-                return Err(AIError::ValidationError(
-                    "Invalid API key format".to_string(),
-                ));
-            }
+        if !no_auth && (api_key.trim().is_empty() || api_key.len() < MIN_API_KEY_LENGTH) {
+            return Err(AIError::ValidationError(
+                "Invalid API key format".to_string(),
+            ));
         }
-
-        let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .build()
-            .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
         // Resolve base URL: expect versioned base (e.g., https://api.openai.com/v1) and append only /chat/completions
         let base_root = options
@@ -59,10 +51,16 @@ impl OpenAIProvider {
         Ok(Self {
             api_key,
             model,
-            client,
             base_url,
             options,
         })
+    }
+
+    fn create_http_client() -> Result<Client, AIError> {
+        Client::builder()
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| AIError::NetworkError(format!("Failed to create HTTP client: {}", e)))
     }
 
     async fn make_request_with_retry(
@@ -102,8 +100,9 @@ impl OpenAIProvider {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let mut req = self
-            .client
+        let client = Self::create_http_client()?;
+
+        let mut req = client
             .post(&self.base_url)
             .header("Content-Type", "application/json")
             .json(request);
@@ -149,6 +148,9 @@ struct OpenAIRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    /// For GPT-5 models: set reasoning effort to minimal for fast text formatting
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -179,6 +181,7 @@ impl AIProvider for OpenAIProvider {
             &request.text,
             request.context.as_deref(),
             &request.options.unwrap_or_default(),
+            request.language.as_deref(),
         );
 
         let temperature = self
@@ -194,6 +197,13 @@ impl AIProvider for OpenAIProvider {
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
 
+        // For GPT-5 models, use minimal reasoning effort for fast text formatting
+        let reasoning_effort = if self.model.starts_with("gpt-5") {
+            Some("minimal".to_string())
+        } else {
+            None
+        };
+
         let request_body = OpenAIRequest {
             model: self.model.clone(),
             messages: vec![
@@ -208,6 +218,7 @@ impl AIProvider for OpenAIProvider {
             ],
             temperature: Some(temperature.clamp(0.0, 2.0)),
             max_tokens,
+            reasoning_effort,
         };
 
         let api_response = self.make_request_with_retry(&request_body).await?;

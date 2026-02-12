@@ -1,4 +1,4 @@
-/// Configuration constants for AI providers
+//! Configuration constants for AI providers.
 
 /// Default timeout for API requests in seconds
 pub const DEFAULT_TIMEOUT_SECS: u64 = 30;

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-// 100/100 Base Prompt - deterministic last-intent processing
-const BASE_PROMPT: &str = r#"You are a post-processor for voice transcripts.
+// Base prompt template with {language} placeholder
+const BASE_PROMPT_TEMPLATE: &str = r#"You are a post-processor for voice transcripts.
 
 Resolve self-corrections and intent changes: delete the retracted part and keep only the final intended phrasing (last-intent wins).
 Tie-breakers:
@@ -10,11 +10,94 @@ Tie-breakers:
 - Remove "or/maybe" alternatives that precede a final choice.
 - If still uncertain, output the safest minimal intent without adding details.
 
-Rewrite into clear, natural written English while preserving meaning and tone.
+Rewrite into clear, natural written {language} while preserving meaning and tone.
 Remove fillers/false starts; fix grammar, punctuation, capitalization, and spacing.
 Normalize obvious names/brands/terms when unambiguous; if uncertain, don't guess—keep generic.
 Format numbers/dates/times as spoken. Handle dictation commands only when explicitly said (e.g., "period", "new line").
 Output only the polished text."#;
+
+/// Convert ISO 639-1 language code to full language name
+pub fn get_language_name(code: &str) -> &'static str {
+    match code.to_lowercase().as_str() {
+        "en" => "English",
+        "es" => "Spanish",
+        "fr" => "French",
+        "de" => "German",
+        "it" => "Italian",
+        "pt" => "Portuguese",
+        "nl" => "Dutch",
+        "pl" => "Polish",
+        "ru" => "Russian",
+        "ja" => "Japanese",
+        "ko" => "Korean",
+        "zh" => "Chinese",
+        "ar" => "Arabic",
+        "hi" => "Hindi",
+        "tr" => "Turkish",
+        "vi" => "Vietnamese",
+        "th" => "Thai",
+        "id" => "Indonesian",
+        "ms" => "Malay",
+        "sv" => "Swedish",
+        "da" => "Danish",
+        "no" => "Norwegian",
+        "fi" => "Finnish",
+        "cs" => "Czech",
+        "sk" => "Slovak",
+        "uk" => "Ukrainian",
+        "el" => "Greek",
+        "he" => "Hebrew",
+        "ro" => "Romanian",
+        "hu" => "Hungarian",
+        "bg" => "Bulgarian",
+        "hr" => "Croatian",
+        "sr" => "Serbian",
+        "sl" => "Slovenian",
+        "lt" => "Lithuanian",
+        "lv" => "Latvian",
+        "et" => "Estonian",
+        "bn" => "Bengali",
+        "ta" => "Tamil",
+        "te" => "Telugu",
+        "mr" => "Marathi",
+        "gu" => "Gujarati",
+        "kn" => "Kannada",
+        "ml" => "Malayalam",
+        "pa" => "Punjabi",
+        "ur" => "Urdu",
+        "fa" => "Persian",
+        "sw" => "Swahili",
+        "af" => "Afrikaans",
+        "ca" => "Catalan",
+        "eu" => "Basque",
+        "gl" => "Galician",
+        "cy" => "Welsh",
+        "is" => "Icelandic",
+        "mt" => "Maltese",
+        "sq" => "Albanian",
+        "mk" => "Macedonian",
+        "be" => "Belarusian",
+        "ka" => "Georgian",
+        "hy" => "Armenian",
+        "az" => "Azerbaijani",
+        "kk" => "Kazakh",
+        "uz" => "Uzbek",
+        "tl" => "Tagalog",
+        "ne" => "Nepali",
+        "si" => "Sinhala",
+        "km" => "Khmer",
+        "lo" => "Lao",
+        "my" => "Burmese",
+        "mn" => "Mongolian",
+        _ => "English", // Default fallback
+    }
+}
+
+/// Build the base prompt with the specified language
+fn build_base_prompt(language: Option<&str>) -> String {
+    let lang_name = language.map(get_language_name).unwrap_or("English");
+    BASE_PROMPT_TEMPLATE.replace("{language}", lang_name)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EnhancementPreset {
@@ -41,9 +124,10 @@ pub fn build_enhancement_prompt(
     text: &str,
     context: Option<&str>,
     options: &EnhancementOptions,
+    language: Option<&str>,
 ) -> String {
-    // Base processing applies to ALL presets
-    let base_prompt = BASE_PROMPT;
+    // Base processing applies to ALL presets, with language-aware output
+    let base_prompt = build_base_prompt(language);
 
     // Add mode-specific transformation if not Default
     let mode_transform = match options.preset {

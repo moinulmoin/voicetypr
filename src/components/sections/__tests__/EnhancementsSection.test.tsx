@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EnhancementsSection } from '../EnhancementsSection';
 import { invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 
 // Mock dependencies
@@ -21,24 +22,56 @@ vi.mock('@/utils/keyring', () => ({
   hasApiKey: vi.fn().mockResolvedValue(false),
   removeApiKey: vi.fn().mockResolvedValue(undefined),
   getApiKey: vi.fn().mockResolvedValue(null),
+  keyringSet: vi.fn().mockResolvedValue(undefined),
 }));
+
+// Mock models returned by list_provider_models
+const mockModels = {
+  openai: [
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', recommended: true },
+    { id: 'gpt-4o', name: 'GPT-4o', recommended: false },
+  ],
+  anthropic: [
+    { id: 'claude-3-5-haiku-latest', name: 'Claude 3.5 Haiku', recommended: true },
+    { id: 'claude-3-5-sonnet-latest', name: 'Claude 3.5 Sonnet', recommended: true },
+  ],
+  gemini: [
+    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', recommended: true },
+    { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash', recommended: true },
+  ],
+};
 
 describe('EnhancementsSection', () => {
   const mockAISettings = {
     enabled: false,
-    provider: 'groq',
-    model: '',  // Empty by default
+    provider: '',
+    model: '',
     hasApiKey: false,
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (invoke as any).mockImplementation((cmd: string) => {
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'get_enhancement_options') {
         return Promise.resolve({
           preset: 'Default',
           custom_vocabulary: []
         });
+      }
+      if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider || '';
+        return Promise.resolve({
+          ...mockAISettings,
+          provider,
+          hasApiKey: false,
+        });
+      }
+      if (cmd === 'list_provider_models') {
+        const provider = (args as { provider: string })?.provider;
+        return Promise.resolve(mockModels[provider as keyof typeof mockModels] || []);
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' });
       }
       return Promise.resolve(mockAISettings);
     });
@@ -49,48 +82,48 @@ describe('EnhancementsSection', () => {
     
     expect(screen.getByText('AI Formatting')).toBeInTheDocument();
     
-    // Wait for models to load
+    // Wait for providers to load
     await waitFor(() => {
-      expect(screen.getByText('Gemini 2.5 Flash Lite')).toBeInTheDocument();
+      expect(screen.getByText('AI Providers')).toBeInTheDocument();
     });
   });
 
-  it('displays all available models', async () => {
+  it('displays all available providers', async () => {
     render(<EnhancementsSection />);
     
     await waitFor(() => {
-      expect(screen.getByText('Gemini 2.5 Flash Lite')).toBeInTheDocument();
-      expect(screen.getByText('OpenAI Compatible')).toBeInTheDocument();
+      expect(screen.getByText('AI Providers')).toBeInTheDocument();
+      expect(screen.getByText('OpenAI')).toBeInTheDocument();
+      expect(screen.getByText('Anthropic')).toBeInTheDocument();
+      expect(screen.getByText('Google Gemini')).toBeInTheDocument();
+    }, { timeout: 5000 });
+    
+    // Custom Provider is in the same list
+    await waitFor(() => {
+      expect(screen.getByText('Custom (OpenAI-compatible)')).toBeInTheDocument();
+    }, { timeout: 3000 });
+  });
+
+  it('shows Add Key button when no API key is set', async () => {
+    render(<EnhancementsSection />);
+    
+    await waitFor(() => {
+      const addKeyButtons = screen.getAllByText('Add Key');
+      expect(addKeyButtons.length).toBeGreaterThan(0);
     });
   });
 
-  it('shows key icon when no API key is set', async () => {
+  it('opens API key modal when Add Key is clicked', async () => {
     render(<EnhancementsSection />);
     
     await waitFor(() => {
-      // Look for buttons that contain the key icon (these are the API key buttons)
-      const allButtons = screen.getAllByRole('button');
-      const keyButtons = allButtons.filter(button => 
-        button.querySelector('svg.lucide-key')
-      );
-      expect(keyButtons.length).toBeGreaterThan(0);
-    });
-  });
-
-  it('opens API key modal when key icon is clicked', async () => {
-    render(<EnhancementsSection />);
-    
-    await waitFor(() => {
-      const keyButtons = screen.getAllByRole('button');
-      const keyButton = keyButtons.find(btn => btn.querySelector('svg'));
-      if (keyButton) {
-        fireEvent.click(keyButton);
-      }
+      const addKeyButtons = screen.getAllByText('Add Key');
+      expect(addKeyButtons.length).toBeGreaterThan(0);
+      fireEvent.click(addKeyButtons[0]);
     });
     
     await waitFor(() => {
-      // The modal title will vary based on which provider's key button was clicked
-      const modalTitle = screen.getByText(/Add (Groq|Gemini) API Key/);
+      const modalTitle = screen.getByText(/Add OpenAI API Key/);
       expect(modalTitle).toBeInTheDocument();
     });
   });
@@ -105,30 +138,29 @@ describe('EnhancementsSection', () => {
   });
 
   it('enables enhancement toggle when API key exists and model is selected', async () => {
-    // Import the mocked hasApiKey function
     const { hasApiKey } = await import('@/utils/keyring');
     
-    // Mock hasApiKey to return true for gemini provider
-    (hasApiKey as any).mockImplementation((provider: string) => {
+    (hasApiKey as ReturnType<typeof vi.fn>).mockImplementation((provider: string) => {
       return Promise.resolve(provider === 'gemini');
     });
     
-    (invoke as any).mockImplementation((cmd: string, args?: any) => {
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, _args?: Record<string, unknown>) => {
       if (cmd === 'get_ai_settings') {
         return Promise.resolve({
           enabled: false,
           provider: 'gemini',
-          model: 'gemini-2.5-flash-lite',  // Model is selected
+          model: 'gemini-1.5-flash',
           hasApiKey: true,
         });
       }
-      if (cmd === 'get_ai_settings_for_provider') {
-        return Promise.resolve({
-          enabled: false,
-          provider: args?.provider || 'gemini',
-          model: 'gemini-2.5-flash-lite',
-          hasApiKey: true,
-        });
+      if (cmd === 'list_provider_models') {
+        return Promise.resolve(mockModels.gemini);
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' });
       }
       return Promise.resolve();
     });
@@ -141,44 +173,120 @@ describe('EnhancementsSection', () => {
     });
   });
 
-  it('toggles AI enhancement', async () => {
-    // Import the mocked hasApiKey function
+  it('enables enhancement toggle for custom no-auth config without keyring key', async () => {
     const { hasApiKey } = await import('@/utils/keyring');
-    
-    // Mock hasApiKey to return true for gemini provider
-    (hasApiKey as any).mockImplementation((provider: string) => {
-      return Promise.resolve(provider === 'gemini');
-    });
-    
-    // Mock that we have an API key for gemini provider
-    (invoke as any).mockImplementation((cmd: string, args?: any) => {
+
+    (hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'get_ai_settings') {
         return Promise.resolve({
           enabled: false,
-          provider: 'gemini',
-          model: 'gemini-2.5-flash-lite',
+          provider: 'custom',
+          model: 'local-model',
           hasApiKey: true,
         });
       }
       if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider;
         return Promise.resolve({
           enabled: false,
-          provider: args?.provider || 'gemini',
-          model: 'gemini-2.5-flash-lite',
+          provider,
+          model: 'local-model',
+          hasApiKey: provider === 'custom',
+        });
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://custom.endpoint/v1' });
+      }
+      return Promise.resolve();
+    });
+
+    render(<EnhancementsSection />);
+
+    await waitFor(() => {
+      const toggle = screen.getByRole('switch');
+      expect(toggle).toBeEnabled();
+    });
+  });
+
+  it('enables enhancement toggle for legacy openai-compatible config without keyring key', async () => {
+    const { hasApiKey } = await import('@/utils/keyring');
+
+    (hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_ai_settings') {
+        return Promise.resolve({
+          enabled: false,
+          provider: 'openai',
+          model: 'legacy-model',
           hasApiKey: true,
         });
+      }
+      if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider;
+        return Promise.resolve({
+          enabled: false,
+          provider,
+          model: 'legacy-model',
+          hasApiKey: provider === 'openai',
+        });
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://legacy.endpoint/v1' });
+      }
+      return Promise.resolve();
+    });
+
+    render(<EnhancementsSection />);
+
+    await waitFor(() => {
+      const toggle = screen.getByRole('switch');
+      expect(toggle).toBeEnabled();
+    });
+  });
+
+  it('toggles AI enhancement', async () => {
+    const { hasApiKey } = await import('@/utils/keyring');
+    
+    (hasApiKey as ReturnType<typeof vi.fn>).mockImplementation((provider: string) => {
+      return Promise.resolve(provider === 'gemini');
+    });
+    
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, _args?: Record<string, unknown>) => {
+      if (cmd === 'get_ai_settings') {
+        return Promise.resolve({
+          enabled: false,
+          provider: 'gemini',
+          model: 'gemini-1.5-flash',
+          hasApiKey: true,
+        });
+      }
+      if (cmd === 'list_provider_models') {
+        return Promise.resolve(mockModels.gemini);
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' });
       }
       return Promise.resolve();
     });
     
     render(<EnhancementsSection />);
     
-    // Wait for the component to load and fetch API key status
     await waitFor(() => {
       expect(screen.getByText('AI Formatting')).toBeInTheDocument();
     });
     
-    // The toggle should be enabled since we have API key and a model selected
     await waitFor(() => {
       const toggle = screen.getByRole('switch');
       expect(toggle).toBeEnabled();
@@ -189,115 +297,199 @@ describe('EnhancementsSection', () => {
       expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
         enabled: true,
         provider: 'gemini',
-        model: 'gemini-2.5-flash-lite',
+        model: 'gemini-1.5-flash',
       });
       expect(toast.success).toHaveBeenCalledWith('AI formatting enabled');
     });
   });
 
-  it('displays and allows model selection', async () => {
-    // Setup: User has an API key
+  it('displays provider cards', async () => {
     const { hasApiKey } = await import('@/utils/keyring');
-    (hasApiKey as any).mockResolvedValue(true);
+    (hasApiKey as ReturnType<typeof vi.fn>).mockImplementation((provider: string) => {
+      return Promise.resolve(provider === 'anthropic');
+    });
     
-    (invoke as any).mockImplementation((cmd: string) => {
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
       if (cmd === 'get_ai_settings') {
         return Promise.resolve({
           enabled: false,
-          provider: 'gemini',
-          model: '',
+          provider: 'anthropic',
+          model: 'claude-3-5-haiku-latest',
           hasApiKey: true,
         });
       }
-      if (cmd === 'get_ai_settings_for_provider') {
-        return Promise.resolve({
-          enabled: false,
-          provider: 'gemini',
-          model: '',
-          hasApiKey: true,
-        });
+      if (cmd === 'list_provider_models') {
+        return Promise.resolve(mockModels.anthropic);
       }
       if (cmd === 'get_enhancement_options') {
-        return Promise.resolve({
-          preset: 'default',
-          tone: 'professional',
-          fixGrammar: true,
-          improveClarity: true,
-          makeConcise: false,
-          expandIdeas: false,
-          customInstructions: '',
-        });
+        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' });
       }
       return Promise.resolve();
     });
     
     render(<EnhancementsSection />);
     
-    // User should see the AI Formatting section
     await waitFor(() => {
-      expect(screen.getByText('AI Formatting')).toBeInTheDocument();
+      expect(screen.getByText('AI Providers')).toBeInTheDocument();
+      expect(screen.getByText('OpenAI')).toBeInTheDocument();
+      expect(screen.getByText('Anthropic')).toBeInTheDocument();
+      expect(screen.getByText('Google Gemini')).toBeInTheDocument();
     });
-    
-    // User should see available models
-    await waitFor(() => {
-      const models = screen.getAllByText(/Gemini|OpenAI Compatible/);
-      expect(models.length).toBeGreaterThan(0);
-    });
-    
-    // That's the key user behavior - they can see the section and models
-    // Whether clicking works is an integration test, not a unit test
   });
 
   it('handles API key submission', async () => {
-    // Import the mocked saveApiKey function
     const { saveApiKey } = await import('@/utils/keyring');
     
     render(<EnhancementsSection />);
     
-    // Open modal by clicking the first key button found
     await waitFor(() => {
-      const keyButtons = screen.getAllByRole('button');
-      const keyButton = keyButtons.find(btn => btn.querySelector('svg'));
-      expect(keyButton).toBeTruthy();
-      if (keyButton) {
-        fireEvent.click(keyButton);
-      }
+      const addKeyButtons = screen.getAllByText('Add Key');
+      expect(addKeyButtons.length).toBeGreaterThan(0);
+      fireEvent.click(addKeyButtons[0]);
     });
     
-    // Wait for modal to open and check it's visible
     await waitFor(() => {
-      const modalTitle = screen.getByText(/Add Gemini API Key/);
+      const modalTitle = screen.getByText(/Add OpenAI API Key/);
       expect(modalTitle).toBeInTheDocument();
     });
     
-    // Enter API key
-    const input = screen.getByPlaceholderText(/Enter your Gemini API key/);
-    fireEvent.change(input, { target: { value: 'test-api-key-12345' } });
+    const input = screen.getByPlaceholderText(/Enter your OpenAI API key/);
+    fireEvent.change(input, { target: { value: 'sk-test-api-key-12345' } });
     
-    // Submit
     const submitButton = screen.getByText('Save API Key');
     fireEvent.click(submitButton);
     
-    // Just verify that our mocked saveApiKey was called
     await waitFor(() => {
       expect(saveApiKey).toHaveBeenCalled();
     });
   });
 
-  it('shows error when enabling without API key', async () => {
+  it('shows Quick Setup guide when AI is disabled', async () => {
     render(<EnhancementsSection />);
     
-    // Wait for initial load
     await waitFor(() => {
-      const toggle = screen.getByRole('switch');
-      expect(toggle).toBeDisabled();
+      expect(screen.getByText('Quick Setup')).toBeInTheDocument();
+      expect(screen.getByText(/Choose a provider above/)).toBeInTheDocument();
     });
+  });
+
+  it('shows Formatting Options section', async () => {
+    render(<EnhancementsSection />);
     
-    // Try to enable through the handler directly
-    const component = screen.getByText('AI Formatting').closest('div');
-    expect(component).toBeInTheDocument();
-    
-    // The switch is disabled, so we can't actually click it to trigger the error
-    // This test validates that the switch is properly disabled when no API key exists
+    await waitFor(() => {
+      expect(screen.getByText('Formatting Options')).toBeInTheDocument();
+    });
+  });
+
+  it('does not clear active OpenAI selection when custom key is removed', async () => {
+    const { hasApiKey } = await import('@/utils/keyring');
+
+    (hasApiKey as ReturnType<typeof vi.fn>).mockImplementation((provider: string) => {
+      return Promise.resolve(provider === 'openai' || provider === 'custom');
+    });
+
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_ai_settings') {
+        return Promise.resolve({
+          enabled: true,
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          hasApiKey: true,
+        });
+      }
+      if (cmd === 'list_provider_models') {
+        const provider = (args as { provider: string })?.provider;
+        return Promise.resolve(mockModels[provider as keyof typeof mockModels] || []);
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://custom.endpoint/v1' });
+      }
+      if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider;
+        return Promise.resolve({
+          enabled: true,
+          provider,
+          model: 'gpt-4o-mini',
+          hasApiKey: provider === 'custom',
+        });
+      }
+      return Promise.resolve();
+    });
+
+    render(<EnhancementsSection />);
+
+    await waitFor(() => {
+      expect(screen.getByText('AI Providers')).toBeInTheDocument();
+    });
+
+    await emit('api-key-removed', { provider: 'custom' });
+
+    await waitFor(() => {
+      expect(invoke).not.toHaveBeenCalledWith('update_ai_settings', {
+        enabled: false,
+        provider: '',
+        model: '',
+      });
+    });
+  });
+
+  it('does not clear active OpenAI selection when openai key is removed but legacy config exists', async () => {
+    const { hasApiKey } = await import('@/utils/keyring');
+
+    // No keyring key, but backend reports legacy config is usable.
+    (hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_ai_settings') {
+        return Promise.resolve({
+          enabled: true,
+          provider: 'openai',
+          model: 'legacy-model',
+          hasApiKey: true,
+        });
+      }
+      if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider;
+        return Promise.resolve({
+          enabled: true,
+          provider,
+          model: 'legacy-model',
+          hasApiKey: provider === 'openai',
+        });
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://legacy.endpoint/v1' });
+      }
+      if (cmd === 'list_provider_models') {
+        const provider = (args as { provider: string })?.provider;
+        return Promise.resolve(mockModels[provider as keyof typeof mockModels] || []);
+      }
+      return Promise.resolve();
+    });
+
+    render(<EnhancementsSection />);
+
+    await waitFor(() => {
+      expect(screen.getByText('AI Providers')).toBeInTheDocument();
+    });
+
+    await emit('api-key-removed', { provider: 'openai' });
+
+    await waitFor(() => {
+      expect(invoke).not.toHaveBeenCalledWith('update_ai_settings', {
+        enabled: false,
+        provider: '',
+        model: '',
+      });
+    });
   });
 });

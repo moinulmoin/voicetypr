@@ -7,36 +7,36 @@ describe('ApiKeyModal', () => {
     isOpen: true,
     onClose: vi.fn(),
     onSubmit: vi.fn(),
-    providerName: 'Groq',
+    providerName: 'gemini',
     isLoading: false,
   };
 
   it('renders when open', () => {
     render(<ApiKeyModal {...defaultProps} />);
     
-    expect(screen.getByText('Add Groq API Key')).toBeInTheDocument();
-    expect(screen.getByText(/Enter your API key to enable Groq/)).toBeInTheDocument();
+    expect(screen.getByText('Add Gemini API Key')).toBeInTheDocument();
+    expect(screen.getByText(/Enter your API key to enable Gemini/)).toBeInTheDocument();
   });
 
   it('does not render when closed', () => {
     render(<ApiKeyModal {...defaultProps} isOpen={false} />);
     
-    expect(screen.queryByText('Add Groq API Key')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add Gemini API Key')).not.toBeInTheDocument();
   });
 
-  it('shows provider-specific link for Groq', () => {
+  it('shows provider-specific link for Gemini', () => {
     render(<ApiKeyModal {...defaultProps} />);
     
-    const link = screen.getByText('Get your Groq API key');
+    const link = screen.getByText('Get your Gemini API key');
     expect(link).toBeInTheDocument();
-    expect(link.closest('a')).toHaveAttribute('href', 'https://console.groq.com/keys');
+    expect(link.closest('a')).toHaveAttribute('href', 'https://aistudio.google.com/apikey');
   });
 
   it('calls onSubmit with API key', async () => {
     const onSubmit = vi.fn();
     render(<ApiKeyModal {...defaultProps} onSubmit={onSubmit} />);
     
-    const input = screen.getByPlaceholderText('Enter your Groq API key');
+    const input = screen.getByPlaceholderText('Enter your Gemini API key');
     fireEvent.change(input, { target: { value: 'test-api-key-12345' } });
     
     const form = input.closest('form');
@@ -51,7 +51,7 @@ describe('ApiKeyModal', () => {
     const onSubmit = vi.fn();
     render(<ApiKeyModal {...defaultProps} onSubmit={onSubmit} />);
     
-    const form = screen.getByPlaceholderText('Enter your Groq API key').closest('form');
+    const form = screen.getByPlaceholderText('Enter your Gemini API key').closest('form');
     if (form) {
       fireEvent.submit(form);
     }
@@ -69,7 +69,7 @@ describe('ApiKeyModal', () => {
   it('enables submit button when input has value', () => {
     render(<ApiKeyModal {...defaultProps} />);
     
-    const input = screen.getByPlaceholderText('Enter your Groq API key');
+    const input = screen.getByPlaceholderText('Enter your Gemini API key');
     fireEvent.change(input, { target: { value: 'test-key' } });
     
     const submitButton = screen.getByText('Save API Key');
@@ -84,7 +84,7 @@ describe('ApiKeyModal', () => {
     const submitButton = screen.getByText('Saving...').closest('button');
     expect(submitButton).toBeDisabled();
     
-    const input = screen.getByPlaceholderText('Enter your Groq API key');
+    const input = screen.getByPlaceholderText('Enter your Gemini API key');
     expect(input).toBeDisabled();
   });
 
@@ -101,7 +101,7 @@ describe('ApiKeyModal', () => {
   it('clears input when closing', () => {
     const { rerender } = render(<ApiKeyModal {...defaultProps} />);
     
-    const input = screen.getByPlaceholderText('Enter your Groq API key');
+    const input = screen.getByPlaceholderText('Enter your Gemini API key');
     fireEvent.change(input, { target: { value: 'test-key' } });
     
     expect(input).toHaveValue('test-key');
@@ -112,7 +112,7 @@ describe('ApiKeyModal', () => {
     // Reopen modal
     rerender(<ApiKeyModal {...defaultProps} isOpen={true} />);
     
-    const newInput = screen.getByPlaceholderText('Enter your Groq API key');
+    const newInput = screen.getByPlaceholderText('Enter your Gemini API key');
     expect(newInput).toHaveValue('');
   });
 
@@ -120,7 +120,7 @@ describe('ApiKeyModal', () => {
     const onSubmit = vi.fn();
     render(<ApiKeyModal {...defaultProps} onSubmit={onSubmit} isLoading={true} />);
     
-    const input = screen.getByPlaceholderText('Enter your Groq API key');
+    const input = screen.getByPlaceholderText('Enter your Gemini API key');
     fireEvent.change(input, { target: { value: 'test-key' } });
     
     const form = input.closest('form');

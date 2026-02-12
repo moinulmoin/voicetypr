@@ -29,6 +29,7 @@ pub struct ParakeetModelStatus {
 pub struct ParakeetManager {
     client: ParakeetClient,
     root_dir: PathBuf,
+    #[allow(dead_code)]
     http: Client,
 }
 
@@ -268,7 +269,7 @@ impl ParakeetManager {
                 let ok = match (loaded_model.as_deref(), model_version.as_deref()) {
                     (Some(id), mv) if mv == Some(expected_v.as_str()) => {
                         // Accept exact match ("parakeet-...-v2") or prefix match for id variants
-                        id == format!("{}", definition.id)
+                        id == definition.id
                             || id == format!("{}-{}", definition.id, expected_v)
                             || id.starts_with(definition.id)
                     }
@@ -320,6 +321,7 @@ impl ParakeetManager {
     }
 
     /// Check if the Parakeet sidecar is healthy and can respond to commands
+    #[allow(dead_code)]
     pub async fn health_check(&self, app: &AppHandle) -> Result<bool, ParakeetError> {
         match self.send_command(app, &ParakeetCommand::Status {}).await {
             Ok(ParakeetResponse::Status { .. }) => Ok(true),
@@ -331,6 +333,7 @@ impl ParakeetManager {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn shutdown(&self) {
         self.client.shutdown().await;
     }

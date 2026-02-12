@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod anthropic;
 pub mod config;
 pub mod gemini;
-pub mod groq;
 pub mod openai;
 pub mod prompts;
 
@@ -31,6 +31,9 @@ pub struct AIEnhancementRequest {
     pub context: Option<String>,
     #[serde(default)]
     pub options: Option<EnhancementOptions>,
+    /// ISO 639-1 language code for output language (e.g., "en", "es", "fr")
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 impl AIEnhancementRequest {
@@ -90,6 +93,7 @@ pub trait AIProvider: Send + Sync {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct AIModel {
     pub id: String,
     pub name: String,
@@ -106,11 +110,6 @@ impl AIProviderFactory {
         }
 
         match config.provider.as_str() {
-            "groq" => Ok(Box::new(groq::GroqProvider::new(
-                config.api_key.clone(),
-                config.model.clone(),
-                config.options.clone(),
-            )?)),
             "gemini" => Ok(Box::new(gemini::GeminiProvider::new(
                 config.api_key.clone(),
                 config.model.clone(),
@@ -121,11 +120,16 @@ impl AIProviderFactory {
                 config.model.clone(),
                 config.options.clone(),
             )?)),
+            "anthropic" => Ok(Box::new(anthropic::AnthropicProvider::new(
+                config.api_key.clone(),
+                config.model.clone(),
+                config.options.clone(),
+            )?)),
             provider => Err(AIError::ProviderNotFound(provider.to_string())),
         }
     }
 
     fn is_valid_provider(provider: &str) -> bool {
-        matches!(provider, "groq" | "gemini" | "openai")
+        matches!(provider, "gemini" | "openai" | "anthropic")
     }
 }

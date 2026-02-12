@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::error::ParakeetError;
 use super::messages::{ParakeetCommand, ParakeetResponse};
 use log::{error, warn};

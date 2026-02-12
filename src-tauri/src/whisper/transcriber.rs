@@ -79,7 +79,14 @@ impl Transcriber {
                     ("backend", if is_apple_silicon { "Metal" } else { "CPU" }),
                     ("platform", "macOS"),
                     ("arch", std::env::consts::ARCH),
-                    ("attempt", if is_apple_silicon { "gpu_first" } else { "cpu_only" }),
+                    (
+                        "attempt",
+                        if is_apple_silicon {
+                            "gpu_first"
+                        } else {
+                            "cpu_only"
+                        },
+                    ),
                 ],
             );
 
@@ -101,7 +108,7 @@ impl Transcriber {
                         log::Level::Info,
                         "🎮 METAL_SUCCESS",
                         &[
-                            ("init_time_ms", &init_time.to_string().as_str()),
+                            ("init_time_ms", init_time.to_string().as_str()),
                             ("acceleration", "enabled"),
                         ],
                     );
@@ -120,11 +127,11 @@ impl Transcriber {
                         log::Level::Info,
                         "🎮 METAL_FALLBACK",
                         &[
-                            ("error", &gpu_err.to_string().as_str()),
+                            ("error", gpu_err.to_string().as_str()),
                             ("fallback_to", "CPU"),
                             (
                                 "attempt_time_ms",
-                                &metal_start.elapsed().as_millis().to_string().as_str(),
+                                metal_start.elapsed().as_millis().to_string().as_str(),
                             ),
                         ],
                     );
@@ -137,58 +144,100 @@ impl Transcriber {
         }
 
         // Windows: Try Vulkan GPU first, fallback to CPU if it fails (just like macOS!)
+        // Exception: Windows ARM64 uses CPU-only mode (Vulkan unstable on Qualcomm)
         #[cfg(target_os = "windows")]
         {
-            ctx_params.use_gpu(true);
+            let is_arm64 = std::env::consts::ARCH == "aarch64";
+
+            if is_arm64 {
+                // Windows ARM64: Skip Vulkan GPU, use CPU-only mode
+                // Vulkan is unstable on Qualcomm Snapdragon and causes crashes during inference
+                log::warn!(
+                    "⚠️ Windows ARM64 detected: Using CPU-only mode (Vulkan unstable on ARM)"
+                );
+                log_with_context(
+                    log::Level::Info,
+                    "🎮 GPU_SKIP",
+                    &[
+                        ("reason", "Windows ARM64 - Vulkan unstable"),
+                        ("arch", "aarch64"),
+                        ("fallback_to", "CPU"),
+                    ],
+                );
+                ctx_params.use_gpu(false);
+            } else {
+                ctx_params.use_gpu(true);
+            }
+
             let vulkan_start = Instant::now();
 
-            // Check if Vulkan runtime is available
+            // Check if Vulkan runtime is available (only relevant for x86_64)
             let vulkan_available =
-                std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
+                !is_arm64 && std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
 
-            log_with_context(
-                log::Level::Info,
-                "🎮 VULKAN_INIT",
-                &[
-                    ("backend", "Vulkan"),
-                    ("platform", "Windows"),
-                    (
-                        "vulkan_dll_available",
-                        &vulkan_available.to_string().as_str(),
-                    ),
-                    ("attempt", "gpu_first"),
-                ],
-            );
+            if !is_arm64 {
+                log_with_context(
+                    log::Level::Info,
+                    "🎮 VULKAN_INIT",
+                    &[
+                        ("backend", "Vulkan"),
+                        ("platform", "Windows"),
+                        (
+                            "vulkan_dll_available",
+                            &vulkan_available.to_string().as_str(),
+                        ),
+                        ("attempt", "gpu_first"),
+                    ],
+                );
 
-            if !vulkan_available {
-                log::warn!("⚠️  Vulkan runtime not found. GPU acceleration unavailable.");
+                if !vulkan_available {
+                    log::warn!("⚠️  Vulkan runtime not found. GPU acceleration unavailable.");
+                }
             }
 
             match WhisperContext::new_with_params(model_path_str, ctx_params) {
                 Ok(ctx) => {
-                    gpu_used = true;
+                    gpu_used = !is_arm64; // Only true if actually using Vulkan GPU
                     let init_time = vulkan_start.elapsed().as_millis();
 
-                    log_performance(
-                        "VULKAN_INIT",
-                        init_time as u64,
-                        Some("gpu_acceleration_enabled"),
-                    );
-                    log_with_context(
-                        log::Level::Info,
-                        "🎮 VULKAN_SUCCESS",
-                        &[
-                            ("init_time_ms", &init_time.to_string().as_str()),
-                            ("acceleration", "enabled"),
-                        ],
-                    );
-
-                    log_complete("TRANSCRIBER_INIT", init_start.elapsed().as_millis() as u64);
-                    log_with_context(
-                        log::Level::Debug,
-                        "Transcriber initialized",
-                        &[("backend", "Vulkan"), ("model_path", model_path_str)],
-                    );
+                    if is_arm64 {
+                        log_performance("CPU_INIT", init_time as u64, Some("arm64_cpu_mode"));
+                        log_with_context(
+                            log::Level::Info,
+                            "🎮 CPU_SUCCESS",
+                            &[
+                                ("init_time_ms", &init_time.to_string().as_str()),
+                                ("mode", "cpu_only"),
+                                ("reason", "arm64_vulkan_unstable"),
+                            ],
+                        );
+                        log_complete("TRANSCRIBER_INIT", init_start.elapsed().as_millis() as u64);
+                        log_with_context(
+                            log::Level::Debug,
+                            "Transcriber initialized",
+                            &[("backend", "CPU"), ("model_path", model_path_str)],
+                        );
+                    } else {
+                        log_performance(
+                            "VULKAN_INIT",
+                            init_time as u64,
+                            Some("gpu_acceleration_enabled"),
+                        );
+                        log_with_context(
+                            log::Level::Info,
+                            "🎮 VULKAN_SUCCESS",
+                            &[
+                                ("init_time_ms", &init_time.to_string().as_str()),
+                                ("acceleration", "enabled"),
+                            ],
+                        );
+                        log_complete("TRANSCRIBER_INIT", init_start.elapsed().as_millis() as u64);
+                        log_with_context(
+                            log::Level::Debug,
+                            "Transcriber initialized",
+                            &[("backend", "Vulkan"), ("model_path", model_path_str)],
+                        );
+                    }
 
                     return Ok(Self { context: ctx });
                 }
@@ -246,8 +295,8 @@ impl Transcriber {
             "🎮 WHISPER_BACKEND",
             &[
                 ("backend", backend_type),
-                ("gpu_used", &gpu_used.to_string().as_str()),
-                ("init_time_ms", &cpu_time.to_string().as_str()),
+                ("gpu_used", gpu_used.to_string().as_str()),
+                ("init_time_ms", cpu_time.to_string().as_str()),
             ],
         );
 
@@ -258,7 +307,7 @@ impl Transcriber {
             &[
                 ("backend", backend_type),
                 ("model_path", model_path_str),
-                ("gpu_acceleration", &gpu_used.to_string().as_str()),
+                ("gpu_acceleration", gpu_used.to_string().as_str()),
             ],
         );
 
@@ -277,7 +326,7 @@ impl Transcriber {
                 ("supports_multilingual", "true"), // Whisper models are multilingual
                 (
                     "model_size_mb",
-                    &(std::fs::metadata(model_path)
+                    (std::fs::metadata(model_path)
                         .map(|m| m.len() / 1024 / 1024)
                         .unwrap_or(0)
                         .to_string())
@@ -322,8 +371,8 @@ impl Transcriber {
             &[
                 ("audio_path", &audio_path_str),
                 ("language", language.unwrap_or("auto")),
-                ("translate", &translate.to_string().as_str()),
-                ("timestamp", &chrono::Utc::now().to_rfc3339().as_str()),
+                ("translate", translate.to_string().as_str()),
+                ("timestamp", chrono::Utc::now().to_rfc3339().as_str()),
             ],
         );
 
@@ -474,11 +523,11 @@ impl Transcriber {
             &[
                 (
                     "preprocessing_time_ms",
-                    &preprocessing_time.to_string().as_str(),
+                    preprocessing_time.to_string().as_str(),
                 ),
                 ("sample_rate", "16000"),
                 ("channels", "1"),
-                ("samples", &resampled_audio.len().to_string().as_str()),
+                ("samples", resampled_audio.len().to_string().as_str()),
             ],
         );
 
@@ -536,9 +585,29 @@ impl Transcriber {
         let hw = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        let threads = std::cmp::max(1, hw.saturating_sub(1)) as i32; // e.g., 8 cores -> 7 threads
+
+        // ARM big.LITTLE optimization: On ARM64 Windows (Qualcomm Snapdragon),
+        // using all cores is slower because efficiency cores drag down performance.
+        // Limit to ~4 threads (performance cores only) for better speed.
+        #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+        let threads = {
+            let t = std::cmp::min(4, std::cmp::max(1, hw.saturating_sub(1))) as i32;
+            log::info!(
+                "[PERFORMANCE] ARM64: Using {} threads (limiting to perf cores, {} total available)",
+                t,
+                hw
+            );
+            t
+        };
+
+        #[cfg(not(all(target_os = "windows", target_arch = "aarch64")))]
+        let threads = {
+            let t = std::cmp::max(1, hw.saturating_sub(1)) as i32;
+            log::info!("[PERFORMANCE] Using {} threads for transcription", t);
+            t
+        };
+
         params.set_n_threads(threads);
-        log::info!("[PERFORMANCE] Using {} threads for transcription", threads);
 
         params.set_no_context(false); // Enable context for better word recognition
         params.set_print_special(false);
@@ -588,7 +657,7 @@ impl Transcriber {
 
         // Check minimum duration (0.5 seconds)
         if duration_seconds < 0.5 {
-            let error = format!("Recording too short");
+            let error = "Recording too short".to_string();
             log::warn!("[TRANSCRIPTION_DEBUG] {}", error);
             return Err(error);
         }
@@ -601,13 +670,13 @@ impl Transcriber {
             log::Level::Debug,
             "Starting Whisper inference",
             &[
-                ("samples", &samples_count.to_string().as_str()),
+                ("samples", samples_count.to_string().as_str()),
                 (
                     "duration_seconds",
-                    &format!("{:.2}", duration_seconds).as_str(),
+                    format!("{:.2}", duration_seconds).as_str(),
                 ),
                 ("language", language.unwrap_or("auto")),
-                ("translate", &translate.to_string().as_str()),
+                ("translate", translate.to_string().as_str()),
             ],
         );
 
@@ -637,14 +706,14 @@ impl Transcriber {
                     log::Level::Debug,
                     "Inference failed",
                     &[
-                        ("samples", &samples_count.to_string().as_str()),
+                        ("samples", samples_count.to_string().as_str()),
                         (
                             "duration_seconds",
-                            &format!("{:.2}", duration_seconds).as_str(),
+                            format!("{:.2}", duration_seconds).as_str(),
                         ),
                         (
                             "inference_time_ms",
-                            &inference_start.elapsed().as_millis().to_string().as_str(),
+                            inference_start.elapsed().as_millis().to_string().as_str(),
                         ),
                     ],
                 );
@@ -655,11 +724,7 @@ impl Transcriber {
         // Get text
         let text_extraction_start = Instant::now();
         log::info!("[TRANSCRIPTION_DEBUG] Getting segments from Whisper output...");
-        let num_segments = state.full_n_segments().map_err(|e| {
-            let error = format!("Failed to get segments: {}", e);
-            log::error!("[TRANSCRIPTION_DEBUG] {}", error);
-            error
-        })?;
+        let num_segments = state.full_n_segments();
 
         log::info!(
             "[TRANSCRIPTION_DEBUG] Transcription complete: {} segments",
@@ -667,14 +732,10 @@ impl Transcriber {
         );
 
         let mut text = String::new();
-        for i in 0..num_segments {
-            let segment = state.full_get_segment_text(i).map_err(|e| {
-                let error = format!("Failed to get segment {}: {}", i, e);
-                log::error!("[TRANSCRIPTION_DEBUG] {}", error);
-                error
-            })?;
-            log::info!("[TRANSCRIPTION_DEBUG] Segment {}: '{}'", i, segment);
-            text.push_str(&segment);
+        for (i, segment) in state.as_iter().enumerate() {
+            let segment_text = segment.to_string();
+            log::info!("[TRANSCRIPTION_DEBUG] Segment {}: '{}'", i, segment_text);
+            text.push_str(&segment_text);
             text.push(' ');
         }
 
@@ -707,11 +768,8 @@ impl Transcriber {
                 log::Level::Debug,
                 "Empty result",
                 &[
-                    ("segments", &num_segments.to_string().as_str()),
-                    (
-                        "total_time_ms",
-                        &total_time.as_millis().to_string().as_str(),
-                    ),
+                    ("segments", num_segments.to_string().as_str()),
+                    ("total_time_ms", total_time.as_millis().to_string().as_str()),
                 ],
             );
         } else if result == "[SOUND]" {
@@ -721,11 +779,8 @@ impl Transcriber {
                 "No speech",
                 &[
                     ("result", "[SOUND]"),
-                    ("segments", &num_segments.to_string().as_str()),
-                    (
-                        "total_time_ms",
-                        &total_time.as_millis().to_string().as_str(),
-                    ),
+                    ("segments", num_segments.to_string().as_str()),
+                    ("total_time_ms", total_time.as_millis().to_string().as_str()),
                 ],
             );
         } else {
@@ -734,11 +789,11 @@ impl Transcriber {
                 log::Level::Debug,
                 "Transcription complete",
                 &[
-                    ("result_length", &result.len().to_string().as_str()),
-                    ("segments", &num_segments.to_string().as_str()),
+                    ("result_length", result.len().to_string().as_str()),
+                    ("segments", num_segments.to_string().as_str()),
                     (
                         "audio_duration_seconds",
-                        &format!("{:.2}", duration_seconds).as_str(),
+                        format!("{:.2}", duration_seconds).as_str(),
                     ),
                 ],
             );

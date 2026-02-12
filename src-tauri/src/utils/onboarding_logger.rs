@@ -88,7 +88,7 @@ impl OnboardingLogger {
     /// Log model download progress
     pub fn log_model_download_progress(&mut self, model_name: &str, progress: u8) {
         // Log every 10% or at critical points
-        if progress % 10 == 0 || progress == 1 || progress == 99 {
+        if progress.is_multiple_of(10) || progress == 1 || progress == 99 {
             log::info!(
                 "📊 MODEL_DOWNLOAD_PROGRESS - Model: {}, Progress: {}%",
                 model_name,

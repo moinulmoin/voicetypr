@@ -76,6 +76,16 @@ function fail(msg) {
   process.exit(1);
 }
 
+function cleanupTmp(tmpDir) {
+  try {
+    if (tmpDir && fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  } catch (err) {
+    console.warn(`[ensure-ffmpeg-sidecar] Failed to cleanup temp dir ${tmpDir}: ${err.message}`);
+  }
+}
+
 function sha256File(file) {
   const buf = fs.readFileSync(file);
   return crypto.createHash('sha256').update(buf).digest('hex');
@@ -145,6 +155,8 @@ function verifyChecksum(file, expected, label) {
         }
       } catch (err) {
         console.warn(`[ensure-ffmpeg-sidecar] Failed to download x86_64: ${err.message}`);
+      } finally {
+        cleanupTmp(tmpX64);
       }
       return;
     }
@@ -154,30 +166,34 @@ function verifyChecksum(file, expected, label) {
     const ffprobeZipUrl = process.env.FFPROBE_MAC_URL || 'https://www.osxexperts.net/ffprobe80arm.zip';
 
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fftools-'));
-    const ffmpegZip = path.join(tmp, 'ffmpeg.zip');
-    const ffprobeZip = path.join(tmp, 'ffprobe.zip');
-    download(ffmpegZipUrl, ffmpegZip);
-    download(ffprobeZipUrl, ffprobeZip);
-    const outFfmpeg = path.join(tmp, 'ffmpeg');
-    const outFfprobe = path.join(tmp, 'ffprobe');
-    unzip(ffmpegZip, tmp);
-    unzip(ffprobeZip, tmp);
+    try {
+      const ffmpegZip = path.join(tmp, 'ffmpeg.zip');
+      const ffprobeZip = path.join(tmp, 'ffprobe.zip');
+      download(ffmpegZipUrl, ffmpegZip);
+      download(ffprobeZipUrl, ffprobeZip);
+      const outFfmpeg = path.join(tmp, 'ffmpeg');
+      const outFfprobe = path.join(tmp, 'ffprobe');
+      unzip(ffmpegZip, tmp);
+      unzip(ffprobeZip, tmp);
 
-    // OSXExperts zips contain a single binary named ffmpeg/ffprobe at tmp
-    if (!fs.existsSync(outFfmpeg) || !fs.existsSync(outFfprobe)) {
-      fail('Downloaded archives did not contain expected ffmpeg/ffprobe binaries.');
+      // OSXExperts zips contain a single binary named ffmpeg/ffprobe at tmp
+      if (!fs.existsSync(outFfmpeg) || !fs.existsSync(outFfprobe)) {
+        fail('Downloaded archives did not contain expected ffmpeg/ffprobe binaries.');
+      }
+      // Verify checksums against extracted binaries (provider publishes hashes for binaries)
+      const macFfmpegBinSha = process.env.FFMPEG_MAC_BIN_SHA256 || '77d2c853f431318d55ec02676d9b2f185ebfdddb9f7677a251fbe453affe025a';
+      const macFfprobeBinSha = process.env.FFPROBE_MAC_BIN_SHA256 || 'babf170e86bd6b0b2fefee5fa56f57721b0acb98ad2794b095d8030b02857dfe';
+      verifyChecksum(outFfmpeg, macFfmpegBinSha, 'macOS ffmpeg (binary)');
+      verifyChecksum(outFfprobe, macFfprobeBinSha, 'macOS ffprobe (binary)');
+      fs.copyFileSync(outFfmpeg, ffmpegDst); chmodx(ffmpegDst);
+      fs.copyFileSync(outFfprobe, ffprobeDst); chmodx(ffprobeDst);
+
+      ensureSymlink(ffmpegDst, path.join(distDir, 'ffmpeg-aarch64-apple-darwin'));
+      ensureSymlink(ffprobeDst, path.join(distDir, 'ffprobe-aarch64-apple-darwin'));
+      console.log('[ensure-ffmpeg-sidecar] Installed macOS ARM64 sidecar binaries by download.');
+    } finally {
+      cleanupTmp(tmp);
     }
-    // Verify checksums against extracted binaries (provider publishes hashes for binaries)
-    const macFfmpegBinSha = process.env.FFMPEG_MAC_BIN_SHA256 || '77d2c853f431318d55ec02676d9b2f185ebfdddb9f7677a251fbe453affe025a';
-    const macFfprobeBinSha = process.env.FFPROBE_MAC_BIN_SHA256 || 'babf170e86bd6b0b2fefee5fa56f57721b0acb98ad2794b095d8030b02857dfe';
-    verifyChecksum(outFfmpeg, macFfmpegBinSha, 'macOS ffmpeg (binary)');
-    verifyChecksum(outFfprobe, macFfprobeBinSha, 'macOS ffprobe (binary)');
-    fs.copyFileSync(outFfmpeg, ffmpegDst); chmodx(ffmpegDst);
-    fs.copyFileSync(outFfprobe, ffprobeDst); chmodx(ffprobeDst);
-
-    ensureSymlink(ffmpegDst, path.join(distDir, 'ffmpeg-aarch64-apple-darwin'));
-    ensureSymlink(ffprobeDst, path.join(distDir, 'ffprobe-aarch64-apple-darwin'));
-    console.log('[ensure-ffmpeg-sidecar] Installed macOS ARM64 sidecar binaries by download.');
 
     // Also download Intel x86_64 binaries for universal build support
     // Using evermeet.cx (trusted source for Intel Mac ffmpeg builds)
@@ -209,6 +225,8 @@ function verifyChecksum(file, expected, label) {
       } catch (err) {
         console.warn(`[ensure-ffmpeg-sidecar] Failed to download x86_64 binaries: ${err.message}`);
         console.warn('[ensure-ffmpeg-sidecar] Intel Mac builds may fail. ARM64 binaries are still available.');
+      } finally {
+        cleanupTmp(tmpX64);
       }
     } else {
       console.log('[ensure-ffmpeg-sidecar] x86_64 binaries already present.');
@@ -236,49 +254,53 @@ function verifyChecksum(file, expected, label) {
     // Use gyan.dev essentials latest (or override). This is version-agnostic latest link.
     const zipUrl = process.env.FFMPEG_WIN_URL || 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fftools-'));
-    const zipFile = path.join(tmp, 'ffmpeg.zip');
-    download(zipUrl, zipFile);
-    // Optional checksum verification (provide env or attempt to fetch .sha256 sidecar)
-    let winSha = process.env.FFMPEG_WIN_ZIP_SHA256;
-    if (!winSha) {
-      try {
-        const shaFile = path.join(tmp, 'ffmpeg.zip.sha256');
-        const shaUrl = zipUrl + '.sha256';
-        download(shaUrl, shaFile);
-        const txt = fs.readFileSync(shaFile, 'utf8');
-        // Typical format: <sha256> *ffmpeg-release-essentials.zip
-        winSha = (txt.split(/\s+/)[0] || '').trim();
-      } catch (err) {
-        // No checksum available from remote and none provided via env.
-        // Refuse to install unverified binaries.
-        fail(
-          'Missing SHA256 for Windows ffmpeg.zip.\n' +
-            'Provide FFMPEG_WIN_ZIP_SHA256 env to pin a known archive, or ensure the .sha256 file is accessible.\n' +
-            'Example: FFMPEG_WIN_URL + FFMPEG_WIN_ZIP_SHA256.'
-        );
+    try {
+      const zipFile = path.join(tmp, 'ffmpeg.zip');
+      download(zipUrl, zipFile);
+      // Optional checksum verification (provide env or attempt to fetch .sha256 sidecar)
+      let winSha = process.env.FFMPEG_WIN_ZIP_SHA256;
+      if (!winSha) {
+        try {
+          const shaFile = path.join(tmp, 'ffmpeg.zip.sha256');
+          const shaUrl = zipUrl + '.sha256';
+          download(shaUrl, shaFile);
+          const txt = fs.readFileSync(shaFile, 'utf8');
+          // Typical format: <sha256> *ffmpeg-release-essentials.zip
+          winSha = (txt.split(/\s+/)[0] || '').trim();
+        } catch (err) {
+          // No checksum available from remote and none provided via env.
+          // Refuse to install unverified binaries.
+          fail(
+            'Missing SHA256 for Windows ffmpeg.zip.\n' +
+              'Provide FFMPEG_WIN_ZIP_SHA256 env to pin a known archive, or ensure the .sha256 file is accessible.\n' +
+              'Example: FFMPEG_WIN_URL + FFMPEG_WIN_ZIP_SHA256.'
+          );
+        }
       }
-    }
-    verifyChecksum(zipFile, winSha, 'Windows ffmpeg.zip');
-    const outDir = path.join(tmp, 'out');
-    unzip(zipFile, outDir);
+      verifyChecksum(zipFile, winSha, 'Windows ffmpeg.zip');
+      const outDir = path.join(tmp, 'out');
+      unzip(zipFile, outDir);
 
-    // Find bin folder inside extracted structure
-    const entries = fs.readdirSync(outDir);
-    const root = entries.find((e) => e.toLowerCase().startsWith('ffmpeg-') && fs.statSync(path.join(outDir, e)).isDirectory());
-    if (!root) fail('Unexpected archive structure for Windows ffmpeg build.');
-    const binDir = path.join(outDir, root, 'bin');
-    const srcFfmpeg = path.join(binDir, 'ffmpeg.exe');
-    const srcFfprobe = path.join(binDir, 'ffprobe.exe');
-    if (!fs.existsSync(srcFfmpeg) || !fs.existsSync(srcFfprobe)) {
-      fail('Downloaded Windows archive missing ffmpeg.exe/ffprobe.exe');
+      // Find bin folder inside extracted structure
+      const entries = fs.readdirSync(outDir);
+      const root = entries.find((e) => e.toLowerCase().startsWith('ffmpeg-') && fs.statSync(path.join(outDir, e)).isDirectory());
+      if (!root) fail('Unexpected archive structure for Windows ffmpeg build.');
+      const binDir = path.join(outDir, root, 'bin');
+      const srcFfmpeg = path.join(binDir, 'ffmpeg.exe');
+      const srcFfprobe = path.join(binDir, 'ffprobe.exe');
+      if (!fs.existsSync(srcFfmpeg) || !fs.existsSync(srcFfprobe)) {
+        fail('Downloaded Windows archive missing ffmpeg.exe/ffprobe.exe');
+      }
+      fs.copyFileSync(srcFfmpeg, ffmpegDst);
+      fs.copyFileSync(srcFfprobe, ffprobeDst);
+      ensureCopy(ffmpegDst, path.join(distDir, 'ffmpeg-x86_64-pc-windows-msvc.exe'));
+      ensureCopy(ffprobeDst, path.join(distDir, 'ffprobe-x86_64-pc-windows-msvc.exe'));
+      ensureCopy(ffmpegDst, path.join(distDir, 'ffmpeg.exe-x86_64-pc-windows-msvc.exe'));
+      ensureCopy(ffprobeDst, path.join(distDir, 'ffprobe.exe-x86_64-pc-windows-msvc.exe'));
+      console.log('[ensure-ffmpeg-sidecar] Installed Windows sidecar binaries by download.');
+    } finally {
+      cleanupTmp(tmp);
     }
-    fs.copyFileSync(srcFfmpeg, ffmpegDst);
-    fs.copyFileSync(srcFfprobe, ffprobeDst);
-    ensureCopy(ffmpegDst, path.join(distDir, 'ffmpeg-x86_64-pc-windows-msvc.exe'));
-    ensureCopy(ffprobeDst, path.join(distDir, 'ffprobe-x86_64-pc-windows-msvc.exe'));
-    ensureCopy(ffmpegDst, path.join(distDir, 'ffmpeg.exe-x86_64-pc-windows-msvc.exe'));
-    ensureCopy(ffprobeDst, path.join(distDir, 'ffprobe.exe-x86_64-pc-windows-msvc.exe'));
-    console.log('[ensure-ffmpeg-sidecar] Installed Windows sidecar binaries by download.');
     return;
   }
 

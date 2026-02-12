@@ -187,7 +187,11 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
     {
         // Windows Registry cleanup
         match std::process::Command::new("reg")
-            .args(&["delete", &format!("HKCU\\\\Software\\\\{}", app_identifier), "/f"])
+            .args(&[
+                "delete",
+                &format!("HKCU\\\\Software\\\\{}", app_identifier),
+                "/f",
+            ])
             .output()
         {
             Ok(output) => {
@@ -219,10 +223,7 @@ pub async fn reset_app_data(app: AppHandle) -> Result<ResetResult, String> {
             }
 
             // Clear any logs
-            let logs_path = home_dir
-                .join("Library")
-                .join("Logs")
-                .join(&app_identifier);
+            let logs_path = home_dir.join("Library").join("Logs").join(&app_identifier);
             if logs_path.exists() {
                 if let Err(e) = fs::remove_dir_all(&logs_path) {
                     errors.push(format!("Failed to clear logs: {}", e));

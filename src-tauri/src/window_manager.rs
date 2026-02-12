@@ -1,3 +1,6 @@
+use crate::commands::settings::{
+    DEFAULT_INDICATOR_OFFSET, MAX_INDICATOR_OFFSET, MIN_INDICATOR_OFFSET,
+};
 use crate::utils::logger::*;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -9,10 +12,14 @@ pub struct WindowManager {
     pill_window: Arc<Mutex<Option<WebviewWindow>>>,
 }
 
-fn calculate_pill_position(position: &str, screen_width: f64, screen_height: f64) -> (f64, f64) {
+fn calculate_pill_position(
+    position: &str,
+    screen_width: f64,
+    screen_height: f64,
+    edge_offset: f64,
+) -> (f64, f64) {
     let pill_width = 80.0;
     let pill_height = 40.0;
-    let edge_offset = 10.0; // Distance from screen edges
 
     // Horizontal position: left, center, or right
     let x = if position.ends_with("-left") {
@@ -51,10 +58,7 @@ impl WindowManager {
             log::Level::Debug,
             "Window manager setup",
             &[
-                (
-                    "main_window_available",
-                    &main_available.to_string().as_str(),
-                ),
+                ("main_window_available", main_available.to_string().as_str()),
                 ("pill_window_created", "false"),
             ],
         );
@@ -280,19 +284,22 @@ impl WindowManager {
         // Apply Windows-specific window flags to prevent focus stealing
         #[cfg(target_os = "windows")]
         {
+            use std::ffi::c_void;
             use windows::Win32::Foundation::HWND;
             use windows::Win32::UI::WindowsAndMessaging::*;
 
             if let Ok(hwnd) = pill_window.hwnd() {
                 unsafe {
-                    let hwnd = HWND(hwnd.0 as isize);
+                    // windows crate 0.62+: HWND wraps *mut c_void instead of isize
+                    let hwnd = HWND(hwnd.0 as *mut c_void);
 
                     // Validate HWND before using it
-                    if IsWindow(hwnd).as_bool() {
+                    if IsWindow(Some(hwnd)).as_bool() {
                         // Get current window style
                         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
 
                         // Add tool window and no-activate flags, remove from Alt-Tab
+                        // WINDOW_EX_STYLE.0 gives the underlying u32 value
                         let new_style =
                             (style | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize)
                                 & !(WS_EX_APPWINDOW.0 as isize);
@@ -300,9 +307,9 @@ impl WindowManager {
                         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
 
                         // Force window to update with new styles
-                        SetWindowPos(
+                        let _ = SetWindowPos(
                             hwnd,
-                            HWND_TOPMOST,
+                            Some(HWND_TOPMOST),
                             0,
                             0,
                             0,
@@ -487,8 +494,7 @@ impl WindowManager {
             // Skip visibility check for performance
 
             // Check if window is visible or if it's a critical event
-            let is_critical =
-                matches!(event, "recording-state-changed" | "transcription-complete");
+            let is_critical = matches!(event, "recording-state-changed" | "transcription-complete");
 
             // Check if window is visible or if it's a critical event
 
@@ -524,8 +530,7 @@ impl WindowManager {
                 window_id
             );
             // For critical events when window not found, try app-wide emission
-            let is_critical =
-                matches!(event, "recording-state-changed" | "transcription-complete");
+            let is_critical = matches!(event, "recording-state-changed" | "transcription-complete");
 
             // Queue critical pill events so they can be delivered when the pill window is created
             if is_critical && window_id == "pill" {
@@ -585,26 +590,42 @@ impl WindowManager {
             store
                 .get("pill_indicator_position")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| "bottom".to_string())
+                .unwrap_or_else(|| "bottom-center".to_string())
         } else {
-            "bottom".to_string()
+            "bottom-center".to_string()
+        }
+    }
+
+    /// Get the current pill indicator offset from settings (in pixels)
+    fn get_pill_offset_setting(&self) -> f64 {
+        use tauri_plugin_store::StoreExt;
+        if let Ok(store) = self.app_handle.store("settings") {
+            store
+                .get("pill_indicator_offset")
+                .and_then(|v| v.as_u64())
+                .map(|v| v.clamp(MIN_INDICATOR_OFFSET as u64, MAX_INDICATOR_OFFSET as u64) as f64)
+                .unwrap_or(DEFAULT_INDICATOR_OFFSET as f64)
+        } else {
+            DEFAULT_INDICATOR_OFFSET as f64
         }
     }
 
     /// Calculate position for pill window based on position setting
     /// position: "top", "center", or "bottom"
     fn calculate_position_for(&self, position: &str) -> (f64, f64) {
-        // Get screen dimensions
+        // Get screen dimensions and offset
         let (screen_width, screen_height) = self.get_screen_dimensions();
-        let (x, y) = calculate_pill_position(position, screen_width, screen_height);
+        let edge_offset = self.get_pill_offset_setting();
+        let (x, y) = calculate_pill_position(position, screen_width, screen_height, edge_offset);
 
         log::info!(
-            "Calculated pill position: ({}, {}) for '{}' on {}x{} screen",
+            "Calculated pill position: ({}, {}) for '{}' on {}x{} screen with offset {}",
             x,
             y,
             position,
             screen_width,
-            screen_height
+            screen_height,
+            edge_offset
         );
         (x, y)
     }
@@ -683,7 +704,12 @@ impl WindowManager {
             if let Err(e) = pill.set_position(LogicalPosition::new(pill_x, pill_y)) {
                 log::warn!("Failed to reposition pill window: {}", e);
             } else {
-                log::info!("Repositioned pill window to ({}, {}) for position '{}'", pill_x, pill_y, position);
+                log::info!(
+                    "Repositioned pill window to ({}, {}) for position '{}'",
+                    pill_x,
+                    pill_y,
+                    position
+                );
             }
         }
 
@@ -720,50 +746,58 @@ mod tests {
 
     #[test]
     fn calculate_pill_position_top_left() {
-        let (x, y) = calculate_pill_position("top-left", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("top-left", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 10.0);
         assert_eq!(y, 10.0);
     }
 
     #[test]
     fn calculate_pill_position_top_center() {
-        let (x, y) = calculate_pill_position("top-center", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("top-center", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 920.0);
         assert_eq!(y, 10.0);
     }
 
     #[test]
     fn calculate_pill_position_top_right() {
-        let (x, y) = calculate_pill_position("top-right", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("top-right", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 1830.0);
         assert_eq!(y, 10.0);
     }
 
     #[test]
     fn calculate_pill_position_bottom_left() {
-        let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 10.0);
         assert_eq!(y, 1030.0);
     }
 
     #[test]
     fn calculate_pill_position_bottom_center() {
-        let (x, y) = calculate_pill_position("bottom-center", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("bottom-center", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 920.0);
         assert_eq!(y, 1030.0);
     }
 
     #[test]
     fn calculate_pill_position_bottom_right() {
-        let (x, y) = calculate_pill_position("bottom-right", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("bottom-right", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 1830.0);
         assert_eq!(y, 1030.0);
     }
 
     #[test]
     fn calculate_pill_position_defaults_to_bottom_center() {
-        let (x, y) = calculate_pill_position("unknown", 1920.0, 1080.0);
+        let (x, y) = calculate_pill_position("unknown", 1920.0, 1080.0, 10.0);
         assert_eq!(x, 920.0);
         assert_eq!(y, 1030.0);
+    }
+
+    #[test]
+    fn calculate_pill_position_with_custom_offset() {
+        // Test with 50px offset
+        let (x, y) = calculate_pill_position("bottom-left", 1920.0, 1080.0, 50.0);
+        assert_eq!(x, 50.0);
+        assert_eq!(y, 990.0); // 1080 - 40 - 50
     }
 }

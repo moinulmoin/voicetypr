@@ -1,13 +1,15 @@
 import { ApiKeyModal } from "@/components/ApiKeyModal";
-import { EnhancementModelCard } from "@/components/EnhancementModelCard";
 import { EnhancementSettings } from "@/components/EnhancementSettings";
 import { OpenAICompatConfigModal } from "@/components/OpenAICompatConfigModal";
+import { ProviderCard } from "@/components/ProviderCard";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { EnhancementOptions } from "@/types/ai";
 import { fromBackendOptions, toBackendOptions } from "@/types/ai";
-import { hasApiKey, removeApiKey, saveApiKey, getApiKey, keyringSet } from "@/utils/keyring";
+import { AI_PROVIDERS } from "@/types/providers";
+import { useAllProviderModels } from "@/hooks/useProviderModels";
+import { hasApiKey, removeApiKey, saveApiKey, getApiKey } from "@/utils/keyring";
 import { getErrorMessage } from "@/utils/error";
 import { useReadinessState } from "@/contexts/ReadinessContext";
 import { invoke } from "@tauri-apps/api/core";
@@ -15,13 +17,6 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { Info } from "lucide-react";
-
-interface AIModel {
-  id: string;
-  name: string;
-  provider: string;
-  description?: string;
-}
 
 interface AISettings {
   enabled: boolean;
@@ -32,17 +27,19 @@ interface AISettings {
 
 export function EnhancementsSection() {
   const readiness = useReadinessState();
+  const { fetchModels, getModels, isLoading: isModelsLoading, getError, clearModels } = useAllProviderModels();
   
   const [aiSettings, setAISettings] = useState<AISettings>({
     enabled: false,
-    provider: "groq",
-    model: "",  // Empty by default until user selects
+    provider: "",
+    model: "",
     hasApiKey: false,
   });
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [showOpenAIConfig, setShowOpenAIConfig] = useState(false);
   const [openAIDefaultBaseUrl, setOpenAIDefaultBaseUrl] = useState("https://api.openai.com/v1");
+  const [customModelName, setCustomModelName] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [providerApiKeys, setProviderApiKeys] = useState<Record<string, boolean>>({});
@@ -55,22 +52,6 @@ export function EnhancementsSection() {
   });
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 
-  // Gemini and OpenAI-compatible
-  const models: AIModel[] = [
-    {
-      id: "gemini-2.5-flash-lite",
-      name: "Gemini 2.5 Flash Lite",
-      provider: "gemini",
-      description: "Google's lightweight flash model for quick processing"
-    },
-    {
-      id: "openai-compatible",
-      name: "OpenAI Compatible",
-      provider: "openai",
-      description: "Configure any OpenAI-compatible endpoint"
-    }
-  ];
-
   const loadEnhancementOptions = async () => {
     try {
       const options = await invoke<EnhancementOptions>("get_enhancement_options");
@@ -82,86 +63,78 @@ export function EnhancementsSection() {
 
   const loadAISettings = useCallback(async () => {
     try {
-      // First, check and cache API keys if not already loaded
-      let currentKeyStatus = providerApiKeys;
-      if (Object.keys(providerApiKeys).length === 0) {
-        const providers = [...new Set(models.map(m => m.provider))];
-        const keyStatus: Record<string, boolean> = {};
+      // Check and cache API keys for all providers
+      const allProviders = AI_PROVIDERS.map(p => p.id);
+      const keyStatus: Record<string, boolean> = {};
 
-        // Batch check API keys and cache them to backend
-        await Promise.all(providers.map(async (provider) => {
-          const hasKey = await hasApiKey(provider);
-          keyStatus[provider] = hasKey;
-          if (hasKey) {
-            console.log(`[AI Settings] Found ${provider} API key in keyring, caching to backend`);
-            // Load the key from keyring and cache it to backend
-            try {
-              const apiKey = await getApiKey(provider);
-              if (apiKey) {
-                await invoke('cache_ai_api_key', { args: { provider, apiKey } });
-              }
-            } catch (error) {
-              console.error(`Failed to cache ${provider} API key:`, error);
-            }
+      await Promise.all(allProviders.map(async (providerId) => {
+        const keyId = providerId;
+        let isConfigured = await hasApiKey(keyId);
+
+        // For providers that may be configured without a keyring key (no-auth),
+        // fall back to backend-derived readiness (covers legacy OpenAI-compatible configs).
+        if ((providerId === 'custom' || providerId === 'openai') && !isConfigured) {
+          try {
+            const providerSettings = await invoke<AISettings>('get_ai_settings_for_provider', {
+              provider: providerId
+            });
+            isConfigured = providerSettings.hasApiKey;
+          } catch (error) {
+            console.error(`Failed to resolve ${providerId} provider readiness:`, error);
           }
-        }));
+        }
 
-        setProviderApiKeys(keyStatus);
-        currentKeyStatus = keyStatus;
+        keyStatus[providerId] = isConfigured;
+
+        if (isConfigured) {
+          try {
+            const apiKey = await getApiKey(keyId);
+            if (apiKey) {
+              console.log(`[AI Settings] Found ${keyId} API key in keyring, caching to backend`);
+              await invoke('cache_ai_api_key', { args: { provider: providerId, apiKey } });
+            }
+          } catch (error) {
+            console.error(`Failed to cache ${keyId} API key:`, error);
+          }
+        }
+      }));
+
+      setProviderApiKeys(keyStatus);
+
+      // Load custom provider config
+      try {
+        const customConfig = await invoke<{ baseUrl: string }>('get_openai_config');
+        setOpenAIDefaultBaseUrl(customConfig.baseUrl || "https://api.openai.com/v1");
+      } catch (error) {
+        console.error('Failed to load custom config:', error);
       }
 
-      // Now load settings after API keys are cached
+      // Load AI settings from backend
       const settings = await invoke<AISettings>("get_ai_settings");
+      
+      // If using custom provider, track model name
+      if (settings.provider === 'custom') {
+        setCustomModelName(settings.model);
+      }
+      
       setAISettings(settings);
 
-      // Use readiness state for quick check
-      if (readiness?.ai_ready) {
-        // AI is ready, so current provider has API key
-        const currentProvider = settings.provider;
-        setProviderApiKeys(prev => ({ ...prev, [currentProvider]: true }));
+      // If readiness state shows AI is ready, update the provider key status
+      if (readiness?.ai_ready && settings.provider) {
+        setProviderApiKeys(prev => ({ ...prev, [settings.provider]: true }));
       }
 
-      // Auto-select model if only one has API key and no model is currently selected
-      const modelsWithApiKey = models.filter(m => currentKeyStatus[m.provider]);
-      if (!settings.model && modelsWithApiKey.length === 1) {
-        const autoSelectModel = modelsWithApiKey[0];
-        console.log(`[AI Settings] Auto-selecting model: ${autoSelectModel.name}`);
-
-        // Update backend settings with auto-selected model
-        // Preserve the enabled state from settings
-        await invoke("update_ai_settings", {
-          enabled: settings.enabled, // Preserve the existing enabled state
-          provider: autoSelectModel.provider,
-          model: autoSelectModel.id
-        });
-
-        // Update local state
-        setAISettings({
-          ...settings,
-          enabled: settings.enabled, // Preserve the existing enabled state
-          provider: autoSelectModel.provider,
-          model: autoSelectModel.id,
-          hasApiKey: true
-        });
-      } else {
-        // Respect backend hasApiKey for OpenAI (no-auth). For others, derive from keyring status.
-        const currentModelProvider = settings.provider === 'openai'
-          ? 'openai'
-          : (settings.model ? models.find(m => m.id === settings.model)?.provider || null : null);
-        const currentModelHasKey = currentModelProvider ? currentKeyStatus[currentModelProvider] : false;
-        const derivedHasKey = settings.provider === 'openai' ? settings.hasApiKey : currentModelHasKey;
-
-        setAISettings({
-          ...settings,
-          hasApiKey: derivedHasKey,
-        });
-      }
+      // Pre-fetch models for all providers with API keys (list is static, so this is fast)
+      const providersWithKeys = allProviders.filter(p => keyStatus[p] && p !== 'custom');
+      providersWithKeys.forEach(providerId => {
+        fetchModels(providerId);
+      });
     } catch (error) {
       console.error("Failed to load AI settings:", error);
     }
-  }, [readiness, providerApiKeys, models]);
+  }, [readiness, fetchModels]);
 
-  // Load settings only once when component becomes visible
+  // Load settings when component mounts
   useEffect(() => {
     if (!settingsLoaded) {
       loadAISettings();
@@ -170,44 +143,54 @@ export function EnhancementsSection() {
     }
   }, [settingsLoaded, loadAISettings]);
 
-  // Listen for AI readiness changes from backend
+  // Listen for AI events
   useEffect(() => {
     const unlistenReady = listen('ai-ready', async () => {
-      // Only reload if settings were already loaded
       if (settingsLoaded) {
         await loadAISettings();
       }
     });
 
-    // Listen for API key save events
     const unlistenApiKey = listen('api-key-saved', async (event) => {
-      console.log('[AI Settings] API key saved event received:', event.payload);
-      // Only reload settings, not API keys check
+      console.log('[AI Settings] API key saved:', event.payload);
       const settings = await invoke<AISettings>("get_ai_settings");
       setAISettings(settings);
       
-      // Update provider key status for the specific provider
-      const provider = (event.payload as any).provider;
+      const provider = (event.payload as { provider?: string }).provider;
       if (provider) {
         setProviderApiKeys(prev => ({ ...prev, [provider]: true }));
       }
     });
 
-    // Listen for API key remove events
     const unlistenApiKeyRemoved = listen<{ provider: string }>('api-key-removed', async (event) => {
-      console.log('[AI Settings] API key removed for provider:', event.payload.provider);
+      console.log('[AI Settings] API key removed:', event.payload.provider);
+      let providerStillConfigured = false;
+
+      if (event.payload.provider === 'custom' || event.payload.provider === 'openai') {
+        try {
+          const providerSettings = await invoke<AISettings>('get_ai_settings_for_provider', {
+            provider: event.payload.provider
+          });
+          providerStillConfigured = providerSettings.hasApiKey;
+          setProviderApiKeys(prev => ({ ...prev, [event.payload.provider]: providerStillConfigured }));
+        } catch (error) {
+          console.error(
+            `Failed to refresh ${event.payload.provider} provider readiness after key removal:`,
+            error
+          );
+          setProviderApiKeys(prev => ({ ...prev, [event.payload.provider]: false }));
+        }
+      } else {
+        setProviderApiKeys(prev => ({ ...prev, [event.payload.provider]: false }));
+      }
       
-      // Update local state immediately
-      setProviderApiKeys(prev => ({ ...prev, [event.payload.provider]: false }));
+      // Clear cached models for removed provider
+      clearModels(event.payload.provider);
       
-      // For OpenAI provider, always clear selection when key is removed
-      // For other providers, only clear if the selected model belongs to that provider
-      const shouldClearSelection = event.payload.provider === 'openai' || 
-        (models.find(m => m.id === aiSettings.model)?.provider === event.payload.provider);
+      // If removed provider is currently selected, clear selection
+      const isCurrentProviderRemoved = aiSettings.provider === event.payload.provider && !providerStillConfigured;
       
-      if (shouldClearSelection) {
-        console.log('[AI Settings] Clearing model selection for removed API key');
-        // Clear the model selection and disable AI
+      if (isCurrentProviderRemoved) {
         setAISettings(prev => ({
           ...prev,
           enabled: false,
@@ -216,23 +199,16 @@ export function EnhancementsSection() {
           hasApiKey: false
         }));
         
-        // Update backend to clear the selection
-        try {
-          await invoke("update_ai_settings", {
-            enabled: false,
-            provider: "",
-            model: ""
-          });
-          console.log('[AI Settings] Backend settings cleared successfully');
-        } catch (error) {
-          console.error('Failed to update backend settings:', error);
-        }
+        await invoke("update_ai_settings", {
+          enabled: false,
+          provider: "",
+          model: ""
+        });
       }
     });
 
-    // Listen for formatting failures from backend and show a toast
     const unlistenFormattingError = listen<string>('formatting-error', async (event) => {
-      const msg = (event.payload as any) || 'Formatting failed';
+      const msg = event.payload || 'Formatting failed';
       toast.error(typeof msg === 'string' ? msg : 'Formatting failed');
     });
 
@@ -241,7 +217,7 @@ export function EnhancementsSection() {
         fns.forEach(fn => fn());
       });
     };
-  }, [settingsLoaded]);
+  }, [settingsLoaded, aiSettings.provider, clearModels]);
 
   const handleEnhancementOptionsChange = async (newOptions: typeof enhancementOptions) => {
     setEnhancementOptions(newOptions);
@@ -256,8 +232,10 @@ export function EnhancementsSection() {
   };
 
   const handleToggleEnabled = async (enabled: boolean) => {
-    if (enabled && (!aiSettings.hasApiKey || !aiSettings.model)) {
-      toast.error("Please select a model and add an API key first");
+    const hasActiveProviderKey = Boolean(providerApiKeys[aiSettings.provider]);
+
+    if (enabled && (!hasActiveProviderKey || !aiSettings.model)) {
+      toast.error("Please select a provider, add an API key, and select a model first");
       return;
     }
 
@@ -276,39 +254,41 @@ export function EnhancementsSection() {
     }
   };
 
+  const handleSetupApiKey = async (providerId: string) => {
+    setSelectedProvider(providerId);
+    
+    if (providerId === "custom") {
+      // Custom provider - show OpenAI config modal
+      try {
+        const savedConfig = await invoke<{ baseUrl: string }>('get_openai_config');
+        setOpenAIDefaultBaseUrl(savedConfig.baseUrl || "https://api.openai.com/v1");
+      } catch (error) {
+        console.error('Failed to load custom config:', error);
+      }
+      setShowOpenAIConfig(true);
+    } else {
+      // Standard provider - show API key modal
+      setShowApiKeyModal(true);
+    }
+  };
+
   const handleApiKeySubmit = async (apiKey: string) => {
     setIsLoading(true);
     try {
-      // Save API key using Stronghold
       const trimmedKey = apiKey.trim();
       await saveApiKey(selectedProvider, trimmedKey);
 
-      // After saving, if this is Gemini, auto-select its model and optionally enable AI
-      if (selectedProvider === 'gemini') {
-        const hadModel = Boolean(aiSettings.model);
-        const nextEnabled = aiSettings.enabled || !hadModel;
+      // Update provider key status
+      setProviderApiKeys(prev => ({ ...prev, [selectedProvider]: true }));
 
-        await invoke("update_ai_settings", {
-          enabled: nextEnabled,
-          provider: 'gemini',
-          model: 'gemini-2.5-flash-lite'
-        });
+      // Don't auto-select model - user will do it from dropdown
+      // Just update the provider
+      setAISettings(prev => ({
+        ...prev,
+        provider: selectedProvider,
+        hasApiKey: true
+      }));
 
-        setAISettings(prev => ({
-          ...prev,
-          enabled: nextEnabled,
-          provider: 'gemini',
-          model: 'gemini-2.5-flash-lite',
-          hasApiKey: true
-        }));
-
-        setProviderApiKeys(prev => ({
-          ...prev,
-          gemini: true
-        }));
-      }
-
-      // Close modal and notify
       setShowApiKeyModal(false);
       toast.success("API key saved securely");
     } catch (error) {
@@ -319,37 +299,35 @@ export function EnhancementsSection() {
     }
   };
 
-  const handleSetupApiKey = async (provider: string) => {
-    setSelectedProvider(provider);
-    if (provider === 'openai') {
-      try {
-        const savedConfig = await invoke<{ baseUrl: string }>('get_openai_config');
-        setOpenAIDefaultBaseUrl(savedConfig.baseUrl || "https://api.openai.com/v1");
-      } catch (error) {
-        console.error('Failed to load OpenAI config:', error);
-      }
-      setShowOpenAIConfig(true);
-    } else {
-      setShowApiKeyModal(true);
+  const handleRemoveApiKey = async (providerId: string) => {
+    try {
+      await removeApiKey(providerId);
+      // Clear cached models
+      clearModels(providerId);
+      toast.success("API key removed");
+    } catch (error) {
+      const message = getErrorMessage(error, "Failed to remove API key");
+      toast.error(message);
     }
   };
 
-  const handleModelSelect = async (modelId: string, provider: string) => {
+  const handleSelectModel = async (providerId: string, modelId: string) => {
     try {
-      // When selecting a model, preserve the enabled state unless the provider has no API key
-      const shouldBeEnabled = providerApiKeys[provider] ? aiSettings.enabled : false;
-      
+      const hasKey = providerApiKeys[providerId];
+      const shouldEnable = hasKey ? aiSettings.enabled : false;
+
       await invoke("update_ai_settings", {
-        enabled: shouldBeEnabled,
-        provider: provider,
+        enabled: shouldEnable,
+        provider: providerId,
         model: modelId
       });
 
       setAISettings(prev => ({
         ...prev,
-        provider: provider,
+        enabled: shouldEnable,
+        provider: providerId,
         model: modelId,
-        hasApiKey: providerApiKeys[provider] || false
+        hasApiKey: hasKey
       }));
 
       toast.success("Model selected");
@@ -359,38 +337,21 @@ export function EnhancementsSection() {
     }
   };
 
-  const handleRemoveApiKey = async (provider: string) => {
-    try {
-      console.log(`[AI Settings] Removing API key for provider: ${provider}`);
-      
-      // Remove the key (this also clears backend cache and emits the event)
-      // The 'api-key-removed' event listener will handle all UI updates
-      await removeApiKey(provider);
-      
-      toast.success("API key removed");
-    } catch (error) {
-      console.error(`[AI Settings] Failed to remove API key:`, error);
-      const message = getErrorMessage(error, "Failed to remove API key");
-      toast.error(message);
-    }
-  };
+  // Check if any provider has a valid API key
+  const hasAnyValidConfig = Object.values(providerApiKeys).some(v => v);
+  
+  // Check if we have a selected model
+  const isUsingCustomProvider = aiSettings.provider === 'custom';
+  const hasSelectedModel = Boolean(
+    aiSettings.provider && 
+    aiSettings.model && 
+    (isUsingCustomProvider || providerApiKeys[aiSettings.provider])
+  );
 
-  const getProviderDisplayName = (provider: string) => {
-    const names: Record<string, string> = {
-      groq: "Groq",
-      gemini: "Gemini",
-      openai: "OpenAI Compatible"
-    };
-    return names[provider] || provider;
-  };
-
-  // Valid config is either a cached key in keyring OR backend-validated config (OpenAI no-auth)
-  const hasAnyValidConfig = aiSettings.hasApiKey || Object.values(providerApiKeys).some(v => v);
-  const selectedModelProvider = models.find(m => m.id === aiSettings.model)?.provider;
-  const hasSelectedModel = aiSettings.provider === 'openai'
-    ? Boolean(aiSettings.model)
-    : Boolean(aiSettings.model && selectedModelProvider && providerApiKeys[selectedModelProvider]);
-  const selectedModelName = models.find(m => m.id === aiSettings.model)?.name;
+  // Get active model name for display
+  const activeModelName = isUsingCustomProvider 
+    ? customModelName 
+    : getModels(aiSettings.provider).find(m => m.id === aiSettings.model)?.name || aiSettings.model;
 
   return (
     <div className="h-full flex flex-col">
@@ -419,35 +380,49 @@ export function EnhancementsSection() {
 
       <ScrollArea className="flex-1">
         <div className="p-6 space-y-6">
-          {/* AI Models Section */}
+          {/* AI Providers Section */}
           <div className="space-y-4">
             <div className="flex items-center gap-2">
-              <h2 className="text-base font-semibold">AI Models</h2>
+              <h2 className="text-base font-semibold">AI Providers</h2>
               <div className="h-px bg-border/50 flex-1" />
-              {selectedModelName && (
+              {activeModelName && aiSettings.enabled && (
                 <span className="text-sm text-muted-foreground">
-                  Active: <span className="text-amber-600 dark:text-amber-500">{selectedModelName}</span>
+                  Active: <span className="text-amber-600 dark:text-amber-500">{activeModelName}</span>
                 </span>
               )}
             </div>
             
             <div className="grid gap-3">
-              {models.map((model) => {
-                const hasKey = model.provider === 'openai'
-                  ? (aiSettings.hasApiKey || providerApiKeys[model.provider] || false)
-                  : (providerApiKeys[model.provider] || false);
-                const isSelected = model.provider === 'openai'
-                  ? (aiSettings.provider === 'openai' && hasKey)
-                  : (aiSettings.model === model.id && providerApiKeys[model.provider]);
+              {AI_PROVIDERS.map((provider) => {
+                // For custom provider, check if it's active
+                const isCustomActive = Boolean(
+                  provider.isCustom && 
+                  aiSettings.provider === 'custom' && 
+                  providerApiKeys['custom'] && 
+                  aiSettings.enabled
+                );
+                const isActive = provider.isCustom 
+                  ? isCustomActive
+                  : Boolean(aiSettings.provider === provider.id && aiSettings.enabled);
+                
                 return (
-                  <EnhancementModelCard
-                    key={model.id}
-                    model={model}
-                    hasApiKey={hasKey}
-                    isSelected={isSelected}
-                    onSetupApiKey={() => handleSetupApiKey(model.provider)}
-                    onSelect={() => (model.provider === 'openai' ? handleModelSelect(aiSettings.model, model.provider) : handleModelSelect(model.id, model.provider))}
-                    onRemoveApiKey={() => handleRemoveApiKey(model.provider)}
+                  <ProviderCard
+                    key={provider.id}
+                    provider={provider}
+                    hasApiKey={providerApiKeys[provider.id] || false}
+                    isActive={isActive}
+                    selectedModel={provider.isCustom 
+                      ? (isCustomActive ? customModelName : null)
+                      : (aiSettings.provider === provider.id ? aiSettings.model : null)
+                    }
+                    onSetupApiKey={() => handleSetupApiKey(provider.id)}
+                    onRemoveApiKey={() => handleRemoveApiKey(provider.id)}
+                    onSelectModel={(modelId) => handleSelectModel(provider.id, modelId)}
+                    models={getModels(provider.id)}
+                    modelsLoading={isModelsLoading(provider.id)}
+                    modelsError={getError(provider.id)}
+                    onRefreshModels={() => fetchModels(provider.id)}
+                    customModelName={provider.isCustom ? customModelName : undefined}
                   />
                 );
               })}
@@ -479,14 +454,13 @@ export function EnhancementsSection() {
                 <div className="space-y-2 flex-1">
                   <h3 className="font-medium text-sm">Quick Setup</h3>
                   <ol className="text-sm text-muted-foreground space-y-1.5 list-decimal list-inside">
-                    <li>Click "Add Key" on a model above</li>
-                    <li>Get your API key from the provider's website</li>
-                    <li>Paste the API key and save</li>
-                    <li>Select the model you want to use</li>
-                    <li>Toggle AI Formatting on to enable</li>
+                    <li>Choose a provider above (OpenAI, Anthropic, or Google)</li>
+                    <li>Click "Add Key" and enter your API key</li>
+                    <li>Select a model from the dropdown</li>
+                    <li>Toggle "AI Formatting" on to enable</li>
                   </ol>
                   <p className="text-xs text-muted-foreground mt-3">
-                    AI formatting automatically improves your transcribed text with proper punctuation, capitalization, and style.
+                    AI formatting automatically improves your transcribed text with proper punctuation, grammar, and style in your selected language.
                   </p>
                 </div>
               </div>
@@ -499,13 +473,14 @@ export function EnhancementsSection() {
         isOpen={showApiKeyModal}
         onClose={() => setShowApiKeyModal(false)}
         onSubmit={handleApiKeySubmit}
-        providerName={getProviderDisplayName(selectedProvider)}
+        providerName={selectedProvider}
         isLoading={isLoading}
       />
+      
       <OpenAICompatConfigModal
         isOpen={showOpenAIConfig}
         defaultBaseUrl={openAIDefaultBaseUrl}
-        defaultModel={aiSettings.provider === 'openai' ? aiSettings.model : ''}
+        defaultModel={customModelName || ''}
         onClose={() => setShowOpenAIConfig(false)}
         onSubmit={async ({ baseUrl, model, apiKey }) => {
           try {
@@ -514,51 +489,36 @@ export function EnhancementsSection() {
             const trimmedModel = model.trim();
             const trimmedKey = apiKey?.trim() || '';
 
-            console.log('[OpenAI Config] Saving configuration:', { 
-              hasKey: !!trimmedKey, 
-              baseUrl: trimmedBase, 
-              model: trimmedModel 
-            });
-
-            // 1) Persist base URL only (no explicit noAuth flag)
+            // Save custom OpenAI-compatible config (base URL)
             await invoke('set_openai_config', { args: { baseUrl: trimmedBase } });
 
-            // 2) If API key provided, store in keyring and cache for backend use
+            // Save API key under 'custom' provider
             if (trimmedKey) {
-              console.log('[OpenAI Config] Saving API key to keyring and cache');
-              await keyringSet('ai_api_key_openai', trimmedKey);
-              await invoke('cache_ai_api_key', { args: { provider: 'openai', apiKey: trimmedKey } });
-              console.log('[OpenAI Config] API key saved and cached successfully');
-            } else {
-              console.log('[OpenAI Config] No API key provided, using no-auth mode');
+              await saveApiKey('custom', trimmedKey);
             }
 
-            // 3) Persist provider + model selection
-            const hadModel = Boolean(aiSettings.model);
-            const nextEnabled = aiSettings.enabled || !hadModel;
+            // Update settings
+            const nextEnabled = aiSettings.enabled || !aiSettings.model;
+            await invoke('update_ai_settings', { enabled: nextEnabled, provider: 'custom', model: trimmedModel });
 
-            await invoke('update_ai_settings', { enabled: nextEnabled, provider: 'openai', model: trimmedModel });
-
-            // 4) Update local state immediately - treat a tested+saved config as a valid "key" even in no-auth mode
-            const hasConfig = true;
+            // Update local state
+            setCustomModelName(trimmedModel);
+            setOpenAIDefaultBaseUrl(trimmedBase);
+            
             setAISettings(prev => ({
               ...prev,
               enabled: nextEnabled,
-              provider: 'openai',
+              provider: 'custom',
               model: trimmedModel,
-              hasApiKey: hasConfig
+              hasApiKey: true
             }));
 
-            // 5) Update provider API key status
-            setProviderApiKeys(prev => ({ 
-              ...prev, 
-              openai: hasConfig 
-            }));
+            // Mark custom as configured (not openai)
+            setProviderApiKeys(prev => ({ ...prev, custom: true }));
 
-            toast.success('Configuration saved');
+            toast.success('Custom provider configured');
             setShowOpenAIConfig(false);
           } catch (error) {
-            console.error('[OpenAI Config] Failed to save configuration:', error);
             const message = getErrorMessage(error, 'Failed to save configuration');
             toast.error(message);
           } finally {

@@ -31,24 +31,33 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
   const [devices, setDevices] = React.useState<string[]>([])
   const [loading, setLoading] = React.useState(false)
 
-  // Fetch audio devices on mount
+  // Fetch audio devices on mount and validate stored selection
   React.useEffect(() => {
-
-    const fetchDevices = async () => {
+    const initializeDevices = async () => {
       try {
         setLoading(true)
+        
+        // First, validate that any stored microphone still exists
+        // This cleans up stale selections from previously connected devices
+        const wasReset = await invoke<boolean>("validate_microphone_selection")
+        if (wasReset) {
+          console.log("Stale microphone selection was reset to default")
+          toast.info("Previously selected microphone is no longer available, using default")
+        }
+        
+        // Then fetch current devices
         const audioDevices = await invoke<string[]>("get_audio_devices")
         console.log("Fetched audio devices:", audioDevices)
         setDevices(audioDevices)
       } catch (error) {
-        console.error("Failed to fetch audio devices:", error)
+        console.error("Failed to initialize audio devices:", error)
         toast.error("Failed to load audio devices")
       } finally {
         setLoading(false)
       }
     }
 
-    fetchDevices()
+    initializeDevices()
 
     const listenerPromise = listen<string[]>("audio-devices-updated", ({ payload }) => {
       console.log("Audio devices updated:", payload)

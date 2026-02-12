@@ -5,6 +5,7 @@ use crate::audio::recorder::AudioRecorder;
 use crate::commands::license::check_license_status_internal;
 use crate::commands::settings::{get_settings, resolve_pill_indicator_mode, Settings};
 use crate::license::LicenseState;
+use crate::media::MediaPauseController;
 use crate::parakeet::messages::ParakeetResponse;
 use crate::parakeet::ParakeetManager;
 use crate::utils::logger::*;
@@ -15,6 +16,7 @@ use crate::whisper::languages::validate_language;
 use crate::whisper::manager::WhisperManager;
 use crate::{emit_to_window, update_recording_state, AppState, RecordingMode, RecordingState};
 use cpal::traits::{DeviceTrait, HostTrait};
+use once_cell::sync::Lazy;
 use serde_json;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{Path, PathBuf};
@@ -26,6 +28,9 @@ use tauri_plugin_store::StoreExt;
 
 /// Atomic counter for toast IDs to prevent race conditions
 static TOAST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Global media pause controller for pausing/resuming system media during recording
+static MEDIA_CONTROLLER: Lazy<MediaPauseController> = Lazy::new(MediaPauseController::new);
 
 /// Payload for pill toast messages
 #[derive(serde::Serialize, Clone)]
@@ -39,7 +44,9 @@ pub struct PillToastPayload {
 /// This is the single unified API for pill feedback messages.
 /// Uses atomic counter to prevent race conditions with overlapping toasts.
 pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) {
-    let id = TOAST_ID_COUNTER.fetch_add(1, AtomicOrdering::SeqCst).wrapping_add(1);
+    let id = TOAST_ID_COUNTER
+        .fetch_add(1, AtomicOrdering::SeqCst)
+        .wrapping_add(1);
 
     // Show toast window
     if let Some(toast_window) = app.get_webview_window("toast") {
@@ -57,7 +64,10 @@ pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) {
             }
         });
     } else {
-        log::warn!("pill_toast: toast window not found, message not shown: {}", message);
+        log::warn!(
+            "pill_toast: toast window not found, message not shown: {}",
+            message
+        );
     }
 
     // Build and emit unified payload
@@ -80,8 +90,7 @@ fn should_hide_pill_when_idle(mode: &str) -> bool {
 /// - "never" → always hide (return true)
 /// - "always" → never hide (return false)
 /// - "when_recording" → hide when idle (return true)
-/// Fails open: on error, returns true (default to when_recording behavior).
-#[track_caller]
+///   Fails open: on error, returns true (default to when_recording behavior).
 pub async fn should_hide_pill(app: &AppHandle) -> bool {
     let store = match app.store("settings") {
         Ok(s) => s,
@@ -257,7 +266,7 @@ impl RecordingConfig {
             ai_provider: store
                 .get("ai_provider")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| "groq".to_string()),
+                .unwrap_or_default(),
             ai_model: store
                 .get("ai_model")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -518,7 +527,7 @@ fn select_best_fallback_model(
     if !requested.is_empty() {
         // If requested "large-v3", try other large variants first
         for model in available_models {
-            if model.starts_with(&requested.split('-').next().unwrap_or(requested)) {
+            if model.starts_with(requested.split('-').next().unwrap_or(requested)) {
                 return model.clone();
             }
         }
@@ -532,15 +541,12 @@ fn select_best_fallback_model(
     }
 
     // If no priority model found, return first available
-    available_models
-        .first()
-        .map(|s| s.clone())
-        .unwrap_or_else(|| {
-            log::error!("No models available for fallback selection");
-            // This should never happen as we check for empty models before calling this function
-            // But return a default to prevent panic
-            "base.en".to_string()
-        })
+    available_models.first().cloned().unwrap_or_else(|| {
+        log::error!("No models available for fallback selection");
+        // This should never happen as we check for empty models before calling this function
+        // But return a default to prevent panic
+        "base.en".to_string()
+    })
 }
 
 /// Pre-recording validation using the readiness state
@@ -690,7 +696,7 @@ pub async fn start_recording(
                     ("stage", "validation"),
                     (
                         "validation_time_ms",
-                        &validation_start.elapsed().as_millis().to_string().as_str(),
+                        validation_start.elapsed().as_millis().to_string().as_str(),
                     ),
                 ],
             );
@@ -723,11 +729,38 @@ pub async fn start_recording(
         }
     }
 
+    // Pause system media if enabled (default: true)
+    let mut resume_media_on_error = false;
+    if let Ok(store) = app.store("settings") {
+        let pause_media = store
+            .get("pause_media_during_recording")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true); // Default to true
+        if pause_media {
+            log::info!("🎵 Pause media during recording is enabled");
+            let paused = MEDIA_CONTROLLER.pause_if_playing();
+            resume_media_on_error = paused;
+            log::debug!("🎵 Media pause result: {}", paused);
+        } else {
+            log::debug!("🎵 Pause media during recording is disabled");
+        }
+    }
+
+    let resume_media_if_needed = || {
+        if resume_media_on_error {
+            MEDIA_CONTROLLER.resume_if_we_paused();
+        }
+    };
+
     // Load recording config once to avoid repeated store access
-    let config = get_recording_config(&app).await.map_err(|e| {
-        log::error!("Failed to load recording config: {}", e);
-        format!("Configuration error: {}", e)
-    })?;
+    let config = match get_recording_config(&app).await {
+        Ok(config) => config,
+        Err(e) => {
+            log::error!("Failed to load recording config: {}", e);
+            resume_media_if_needed();
+            return Err(format!("Configuration error: {}", e));
+        }
+    };
     log::debug!(
         "Using recording config: show_pill={} pill_indicator_mode='{}' ai_enabled={} model={}",
         config.show_pill_widget,
@@ -736,20 +769,27 @@ pub async fn start_recording(
         config.current_model
     );
     // Get app data directory for recordings
-    let recordings_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("recordings");
+    let recordings_dir = match app.path().app_data_dir() {
+        Ok(dir) => dir.join("recordings"),
+        Err(e) => {
+            resume_media_if_needed();
+            return Err(e.to_string());
+        }
+    };
 
     // Ensure recordings directory exists
-    std::fs::create_dir_all(&recordings_dir)
-        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+    if let Err(e) = std::fs::create_dir_all(&recordings_dir) {
+        resume_media_if_needed();
+        return Err(format!("Failed to create recordings directory: {}", e));
+    }
 
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| format!("Time error: {}", e))?
-        .as_secs();
+    let timestamp = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs(),
+        Err(e) => {
+            resume_media_if_needed();
+            return Err(format!("Time error: {}", e));
+        }
+    };
     let audio_path = recordings_dir.join(format!("recording_{}.wav", timestamp));
 
     // Store path for later use and reset any leftover pending-toggle flag
@@ -759,11 +799,15 @@ pub async fn start_recording(
         .store(false, std::sync::atomic::Ordering::SeqCst);
 
     // Save current recording path
-    app_state
-        .current_recording_path
-        .lock()
-        .map_err(|e| format!("Failed to acquire path lock: {}", e))?
-        .replace(audio_path.clone());
+    match app_state.current_recording_path.lock() {
+        Ok(mut guard) => {
+            guard.replace(audio_path.clone());
+        }
+        Err(e) => {
+            resume_media_if_needed();
+            return Err(format!("Failed to acquire path lock: {}", e));
+        }
+    }
 
     // Get selected microphone from settings (before acquiring recorder lock)
     let selected_microphone = match get_settings(app.clone()).await {
@@ -787,15 +831,18 @@ pub async fn start_recording(
 
     // Start recording (scoped to release mutex before async operations)
     {
-        let mut recorder = state
-            .inner()
-            .0
-            .lock()
-            .map_err(|e| format!("Failed to acquire recorder lock: {}", e))?;
+        let mut recorder = match state.inner().0.lock() {
+            Ok(recorder) => recorder,
+            Err(e) => {
+                resume_media_if_needed();
+                return Err(format!("Failed to acquire recorder lock: {}", e));
+            }
+        };
 
         // Check if already recording
         if recorder.is_recording() {
             log::warn!("Already recording!");
+            resume_media_if_needed();
             return Err("Already recording".to_string());
         }
 
@@ -807,7 +854,7 @@ pub async fn start_recording(
             &[("stage", "pre_recording")],
         );
 
-        if let Ok(host) = std::panic::catch_unwind(|| cpal::default_host()) {
+        if let Ok(host) = std::panic::catch_unwind(cpal::default_host) {
             if let Some(device) = host.default_input_device() {
                 if let Ok(name) = device.name() {
                     log::info!("🎙️ Audio device available: {}", name);
@@ -836,37 +883,84 @@ pub async fn start_recording(
 
         // Try to start recording with graceful error handling
         let recorder_init_start = Instant::now();
-        let audio_path_str = audio_path
-            .to_str()
-            .ok_or_else(|| "Invalid path encoding".to_string())?;
+        let audio_path_str = match audio_path.to_str() {
+            Some(path) => path,
+            None => {
+                resume_media_if_needed();
+                return Err("Invalid path encoding".to_string());
+            }
+        };
 
         log_file_operation("RECORDING_START", audio_path_str, false, None, None);
 
         // Start recording and get audio level receiver
-        let audio_level_rx = match recorder
-            .start_recording(audio_path_str, selected_microphone.clone())
-        {
-            Ok(_) => {
-                // Verify recording actually started
-                let is_recording = recorder.is_recording();
+        let audio_level_rx =
+            match recorder.start_recording(audio_path_str, selected_microphone.clone()) {
+                Ok(_) => {
+                    // Verify recording actually started
+                    let is_recording = recorder.is_recording();
 
-                // Get the audio level receiver before potentially dropping recorder
-                let rx = recorder.take_audio_level_receiver();
+                    // Get the audio level receiver before potentially dropping recorder
+                    let rx = recorder.take_audio_level_receiver();
 
-                if !is_recording {
-                    drop(recorder); // Release the lock if we're erroring out
-                    log_failed(
-                        "RECORDER_INIT",
-                        "Recording failed to start after initialization",
-                    );
+                    if !is_recording {
+                        drop(recorder); // Release the lock if we're erroring out
+                        log_failed(
+                            "RECORDER_INIT",
+                            "Recording failed to start after initialization",
+                        );
+                        log_with_context(
+                            log::Level::Debug,
+                            "Recorder initialization failed",
+                            &[
+                                ("audio_path", audio_path_str),
+                                (
+                                    "init_time_ms",
+                                    recorder_init_start
+                                        .elapsed()
+                                        .as_millis()
+                                        .to_string()
+                                        .as_str(),
+                                ),
+                            ],
+                        );
+
+                        update_recording_state(
+                            &app,
+                            RecordingState::Error,
+                            Some("Microphone initialization failed".to_string()),
+                        );
+
+                        // Emit user-friendly error via pill toast
+                        pill_toast(&app, "Microphone access failed", 1500);
+
+                        resume_media_if_needed();
+                        return Err("Failed to start recording".to_string());
+                    } else {
+                        log_performance(
+                            "RECORDER_INIT",
+                            recorder_init_start.elapsed().as_millis() as u64,
+                            Some(&format!("file={}", audio_path_str)),
+                        );
+                        log::info!("✅ Recording started successfully");
+
+                        // Monitor system resources at recording start
+                        #[cfg(debug_assertions)]
+                        system_monitor::log_resources_before_operation("RECORDING_START");
+                    }
+
+                    rx // Return the audio level receiver
+                }
+                Err(e) => {
+                    log_failed("RECORDER_START", &e);
                     log_with_context(
                         log::Level::Debug,
-                        "Recorder initialization failed",
+                        "Recorder start failed",
                         &[
                             ("audio_path", audio_path_str),
                             (
                                 "init_time_ms",
-                                &recorder_init_start
+                                recorder_init_start
                                     .elapsed()
                                     .as_millis()
                                     .to_string()
@@ -875,67 +969,25 @@ pub async fn start_recording(
                         ],
                     );
 
-                    update_recording_state(
-                        &app,
-                        RecordingState::Error,
-                        Some("Microphone initialization failed".to_string()),
-                    );
+                    update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
 
-                    // Emit user-friendly error via pill toast
-                    pill_toast(&app, "Microphone access failed", 1500);
+                    // Provide specific error messages for common issues
+                    let user_message = if e.contains("permission") || e.contains("access") {
+                        "Microphone permission denied"
+                    } else if e.contains("device") || e.contains("not found") {
+                        "No microphone found"
+                    } else if e.contains("in use") || e.contains("busy") {
+                        "Microphone busy"
+                    } else {
+                        "Recording failed"
+                    };
 
-                    return Err("Failed to start recording".to_string());
-                } else {
-                    log_performance(
-                        "RECORDER_INIT",
-                        recorder_init_start.elapsed().as_millis() as u64,
-                        Some(&format!("file={}", audio_path_str)),
-                    );
-                    log::info!("✅ Recording started successfully");
+                    pill_toast(&app, user_message, 1500);
 
-                    // Monitor system resources at recording start
-                    #[cfg(debug_assertions)]
-                    system_monitor::log_resources_before_operation("RECORDING_START");
+                    resume_media_if_needed();
+                    return Err(e);
                 }
-
-                rx // Return the audio level receiver
-            }
-            Err(e) => {
-                log_failed("RECORDER_START", &e);
-                log_with_context(
-                    log::Level::Debug,
-                    "Recorder start failed",
-                    &[
-                        ("audio_path", audio_path_str),
-                        (
-                            "init_time_ms",
-                            &recorder_init_start
-                                .elapsed()
-                                .as_millis()
-                                .to_string()
-                                .as_str(),
-                        ),
-                    ],
-                );
-
-                update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
-
-                // Provide specific error messages for common issues
-                let user_message = if e.contains("permission") || e.contains("access") {
-                    "Microphone permission denied"
-                } else if e.contains("device") || e.contains("not found") {
-                    "No microphone found"
-                } else if e.contains("in use") || e.contains("busy") {
-                    "Microphone busy"
-                } else {
-                    "Recording failed"
-                };
-
-                pill_toast(&app, user_message, 1500);
-
-                return Err(e);
-            }
-        };
+            };
 
         // Release the recorder lock after successful start
         drop(recorder);
@@ -1027,7 +1079,7 @@ pub async fn start_recording(
         log::Level::Debug,
         "Recording started successfully",
         &[
-            ("audio_path", &format!("{:?}", audio_path).as_str()),
+            ("audio_path", format!("{:?}", audio_path).as_str()),
             ("state", "recording"),
         ],
     );
@@ -1053,7 +1105,7 @@ pub async fn start_recording(
     }
 
     // Register the ESC key globally
-    match app.global_shortcut().register(escape_shortcut.clone()) {
+    match app.global_shortcut().register(escape_shortcut) {
         Ok(_) => {
             log::info!("Successfully registered global ESC key for recording cancellation");
         }
@@ -1080,7 +1132,7 @@ pub async fn stop_recording(
         "Stop recording command",
         &[
             ("command", "stop_recording"),
-            ("timestamp", &chrono::Utc::now().to_rfc3339().as_str()),
+            ("timestamp", chrono::Utc::now().to_rfc3339().as_str()),
         ],
     );
 
@@ -1123,6 +1175,9 @@ pub async fn stop_recording(
                 play_recording_end_sound();
             }
         }
+
+        // Resume system media if we paused it
+        MEDIA_CONTROLLER.resume_if_we_paused();
 
         // Monitor system resources after recording stop
         #[cfg(debug_assertions)]
@@ -1327,7 +1382,7 @@ pub async fn stop_recording(
                 "Selecting model",
                 &[(
                     "available_count",
-                    &downloaded_models.len().to_string().as_str(),
+                    downloaded_models.len().to_string().as_str(),
                 )],
             );
 
@@ -1476,11 +1531,11 @@ pub async fn stop_recording(
                     log::Level::Info,
                     "NORMALIZED_AUDIO",
                     &[
-                        ("path", &format!("{:?}", normalized_path).as_str()),
-                        ("sample_rate", &spec.sample_rate.to_string().as_str()),
-                        ("channels", &spec.channels.to_string().as_str()),
-                        ("bits", &spec.bits_per_sample.to_string().as_str()),
-                        ("duration_s", &format!("{:.2}", duration).as_str()),
+                        ("path", format!("{:?}", normalized_path).as_str()),
+                        ("sample_rate", spec.sample_rate.to_string().as_str()),
+                        ("channels", spec.channels.to_string().as_str()),
+                        ("bits", spec.bits_per_sample.to_string().as_str()),
+                        ("duration_s", format!("{:.2}", duration).as_str()),
                     ],
                 );
                 Ok(duration < min_duration_s_f32)
@@ -1510,7 +1565,7 @@ pub async fn stop_recording(
         log::Level::Debug,
         "Proceeding to transcription",
         &[
-            ("audio_path", &format!("{:?}", audio_path).as_str()),
+            ("audio_path", format!("{:?}", audio_path).as_str()),
             ("stage", "pre_transcription"),
         ],
     );
@@ -1567,7 +1622,9 @@ pub async fn stop_recording(
 
             // Hide pill window since we're cancelling (only if show_pill_indicator is false)
             if should_hide_pill(&app_for_task).await {
-                if let Err(e) = crate::commands::window::hide_pill_widget(app_for_task.clone()).await {
+                if let Err(e) =
+                    crate::commands::window::hide_pill_widget(app_for_task.clone()).await
+                {
                     log::error!("Failed to hide pill window on cancellation: {}", e);
                 }
             }
@@ -1590,8 +1647,9 @@ pub async fn stop_recording(
                                 Some(e.clone()),
                             );
                             if should_hide_pill(&app_for_task).await {
-                                let _ = crate::commands::window::hide_pill_widget(app_for_task.clone())
-                                    .await;
+                                let _ =
+                                    crate::commands::window::hide_pill_widget(app_for_task.clone())
+                                        .await;
                             }
                             pill_toast(&app_for_task, &e, 1500);
                             return;
@@ -1740,7 +1798,8 @@ pub async fn stop_recording(
                         // Hide pill window (only if show_pill_indicator is false)
                         if should_hide_pill(&app_for_hide).await {
                             if let Err(e) =
-                                crate::commands::window::hide_pill_widget(app_for_hide.clone()).await
+                                crate::commands::window::hide_pill_widget(app_for_hide.clone())
+                                    .await
                             {
                                 log::error!("Failed to hide pill window: {}", e);
                             }
@@ -1946,7 +2005,8 @@ pub async fn stop_recording(
                         // Only hide if show_pill_indicator is false
                         if should_hide_pill(&app_for_reset).await {
                             if let Err(e) =
-                                crate::commands::window::hide_pill_widget(app_for_reset.clone()).await
+                                crate::commands::window::hide_pill_widget(app_for_reset.clone())
+                                    .await
                             {
                                 log::error!("Failed to hide pill window: {}", e);
                             }
@@ -1973,7 +2033,8 @@ pub async fn stop_recording(
                         // Hide pill window when transitioning to Idle (only if show_pill_indicator is false)
                         if should_hide_pill(&app_for_reset).await {
                             if let Err(e) =
-                                crate::commands::window::hide_pill_widget(app_for_reset.clone()).await
+                                crate::commands::window::hide_pill_widget(app_for_reset.clone())
+                                    .await
                             {
                                 log::error!("Failed to hide pill window: {}", e);
                             }
@@ -2655,6 +2716,9 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
             }
         }
     }
+
+    // Resume system media if we paused it
+    MEDIA_CONTROLLER.resume_if_we_paused();
 
     // Unregister ESC key
     match "Escape".parse::<tauri_plugin_global_shortcut::Shortcut>() {
