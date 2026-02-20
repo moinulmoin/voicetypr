@@ -1,12 +1,18 @@
 name: Release
 
 on:
-  push:
-    branches: [release]
   workflow_dispatch:
     inputs:
+      release_type:
+        description: 'Release type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
       dry_run:
-        description: 'Dry run (build only, no release)'
+        description: 'Dry run (build artifacts only, no version bump or release)'
         required: false
         default: false
         type: boolean
@@ -17,13 +23,85 @@ env:
 
 jobs:
   # ===========================================
+  # Prepare: bump version, commit, tag, push
+  # ===========================================
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      ref: ${{ steps.ref.outputs.ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Calculate version
+        id: version
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          case "${{ inputs.release_type }}" in
+            major) NEW="$((MAJOR + 1)).0.0" ;;
+            minor) NEW="${MAJOR}.$((MINOR + 1)).0" ;;
+            patch) NEW="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+          esac
+          echo "version=$NEW" >> $GITHUB_OUTPUT
+          echo "tag=v$NEW" >> $GITHUB_OUTPUT
+          echo "::notice::Release: $CURRENT → $NEW (${{ inputs.release_type }})"
+
+      - name: Check tag doesn't already exist
+        if: ${{ !inputs.dry_run }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG"; then
+            echo "::error::Tag $TAG already exists. Delete it first or use a different release type."
+            exit 1
+          fi
+
+      - name: Bump version files
+        if: ${{ !inputs.dry_run }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          node -e "
+            const pkg = JSON.parse(require('fs').readFileSync('package.json', 'utf8'));
+            pkg.version = '$VERSION';
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          sed -i 's/^version = "[^"]*"/version = "'$VERSION'"/' src-tauri/Cargo.toml
+
+      - name: Commit, tag, and push
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json src-tauri/Cargo.toml
+          git diff --cached --stat
+          git commit -m "chore: release v${{ steps.version.outputs.version }}"
+          git tag "v${{ steps.version.outputs.version }}"
+          git push origin main --follow-tags
+
+      - name: Determine checkout ref
+        id: ref
+        run: |
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            echo "ref=${{ github.sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "ref=v${{ steps.version.outputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
+  # ===========================================
   # Build macOS (aarch64 - Apple Silicon)
   # ===========================================
   build-macos-aarch64:
+    needs: prepare
     runs-on: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -79,10 +157,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
-          # Create config override for signing identity (matches release-separate.sh)
           TAURI_CONFIG_OVERRIDE=$(jq -nc --arg identity "$APPLE_SIGNING_IDENTITY" '{bundle:{macOS:{signingIdentity:$identity}}}')
           pnpm tauri build --target aarch64-apple-darwin --bundles app,dmg --config "$TAURI_CONFIG_OVERRIDE" --ci
 
@@ -94,8 +171,8 @@ jobs:
 
       - name: Sign update artifact
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
           echo "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/tauri.key
           pnpm tauri signer sign -f /tmp/tauri.key -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
@@ -120,10 +197,13 @@ jobs:
   # Build macOS (x86_64 - Intel)
   # ===========================================
   build-macos-x86_64:
-    runs-on: macos-13
+    needs: prepare
+    runs-on: macos-15-intel
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -170,10 +250,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
-          # Create config override for signing identity (matches release-separate.sh)
           TAURI_CONFIG_OVERRIDE=$(jq -nc --arg identity "$APPLE_SIGNING_IDENTITY" '{bundle:{macOS:{signingIdentity:$identity}}}')
           pnpm tauri build --target x86_64-apple-darwin --bundles app,dmg --config "$TAURI_CONFIG_OVERRIDE" --ci
 
@@ -185,8 +264,8 @@ jobs:
 
       - name: Sign update artifact
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
           echo "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/tauri.key
           pnpm tauri signer sign -f /tmp/tauri.key -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
@@ -211,10 +290,13 @@ jobs:
   # Build Windows (x64 with Vulkan GPU support)
   # ===========================================
   build-windows:
+    needs: prepare
     runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -249,16 +331,15 @@ jobs:
 
       - name: Build Tauri app
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           CARGO_TARGET_DIR: t
-        run: |
-          pnpm tauri build --ci
+        run: pnpm tauri build --ci
 
       - name: Sign installer for updates
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         shell: pwsh
         run: |
           $installer = Get-ChildItem "t\release\bundle\nsis\*.exe" | Select-Object -First 1
@@ -284,7 +365,7 @@ jobs:
   # Create Release (after all builds succeed)
   # ===========================================
   release:
-    needs: [build-macos-aarch64, build-macos-x86_64, build-windows]
+    needs: [prepare, build-macos-aarch64, build-macos-x86_64, build-windows]
     runs-on: ubuntu-latest
     if: ${{ !inputs.dry_run }}
     permissions:
@@ -292,13 +373,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Get version
-        id: version
-        run: |
-          VERSION=$(jq -r '.version' package.json)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -308,68 +384,62 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          VERSION="${{ steps.version.outputs.version }}"
-          
+          VERSION="${{ needs.prepare.outputs.version }}"
+
           # macOS aarch64
           cp artifacts/macos-aarch64/*.dmg "release/VoiceTypr_${VERSION}_aarch64.dmg"
           cp artifacts/macos-aarch64/app.tar.gz "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz"
           cp artifacts/macos-aarch64/app.tar.gz.sig "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig"
-          
+
           # macOS x86_64
           cp artifacts/macos-x86_64/*.dmg "release/VoiceTypr_${VERSION}_x86_64.dmg"
           cp artifacts/macos-x86_64/app.tar.gz "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz"
           cp artifacts/macos-x86_64/app.tar.gz.sig "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig"
-          
+
           # Windows x64
           cp artifacts/windows-x64/*.exe "release/VoiceTypr_${VERSION}_x64-setup.exe"
           cp artifacts/windows-x64/*.exe.sig "release/VoiceTypr_${VERSION}_x64-setup.exe.sig"
 
       - name: Generate latest.json
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TAG="${{ steps.version.outputs.tag }}"
-          
-          # Read signatures
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="${{ needs.prepare.outputs.tag }}"
+
           AARCH64_SIG=$(cat "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig" | tr -d '\n')
           X86_64_SIG=$(cat "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig" | tr -d '\n')
-          if [ ! -f "release/VoiceTypr_${VERSION}_x64-setup.exe.sig" ]; then
-            echo "Missing Windows updater signature file" >&2
-            exit 1
-          fi
           WINDOWS_SIG=$(cat "release/VoiceTypr_${VERSION}_x64-setup.exe.sig" | tr -d '\n')
-          if [ -z "$WINDOWS_SIG" ]; then
-            echo "Windows updater signature is empty" >&2
+
+          if [ -z "$AARCH64_SIG" ] || [ -z "$X86_64_SIG" ] || [ -z "$WINDOWS_SIG" ]; then
+            echo "::error::One or more signature files are missing or empty"
             exit 1
           fi
-          
-          # Create latest.json
-          cat > release/latest.json << EOF
-          {
-            "version": "$TAG",
-            "notes": "See the release notes for $TAG",
-            "pub_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "platforms": {
-              "darwin-aarch64": {
-                "signature": "$AARCH64_SIG",
-                "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/VoiceTypr_${VERSION}_aarch64.app.tar.gz"
-              },
-              "darwin-x86_64": {
-                "signature": "$X86_64_SIG",
-                "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/VoiceTypr_${VERSION}_x86_64.app.tar.gz"
-              },
-              "windows-x86_64": {
-                "signature": "$WINDOWS_SIG",
-                "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/VoiceTypr_${VERSION}_x64-setup.exe"
+
+          jq -n \
+            --arg version "$TAG" \
+            --arg notes "See the release notes for $TAG" \
+            --arg pub_date "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+            --arg aarch64_sig "$AARCH64_SIG" \
+            --arg aarch64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/VoiceTypr_${VERSION}_aarch64.app.tar.gz" \
+            --arg x86_64_sig "$X86_64_SIG" \
+            --arg x86_64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/VoiceTypr_${VERSION}_x86_64.app.tar.gz" \
+            --arg windows_sig "$WINDOWS_SIG" \
+            --arg windows_url "https://github.com/${{ github.repository }}/releases/download/$TAG/VoiceTypr_${VERSION}_x64-setup.exe" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: {
+                "darwin-aarch64": { signature: $aarch64_sig, url: $aarch64_url },
+                "darwin-x86_64": { signature: $x86_64_sig, url: $x86_64_url },
+                "windows-x86_64": { signature: $windows_sig, url: $windows_url }
               }
-            }
-          }
-          EOF
+            }' > release/latest.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: VoiceTypr ${{ steps.version.outputs.tag }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: VoiceTypr ${{ needs.prepare.outputs.tag }}
           draft: true
           generate_release_notes: true
           files: release/*
