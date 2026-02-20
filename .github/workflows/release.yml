@@ -154,14 +154,14 @@ jobs:
       - name: Build Tauri app
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ !inputs.dry_run && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ !inputs.dry_run && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ !inputs.dry_run && secrets.APPLE_TEAM_ID || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
           TAURI_CONFIG_OVERRIDE=$(jq -nc --arg identity "$APPLE_SIGNING_IDENTITY" '{bundle:{macOS:{signingIdentity:$identity}}}')
-          pnpm tauri build --target aarch64-apple-darwin --bundles app,dmg --config "$TAURI_CONFIG_OVERRIDE" --ci
+          pnpm tauri build --target aarch64-apple-darwin --bundles app,dmg --config "$TAURI_CONFIG_OVERRIDE" --ci --verbose
 
       - name: Create app.tar.gz for updater
         run: |
@@ -247,14 +247,14 @@ jobs:
       - name: Build Tauri app
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ !inputs.dry_run && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ !inputs.dry_run && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ !inputs.dry_run && secrets.APPLE_TEAM_ID || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
           TAURI_CONFIG_OVERRIDE=$(jq -nc --arg identity "$APPLE_SIGNING_IDENTITY" '{bundle:{macOS:{signingIdentity:$identity}}}')
-          pnpm tauri build --target x86_64-apple-darwin --bundles app,dmg --config "$TAURI_CONFIG_OVERRIDE" --ci
+          pnpm tauri build --target x86_64-apple-darwin --bundles app,dmg --config "$TAURI_CONFIG_OVERRIDE" --ci --verbose
 
       - name: Create app.tar.gz for updater
         run: |
