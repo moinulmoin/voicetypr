@@ -343,7 +343,7 @@ jobs:
         shell: pwsh
         run: |
           $installer = Get-ChildItem "C:\b\release\bundle\nsis\*.exe" | Select-Object -First 1
-          $env:TAURI_SIGNING_PRIVATE_KEY | Out-File -FilePath "$env:TEMP\tauri.key" -Encoding ascii
+          [IO.File]::WriteAllText("$env:TEMP\tauri.key", $env:TAURI_SIGNING_PRIVATE_KEY)
           pnpm tauri signer sign -f "$env:TEMP\tauri.key" -p "$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD" $installer.FullName
           Remove-Item "$env:TEMP\tauri.key"
 
