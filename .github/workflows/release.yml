@@ -79,8 +79,8 @@ jobs:
           git add package.json src-tauri/Cargo.toml
           git diff --cached --stat
           git commit -m "chore: release v${{ steps.version.outputs.version }}"
-          git tag "v${{ steps.version.outputs.version }}"
-          git push origin main --follow-tags
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
+          git push origin main "v${{ steps.version.outputs.version }}"
 
       - name: Determine checkout ref
         id: ref
@@ -88,7 +88,7 @@ jobs:
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
             echo "ref=${{ github.sha }}" >> $GITHUB_OUTPUT
           else
-            echo "ref=v${{ steps.version.outputs.version }}" >> $GITHUB_OUTPUT
+            echo "ref=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
           fi
 
   # ===========================================
