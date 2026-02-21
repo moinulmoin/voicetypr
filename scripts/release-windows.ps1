@@ -91,11 +91,21 @@ if (-not $SkipBuild) {
     
     # Clean to ensure fresh build
     cargo clean --manifest-path src-tauri\Cargo.toml
+
+    # Bundle VC++ runtime installer for fresh Windows machines
+    $vcRedistDir = "src-tauri\windows\resources"
+    $vcRedistPath = "$vcRedistDir\vc_redist.x64.exe"
+    if (-not (Test-Path $vcRedistDir)) {
+        New-Item -ItemType Directory -Path $vcRedistDir -Force | Out-Null
+    }
+    Write-Info "Downloading Visual C++ Runtime installer..."
+    Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $vcRedistPath
     
     # Build with Vulkan enabled by default
     Write-Info "Building with Vulkan support enabled..."
+    $env:RUSTFLAGS = "-C target-feature=+crt-static"
     # Version comes from Cargo.toml, no override needed
-    pnpm tauri build --ci
+    pnpm tauri build --ci --config src-tauri/tauri.windows.conf.json
     
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Build failed!"

@@ -60,7 +60,43 @@ After updating, VoiceTypr will use your GPU!"
     ; Continue with normal installation
 !macroend
 
+!macro NSIS_HOOK_POSTINSTALL
+    ; Ensure Microsoft Visual C++ Runtime is present on fresh systems
+    ClearErrors
+    SetRegView 64
+    ReadRegDWord $0 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Installed"
+    ${If} ${Errors}
+        StrCpy $0 0
+    ${EndIf}
+
+    ${If} $0 == 1
+        DetailPrint "Visual C++ Runtime already installed"
+        Goto vcredist_done
+    ${EndIf}
+
+    ${If} ${FileExists} "$INSTDIR\resources\windows\resources\vc_redist.x64.exe"
+        DetailPrint "Installing Microsoft Visual C++ Runtime..."
+        CopyFiles /SILENT "$INSTDIR\resources\windows\resources\vc_redist.x64.exe" "$TEMP\vc_redist.x64.exe"
+        ExecWait '"$TEMP\vc_redist.x64.exe" /install /passive /norestart' $1
+
+        ${If} $1 == 0
+            DetailPrint "Visual C++ Runtime installed successfully"
+        ${ElseIf} $1 == 3010
+            DetailPrint "Visual C++ Runtime installed (restart required)"
+        ${ElseIf} $1 == 1638
+            DetailPrint "Visual C++ Runtime already installed (newer or same version)"
+        ${Else}
+            MessageBox MB_ICONEXCLAMATION "Visual C++ Runtime installation returned code $1. VoiceTypr may fail to start if runtime is missing."
+        ${EndIf}
+
+        Delete "$TEMP\vc_redist.x64.exe"
+    ${Else}
+        DetailPrint "vc_redist.x64.exe not bundled, skipping runtime installation"
+    ${EndIf}
+
+    vcredist_done:
+!macroend
+
 ; No special uninstall handling needed
 !macro NSIS_HOOK_PREUNINSTALL
 !macroend
-

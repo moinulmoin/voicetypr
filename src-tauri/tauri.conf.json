@@ -65,6 +65,10 @@
     },
     "windows": {
       "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
       "nsis": {
         "installMode": "currentUser",
         "installerHooks": "./windows/smart-installer-hooks.nsh"
