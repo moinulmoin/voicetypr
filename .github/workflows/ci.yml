@@ -139,6 +139,12 @@ jobs:
       - name: Ensure FFmpeg sidecar
         run: pnpm run sidecar:ensure-ffmpeg
 
+      - name: Download VC++ runtime installer resource
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "src-tauri/windows/resources" | Out-Null
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "src-tauri/windows/resources/vc_redist.x64.exe"
+
       - name: Build frontend
         run: pnpm build
 

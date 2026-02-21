@@ -185,10 +185,11 @@ jobs:
 
       - name: Stage artifacts for upload
         run: |
+          VERSION=$(node -p "require('./package.json').version")
           mkdir -p artifacts
           cp src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg artifacts/
-          cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz artifacts/
-          cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz.sig artifacts/
+          cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz "artifacts/VoiceTypr_${VERSION}_aarch64.app.tar.gz"
+          cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz.sig "artifacts/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -282,10 +283,11 @@ jobs:
 
       - name: Stage artifacts for upload
         run: |
+          VERSION=$(node -p "require('./package.json').version")
           mkdir -p artifacts
           cp src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg artifacts/
-          cp src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz artifacts/
-          cp src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz.sig artifacts/
+          cp src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz "artifacts/VoiceTypr_${VERSION}_x86_64.app.tar.gz"
+          cp src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz.sig "artifacts/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -403,13 +405,13 @@ jobs:
 
           # macOS aarch64
           cp artifacts/macos-aarch64/*.dmg "release/VoiceTypr_${VERSION}_aarch64.dmg"
-          cp artifacts/macos-aarch64/app.tar.gz "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz"
-          cp artifacts/macos-aarch64/app.tar.gz.sig "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig"
+          cp artifacts/macos-aarch64/VoiceTypr_${VERSION}_aarch64.app.tar.gz "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz"
+          cp artifacts/macos-aarch64/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig"
 
           # macOS x86_64
           cp artifacts/macos-x86_64/*.dmg "release/VoiceTypr_${VERSION}_x86_64.dmg"
-          cp artifacts/macos-x86_64/app.tar.gz "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz"
-          cp artifacts/macos-x86_64/app.tar.gz.sig "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig"
+          cp artifacts/macos-x86_64/VoiceTypr_${VERSION}_x86_64.app.tar.gz "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz"
+          cp artifacts/macos-x86_64/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig"
 
           # Windows x64
           cp artifacts/windows-x64/*.exe "release/VoiceTypr_${VERSION}_x64-setup.exe"
