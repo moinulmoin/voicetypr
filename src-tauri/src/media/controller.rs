@@ -9,18 +9,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 #[cfg(target_os = "macos")]
-use once_cell::sync::Lazy;
-
-#[cfg(target_os = "macos")]
 use std::{
     io::Write,
     process::{Command as ProcessCommand, Stdio},
 };
-
-#[cfg(target_os = "macos")]
-static MEDIA_REMOTE_NOTIFICATIONS: Lazy<()> = Lazy::new(|| {
-    media_remote::register_for_now_playing_notifications();
-});
 
 #[cfg(target_os = "macos")]
 const NOW_PLAYING_JXA_SCRIPT: &str = r#"
@@ -67,8 +59,6 @@ function run() {
 #[derive(Debug, Clone)]
 struct NowPlayingSnapshot {
     is_playing: Option<bool>,
-    bundle_id: Option<String>,
-    title: Option<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -135,29 +125,7 @@ fn now_playing_snapshot_via_osascript() -> Option<NowPlayingSnapshot> {
     };
     let is_playing = raw.get("isPlaying").and_then(|v| v.as_bool());
 
-    let bundle_id = raw
-        .get("client")
-        .and_then(|c| c.get("parentApplicationBundleIdentifier"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            raw.get("client")
-                .and_then(|c| c.get("bundleIdentifier"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        });
-
-    let title = raw
-        .get("info")
-        .and_then(|info| info.get("kMRMediaRemoteNowPlayingInfoTitle"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    Some(NowPlayingSnapshot {
-        is_playing,
-        bundle_id,
-        title,
-    })
+    Some(NowPlayingSnapshot { is_playing })
 }
 
 /// Controller for pausing/resuming system media during voice recording.
@@ -245,141 +213,16 @@ impl MediaPauseController {
 }
 
 // ============================================
-// macOS Implementation (media-remote crate)
-// ============================================
 #[cfg(target_os = "macos")]
 impl MediaPauseController {
     fn pause_if_playing_macos(&self) -> bool {
-        use media_remote::{
-            get_now_playing_application_is_playing, get_now_playing_application_pid,
-            get_now_playing_client_bundle_identifier,
-            get_now_playing_client_parent_app_bundle_identifier, get_now_playing_info,
-            send_command, Command,
-        };
-
-        // Ensure MediaRemote is initialized.
-        Lazy::force(&MEDIA_REMOTE_NOTIFICATIONS);
-
-        let is_playing_raw = get_now_playing_application_is_playing();
-        let is_playing = is_playing_raw.unwrap_or(false);
+        let snapshot = now_playing_snapshot_via_osascript();
+        let is_playing = snapshot
+            .as_ref()
+            .and_then(|s| s.is_playing)
+            .unwrap_or(false);
 
         if !is_playing {
-            let bundle_id = get_now_playing_client_parent_app_bundle_identifier()
-                .or_else(get_now_playing_client_bundle_identifier);
-            let pid = get_now_playing_application_pid();
-
-            let info = get_now_playing_info();
-            let title = info.as_ref().and_then(|info| {
-                info.get("kMRMediaRemoteNowPlayingInfoTitle")
-                    .and_then(|v| match v {
-                        media_remote::InfoTypes::String(s) => Some(s.clone()),
-                        _ => None,
-                    })
-            });
-
-            // Fallback: some clients seem to expose metadata but `...IsPlaying` is unreliable.
-            // Try to infer the playing state from the now playing info dictionary.
-            let inferred_is_playing = info.as_ref().and_then(|info| {
-                const PLAYBACK_RATE_KEYS: [&str; 3] = [
-                    "kMRMediaRemoteNowPlayingInfoPlaybackRate",
-                    "kMRMediaRemoteNowPlayingInfoDefaultPlaybackRate",
-                    "kMRMediaRemoteNowPlayingInfoRate",
-                ];
-
-                for key in PLAYBACK_RATE_KEYS {
-                    if let Some(media_remote::InfoTypes::Number(media_remote::Number::Floating(
-                        rate,
-                    ))) = info.get(key)
-                    {
-                        return Some(rate > &0.0);
-                    }
-                }
-
-                if let Some(media_remote::InfoTypes::Number(num)) =
-                    info.get("kMRMediaRemoteNowPlayingInfoIsPlaying")
-                {
-                    match num {
-                        media_remote::Number::Signed(v) => return Some(*v != 0),
-                        media_remote::Number::Unsigned(v) => return Some(*v != 0),
-                        media_remote::Number::Floating(v) => return Some(*v != 0.0),
-                    }
-                }
-
-                None
-            });
-
-            let osa_snapshot = now_playing_snapshot_via_osascript();
-            let osa_is_playing = osa_snapshot
-                .as_ref()
-                .and_then(|s| s.is_playing)
-                .unwrap_or(false);
-
-            // Diagnostics for cases where MediaRemote reports false while user expects playback.
-            if log::log_enabled!(log::Level::Debug) {
-                let mut keys = info
-                    .as_ref()
-                    .map(|info| {
-                        let mut keys: Vec<&str> = info.keys().map(|k| k.as_str()).collect();
-                        keys.sort_unstable();
-                        keys
-                    })
-                    .unwrap_or_default();
-
-                // Keep the log line reasonably sized.
-                if keys.len() > 40 {
-                    keys.truncate(40);
-                    keys.push("…");
-                }
-
-                let keys_str = if keys.is_empty() {
-                    "<none>".to_string()
-                } else {
-                    keys.join(", ")
-                };
-
-                log::debug!(
-                    "MediaRemote says not playing | is_playing={:?} inferred_is_playing={:?} bundle_id={:?} pid={:?} title={:?} keys=[{}] osa_is_playing={:?} osa_bundle_id={:?} osa_title={:?}",
-                    is_playing_raw,
-                    inferred_is_playing,
-                    bundle_id,
-                    pid,
-                    title,
-                    keys_str,
-                    osa_snapshot.as_ref().and_then(|s| s.is_playing),
-                    osa_snapshot
-                        .as_ref()
-                        .and_then(|s| s.bundle_id.as_deref()),
-                    osa_snapshot.as_ref().and_then(|s| s.title.as_deref())
-                );
-            }
-
-            let should_attempt_pause = inferred_is_playing == Some(true) || osa_is_playing;
-
-            if should_attempt_pause {
-                let reason = if inferred_is_playing == Some(true) {
-                    "inferred"
-                } else {
-                    "osascript"
-                };
-
-                log::info!(
-                    "🎵 Media appears to be playing ({}), pausing for recording...",
-                    reason
-                );
-
-                if send_command(Command::Pause) {
-                    log::info!("✅ Media paused successfully");
-                    self.was_playing_before_recording
-                        .store(true, Ordering::SeqCst);
-                    return true;
-                }
-
-                log::warn!("⚠️ Failed to pause media");
-                self.was_playing_before_recording
-                    .store(false, Ordering::SeqCst);
-                return false;
-            }
-
             log::debug!("No media playing, nothing to pause");
             self.was_playing_before_recording
                 .store(false, Ordering::SeqCst);
@@ -388,7 +231,7 @@ impl MediaPauseController {
 
         log::info!("🎵 Media is playing, pausing for recording...");
 
-        if send_command(Command::Pause) {
+        if toggle_media_playback_via_osascript() {
             log::info!("✅ Media paused successfully");
             self.was_playing_before_recording
                 .store(true, Ordering::SeqCst);
@@ -402,11 +245,6 @@ impl MediaPauseController {
     }
 
     fn resume_macos(&self) -> bool {
-        use media_remote::{send_command, Command};
-
-        // Ensure MediaRemote is initialized.
-        Lazy::force(&MEDIA_REMOTE_NOTIFICATIONS);
-
         if now_playing_snapshot_via_osascript()
             .and_then(|s| s.is_playing)
             .unwrap_or(false)
@@ -416,11 +254,38 @@ impl MediaPauseController {
         }
 
         log::info!("🎵 Resuming media playback...");
-        if send_command(Command::Play) {
+        if toggle_media_playback_via_osascript() {
             log::info!("✅ Media resumed successfully");
             true
         } else {
             log::warn!("⚠️ Failed to resume media");
+            false
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn toggle_media_playback_via_osascript() -> bool {
+    let output = ProcessCommand::new("/usr/bin/osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\" to key code 100")
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => true,
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            log::warn!(
+                "osascript media toggle failed | status={:?} stdout={:?} stderr={:?}",
+                output.status,
+                stdout,
+                stderr
+            );
+            false
+        }
+        Err(err) => {
+            log::warn!("Failed to execute osascript media toggle: {}", err);
             false
         }
     }
