@@ -28,12 +28,8 @@ vi.mock('@/utils/keyring', () => ({
 // Mock models returned by list_provider_models
 const mockModels = {
   openai: [
-    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', recommended: true },
-    { id: 'gpt-4o', name: 'GPT-4o', recommended: false },
-  ],
-  anthropic: [
-    { id: 'claude-3-5-haiku-latest', name: 'Claude 3.5 Haiku', recommended: true },
-    { id: 'claude-3-5-sonnet-latest', name: 'Claude 3.5 Sonnet', recommended: true },
+    { id: 'gpt-5-nano', name: 'GPT-5 Nano', recommended: true },
+    { id: 'gpt-5-mini', name: 'GPT-5 Mini', recommended: true },
   ],
   gemini: [
     { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', recommended: true },
@@ -94,7 +90,6 @@ describe('EnhancementsSection', () => {
     await waitFor(() => {
       expect(screen.getByText('AI Providers')).toBeInTheDocument();
       expect(screen.getByText('OpenAI')).toBeInTheDocument();
-      expect(screen.getByText('Anthropic')).toBeInTheDocument();
       expect(screen.getByText('Google Gemini')).toBeInTheDocument();
     }, { timeout: 5000 });
     
@@ -306,20 +301,20 @@ describe('EnhancementsSection', () => {
   it('displays provider cards', async () => {
     const { hasApiKey } = await import('@/utils/keyring');
     (hasApiKey as ReturnType<typeof vi.fn>).mockImplementation((provider: string) => {
-      return Promise.resolve(provider === 'anthropic');
+      return Promise.resolve(provider === 'gemini');
     });
     
     (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
       if (cmd === 'get_ai_settings') {
         return Promise.resolve({
           enabled: false,
-          provider: 'anthropic',
-          model: 'claude-3-5-haiku-latest',
+          provider: 'gemini',
+          model: 'gemini-1.5-flash',
           hasApiKey: true,
         });
       }
       if (cmd === 'list_provider_models') {
-        return Promise.resolve(mockModels.anthropic);
+        return Promise.resolve(mockModels.gemini);
       }
       if (cmd === 'get_enhancement_options') {
         return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
@@ -335,7 +330,6 @@ describe('EnhancementsSection', () => {
     await waitFor(() => {
       expect(screen.getByText('AI Providers')).toBeInTheDocument();
       expect(screen.getByText('OpenAI')).toBeInTheDocument();
-      expect(screen.getByText('Anthropic')).toBeInTheDocument();
       expect(screen.getByText('Google Gemini')).toBeInTheDocument();
     });
   });
@@ -396,7 +390,7 @@ describe('EnhancementsSection', () => {
         return Promise.resolve({
           enabled: true,
           provider: 'openai',
-          model: 'gpt-4o-mini',
+          model: 'gpt-5-nano',
           hasApiKey: true,
         });
       }
@@ -415,7 +409,7 @@ describe('EnhancementsSection', () => {
         return Promise.resolve({
           enabled: true,
           provider,
-          model: 'gpt-4o-mini',
+          model: 'gpt-5-nano',
           hasApiKey: provider === 'custom',
         });
       }

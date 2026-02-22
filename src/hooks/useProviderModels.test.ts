@@ -8,8 +8,8 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 const mockModels = [
-  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', recommended: true },
-  { id: 'gpt-4o', name: 'GPT-4o', recommended: false },
+  { id: 'gpt-5-nano', name: 'GPT-5 Nano', recommended: true },
+  { id: 'gpt-5-mini', name: 'GPT-5 Mini', recommended: true },
 ];
 
 describe('useProviderModels', () => {
@@ -125,13 +125,13 @@ describe('useAllProviderModels', () => {
   });
 
   it('manages models for multiple providers', async () => {
-    const anthropicModels = [
-      { id: 'claude-3-5-haiku-latest', name: 'Claude 3.5 Haiku', recommended: true },
+    const geminiModels = [
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', recommended: true },
     ];
     
     (invoke as ReturnType<typeof vi.fn>).mockImplementation((_cmd, args) => {
       if ((args as { provider: string })?.provider === 'openai') return Promise.resolve(mockModels);
-      if ((args as { provider: string })?.provider === 'anthropic') return Promise.resolve(anthropicModels);
+      if ((args as { provider: string })?.provider === 'gemini') return Promise.resolve(geminiModels);
       return Promise.resolve([]);
     });
     
@@ -139,11 +139,11 @@ describe('useAllProviderModels', () => {
     
     await act(async () => {
       await result.current.fetchModels('openai');
-      await result.current.fetchModels('anthropic');
+      await result.current.fetchModels('gemini');
     });
     
     expect(result.current.getModels('openai')).toEqual(mockModels);
-    expect(result.current.getModels('anthropic')).toEqual(anthropicModels);
+    expect(result.current.getModels('gemini')).toEqual(geminiModels);
   });
 
   it('returns empty array for unknown provider', () => {
@@ -170,7 +170,7 @@ describe('useAllProviderModels', () => {
     });
     
     expect(result.current.isLoading('openai')).toBe(true);
-    expect(result.current.isLoading('anthropic')).toBe(false);
+    expect(result.current.isLoading('gemini')).toBe(false);
     
     await act(async () => {
       resolveOpenAI!(mockModels);
@@ -195,7 +195,7 @@ describe('useAllProviderModels', () => {
     });
     
     expect(result.current.getError('openai')).toBe('OpenAI error');
-    expect(result.current.getError('anthropic')).toBeNull();
+    expect(result.current.getError('gemini')).toBeNull();
   });
 
   it('clears models for specific provider', async () => {
