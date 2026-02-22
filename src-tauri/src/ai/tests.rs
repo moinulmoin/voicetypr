@@ -67,7 +67,7 @@ mod tests {
     fn test_ai_provider_config_serialization() {
         let config = AIProviderConfig {
             provider: "openai".to_string(),
-            model: "gpt-4o-mini".to_string(),
+            model: "gpt-5-nano".to_string(),
             api_key: "secret_key".to_string(),
             enabled: true,
             options: HashMap::new(),
@@ -77,7 +77,7 @@ mod tests {
         let serialized = serde_json::to_string(&config).unwrap();
         assert!(!serialized.contains("secret_key"));
         assert!(serialized.contains("openai"));
-        assert!(serialized.contains("gpt-4o-mini"));
+        assert!(serialized.contains("gpt-5-nano"));
     }
 
     #[test]
