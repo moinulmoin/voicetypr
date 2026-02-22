@@ -361,7 +361,7 @@ jobs:
         run: |
           $installer = Get-ChildItem "C:\b\release\bundle\nsis\*.exe" | Select-Object -First 1
           [IO.File]::WriteAllText("$env:TEMP\tauri.key", $env:TAURI_SIGNING_PRIVATE_KEY)
-          pnpm tauri signer sign -f "$env:TEMP\tauri.key" -p "$($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" $installer.FullName
+          pnpm tauri signer sign --private-key-path "$env:TEMP\tauri.key" --password="$($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" "$($installer.FullName)"
           Remove-Item "$env:TEMP\tauri.key"
 
       - name: Stage artifacts for upload
