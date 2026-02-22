@@ -179,13 +179,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
           printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/tauri.key
-          if [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
-            pnpm tauri signer sign -f /tmp/tauri.key -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
-              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz
-          else
-            pnpm tauri signer sign -f /tmp/tauri.key \
-              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz
-          fi
+          pnpm tauri signer sign -f /tmp/tauri.key -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD-}" \
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz
           rm /tmp/tauri.key
 
       - name: Stage artifacts for upload
@@ -282,13 +277,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
           printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/tauri.key
-          if [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
-            pnpm tauri signer sign -f /tmp/tauri.key -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
-              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz
-          else
-            pnpm tauri signer sign -f /tmp/tauri.key \
-              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz
-          fi
+          pnpm tauri signer sign -f /tmp/tauri.key -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD-}" \
+            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz
           rm /tmp/tauri.key
 
       - name: Stage artifacts for upload
@@ -371,11 +361,7 @@ jobs:
         run: |
           $installer = Get-ChildItem "C:\b\release\bundle\nsis\*.exe" | Select-Object -First 1
           [IO.File]::WriteAllText("$env:TEMP\tauri.key", $env:TAURI_SIGNING_PRIVATE_KEY)
-          if ([string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
-            pnpm tauri signer sign -f "$env:TEMP\tauri.key" $installer.FullName
-          } else {
-            pnpm tauri signer sign -f "$env:TEMP\tauri.key" -p "$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD" $installer.FullName
-          }
+          pnpm tauri signer sign -f "$env:TEMP\tauri.key" -p "$($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)" $installer.FullName
           Remove-Item "$env:TEMP\tauri.key"
 
       - name: Stage artifacts for upload
