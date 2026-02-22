@@ -454,7 +454,7 @@ export function EnhancementsSection() {
                 <div className="space-y-2 flex-1">
                   <h3 className="font-medium text-sm">Quick Setup</h3>
                   <ol className="text-sm text-muted-foreground space-y-1.5 list-decimal list-inside">
-                    <li>Choose a provider above (OpenAI, Anthropic, or Google)</li>
+                    <li>Choose a provider above (OpenAI or Google)</li>
                     <li>Click "Add Key" and enter your API key</li>
                     <li>Select a model from the dropdown</li>
                     <li>Toggle "AI Formatting" on to enable</li>

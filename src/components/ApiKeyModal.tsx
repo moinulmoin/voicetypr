@@ -62,8 +62,6 @@ export function ApiKeyModal({
         return 'Gemini';
       case 'openai':
         return 'OpenAI';
-      case 'anthropic':
-        return 'Anthropic';
       case 'soniox':
         return 'Soniox';
       default:
@@ -77,8 +75,6 @@ export function ApiKeyModal({
         return 'https://aistudio.google.com/apikey';
       case 'openai':
         return 'https://platform.openai.com/api-keys';
-      case 'anthropic':
-        return 'https://console.anthropic.com/settings/keys';
       case 'soniox':
         return 'https://soniox.com/docs/stt/get-started';
       default:
