@@ -1,3 +1,6 @@
+use crate::ai::openai::{
+    is_unsupported_token_parameter_error, model_uses_max_completion_tokens,
+};
 use crate::ai::{AIEnhancementRequest, AIProviderConfig, AIProviderFactory, EnhancementOptions};
 use crate::commands::audio::pill_toast;
 use once_cell::sync::Lazy;
@@ -42,6 +45,162 @@ fn normalize_chat_completions_url(base: &str) -> String {
     format!("{}/chat/completions", b)
 }
 
+fn normalize_models_url(base: &str) -> String {
+    let b = base.trim_end_matches('/');
+    format!("{}/models", b)
+}
+
+const OPENAI_PROBE_INITIAL_MAX_TOKENS: u32 = 10;
+const OPENAI_PROBE_FALLBACK_MAX_TOKENS: u32 = 32;
+
+fn is_probe_output_limit_error(error_text: &str) -> bool {
+    let haystack = error_text.to_ascii_lowercase();
+    haystack.contains("output limit was reached")
+        || haystack.contains("higher max_tokens")
+        || haystack.contains("higher max_completion_tokens")
+}
+
+fn build_openai_probe_payload(
+    model: &str,
+    use_max_completion_tokens: bool,
+    max_output_tokens: u32,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "1"}],
+    });
+
+    if let Some(obj) = payload.as_object_mut() {
+        if use_max_completion_tokens {
+            obj.insert(
+                "max_completion_tokens".to_string(),
+                serde_json::json!(max_output_tokens),
+            );
+        } else {
+            obj.insert("max_tokens".to_string(), serde_json::json!(max_output_tokens));
+        }
+    }
+
+    payload
+}
+
+async fn run_openai_probe_request(
+    client: &reqwest::Client,
+    base_url: &str,
+    model: &str,
+    auth_header: Option<&str>,
+    allow_chat_probe_fallback: bool,
+) -> Result<(), String> {
+    let models_url = normalize_models_url(base_url);
+
+    let mut models_req = client.get(&models_url);
+    if let Some(header) = auth_header {
+        models_req = models_req.header("Authorization", header);
+    }
+
+    let models_response = models_req
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    let models_status = models_response.status();
+    let models_body = models_response.text().await.unwrap_or_default();
+
+    if models_status.is_success() {
+        if let Ok(json_body) = serde_json::from_str::<serde_json::Value>(&models_body) {
+            if let Some(data) = json_body.get("data").and_then(|d| d.as_array()) {
+                if !data.is_empty() {
+                    let model_exists = data.iter().any(|entry| {
+                        entry
+                            .get("id")
+                            .and_then(|id| id.as_str())
+                            .is_some_and(|id| id == model)
+                    });
+
+                    if !model_exists {
+                        return Err(format!(
+                            "Model '{}' not found in endpoint model list",
+                            model
+                        ));
+                    }
+                }
+            }
+        }
+
+        return Ok(());
+    }
+
+    if !allow_chat_probe_fallback {
+        let snippet: String = models_body.chars().take(500).collect();
+        return Err(format!("HTTP {}: {}", models_status, snippet));
+    }
+
+    if models_status.as_u16() != 404 && models_status.as_u16() != 405 {
+        let snippet: String = models_body.chars().take(500).collect();
+        return Err(format!("HTTP {}: {}", models_status, snippet));
+    }
+
+    let validate_url = normalize_chat_completions_url(base_url);
+    let mut use_max_completion_tokens = model_uses_max_completion_tokens(model);
+    let mut max_output_tokens = OPENAI_PROBE_INITIAL_MAX_TOKENS;
+
+    for _attempt in 0..4 {
+        let payload = build_openai_probe_payload(model, use_max_completion_tokens, max_output_tokens);
+        let mut req = client
+            .post(&validate_url)
+            .header("Content-Type", "application/json")
+            .json(&payload);
+
+        if let Some(header) = auth_header {
+            req = req.header("Authorization", header);
+        }
+
+        let response = req
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+
+        if status.is_success() {
+            return Ok(());
+        }
+
+        let attempted_parameter = if use_max_completion_tokens {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+
+        if is_unsupported_token_parameter_error(&body, attempted_parameter) {
+            log::warn!(
+                "OpenAI probe parameter '{}' unsupported for model '{}'; retrying with alternate parameter",
+                attempted_parameter,
+                model
+            );
+            use_max_completion_tokens = !use_max_completion_tokens;
+            continue;
+        }
+
+        if max_output_tokens < OPENAI_PROBE_FALLBACK_MAX_TOKENS && is_probe_output_limit_error(&body) {
+            log::warn!(
+                "OpenAI probe hit output limit at {} tokens for model '{}'; retrying with {}",
+                max_output_tokens,
+                model,
+                OPENAI_PROBE_FALLBACK_MAX_TOKENS
+            );
+            max_output_tokens = OPENAI_PROBE_FALLBACK_MAX_TOKENS;
+            continue;
+        }
+
+        let snippet: String = body.chars().take(500).collect();
+        return Err(format!("HTTP {}: {}", status, snippet));
+    }
+
+    Err("OpenAI-compatible probe failed after token parameter fallback".to_string())
+}
+
 // removed unused validate_api_key helper
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,7 +218,7 @@ lazy_static::lazy_static! {
 }
 
 // Supported AI providers
-const ALLOWED_PROVIDERS: &[&str] = &["gemini", "openai", "anthropic", "custom"];
+const ALLOWED_PROVIDERS: &[&str] = &["gemini", "openai", "custom"];
 
 fn validate_provider_name(provider: &str) -> Result<(), String> {
     // First check format
@@ -226,7 +385,11 @@ pub async fn validate_and_cache_api_key(
     validate_provider_name(&provider)?;
 
     let provided_key = api_key.clone().unwrap_or_default();
-    let inferred_no_auth = no_auth.unwrap_or(false) || provided_key.trim().is_empty();
+    let inferred_no_auth = if provider == "custom" {
+        no_auth.unwrap_or(false) || provided_key.trim().is_empty()
+    } else {
+        false
+    };
 
     if provider == "openai" || provider == "custom" {
         let store = app.store("settings").map_err(|e| e.to_string())?;
@@ -275,45 +438,39 @@ pub async fn validate_and_cache_api_key(
                 }
             })
             .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
-        let validate_url = normalize_chat_completions_url(&base);
+        let validate_model = model.clone().unwrap_or_else(|| "gpt-5-nano".to_string());
+        let allow_chat_probe_fallback = provider == "custom";
 
         let client = reqwest::Client::new();
-        let mut req = client
-            .post(&validate_url)
-            .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "model": model.clone().unwrap_or_else(|| "gpt-5-nano".to_string()),
-                "messages": [{"role": "user", "content": "1"}],
-                "max_tokens": 1,
-                "temperature": 0
-            }));
-
-        if !inferred_no_auth {
+        let auth_header = if inferred_no_auth {
+            None
+        } else {
             let key = provided_key.trim();
             if key.is_empty() {
                 return Err(
-                    "API key is required (leave empty to use no authentication)".to_string()
+                    "API key is required (leave empty to use no authentication)".to_string(),
                 );
             }
-            req = req.header("Authorization", format!("Bearer {}", key));
-        }
+            Some(format!("Bearer {}", key))
+        };
 
-        let response = req
-            .send()
+        run_openai_probe_request(
+            &client,
+            &base,
+            &validate_model,
+            auth_header.as_deref(),
+            allow_chat_probe_fallback,
+        )
             .await
-            .map_err(|e| format!("Network error: {}", e))?;
-
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            let snippet: String = body.chars().take(500).collect();
-            log::error!(
-                "OpenAI-compatible validate failed: status={} body_snippet={}",
-                status,
-                snippet
-            );
-            return Err(format!("HTTP {}: {}", status, snippet));
-        }
+            .map_err(|error| {
+                log::error!(
+                    "OpenAI-compatible validate failed: base_url={} model={} error={}",
+                    base,
+                    validate_model,
+                    error
+                );
+                error
+            })?;
     } else {
         return Err("Unsupported provider".to_string());
     }
@@ -343,46 +500,28 @@ pub async fn test_openai_endpoint(
             .map(|s| s.trim().is_empty())
             .unwrap_or(true);
 
-    let validate_url = normalize_chat_completions_url(&base_url);
-
     let client = reqwest::Client::new();
-    let mut req = client
-        .post(&validate_url)
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "model": model,
-            "messages": [{"role": "user", "content": "1"}],
-            "max_tokens": 1,
-            "temperature": 0
-        }));
-
-    if !no_auth {
+    let auth_header = if no_auth {
+        None
+    } else {
         let key = api_key.unwrap_or_default();
         if key.trim().is_empty() {
             return Err("API key is required (leave empty to use no authentication)".to_string());
         }
-        req = req.header("Authorization", format!("Bearer {}", key));
-    }
+        Some(format!("Bearer {}", key.trim()))
+    };
 
-    let response = req
-        .send()
+    run_openai_probe_request(&client, &base_url, &model, auth_header.as_deref(), true)
         .await
-        .map_err(|e| format!("Network error: {}", e))?;
-
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if status.is_success() {
-        Ok(())
-    } else {
-        let snippet: String = body.chars().take(500).collect();
-        log::error!(
-            "OpenAI-compatible test failed: url={} status={} body_snippet={}",
-            validate_url,
-            status,
-            snippet
-        );
-        Err(format!("HTTP {}: {}", status, snippet))
-    }
+        .map_err(|error| {
+            log::error!(
+                "OpenAI-compatible test failed: base_url={} model={} error={}",
+                base_url,
+                model,
+                error
+            );
+            error
+        })
 }
 
 // Frontend is responsible for removing API keys from Stronghold
@@ -686,7 +825,7 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
         opts.insert("no_auth".into(), serde_json::Value::Bool(cached.is_none()));
 
         ("openai".to_string(), cached.unwrap_or_default(), opts)
-    } else if provider == "gemini" || provider == "anthropic" {
+    } else if provider == "gemini" {
         // Require API key from in-memory cache
         let cache = API_KEY_CACHE
             .lock()
@@ -845,13 +984,6 @@ const OPENAI_MODELS: &[(&str, &str, bool)] = &[
     ("gpt-5-mini", "GPT-5 Mini", true),
 ];
 
-/// Curated list of Anthropic Claude models for text formatting
-/// Using Claude 4.5 Haiku/Sonnet - fast and balanced options
-const ANTHROPIC_MODELS: &[(&str, &str, bool)] = &[
-    ("claude-haiku-4-5-latest", "Claude 4.5 Haiku", true),
-    ("claude-sonnet-4-5-latest", "Claude 4.5 Sonnet", true),
-];
-
 /// Curated list of Google Gemini models for text formatting
 /// Using Flash variants - optimized for speed and cost
 const GEMINI_MODELS: &[(&str, &str, bool)] = &[
@@ -864,7 +996,6 @@ const GEMINI_MODELS: &[(&str, &str, bool)] = &[
 fn get_curated_models(provider: &str) -> Vec<ProviderModel> {
     let models: &[(&str, &str, bool)] = match provider {
         "openai" => OPENAI_MODELS,
-        "anthropic" => ANTHROPIC_MODELS,
         "gemini" => GEMINI_MODELS,
         _ => return vec![],
     };
@@ -887,7 +1018,7 @@ pub async fn list_provider_models(
     _app: tauri::AppHandle,
 ) -> Result<Vec<ProviderModel>, String> {
     // Validate provider
-    if !["openai", "anthropic", "gemini"].contains(&provider.as_str()) {
+    if !["openai", "gemini"].contains(&provider.as_str()) {
         return Err(format!(
             "Unsupported provider for model listing: {}",
             provider
@@ -913,7 +1044,6 @@ mod tests {
         // Valid providers
         assert!(validate_provider_name("gemini").is_ok());
         assert!(validate_provider_name("openai").is_ok());
-        assert!(validate_provider_name("anthropic").is_ok());
         assert!(validate_provider_name("custom").is_ok());
 
         // Groq is no longer supported
@@ -934,16 +1064,6 @@ mod tests {
         assert_eq!(openai_models.len(), 2);
         assert!(openai_models.iter().any(|m| m.id == "gpt-5-nano"));
         assert!(openai_models.iter().any(|m| m.id == "gpt-5-mini"));
-
-        // Anthropic models
-        let anthropic_models = get_curated_models("anthropic");
-        assert_eq!(anthropic_models.len(), 2);
-        assert!(anthropic_models
-            .iter()
-            .any(|m| m.id == "claude-haiku-4-5-latest"));
-        assert!(anthropic_models
-            .iter()
-            .any(|m| m.id == "claude-sonnet-4-5-latest"));
 
         // Gemini models
         let gemini_models = get_curated_models("gemini");
