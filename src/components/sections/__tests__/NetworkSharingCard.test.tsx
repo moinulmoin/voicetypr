@@ -115,11 +115,11 @@ describe("NetworkSharingCard", () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByText("No model downloaded")).toBeInTheDocument();
+        expect(screen.getByText("No local model downloaded")).toBeInTheDocument();
       });
 
       expect(
-        screen.getByText(/Download a transcription model in the Models tab/)
+        screen.getByText(/Download a local Whisper or Parakeet model in the Models tab/)
       ).toBeInTheDocument();
     });
 
@@ -195,8 +195,138 @@ describe("NetworkSharingCard", () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.queryByText("No model downloaded")).not.toBeInTheDocument();
+        expect(screen.queryByText("No local model downloaded")).not.toBeInTheDocument();
       });
+    });
+  });
+
+
+  describe("when only cloud models are available", () => {
+    beforeEach(() => {
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "soniox",
+              auto_insert: true,
+              launch_at_startup: false,
+            });
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: false,
+              port: null,
+              model_name: null,
+              server_name: null,
+              active_connections: 0,
+            });
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({
+              models: [
+                {
+                  name: "soniox",
+                  display_name: "Soniox (Cloud)",
+                  downloaded: true,
+                  kind: "cloud",
+                  engine: "soniox",
+                },
+              ],
+            });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+    });
+
+    it("keeps network sharing disabled for cloud-only models", async () => {
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByRole("switch")).toBeDisabled();
+      });
+
+      expect(screen.getByText("Soniox (Cloud) can't be shared over the network")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Only local Whisper or Parakeet models can be shared over the network. Select a local model in the Models tab to enable network sharing.",
+        ),
+      ).toBeInTheDocument();
+    });
+  });
+
+  describe("when a cloud model is selected but local sharing is available", () => {
+    beforeEach(() => {
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "soniox",
+              auto_insert: true,
+              launch_at_startup: false,
+            });
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: false,
+              port: null,
+              model_name: null,
+              server_name: null,
+              active_connections: 0,
+            });
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({
+              models: [
+                {
+                  name: "large-v3-turbo",
+                  display_name: "Large v3 Turbo",
+                  downloaded: true,
+                  kind: "local",
+                  engine: "whisper",
+                },
+                {
+                  name: "soniox",
+                  display_name: "Soniox (Cloud)",
+                  downloaded: true,
+                  kind: "cloud",
+                  engine: "soniox",
+                },
+              ],
+            });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+    });
+
+    it("keeps the toggle disabled and only describes local models as shareable", async () => {
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByRole("switch")).toBeDisabled();
+      });
+
+      expect(screen.getByText("Soniox (Cloud) can't be shared over the network")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Only local Whisper or Parakeet models can be shared over the network. Select a local model in the Models tab to enable network sharing.",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          "When enabled, other VoiceTypr instances on your network can use your Large v3 Turbo model for transcription.",
+        ),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText("Large v3 Turbo")).not.toBeInTheDocument();
     });
   });
 

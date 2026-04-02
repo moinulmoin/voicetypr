@@ -16,7 +16,6 @@ use crate::remote::client::{RemoteClientError, RemoteEndpoint};
 use crate::remote::server::StatusResponse;
 use crate::remote::settings::{ConnectionStatus, RemoteSettings, SavedConnection};
 
-
 #[test]
 fn test_normalize_loaded_active_remote_status_preserves_last_checked() {
     let mut settings = RemoteSettings::default();
@@ -92,6 +91,67 @@ fn test_normalize_loaded_active_remote_status_clears_orphaned_active_id() {
     normalize_loaded_active_remote_status(&mut settings);
 
     assert!(settings.active_connection_id.is_none());
+}
+
+#[test]
+fn test_startup_sharing_restore_decision_allows_restore_when_active_remote_is_cleared() {
+    let mut settings = RemoteSettings::default();
+    settings.server_config.enabled = true;
+
+    assert_eq!(
+        crate::startup_sharing_restore_decision(&settings),
+        crate::StartupSharingRestoreDecision::Restore
+    );
+}
+
+#[test]
+fn test_startup_sharing_restore_decision_skips_when_active_remote_remains() {
+    let mut settings = RemoteSettings::default();
+    settings.server_config.enabled = true;
+    settings.active_connection_id = Some("remote-123".to_string());
+
+    assert_eq!(
+        crate::startup_sharing_restore_decision(&settings),
+        crate::StartupSharingRestoreDecision::SkipActiveRemote {
+            active_id: "remote-123".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_startup_sharing_restore_decision_skips_when_sharing_disabled() {
+    let settings = RemoteSettings::default();
+
+    assert_eq!(
+        crate::startup_sharing_restore_decision(&settings),
+        crate::StartupSharingRestoreDecision::SkipDisabled
+    );
+}
+
+#[test]
+fn test_startup_sharing_restore_decision_restores_after_orphaned_active_remote_is_reconciled() {
+    let mut settings = RemoteSettings::default();
+    settings.server_config.enabled = true;
+
+    let conn = settings.add_connection(
+        "192.168.1.103".to_string(),
+        47842,
+        None,
+        Some("Remote".to_string()),
+        None,
+    );
+    let conn_id = conn.id.clone();
+    settings
+        .set_active_connection(Some(conn_id.clone()))
+        .unwrap();
+    settings.remove_connection(&conn_id).unwrap();
+
+    normalize_loaded_active_remote_status(&mut settings);
+
+    assert_eq!(
+        crate::startup_sharing_restore_decision(&settings),
+        crate::StartupSharingRestoreDecision::Restore
+    );
 }
 
 #[test]
@@ -180,7 +240,6 @@ fn test_apply_server_update_errors_when_connection_disappears_before_apply() {
     assert_eq!(error, format!("Server '{}' not found", conn_id));
     assert!(settings.get_connection(&conn_id).is_none());
 }
-
 
 // ============================================================================
 // Constants Tests

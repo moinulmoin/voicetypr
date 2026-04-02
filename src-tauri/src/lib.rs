@@ -388,111 +388,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             app.manage(AsyncMutex::new(remote_settings));
             log::info!("🌐 Remote transcription state initialized ({} saved connections)", connection_count);
 
-            // Auto-start network sharing if it was enabled before app closed
-            // BUT only if no remote server is active (can't share and use remote at same time)
-            if sharing_was_enabled && active_id.is_none() {
-                let app_handle_for_sharing = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-
-                    log::info!("🌐 [STARTUP] Auto-starting network sharing (was enabled before shutdown)");
-
-                    let server_manager = app_handle_for_sharing.state::<AsyncMutex<crate::remote::lifecycle::RemoteServerManager>>();
-                    let whisper_manager = app_handle_for_sharing.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
-                    let remote_state = app_handle_for_sharing.state::<AsyncMutex<crate::remote::settings::RemoteSettings>>();
-
-                    let refreshed_remote_settings = {
-                        let settings = remote_state.lock().await;
-                        settings.clone()
-                    };
-
-                    if !refreshed_remote_settings.server_config.enabled {
-                        log::info!("🌐 [STARTUP] Skipping network sharing auto-start: sharing was disabled during startup delay");
-                        return;
-                    }
-
-                    if refreshed_remote_settings.active_connection_id.is_some() {
-                        log::info!(
-                            "🌐 [STARTUP] Skipping network sharing auto-start: remote server became active during startup delay (id={:?})",
-                            refreshed_remote_settings.active_connection_id
-                        );
-                        return;
-                    }
-
-                    let restore_port = refreshed_remote_settings.server_config.port;
-                    let restore_password = refreshed_remote_settings.server_config.password.clone();
-
-                    let result = async {
-                        let server_name = hostname::get()
-                            .ok()
-                            .and_then(|h| h.into_string().ok())
-                            .unwrap_or_else(|| "VoiceTypr Server".to_string());
-
-                        let store = app_handle_for_sharing
-                            .store("settings")
-                            .map_err(|e| format!("Failed to access store: {}", e))?;
-
-                        let stored_model = store
-                            .get("current_model")
-                            .and_then(|v| v.as_str().map(|s| s.to_string()))
-                            .unwrap_or_default();
-
-                        let stored_engine = store
-                            .get("current_model_engine")
-                            .and_then(|v| v.as_str().map(|s| s.to_string()))
-                            .unwrap_or_else(|| "whisper".to_string());
-
-                        let model_name = if stored_model.is_empty() {
-                            let wm = whisper_manager.read().await;
-                            wm.get_first_downloaded_model()
-                                .ok_or("No model downloaded")?
-                        } else {
-                            stored_model
-                        };
-
-                        let (model_path, validated_engine) = match crate::commands::remote::resolve_shareable_model_config(
-                            &app_handle_for_sharing,
-                            &model_name,
-                            &stored_engine,
-                        ).await {
-                            Ok(config) => config,
-                            Err(e) => {
-                                let mut settings = remote_state.lock().await;
-                                settings.server_config.enabled = false;
-                                settings.sharing_was_active = false;
-                                let _ = crate::commands::remote::save_remote_settings(&app_handle_for_sharing, &settings);
-                                return Err(e);
-                            }
-                        };
-
-                        let mut manager = server_manager.lock().await;
-                        manager
-                            .start(
-                                restore_port,
-                                restore_password,
-                                server_name,
-                                model_path,
-                                model_name,
-                                validated_engine,
-                                Some(app_handle_for_sharing.clone()),
-                            )
-                            .await?;
-
-                        Ok::<(), String>(())
-                    }.await;
-
-                    match result {
-                        Ok(()) => log::info!("🌐 [STARTUP] Network sharing auto-started successfully on port {}", restore_port),
-                        Err(e) => log::warn!("🌐 [STARTUP] Failed to auto-start network sharing: {}", e),
-                    }
-                });
-            } else if sharing_was_enabled && active_id.is_some() {
-                log::info!(
-                    "🌐 [STARTUP] Skipping network sharing auto-start: remote server is active (id={:?})",
-                    active_id
-                );
-            }
-
             // Initialize unified application state
             app.manage(AppState::new());
             log::info!("🧠 App state managed and ready");
@@ -1323,6 +1218,129 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StartupSharingRestoreDecision {
+    Restore,
+    SkipDisabled,
+    SkipActiveRemote { active_id: String },
+}
+
+pub(crate) fn startup_sharing_restore_decision(
+    settings: &crate::remote::settings::RemoteSettings,
+) -> StartupSharingRestoreDecision {
+    if !settings.server_config.enabled {
+        StartupSharingRestoreDecision::SkipDisabled
+    } else if let Some(active_id) = settings.active_connection_id.clone() {
+        StartupSharingRestoreDecision::SkipActiveRemote { active_id }
+    } else {
+        StartupSharingRestoreDecision::Restore
+    }
+}
+
+async fn restore_startup_persisted_sharing(app: tauri::AppHandle) {
+    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+
+    let remote_state = app.state::<AsyncMutex<crate::remote::settings::RemoteSettings>>();
+    let refreshed_remote_settings = {
+        let settings = remote_state.lock().await;
+        settings.clone()
+    };
+
+    match startup_sharing_restore_decision(&refreshed_remote_settings) {
+        StartupSharingRestoreDecision::SkipDisabled => {
+            log::info!("🌐 [STARTUP] Skipping network sharing auto-start: sharing was disabled during startup delay");
+            return;
+        }
+        StartupSharingRestoreDecision::SkipActiveRemote { active_id } => {
+            log::info!(
+                "🌐 [STARTUP] Skipping network sharing auto-start: remote server became active during startup delay (id={:?})",
+                active_id
+);
+            return;
+        }
+        StartupSharingRestoreDecision::Restore => {}
+    }
+
+    log::info!("🌐 [STARTUP] Auto-starting network sharing (was enabled before shutdown)");
+
+    let server_manager = app.state::<AsyncMutex<crate::remote::lifecycle::RemoteServerManager>>();
+    let whisper_manager = app.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
+    let remote_state = app.state::<AsyncMutex<crate::remote::settings::RemoteSettings>>();
+    let restore_port = refreshed_remote_settings.server_config.port;
+    let restore_password = refreshed_remote_settings.server_config.password.clone();
+
+    let result = async {
+        let server_name = hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "VoiceTypr Server".to_string());
+
+        let store = app
+            .store("settings")
+            .map_err(|e| format!("Failed to access store: {}", e))?;
+
+        let stored_model = store
+            .get("current_model")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+
+        let stored_engine = store
+            .get("current_model_engine")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "whisper".to_string());
+
+        let model_name = if stored_model.is_empty() {
+            let wm = whisper_manager.read().await;
+            wm.get_first_downloaded_model()
+                .ok_or("No model downloaded")?
+        } else {
+            stored_model
+        };
+
+        let (model_path, validated_engine) =
+            match crate::commands::remote::resolve_shareable_model_config(
+                &app,
+                &model_name,
+                &stored_engine,
+            )
+            .await
+            {
+                Ok(config) => config,
+                Err(e) => {
+                    let mut settings = remote_state.lock().await;
+                    settings.server_config.enabled = false;
+                    settings.sharing_was_active = false;
+                    let _ = crate::commands::remote::save_remote_settings(&app, &settings);
+                    return Err(e);
+                }
+            };
+
+        let mut manager = server_manager.lock().await;
+        manager
+            .start(
+                restore_port,
+                restore_password,
+                server_name,
+                model_path,
+                model_name,
+                validated_engine,
+                Some(app.clone()),
+            )
+            .await?;
+
+        Ok::<(), String>(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => log::info!(
+            "🌐 [STARTUP] Network sharing auto-started successfully on port {}",
+            restore_port
+        ),
+        Err(e) => log::warn!("🌐 [STARTUP] Failed to auto-start network sharing: {}", e),
+    }
+}
+
 /// Perform essential startup checks
 async fn perform_startup_checks(app: tauri::AppHandle) {
     let checks_start = Instant::now();
@@ -1340,21 +1358,30 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         );
     }
 
-    if let Some(remote_settings) =
-        app.try_state::<AsyncMutex<crate::remote::settings::RemoteSettings>>()
-    {
-        if let Err(err) = crate::commands::remote::refresh_active_remote_server_status_impl(
-            &app,
-            &*remote_settings,
-        )
-        .await
+    let startup_sharing_restore_decision_after_reconciliation =
+        if let Some(remote_settings) =
+            app.try_state::<AsyncMutex<crate::remote::settings::RemoteSettings>>()
         {
-            log::warn!(
-                "Failed to refresh active remote status during startup checks: {}",
-                err
-            );
-        }
-    }
+            if let Err(err) = crate::commands::remote::refresh_active_remote_server_status_impl(
+                &app,
+                &*remote_settings,
+            )
+            .await
+            {
+                log::warn!(
+                    "Failed to refresh active remote status during startup checks: {}",
+                    err
+);
+            }
+
+            Some({
+                let settings = remote_settings.lock().await;
+                startup_sharing_restore_decision(&settings)
+            })
+        } else {
+            None
+        };
+
 
     let availability = crate::recognition::emit_recognition_availability(&app).await;
 
@@ -1401,6 +1428,29 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
     } else {
         log::info!("✅ At least one speech recognition engine is ready");
     }
+
+    if let Some(startup_sharing_restore_decision) =
+        startup_sharing_restore_decision_after_reconciliation
+    {
+        match startup_sharing_restore_decision {
+            StartupSharingRestoreDecision::Restore => {
+                let app_handle_for_sharing = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    restore_startup_persisted_sharing(app_handle_for_sharing).await;
+                });
+            }
+            StartupSharingRestoreDecision::SkipDisabled => {
+                log::info!("🌐 [STARTUP] Skipping network sharing auto-start: sharing was disabled during startup checks");
+            }
+            StartupSharingRestoreDecision::SkipActiveRemote { active_id } => {
+                log::info!(
+                    "🌐 [STARTUP] Skipping network sharing auto-start: remote server is active (id={:?})",
+                    active_id
+);
+            }
+        }
+    }
+
 
     // Validate AI settings if enabled
     if let Ok(store) = app.store("settings") {

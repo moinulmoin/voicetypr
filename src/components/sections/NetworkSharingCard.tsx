@@ -36,10 +36,17 @@ interface ModelInfo {
   name: string;
   display_name: string;
   downloaded: boolean;
+  requires_setup?: boolean;
+  kind?: "local" | "cloud";
+  engine?: "whisper" | "parakeet" | "soniox";
 }
 
 interface ModelStatusResponse {
   models: ModelInfo[];
+}
+
+function isShareableLocalModel(model: ModelInfo) {
+  return model.downloaded && !model.requires_setup && model.kind !== "cloud" && model.engine !== "soniox";
 }
 
 export function NetworkSharingCard() {
@@ -66,8 +73,7 @@ export function NetworkSharingCard() {
   const [loading, setLoading] = useState(false);
   const [savingPort, setSavingPort] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
-  const [modelDisplayName, setModelDisplayName] = useState<string | null>(null);
-  const [hasDownloadedModel, setHasDownloadedModel] = useState<boolean>(true);
+  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
   const [activeRemoteServer, setActiveRemoteServer] = useState<string | null>(null);
   const [firewallStatus, setFirewallStatus] = useState<FirewallStatus | null>(null);
 
@@ -83,6 +89,14 @@ export function NetworkSharingCard() {
   }, [savingPassword]);
 
   const currentModel = settings?.current_model;
+  const selectedModel = currentModel
+    ? availableModels.find((model) => model.name === currentModel) ?? null
+    : null;
+  const selectedModelCanBeShared = selectedModel ? isShareableLocalModel(selectedModel) : false;
+  const selectedModelLabel = selectedModel?.display_name ?? currentModel ?? null;
+  const sharedModelLabel = status.model_name
+    ? availableModels.find((model) => model.name === status.model_name)?.display_name ?? status.model_name
+    : null;
 
   const committedSharingPort = status.port?.toString() ?? savedPort;
 
@@ -173,29 +187,16 @@ export function NetworkSharingCard() {
   );
 
 
-  // Fetch available model info and get display name for current selection
+  // Fetch available model info
   const fetchModelInfo = useCallback(async () => {
     try {
       const response = await invoke<ModelStatusResponse>("get_model_status");
-      const models = response.models || [];
-      const downloaded = models.filter((m) => m.downloaded);
-      setHasDownloadedModel(downloaded.length > 0);
-
-      // Find display name for the currently selected model
-      if (currentModel && downloaded.length > 0) {
-        const selected = downloaded.find((m) => m.name === currentModel);
-        setModelDisplayName(selected?.display_name || currentModel);
-      } else if (downloaded.length > 0) {
-        // Fallback to first downloaded model
-        setModelDisplayName(downloaded[0].display_name);
-      } else {
-        setModelDisplayName(null);
-      }
+      setAvailableModels(response.models || []);
     } catch (error) {
       console.error("Failed to get model status:", error);
-      setHasDownloadedModel(false);
+      setAvailableModels([]);
     }
-  }, [currentModel]);
+  }, []);
 
   // Fetch status, model info, remote server state, and firewall status on mount
   useEffect(() => {
@@ -254,8 +255,8 @@ export function NetworkSharingCard() {
   // Auto-restart sharing when model selection changes
   useEffect(() => {
     const autoRestartSharing = async () => {
-      // Only auto-restart if sharing is enabled and model has changed
-      if (!status.enabled || !status.model_name || !currentModel) return;
+      // Only auto-restart if sharing is enabled, the shared model changed, and the selected model can actually be shared
+      if (!status.enabled || !status.model_name || !currentModel || !selectedModelCanBeShared) return;
       if (status.model_name === currentModel) return;
 
       const { port: committedPort, password: committedPassword } = committedSharingConfigRef.current;
@@ -271,7 +272,7 @@ export function NetworkSharingCard() {
     };
 
     autoRestartSharing();
-  }, [currentModel, status.enabled, status.model_name, restartSharing]);
+  }, [currentModel, selectedModelCanBeShared, status.enabled, status.model_name, restartSharing]);
 
   const handleToggleSharing = async (checked: boolean) => {
     setLoading(true);
@@ -386,22 +387,26 @@ export function NetworkSharingCard() {
             id="network-sharing"
             checked={status.enabled}
             onCheckedChange={handleToggleSharing}
-            disabled={loading || (!status.enabled && (!hasDownloadedModel || !!activeRemoteServer))}
+            disabled={loading || (!status.enabled && (!selectedModelCanBeShared || !!activeRemoteServer))}
           />
         </div>
       </div>
 
-      {/* Warning if no model downloaded */}
-      {!hasDownloadedModel && !status.enabled && (
+      {/* Warning when the selected model can't be shared */}
+      {!selectedModelCanBeShared && !status.enabled && (
         <div className="px-4 py-3">
           <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
             <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
             <div>
               <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
-                No model downloaded
+                {selectedModelLabel
+                  ? `${selectedModelLabel} can't be shared over the network`
+                  : "No local model downloaded"}
               </p>
               <p className="text-xs text-amber-600 dark:text-amber-500">
-                Download a transcription model in the Models tab to enable network sharing.
+                {selectedModelLabel
+                  ? "Only local Whisper or Parakeet models can be shared over the network. Select a local model in the Models tab to enable network sharing."
+                  : "Download a local Whisper or Parakeet model in the Models tab to enable network sharing."}
               </p>
             </div>
           </div>
@@ -425,12 +430,12 @@ export function NetworkSharingCard() {
         </div>
       )}
 
-      {/* Model info when disabled but model available - hide when using remote server */}
-      {hasDownloadedModel && !status.enabled && modelDisplayName && !activeRemoteServer && (
+      {/* Model info when disabled and the selected model is shareable */}
+      {selectedModelCanBeShared && !status.enabled && selectedModelLabel && !activeRemoteServer && (
         <div className="px-4 py-3">
           <p className="text-xs text-muted-foreground">
             When enabled, other VoiceTypr instances on your network can use your{" "}
-            <span className="font-medium text-foreground">{modelDisplayName}</span>{" "}
+            <span className="font-medium text-foreground">{selectedModelLabel}</span>{" "}
             model for transcription.
           </p>
         </div>
@@ -448,9 +453,7 @@ export function NetworkSharingCard() {
                   Sharing Active
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {modelDisplayName
-                    ? `Model: ${modelDisplayName}`
-                    : "No model selected"}
+                  {sharedModelLabel ? `Model: ${sharedModelLabel}` : "No model selected"}
                 </p>
               </div>
             </div>

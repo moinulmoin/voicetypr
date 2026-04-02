@@ -197,10 +197,8 @@ export function useModelAvailability() {
 
   useEffect(() => {
     const handleFocus = () => {
-      const { remoteSelected, remoteStatus } = remoteStateRef.current;
-      if (remoteSelected && remoteStatus !== 'online') {
-        void invoke('refresh_active_remote_server_status');
-      }
+      const { remoteSelected } = remoteStateRef.current;
+      if (remoteSelected) { void invoke('refresh_active_remote_server_status'); }
     };
 
     window.addEventListener('focus', handleFocus);

@@ -271,6 +271,56 @@ describe('RecentRecordings re-transcription', () => {
     expect(screen.queryByTitle('Re-transcribe')).not.toBeInTheDocument();
   });
 
+  it('keeps the latest verification result when history changes mid-flight', async () => {
+    const onHistoryUpdate = vi.fn();
+    const oldVerification = createDeferred<boolean>();
+
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      switch (cmd) {
+        case 'check_recording_exists':
+          if (args?.filename === 'old.wav') {
+            return oldVerification.promise;
+          }
+
+          if (args?.filename === 'new.wav') {
+            return true;
+          }
+
+          return true;
+        case 'get_model_status':
+          return {
+            models: [{ name: 'small.en', downloaded: true, engine: 'whisper' }],
+          };
+        case 'list_remote_servers':
+          return [];
+        default:
+          return null;
+      }
+    });
+
+    const { rerender } = render(
+      <RecentRecordings
+        history={[{ ...historyItem, id: 'old-row', recording_file: 'old.wav', status: 'failed', text: 'Old result' }]}
+        onHistoryUpdate={onHistoryUpdate}
+      />
+    );
+
+    rerender(
+      <RecentRecordings
+        history={[{ ...historyItem, id: 'new-row', recording_file: 'new.wav', status: 'failed', text: 'New result' }]}
+        onHistoryUpdate={onHistoryUpdate}
+      />
+    );
+
+    expect(await screen.findByText('Transcription failed - recording preserved')).toBeInTheDocument();
+
+    oldVerification.resolve(false);
+
+    await waitFor(() => {
+      expect(screen.getByText('Transcription failed - recording preserved')).toBeInTheDocument();
+    });
+  });
+
 });
 
 it('shows Soniox as a cloud retranscription source when configured', async () => {

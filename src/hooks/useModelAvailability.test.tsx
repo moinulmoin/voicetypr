@@ -202,12 +202,21 @@ describe('useModelAvailability', () => {
     });
   });
 
-  it('refreshes the active remote only when it is selected and not already online', async () => {
+  it('refreshes the active remote on focus even after a cached online snapshot', async () => {
     const { result } = renderHook(() => useModelAvailability());
 
     await waitFor(() => {
       expect(result.current.remoteSelected).toBe(true);
       expect(result.current.remoteStatus).toBe('unknown');
+    });
+
+    act(() => {
+      emitTauriEvent('recognition-availability', onlineRemoteSnapshot);
+    });
+
+    await waitFor(() => {
+      expect(result.current.remoteStatus).toBe('online');
+      expect(result.current.remoteAvailable).toBe(true);
     });
 
     mockInvoke.mockClear();
@@ -219,16 +228,35 @@ describe('useModelAvailability', () => {
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('refresh_active_remote_server_status');
     });
+  });
 
-    mockInvoke.mockClear();
+  it('does not refresh on focus when no remote is selected', async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'get_model_status') {
+        return Promise.resolve({ models: [] });
+      }
 
-    act(() => {
-      emitTauriEvent('recognition-availability', onlineRemoteSnapshot);
+      if (command === 'get_recognition_availability_snapshot') {
+        return Promise.resolve({
+          ...unknownRemoteSnapshot,
+          remote_selected: false,
+        });
+      }
+
+      if (command === 'refresh_active_remote_server_status') {
+        return Promise.resolve(null);
+      }
+
+      return Promise.resolve(null);
     });
+
+    const { result } = renderHook(() => useModelAvailability());
 
     await waitFor(() => {
-      expect(result.current.remoteStatus).toBe('online');
+      expect(result.current.remoteSelected).toBe(false);
     });
+
+    mockInvoke.mockClear();
 
     act(() => {
       window.dispatchEvent(new Event('focus'));
@@ -236,4 +264,5 @@ describe('useModelAvailability', () => {
 
     expect(mockInvoke).not.toHaveBeenCalledWith('refresh_active_remote_server_status');
   });
+
 });

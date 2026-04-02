@@ -368,11 +368,16 @@ pub(crate) fn apply_server_update(
     let (model, status) = match probe_result {
         Ok(status_response) => {
             if is_self_connection(local_machine_id, &status_response.machine_id) {
-                return Err("Cannot use this VoiceTypr instance as its own remote server".to_string());
+                return Err(
+                    "Cannot use this VoiceTypr instance as its own remote server".to_string(),
+                );
             }
             (Some(status_response.model), ConnectionStatus::Online)
         }
-        Err(error) => (current.model.clone(), connection_status_for_remote_error(&error)),
+        Err(error) => (
+            current.model.clone(),
+            connection_status_for_remote_error(&error),
+        ),
     };
 
     {
@@ -427,7 +432,6 @@ fn ensure_remote_selection_is_allowed(
 
     Ok(())
 }
-
 
 /// Update an existing remote server connection
 #[tauri::command]
@@ -1499,7 +1503,6 @@ mod tests {
 
         assert_eq!(settings.active_connection_id, Some(conn_b.id));
     }
-
 
     #[test]
     fn test_start_sharing_is_blocked_when_remote_server_is_active() {

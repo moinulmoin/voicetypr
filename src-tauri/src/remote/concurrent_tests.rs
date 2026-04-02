@@ -136,46 +136,54 @@ mod tests {
     /// - Host starts local transcription
     /// - Remote client sends request at same time
     /// - Both should complete, with one waiting for the other
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_concurrent_transcription_requests_serialize() {
         // Use 100ms delay to make timing measurable
         let ctx = Arc::new(RwLock::new(DelayedMockContext::new(100)));
         let (addr, shutdown_tx, handle) = start_test_server(ctx.clone()).await;
 
-        let client = reqwest::Client::new();
         let url = format!("http://{}/api/v1/transcribe", addr);
-
-        // Create test audio data
         let audio_data = vec![0u8; 1000];
+        let start_gate = Arc::new(tokio::sync::Barrier::new(3));
 
-        // Start two concurrent requests
+        let req1 = {
+            let client = reqwest::Client::new();
+            let url = url.clone();
+            let audio = audio_data.clone();
+            let gate = start_gate.clone();
+
+            tokio::spawn(async move {
+                gate.wait().await;
+                client
+                    .post(&url)
+                    .header("Content-Type", "audio/wav")
+                    .body(audio)
+                    .timeout(Duration::from_secs(10))
+                    .send()
+                    .await
+            })
+        };
+
+        let req2 = {
+            let client = reqwest::Client::new();
+            let url = url.clone();
+            let audio = audio_data.clone();
+            let gate = start_gate.clone();
+
+            tokio::spawn(async move {
+                gate.wait().await;
+                client
+                    .post(&url)
+                    .header("Content-Type", "audio/wav")
+                    .body(audio)
+                    .timeout(Duration::from_secs(10))
+                    .send()
+                    .await
+            })
+        };
+
         let start = Instant::now();
-
-        let client1 = client.clone();
-        let url1 = url.clone();
-        let audio1 = audio_data.clone();
-        let req1 = tokio::spawn(async move {
-            client1
-                .post(&url1)
-                .header("Content-Type", "audio/wav")
-                .body(audio1)
-                .timeout(Duration::from_secs(10))
-                .send()
-                .await
-        });
-
-        let client2 = client.clone();
-        let url2 = url.clone();
-        let audio2 = audio_data.clone();
-        let req2 = tokio::spawn(async move {
-            client2
-                .post(&url2)
-                .header("Content-Type", "audio/wav")
-                .body(audio2)
-                .timeout(Duration::from_secs(10))
-                .send()
-                .await
-        });
+        start_gate.wait().await;
 
         // Wait for both to complete
         let (result1, result2) = tokio::join!(req1, req2);
@@ -206,7 +214,7 @@ mod tests {
         );
 
         // With proper serialization, max concurrent should be 1
-        // (the async mutex ensures only one transcription runs at a time)
+        // (the queue lock ensures only one transcription runs at a time)
         assert_eq!(
             ctx_guard.get_max_concurrent(),
             1,

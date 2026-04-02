@@ -418,7 +418,9 @@ async fn test_server_stop_releases_port_for_immediate_restart_while_request_is_o
             None,
         )
         .await
-        .expect("Should restart immediately on the same port while the original request is still open");
+        .expect(
+            "Should restart immediately on the same port while the original request is still open",
+        );
 
     manager.stop().await;
 

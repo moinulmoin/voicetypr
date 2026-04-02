@@ -3,8 +3,9 @@
 //! Uses warp to create REST API endpoints for status and transcription.
 
 use log::{info, warn};
+use once_cell::sync::Lazy;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 use super::server::{ErrorResponse, StatusResponse, TranscribeResponse};
@@ -13,6 +14,8 @@ use super::server::{ErrorResponse, StatusResponse, TranscribeResponse};
 const AUTH_HEADER: &str = "X-VoiceTypr-Key";
 
 const MAX_AUDIO_BODY_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
+
+static TRANSCRIPTION_QUEUE: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(1));
 
 /// Trait for server context (allows mocking in tests)
 pub trait ServerContext: Send + Sync {
@@ -178,8 +181,16 @@ async fn handle_transcribe<T: ServerContext + 'static>(
         model_name, audio_size_kb
     );
 
-    // Perform transcription
-    match ctx.transcribe(&body) {
+    // Serialize transcription work so remote requests queue instead of competing for engine resources.
+    let transcription_result = {
+        let _queue_permit = TRANSCRIPTION_QUEUE
+            .acquire()
+            .await
+            .expect("transcription queue semaphore closed unexpectedly");
+        ctx.transcribe(&body)
+    };
+
+    match transcription_result {
         Ok(response) => {
             info!(
                 "🎯 [Remote Server] Transcription COMPLETED on '{}': {} chars in {}ms using '{}'",

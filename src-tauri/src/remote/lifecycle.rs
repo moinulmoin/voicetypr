@@ -64,10 +64,9 @@ impl ServerHandle {
                     match handle.as_mut().await {
                         Ok(()) => {}
                         Err(e) if e.is_cancelled() => {}
-                        Err(e) => log::warn!(
-                            "[Remote Server] Server task failed after abort: {}",
-                            e
-                        ),
+                        Err(e) => {
+                            log::warn!("[Remote Server] Server task failed after abort: {}", e)
+                        }
                     }
                 }
             }

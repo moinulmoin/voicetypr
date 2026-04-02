@@ -79,6 +79,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
   const [reTranscribingIds, setReTranscribingIds] = useState<Set<string>>(new Set());
   const [verifiedRecordings, setVerifiedRecordings] = useState<Set<string>>(new Set());
   const [checkedRecordings, setCheckedRecordings] = useState<Set<string>>(new Set());
+  const verificationRunIdRef = useRef(0);
   // Track which items are being re-transcribed and with which model
   const { modelOrder } = useModelManagementContext();
   const [reTranscribingModels, setReTranscribingModels] = useState<Map<string, string>>(new Map());
@@ -130,12 +131,18 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
 
   // Verify which recordings exist on filesystem
   useEffect(() => {
+    const runId = ++verificationRunIdRef.current;
+    let cancelled = false;
+
     const verifyRecordings = async () => {
       console.log("[RecentRecordings] Starting verification for", history.length, "items");
       const verified = new Set<string>();
       const checked = new Set<string>();
       let itemsWithRecordingFile = 0;
+
       for (const item of history) {
+        if (cancelled || verificationRunIdRef.current !== runId) return;
+
         if (item.recording_file) {
           itemsWithRecordingFile++;
           console.log("[RecentRecordings] Checking recording:", item.recording_file, "for item:", item.id);
@@ -143,21 +150,31 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
             const exists = await invoke<boolean>("check_recording_exists", {
               filename: item.recording_file
             });
+
+            if (cancelled || verificationRunIdRef.current !== runId) return;
+
             checked.add(item.id);
             console.log("[RecentRecordings] Recording", item.recording_file, "exists:", exists);
             if (exists) {
               verified.add(item.id);
             }
           } catch (error) {
+            if (cancelled || verificationRunIdRef.current !== runId) return;
             console.error(`Failed to verify recording ${item.recording_file}:`, error);
           }
         }
       }
+
+      if (cancelled || verificationRunIdRef.current !== runId) return;
       console.log("[RecentRecordings] Verification complete. Items with recording_file:", itemsWithRecordingFile, "Verified:", verified.size);
       setCheckedRecordings(checked);
       setVerifiedRecordings(verified);
     };
     verifyRecordings();
+
+    return () => {
+      cancelled = true;
+    };
   }, [history]);
 
   // Fetch available transcription sources (local models and all remote servers)
