@@ -3,8 +3,7 @@
 //! Tests the tray menu changes for remote server selection and status display.
 
 use crate::menu::{
-    format_tray_model_label, should_include_remote_connection_in_tray,
-    should_mark_model_selected,
+    format_tray_model_label, should_include_remote_connection_in_tray, should_mark_model_selected,
 };
 use crate::remote::settings::ConnectionStatus;
 
@@ -464,41 +463,5 @@ mod recording_mode_tests {
     fn test_default_mode_is_toggle() {
         let default_mode = "toggle";
         assert!(is_toggle_mode(default_mode));
-    }
-}
-
-// ============================================================================
-// URL Format Tests (for fetch_server_status)
-// ============================================================================
-
-mod url_format_tests {
-    fn format_status_url(host: &str, port: u16) -> String {
-        format!("http://{}:{}/api/v1/status", host, port)
-    }
-
-    #[test]
-    fn test_status_url_format() {
-        let url = format_status_url("192.168.1.100", 47842);
-        assert_eq!(url, "http://192.168.1.100:47842/api/v1/status");
-    }
-
-    #[test]
-    fn test_status_url_localhost() {
-        let url = format_status_url("localhost", 8080);
-        assert_eq!(url, "http://localhost:8080/api/v1/status");
-    }
-
-    #[test]
-    fn test_status_url_hostname() {
-        let url = format_status_url("my-server.local", 47842);
-        assert_eq!(url, "http://my-server.local:47842/api/v1/status");
-    }
-
-    #[test]
-    fn test_status_url_ipv6() {
-        // Note: IPv6 in URLs should be bracketed, but the format string doesn't do that
-        // This test documents the current behavior
-        let url = format_status_url("::1", 47842);
-        assert_eq!(url, "http://::1:47842/api/v1/status");
     }
 }

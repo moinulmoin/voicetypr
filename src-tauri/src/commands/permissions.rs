@@ -261,6 +261,14 @@ pub async fn test_automation_permission() -> Result<bool, String> {
     }
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn spawn_command(mut command: std::process::Command) -> Result<(), String> {
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to open accessibility settings: {}", e))
+}
+
 /// Open the system accessibility settings
 #[tauri::command]
 pub fn open_accessibility_settings() -> Result<(), String> {
@@ -278,16 +286,35 @@ pub fn open_accessibility_settings() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
-        // Windows doesn't have the same accessibility permission model
-        // Open Ease of Access settings as closest equivalent
-        let _ = Command::new("ms-settings:easeofaccess")
-            .spawn();
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let mut command = std::process::Command::new("cmd");
+        command.args(&["/C", "start", "", "ms-settings:easeofaccess"]);
+        command.creation_flags(CREATE_NO_WINDOW);
+
+        spawn_command(command)?;
+
         Ok(())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spawn_command_surfaces_spawn_failures() {
+        let command = std::process::Command::new("definitely-not-a-real-binary-for-voicetypr");
+
+        let err = spawn_command(command).unwrap_err();
+
+        assert!(err.contains("Failed to open accessibility settings:"));
     }
 }

@@ -74,10 +74,7 @@ pub enum ServerStatus {
     /// Server is not running
     Idle,
     /// Server is running and accepting connections
-    Running {
-        port: u16,
-        connections: usize,
-    },
+    Running { port: u16, connections: usize },
 }
 
 impl ServerStatus {

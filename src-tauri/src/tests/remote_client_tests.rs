@@ -4,7 +4,8 @@
 //! other VoiceTypr instances for remote transcription.
 
 use crate::remote::client::{
-    RemoteServerConnection, TranscriptionRequest, TranscriptionSource, calculate_timeout_ms, timeout_ms_for_wav_file,
+    calculate_timeout_ms, timeout_ms_for_wav_file, RemoteServerConnection, TranscriptionRequest,
+    TranscriptionSource,
 };
 
 /// Test timeout calculation for live recordings (30 seconds)
@@ -470,7 +471,6 @@ fn test_url_format_validity() {
     assert!(status_url.contains("8443"));
     assert!(transcribe_url.contains("8443"));
 }
-
 
 use crate::remote::client::{RemoteClientError, RemoteEndpoint};
 use reqwest::StatusCode;

@@ -6,8 +6,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::Instant;
-use tempfile::NamedTempFile;
 use tauri::AppHandle;
+use tempfile::NamedTempFile;
 
 use super::http::ServerContext;
 use super::server::TranscribeResponse;
@@ -28,53 +28,78 @@ pub struct TranscriptionServerConfig {
     pub model_name: String,
 }
 
-/// Shared state that can be updated while the server is running
+/// Coherent snapshot of remote model state
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SharedServerStateSnapshot {
+    /// Name of the model currently configured for remote transcription.
+    pub model_name: String,
+    /// Path to the model artifact currently configured for this context.
+    pub model_path: PathBuf,
+    /// Engine used for remote transcription.
+    pub engine: String,
+}
+
+impl Default for SharedServerStateSnapshot {
+    fn default() -> Self {
+        Self {
+            model_name: String::new(),
+            model_path: PathBuf::new(),
+            engine: "whisper".to_string(),
+        }
+    }
+}
+
+/// Shared state that can be updated while the server is running.
 #[derive(Clone)]
 pub struct SharedServerState {
-    /// Current model name (can be updated dynamically)
-    pub model_name: Arc<RwLock<String>>,
-    /// Current model path (can be updated dynamically, only for whisper)
-    pub model_path: Arc<RwLock<PathBuf>>,
-    /// Current engine type (whisper, parakeet, etc.)
-    pub engine: Arc<RwLock<String>>,
+    /// Coherent snapshot of model configuration shared across threads.
+    snapshot: Arc<RwLock<SharedServerStateSnapshot>>,
 }
 
 impl SharedServerState {
     /// Create new shared state from initial values
     pub fn new(model_name: String, model_path: PathBuf, engine: String) -> Self {
         Self {
-            model_name: Arc::new(RwLock::new(model_name)),
-            model_path: Arc::new(RwLock::new(model_path)),
-            engine: Arc::new(RwLock::new(engine)),
+            snapshot: Arc::new(RwLock::new(SharedServerStateSnapshot {
+                model_name,
+                model_path,
+                engine,
+            })),
         }
     }
 
-    /// Update the model
+    /// Update the model atomically
     pub fn update_model(&self, model_name: String, model_path: PathBuf, engine: String) {
-        if let Ok(mut name) = self.model_name.write() {
-            *name = model_name;
+        if let Ok(mut snapshot) = self.snapshot.write() {
+            *snapshot = SharedServerStateSnapshot {
+                model_name,
+                model_path,
+                engine,
+            };
         }
-        if let Ok(mut path) = self.model_path.write() {
-            *path = model_path;
-        }
-        if let Ok(mut eng) = self.engine.write() {
-            *eng = engine;
-        }
+    }
+
+    /// Read the current model configuration snapshot
+    pub(crate) fn get_snapshot(&self) -> SharedServerStateSnapshot {
+        self.snapshot
+            .read()
+            .map(|snapshot| snapshot.clone())
+            .unwrap_or_default()
     }
 
     /// Get the current model name
     pub fn get_model_name(&self) -> String {
-        self.model_name.read().map(|n| n.clone()).unwrap_or_default()
+        self.get_snapshot().model_name
     }
 
     /// Get the current model path
     pub fn get_model_path(&self) -> PathBuf {
-        self.model_path.read().map(|p| p.clone()).unwrap_or_default()
+        self.get_snapshot().model_path
     }
 
     /// Get the current engine
     pub fn get_engine(&self) -> String {
-        self.engine.read().map(|e| e.clone()).unwrap_or_else(|_| "whisper".to_string())
+        self.get_snapshot().engine
     }
 }
 
@@ -115,7 +140,8 @@ impl RealTranscriptionContext {
     /// Create a new transcription context (legacy, creates its own shared state)
     pub fn new(config: TranscriptionServerConfig) -> Self {
         // Default to whisper engine for legacy compatibility
-        let shared_state = SharedServerState::new(config.model_name, config.model_path, "whisper".to_string());
+        let shared_state =
+            SharedServerState::new(config.model_name, config.model_path, "whisper".to_string());
         Self {
             server_name: config.server_name,
             password: config.password,
@@ -127,7 +153,8 @@ impl RealTranscriptionContext {
 
     /// Update the model being served
     pub fn update_model(&mut self, model_path: PathBuf, model_name: String, engine: String) {
-        self.shared_state.update_model(model_name, model_path, engine);
+        self.shared_state
+            .update_model(model_name, model_path, engine);
     }
 
     /// Update the password
@@ -138,6 +165,11 @@ impl RealTranscriptionContext {
     /// Get the current model path
     pub fn get_model_path(&self) -> PathBuf {
         self.shared_state.get_model_path()
+    }
+
+    /// Get the current model snapshot (coherent read)
+    pub(crate) fn get_model_snapshot(&self) -> SharedServerStateSnapshot {
+        self.shared_state.get_snapshot()
     }
 
     /// Get the shared state (for external updates)
@@ -163,15 +195,14 @@ impl ServerContext for RealTranscriptionContext {
     fn transcribe(&self, audio_data: &[u8]) -> Result<TranscribeResponse, String> {
         let start = Instant::now();
 
-        // Get current engine and model info from shared state
-        let engine = self.shared_state.get_engine();
-        let model_name = self.shared_state.get_model_name();
+        // Capture a single coherent snapshot for this request
+        let snapshot = self.shared_state.get_snapshot();
 
         log::info!(
             "Starting remote transcription: {} bytes of audio, engine='{}', model='{}'",
             audio_data.len(),
-            engine,
-            model_name
+            snapshot.engine,
+            snapshot.model_name
         );
 
         // Validate audio data is not empty
@@ -180,8 +211,8 @@ impl ServerContext for RealTranscriptionContext {
         }
 
         // Write audio data to a temporary WAV file
-        let mut temp_file = NamedTempFile::new()
-            .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        let mut temp_file =
+            NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {}", e))?;
 
         temp_file
             .write_all(audio_data)
@@ -196,14 +227,14 @@ impl ServerContext for RealTranscriptionContext {
         log::info!("Audio written to temp file: {:?}", temp_path);
 
         // Route to appropriate transcription engine
-        let text = match engine.as_str() {
+        let text = match snapshot.engine.as_str() {
             "parakeet" => {
                 // Use Parakeet sidecar for transcription
-                self.transcribe_with_parakeet(&temp_path, &model_name)?
+                self.transcribe_with_parakeet(&temp_path, &snapshot.model_name)?
             }
             _ => {
                 // Default to Whisper transcription
-                self.transcribe_with_whisper(&temp_path)?
+                self.transcribe_with_whisper(&temp_path, &snapshot.model_path)?
             }
         };
 
@@ -213,23 +244,25 @@ impl ServerContext for RealTranscriptionContext {
             "Remote transcription completed: {} chars in {}ms using {} ({})",
             text.len(),
             duration_ms,
-            model_name,
-            engine
+            snapshot.model_name,
+            snapshot.engine
         );
 
         Ok(TranscribeResponse {
             text,
             duration_ms,
-            model: model_name,
+            model: snapshot.model_name,
         })
     }
 }
 
 impl RealTranscriptionContext {
     /// Transcribe using Whisper model
-    fn transcribe_with_whisper(&self, audio_path: &PathBuf) -> Result<String, String> {
-        let model_path = self.shared_state.get_model_path();
-
+    fn transcribe_with_whisper(
+        &self,
+        audio_path: &PathBuf,
+        model_path: &PathBuf,
+    ) -> Result<String, String> {
         // Get transcriber from cache (blocking lock - serializes all transcriptions)
         let transcriber = {
             let mut cache = self
@@ -251,11 +284,19 @@ impl RealTranscriptionContext {
     }
 
     /// Transcribe using Parakeet sidecar
-    fn transcribe_with_parakeet(&self, audio_path: &PathBuf, model_name: &str) -> Result<String, String> {
-        let app_handle = self.app_handle.as_ref()
-            .ok_or_else(|| "Parakeet transcription requires AppHandle but none was provided".to_string())?;
+    fn transcribe_with_parakeet(
+        &self,
+        audio_path: &PathBuf,
+        model_name: &str,
+    ) -> Result<String, String> {
+        let app_handle = self.app_handle.as_ref().ok_or_else(|| {
+            "Parakeet transcription requires AppHandle but none was provided".to_string()
+        })?;
 
-        log::info!("Using Parakeet engine for transcription with model '{}'", model_name);
+        log::info!(
+            "Using Parakeet engine for transcription with model '{}'",
+            model_name
+        );
 
         // Get the ParakeetManager from app state
         use tauri::Manager;
@@ -282,8 +323,8 @@ impl RealTranscriptionContext {
                         &app_handle_clone,
                         &model_name_owned,
                         audio_path_clone,
-                        None,    // language
-                        false,   // translate
+                        None,  // language
+                        false, // translate
                     )
                     .await
                     .map_err(|e| format!("Parakeet transcription failed: {}", e))?;

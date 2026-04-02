@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ReactNode } from "react";
@@ -51,6 +51,22 @@ function TestWrapper({ children }: { children: ReactNode }) {
 function renderWithProviders(ui: React.ReactElement) {
   return render(ui, { wrapper: TestWrapper });
 }
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  return { promise, resolve, reject };
+}
+
+function getInvokeCalls(command: string) {
+  return mockInvoke.mock.calls.filter(([calledCommand]) => calledCommand === command);
+}
+
 
 describe("NetworkSharingCard", () => {
   beforeEach(() => {
@@ -292,6 +308,61 @@ describe("NetworkSharingCard", () => {
     });
   });
 
+  describe("when model selection changes but sharing is disabled", () => {
+    beforeEach(() => {
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "base.en",
+              auto_insert: true,
+              launch_at_startup: false,
+            });
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: false,
+              port: 47842,
+              model_name: "large-v3-turbo",
+              server_name: "My-PC",
+              active_connections: 0,
+              password: "committed-secret",
+            });
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({
+              models: [
+                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                { name: "base.en", display_name: "Base (English)", downloaded: true },
+              ],
+            });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+    });
+
+    it("does not restart sharing when the model mismatches but sharing is disabled", async () => {
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(
+            /When enabled, other VoiceTypr instances on your network can use your/,
+          ),
+        ).toBeInTheDocument();
+      });
+
+      expect(getInvokeCalls("stop_sharing")).toHaveLength(0);
+      expect(getInvokeCalls("start_sharing")).toHaveLength(0);
+    });
+  });
+
+
   describe("when model selection changes while sharing", () => {
     beforeEach(() => {
       mockInvoke.mockImplementation((command: string) => {
@@ -311,6 +382,7 @@ describe("NetworkSharingCard", () => {
               model_name: "large-v3-turbo",
               server_name: "My-PC",
               active_connections: 0,
+              password: "committed-secret",
             });
           case "get_local_ips":
             return Promise.resolve(["192.168.1.100 (eth0)"]);
@@ -335,14 +407,108 @@ describe("NetworkSharingCard", () => {
       });
     });
 
-    it("automatically restarts sharing when model changes", async () => {
+    it("does not trigger extra restarts when typing draft port/password", async () => {
+      const user = userEvent.setup();
       renderWithProviders(<NetworkSharingCard />);
 
-      // Wait for the auto-restart to be triggered
       await waitFor(() => {
-        expect(mockInvoke).toHaveBeenCalledWith("stop_sharing");
-        expect(mockInvoke).toHaveBeenCalledWith("start_sharing", expect.any(Object));
+        expect(screen.getByLabelText("Port")).toBeInTheDocument();
       });
+
+      await waitFor(() => {
+        expect(getInvokeCalls("start_sharing")).toHaveLength(1);
+        expect(getInvokeCalls("stop_sharing")).toHaveLength(1);
+      });
+
+      const portInput = screen.getByLabelText("Port");
+      const passwordInput = screen.getByLabelText("Password (Optional)");
+
+      await user.clear(portInput);
+      await user.type(portInput, "55555");
+      await user.clear(passwordInput);
+      await user.type(passwordInput, "typed-secret");
+
+      await waitFor(() => {
+        expect(getInvokeCalls("start_sharing")).toHaveLength(1);
+        expect(getInvokeCalls("stop_sharing")).toHaveLength(1);
+      });
+    });
+
+    it("uses committed config when auto-restarting after a model change", async () => {
+      const deferredSettings = createDeferred<{
+        current_model: string;
+        auto_insert: boolean;
+        launch_at_startup: boolean;
+      }>();
+
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return deferredSettings.promise;
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: true,
+              port: 47842,
+              model_name: "large-v3-turbo",
+              server_name: "My-PC",
+              active_connections: 0,
+              password: "committed-secret",
+            });
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({
+              models: [
+                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                { name: "base.en", display_name: "Base (English)", downloaded: true },
+              ],
+            });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          case "stop_sharing":
+            return Promise.resolve();
+          case "start_sharing":
+            return Promise.resolve();
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+
+      const user = userEvent.setup();
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Port")).toBeInTheDocument();
+      });
+
+      const portInput = screen.getByLabelText("Port");
+      const passwordInput = screen.getByLabelText("Password (Optional)");
+
+      await user.clear(portInput);
+      await user.type(portInput, "55555");
+      await user.clear(passwordInput);
+      await user.type(passwordInput, "typed-secret");
+
+      deferredSettings.resolve({
+        current_model: "base.en",
+        auto_insert: true,
+        launch_at_startup: false,
+      });
+
+      await waitFor(() => {
+        expect(getInvokeCalls("stop_sharing")).toHaveLength(1);
+        expect(getInvokeCalls("start_sharing")).toHaveLength(1);
+      });
+
+      expect(getInvokeCalls("start_sharing")[0][1]).toEqual(
+        expect.objectContaining({
+          port: 47842,
+          password: "committed-secret",
+          serverName: null,
+        }),
+      );
     });
 
     it("does not show manual Update button", async () => {
@@ -357,6 +523,7 @@ describe("NetworkSharingCard", () => {
       expect(screen.queryByRole("button", { name: /Update/i })).not.toBeInTheDocument();
     });
   });
+
 
   describe("when using a remote server", () => {
     beforeEach(() => {
@@ -711,18 +878,34 @@ describe("NetworkSharingCard", () => {
       });
     });
 
-    it("shows success toast when copy button is clicked", async () => {
+    it("keeps the committed address while editing a draft port", async () => {
+      const user = userEvent.setup();
+      const mockWriteText = vi.fn().mockResolvedValue(undefined);
+
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText: mockWriteText },
+        writable: true,
+        configurable: true,
+      });
+
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
         expect(screen.getByText("Sharing Active")).toBeInTheDocument();
       });
 
-      // Find and click the copy button
-      const copyButton = screen.getByTitle("Copy address");
-      fireEvent.click(copyButton);
+      const portInput = screen.getByLabelText("Port");
+      await user.clear(portInput);
+      await user.type(portInput, "55555");
 
-      // Verify the toast is shown (the clipboard call is a browser API side effect)
+      expect(portInput).toHaveValue(55555);
+      expect(screen.getByText(/192\.168\.1\.100:47842/)).toBeInTheDocument();
+      expect(screen.queryByText(/192\.168\.1\.100:55555/)).not.toBeInTheDocument();
+
+      const copyButton = screen.getByTitle("Copy address");
+      await user.click(copyButton);
+
+      expect(mockWriteText).toHaveBeenCalledWith("192.168.1.100:47842");
       await waitFor(() => {
         expect(toast.success).toHaveBeenCalledWith("Address copied to clipboard");
       });
@@ -809,6 +992,121 @@ describe("NetworkSharingCard", () => {
         expect(screen.getByTitle("Save and restart server")).toBeInTheDocument();
       });
     });
+
+    it("restarts sharing with the updated port when the save button is clicked", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Port")).toBeInTheDocument();
+      });
+
+      const portInput = screen.getByLabelText("Port");
+      await user.clear(portInput);
+      await user.type(portInput, "8080");
+
+      await user.click(screen.getByTitle("Save and restart server"));
+
+      await waitFor(() => {
+        expect(getInvokeCalls("stop_sharing")).toHaveLength(1);
+        expect(getInvokeCalls("start_sharing")).toHaveLength(1);
+      });
+
+      expect(getInvokeCalls("start_sharing")[0][1]).toEqual(
+        expect.objectContaining({
+          port: 8080,
+          password: null,
+          serverName: null,
+        }),
+      );
+    });
+
+    it("rolls back the live port when port save persistence fails", async () => {
+      let livePort = 47842;
+      const user = userEvent.setup();
+
+      mockInvoke.mockImplementation((command: string, args?: any) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "large-v3-turbo",
+              auto_insert: true,
+              launch_at_startup: false,
+              sharing_port: 47842,
+            });
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: true,
+              port: livePort,
+              model_name: "large-v3-turbo",
+              server_name: "My-PC",
+              active_connections: 0,
+            });
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({
+              models: [
+                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+              ],
+            });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          case "stop_sharing":
+            return Promise.resolve();
+          case "start_sharing":
+            livePort = args?.port ?? livePort;
+            return Promise.resolve();
+          case "save_settings":
+            return Promise.reject(new Error("Failed to persist sharing port"));
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Port")).toBeInTheDocument();
+      });
+
+      const portInput = screen.getByLabelText("Port");
+      await user.clear(portInput);
+      await user.type(portInput, "55555");
+
+      await user.click(screen.getByTitle("Save and restart server"));
+
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalledWith("Failed to update port");
+      });
+      await waitFor(() => {
+        expect(getInvokeCalls("start_sharing")).toHaveLength(2);
+        expect(getInvokeCalls("stop_sharing")).toHaveLength(2);
+      });
+
+      expect(getInvokeCalls("start_sharing")[0][1]).toEqual(
+        expect.objectContaining({
+          port: 55555,
+          password: null,
+          serverName: null,
+        }),
+      );
+      expect(getInvokeCalls("start_sharing")[1][1]).toEqual(
+        expect.objectContaining({
+          port: 47842,
+          password: null,
+          serverName: null,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(portInput).toHaveValue(47842);
+        expect(screen.getByText(/192\.168\.1\.100:47842/)).toBeInTheDocument();
+      });
+    });
+
   });
 
   describe("password configuration", () => {
@@ -913,6 +1211,121 @@ describe("NetworkSharingCard", () => {
         expect(screen.getByTitle("Save password")).toBeInTheDocument();
       });
     });
+
+    it("restarts sharing with the updated password when the save button is clicked", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Password (Optional)")).toBeInTheDocument();
+      });
+
+      const passwordInput = screen.getByLabelText("Password (Optional)");
+      await user.type(passwordInput, "secret123");
+
+      await user.click(screen.getByTitle("Save password"));
+
+      await waitFor(() => {
+        expect(getInvokeCalls("stop_sharing")).toHaveLength(1);
+        expect(getInvokeCalls("start_sharing")).toHaveLength(1);
+      });
+
+      expect(getInvokeCalls("start_sharing")[0][1]).toEqual(
+        expect.objectContaining({
+          port: 47842,
+          password: "secret123",
+          serverName: null,
+        }),
+      );
+    });
+
+    it("rolls back the live password when password save persistence fails", async () => {
+      let livePassword = "committed-secret";
+      const user = userEvent.setup();
+
+      mockInvoke.mockImplementation((command: string, args?: any) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "large-v3-turbo",
+              auto_insert: true,
+              launch_at_startup: false,
+              sharing_port: 47842,
+              sharing_password: "committed-secret",
+            });
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: true,
+              port: 47842,
+              model_name: "large-v3-turbo",
+              server_name: "My-PC",
+              active_connections: 0,
+              password: livePassword,
+            });
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({
+              models: [
+                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+              ],
+            });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          case "stop_sharing":
+            return Promise.resolve();
+          case "start_sharing":
+            livePassword = args?.password ?? null;
+            return Promise.resolve();
+          case "save_settings":
+            return Promise.reject(new Error("Failed to persist sharing password"));
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Password (Optional)")).toBeInTheDocument();
+      });
+
+      const passwordInput = screen.getByLabelText("Password (Optional)");
+      await user.clear(passwordInput);
+      await user.type(passwordInput, "typed-secret");
+
+      await user.click(screen.getByTitle("Save password"));
+
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalledWith("Failed to update password");
+      });
+      await waitFor(() => {
+        expect(getInvokeCalls("start_sharing")).toHaveLength(2);
+        expect(getInvokeCalls("stop_sharing")).toHaveLength(2);
+      });
+
+      expect(getInvokeCalls("start_sharing")[0][1]).toEqual(
+        expect.objectContaining({
+          port: 47842,
+          password: "typed-secret",
+          serverName: null,
+        }),
+      );
+      expect(getInvokeCalls("start_sharing")[1][1]).toEqual(
+        expect.objectContaining({
+          port: 47842,
+          password: "committed-secret",
+          serverName: null,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(passwordInput).toHaveValue("committed-secret");
+      });
+    });
+
   });
 
   describe("server configuration section", () => {

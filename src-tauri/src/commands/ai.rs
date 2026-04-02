@@ -1,6 +1,4 @@
-use crate::ai::openai::{
-    is_unsupported_token_parameter_error, model_uses_max_completion_tokens,
-};
+use crate::ai::openai::{is_unsupported_token_parameter_error, model_uses_max_completion_tokens};
 use crate::ai::{AIEnhancementRequest, AIProviderConfig, AIProviderFactory, EnhancementOptions};
 use crate::commands::audio::pill_toast;
 use once_cell::sync::Lazy;
@@ -77,7 +75,10 @@ fn build_openai_probe_payload(
                 serde_json::json!(max_output_tokens),
             );
         } else {
-            obj.insert("max_tokens".to_string(), serde_json::json!(max_output_tokens));
+            obj.insert(
+                "max_tokens".to_string(),
+                serde_json::json!(max_output_tokens),
+            );
         }
     }
 
@@ -145,7 +146,8 @@ async fn run_openai_probe_request(
     let mut max_output_tokens = OPENAI_PROBE_INITIAL_MAX_TOKENS;
 
     for _attempt in 0..4 {
-        let payload = build_openai_probe_payload(model, use_max_completion_tokens, max_output_tokens);
+        let payload =
+            build_openai_probe_payload(model, use_max_completion_tokens, max_output_tokens);
         let mut req = client
             .post(&validate_url)
             .header("Content-Type", "application/json")
@@ -183,7 +185,9 @@ async fn run_openai_probe_request(
             continue;
         }
 
-        if max_output_tokens < OPENAI_PROBE_FALLBACK_MAX_TOKENS && is_probe_output_limit_error(&body) {
+        if max_output_tokens < OPENAI_PROBE_FALLBACK_MAX_TOKENS
+            && is_probe_output_limit_error(&body)
+        {
             log::warn!(
                 "OpenAI probe hit output limit at {} tokens for model '{}'; retrying with {}",
                 max_output_tokens,
@@ -448,7 +452,7 @@ pub async fn validate_and_cache_api_key(
             let key = provided_key.trim();
             if key.is_empty() {
                 return Err(
-                    "API key is required (leave empty to use no authentication)".to_string(),
+                    "API key is required (leave empty to use no authentication)".to_string()
                 );
             }
             Some(format!("Bearer {}", key))
@@ -461,16 +465,16 @@ pub async fn validate_and_cache_api_key(
             auth_header.as_deref(),
             allow_chat_probe_fallback,
         )
-            .await
-            .map_err(|error| {
-                log::error!(
-                    "OpenAI-compatible validate failed: base_url={} model={} error={}",
-                    base,
-                    validate_model,
-                    error
-                );
+        .await
+        .map_err(|error| {
+            log::error!(
+                "OpenAI-compatible validate failed: base_url={} model={} error={}",
+                base,
+                validate_model,
                 error
-            })?;
+            );
+            error
+        })?;
     } else {
         return Err("Unsupported provider".to_string());
     }

@@ -52,11 +52,7 @@ fn test_shared_server_state_update_model() {
 /// Test SharedServerState get_model_name returns empty string on default
 #[test]
 fn test_shared_server_state_empty_model_name() {
-    let state = SharedServerState::new(
-        "".to_string(),
-        PathBuf::new(),
-        "whisper".to_string(),
-    );
+    let state = SharedServerState::new("".to_string(), PathBuf::new(), "whisper".to_string());
 
     assert_eq!(state.get_model_name(), "");
 }
@@ -64,11 +60,7 @@ fn test_shared_server_state_empty_model_name() {
 /// Test SharedServerState get_model_path returns empty path on default
 #[test]
 fn test_shared_server_state_empty_model_path() {
-    let state = SharedServerState::new(
-        "test".to_string(),
-        PathBuf::new(),
-        "whisper".to_string(),
-    );
+    let state = SharedServerState::new("test".to_string(), PathBuf::new(), "whisper".to_string());
 
     assert_eq!(state.get_model_path(), PathBuf::new());
 }
@@ -86,7 +78,10 @@ fn test_shared_server_state_clone() {
 
     // Both should have same values
     assert_eq!(cloned.get_model_name(), "original");
-    assert_eq!(cloned.get_model_path(), PathBuf::from("/models/original.bin"));
+    assert_eq!(
+        cloned.get_model_path(),
+        PathBuf::from("/models/original.bin")
+    );
 
     // Update original - cloned should also see the update (shared Arc)
     state.update_model(
@@ -96,7 +91,10 @@ fn test_shared_server_state_clone() {
     );
 
     assert_eq!(cloned.get_model_name(), "updated");
-    assert_eq!(cloned.get_model_path(), PathBuf::from("/models/updated.bin"));
+    assert_eq!(
+        cloned.get_model_path(),
+        PathBuf::from("/models/updated.bin")
+    );
 }
 
 /// Test SharedServerState is thread-safe
@@ -123,32 +121,61 @@ fn test_shared_server_state_thread_safety() {
 
     // Main thread should see the update
     assert_eq!(state.get_model_name(), "from-thread");
-    assert_eq!(state.get_model_path(), PathBuf::from("/models/from-thread.bin"));
+    assert_eq!(
+        state.get_model_path(),
+        PathBuf::from("/models/from-thread.bin")
+    );
     assert_eq!(state.get_engine(), "parakeet");
 }
 
 /// Test SharedServerState concurrent reads
 #[test]
-fn test_shared_server_state_concurrent_reads() {
+fn test_shared_server_state_concurrent_reads_are_atomic() {
     let state = Arc::new(SharedServerState::new(
-        "concurrent-test".to_string(),
-        PathBuf::from("/models/concurrent.bin"),
+        "model-a".to_string(),
+        PathBuf::from("/models/model-a.bin"),
         "whisper".to_string(),
     ));
 
     let mut handles = vec![];
 
-    // Spawn multiple threads to read concurrently
-    for _ in 0..10 {
+    // Concurrent writer flips between two coherent states.
+    let state_for_writer = Arc::clone(&state);
+    let writer = thread::spawn(move || {
+        for i in 0..20_000 {
+            if i % 2 == 0 {
+                state_for_writer.update_model(
+                    "model-a".to_string(),
+                    PathBuf::from("/models/model-a.bin"),
+                    "whisper".to_string(),
+                );
+            } else {
+                state_for_writer.update_model(
+                    "model-b".to_string(),
+                    PathBuf::from("/models/model-b.bin"),
+                    "parakeet".to_string(),
+                );
+            }
+            if i % 4 == 0 {
+                thread::yield_now();
+            }
+        }
+    });
+
+    // Spawn multiple threads to read concurrently while updates are in progress.
+    for _ in 0..8 {
         let state_clone = Arc::clone(&state);
         let handle = thread::spawn(move || {
-            for _ in 0..100 {
-                let name = state_clone.get_model_name();
-                let path = state_clone.get_model_path();
-                let engine = state_clone.get_engine();
-                assert!(!name.is_empty());
-                assert!(!path.as_os_str().is_empty());
-                assert!(!engine.is_empty());
+            for _ in 0..20_000 {
+                let snapshot = state_clone.get_snapshot();
+
+                let is_model_a = snapshot.model_name == "model-a"
+                    && snapshot.model_path == PathBuf::from("/models/model-a.bin")
+                    && snapshot.engine == "whisper";
+                let is_model_b = snapshot.model_name == "model-b"
+                    && snapshot.model_path == PathBuf::from("/models/model-b.bin")
+                    && snapshot.engine == "parakeet";
+                assert!(is_model_a || is_model_b);
             }
         });
         handles.push(handle);
@@ -157,6 +184,8 @@ fn test_shared_server_state_concurrent_reads() {
     for handle in handles {
         handle.join().expect("Thread panicked");
     }
+
+    writer.join().expect("Writer thread panicked");
 }
 
 // ============================================================================
@@ -197,7 +226,10 @@ fn test_context_get_model_path() {
 
     let ctx = RealTranscriptionContext::new(config);
 
-    assert_eq!(ctx.get_model_path(), PathBuf::from("/custom/path/model.bin"));
+    assert_eq!(
+        ctx.get_model_path(),
+        PathBuf::from("/custom/path/model.bin")
+    );
 }
 
 /// Test RealTranscriptionContext implements ServerContext trait
@@ -277,6 +309,47 @@ fn test_context_update_model_affects_shared_state() {
     assert_eq!(ctx.get_model_name(), "end");
     assert_eq!(shared_state.get_model_name(), "end");
     assert_eq!(shared_state.get_engine(), "parakeet");
+}
+
+#[test]
+fn test_context_get_model_snapshot_is_coherent_after_update() {
+    let shared_state = SharedServerState::new(
+        "start-model".to_string(),
+        PathBuf::from("/models/start.bin"),
+        "whisper".to_string(),
+    );
+
+    let mut ctx = RealTranscriptionContext::new_with_shared_state(
+        "Server".to_string(),
+        None,
+        shared_state.clone(),
+        None,
+    );
+
+    let initial_snapshot = ctx.get_model_snapshot();
+    assert_eq!(initial_snapshot.model_name, "start-model");
+    assert_eq!(
+        initial_snapshot.model_path,
+        PathBuf::from("/models/start.bin")
+    );
+    assert_eq!(initial_snapshot.engine, "whisper");
+
+    ctx.update_model(
+        PathBuf::from("/models/updated.bin"),
+        "updated-model".to_string(),
+        "parakeet".to_string(),
+    );
+
+    let context_snapshot = ctx.get_model_snapshot();
+    let state_snapshot = ctx.get_shared_state().get_snapshot();
+
+    assert_eq!(context_snapshot, state_snapshot);
+    assert_eq!(context_snapshot.model_name, "updated-model");
+    assert_eq!(
+        context_snapshot.model_path,
+        PathBuf::from("/models/updated.bin")
+    );
+    assert_eq!(context_snapshot.engine, "parakeet");
 }
 
 /// Test TranscriptionServerConfig creation

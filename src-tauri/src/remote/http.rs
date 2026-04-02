@@ -72,7 +72,10 @@ async fn handle_status<T: ServerContext + 'static>(
     let ctx = ctx.read().await;
     let server_name = ctx.get_server_name();
 
-    info!("[Remote Server] Status request received on '{}'", server_name);
+    info!(
+        "[Remote Server] Status request received on '{}'",
+        server_name
+    );
 
     // Check authentication
     if let Some(required_password) = ctx.get_password() {
@@ -96,8 +99,8 @@ async fn handle_status<T: ServerContext + 'static>(
     }
 
     // Get unique machine ID to allow clients to detect self-connection
-    let machine_id = crate::license::device::get_device_hash()
-        .unwrap_or_else(|_| "unknown".to_string());
+    let machine_id =
+        crate::license::device::get_device_hash().unwrap_or_else(|_| "unknown".to_string());
 
     let response = StatusResponse {
         status: "ok".to_string(),
@@ -410,10 +413,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(server_context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -488,10 +490,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(server_context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -573,10 +574,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(server_context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -662,10 +662,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(server_context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -717,10 +716,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(server_context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -822,10 +820,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(server_context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;

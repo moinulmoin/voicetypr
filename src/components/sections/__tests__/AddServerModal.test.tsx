@@ -38,43 +38,30 @@ describe("AddServerModal", () => {
   });
 
   // ============================================================================
-  // Modal Open/Close Behavior
+  // Modal visibility lifecycle
   // ============================================================================
 
-  describe("Modal open/close behavior", () => {
-    it("renders when open is true", () => {
-      render(
-        <AddServerModal
-          open={true}
-          onOpenChange={mockOnOpenChange}
-          onServerAdded={mockOnServerAdded}
-        />
-      );
-      expect(screen.getByText("Add Remote VoiceTypr")).toBeInTheDocument();
-    });
+  describe("Modal visibility lifecycle", () => {
+    it("hydrates edit mode values when opened", async () => {
+      const editServer = {
+        id: "test-id",
+        host: "192.168.1.100",
+        port: 8080,
+        password: "secret",
+        name: "My Server",
+        created_at: 1234567890,
+      };
 
-    it("does not render when open is false", () => {
-      render(
+      const { rerender } = render(
         <AddServerModal
           open={false}
           onOpenChange={mockOnOpenChange}
           onServerAdded={mockOnServerAdded}
+          editServer={editServer}
         />
       );
-      expect(screen.queryByText("Add Remote VoiceTypr")).not.toBeInTheDocument();
-    });
 
-    it("shows edit mode title when editServer is provided", () => {
-      const editServer = {
-        id: "test-id",
-        host: "192.168.1.100",
-        port: 47842,
-        password: null,
-        name: "Test Server",
-        created_at: 1234567890,
-      };
-
-      render(
+      rerender(
         <AddServerModal
           open={true}
           onOpenChange={mockOnOpenChange}
@@ -82,9 +69,81 @@ describe("AddServerModal", () => {
           editServer={editServer}
         />
       );
-      expect(screen.getByText("Edit Remote VoiceTypr")).toBeInTheDocument();
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Host Address")).toHaveValue("192.168.1.100");
+        expect(screen.getByLabelText("Port")).toHaveValue(8080);
+        expect(screen.getByLabelText("Password (if required)")).toHaveValue("secret");
+        expect(screen.getByLabelText("Display Name (optional)")).toHaveValue("My Server");
+      });
     });
 
+    it("uses add mode defaults when opened without editServer", async () => {
+      const { rerender } = render(
+        <AddServerModal
+          open={false}
+          onOpenChange={mockOnOpenChange}
+          onServerAdded={mockOnServerAdded}
+        />
+      );
+
+      rerender(
+        <AddServerModal
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onServerAdded={mockOnServerAdded}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Host Address")).toHaveValue("");
+        expect(screen.getByLabelText("Port")).toHaveValue(47842);
+        expect(screen.getByLabelText("Password (if required)")).toHaveValue("");
+        expect(screen.getByLabelText("Display Name (optional)")).toHaveValue("");
+      });
+    });
+
+    it("discards unsaved add-mode state when closed and reopened", async () => {
+      const user = userEvent.setup();
+      const { rerender } = render(
+        <AddServerModal
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onServerAdded={mockOnServerAdded}
+        />
+      );
+
+      await user.type(screen.getByLabelText("Host Address"), "192.168.1.100");
+      await user.type(screen.getByLabelText("Display Name (optional)"), "Unsaved Server");
+      expect(screen.getByLabelText("Host Address")).toHaveValue("192.168.1.100");
+      expect(screen.getByLabelText("Display Name (optional)")).toHaveValue("Unsaved Server");
+
+      rerender(
+        <AddServerModal
+          open={false}
+          onOpenChange={mockOnOpenChange}
+          onServerAdded={mockOnServerAdded}
+        />
+      );
+
+      rerender(
+        <AddServerModal
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onServerAdded={mockOnServerAdded}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Host Address")).toHaveValue("");
+        expect(screen.getByLabelText("Port")).toHaveValue(47842);
+        expect(screen.getByLabelText("Password (if required)")).toHaveValue("");
+        expect(screen.getByLabelText("Display Name (optional)")).toHaveValue("");
+      });
+    });
+  });
+
+  describe("Modal controls", () => {
     it("calls onOpenChange when Cancel button is clicked", () => {
       render(
         <AddServerModal
@@ -428,11 +487,15 @@ describe("AddServerModal", () => {
         />
       );
 
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith("get_local_machine_id");
+      });
+
       await user.type(screen.getByLabelText("Host Address"), "192.168.1.100");
       fireEvent.click(screen.getByText("Test Connection"));
 
       await waitFor(() => {
-        expect(screen.getByText("Connection failed")).toBeInTheDocument();
+        expect(screen.getByText(/cannot connect - check host and port/i)).toBeInTheDocument();
       });
     });
 
@@ -450,6 +513,10 @@ describe("AddServerModal", () => {
           onServerAdded={mockOnServerAdded}
         />
       );
+
+      await waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith("get_local_machine_id");
+      });
 
       await user.type(screen.getByLabelText("Host Address"), "192.168.1.100");
       fireEvent.click(screen.getByText("Test Connection"));

@@ -6,7 +6,7 @@ import { isMacOS, isWindows } from "@/lib/platform";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AlertTriangle, Check, CheckCircle, Copy, Eye, EyeOff, ExternalLink, Network, Server, Shield, XCircle } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 interface BindingResult {
@@ -58,6 +58,11 @@ export function NetworkSharingCard() {
   const [password, setPassword] = useState("");
   const [savedPort, setSavedPort] = useState("47842");
   const [savedPassword, setSavedPassword] = useState("");
+  const committedSharingConfigRef = useRef({
+    port: savedPort,
+    password: savedPassword,
+  });
+
   const [loading, setLoading] = useState(false);
   const [savingPort, setSavingPort] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
@@ -66,7 +71,20 @@ export function NetworkSharingCard() {
   const [activeRemoteServer, setActiveRemoteServer] = useState<string | null>(null);
   const [firewallStatus, setFirewallStatus] = useState<FirewallStatus | null>(null);
 
+  const savingPortRef = useRef(false);
+  const savingPasswordRef = useRef(false);
+
+  useEffect(() => {
+    savingPortRef.current = savingPort;
+  }, [savingPort]);
+
+  useEffect(() => {
+    savingPasswordRef.current = savingPassword;
+  }, [savingPassword]);
+
   const currentModel = settings?.current_model;
+
+  const committedSharingPort = status.port?.toString() ?? savedPort;
 
   // Fetch current sharing status
   const fetchStatus = useCallback(async () => {
@@ -103,11 +121,16 @@ export function NetworkSharingCard() {
         if (normalizedResult.port) {
           const portStr = normalizedResult.port.toString();
           setPort(portStr);
-          setSavedPort(portStr);
+          if (!savingPortRef.current) {
+            setSavedPort(portStr);
+          }
         }
         if (normalizedResult.password !== undefined) {
-          setPassword(normalizedResult.password || "");
-          setSavedPassword(normalizedResult.password || "");
+          const nextPassword = normalizedResult.password || "";
+          setPassword(nextPassword);
+          if (!savingPasswordRef.current) {
+            setSavedPassword(nextPassword);
+          }
         }
       }
     } catch (error) {
@@ -135,6 +158,20 @@ export function NetworkSharingCard() {
       setFirewallStatus(null);
     }
   }, []);
+
+  const restartSharing = useCallback(
+    async (sharingPort: string, sharingPassword: string) => {
+      await invoke("stop_sharing");
+      await invoke("start_sharing", {
+        port: parseInt(sharingPort, 10),
+        password: sharingPassword || null,
+        serverName: null,
+      });
+      await fetchStatus();
+    },
+    [fetchStatus],
+  );
+
 
   // Fetch available model info and get display name for current selection
   const fetchModelInfo = useCallback(async () => {
@@ -206,6 +243,14 @@ export function NetworkSharingCard() {
     }
   }, [settings?.sharing_port, settings?.sharing_password]);
 
+  useEffect(() => {
+    committedSharingConfigRef.current = {
+      port: savedPort,
+      password: savedPassword,
+    };
+  }, [savedPort, savedPassword]);
+
+
   // Auto-restart sharing when model selection changes
   useEffect(() => {
     const autoRestartSharing = async () => {
@@ -213,16 +258,11 @@ export function NetworkSharingCard() {
       if (!status.enabled || !status.model_name || !currentModel) return;
       if (status.model_name === currentModel) return;
 
+      const { port: committedPort, password: committedPassword } = committedSharingConfigRef.current;
       console.log(`[Network Sharing] Model changed from ${status.model_name} to ${currentModel}, restarting...`);
 
       try {
-        await invoke("stop_sharing");
-        await invoke("start_sharing", {
-          port: parseInt(port, 10),
-          password: password || null,
-          serverName: null,
-        });
-        await fetchStatus();
+        await restartSharing(committedPort, committedPassword);
         toast.success(`Now sharing ${currentModel}`);
       } catch (error) {
         console.error("Failed to restart sharing with new model:", error);
@@ -231,7 +271,7 @@ export function NetworkSharingCard() {
     };
 
     autoRestartSharing();
-  }, [currentModel, status.enabled, status.model_name, port, password, fetchStatus]);
+  }, [currentModel, status.enabled, status.model_name, restartSharing]);
 
   const handleToggleSharing = async (checked: boolean) => {
     setLoading(true);
@@ -264,23 +304,27 @@ export function NetworkSharingCard() {
   const handleSavePort = async () => {
     if (!status.enabled) return;
     setSavingPort(true);
+    savingPortRef.current = true;
+    const previousPort = savedPort;
     try {
-      await invoke("stop_sharing");
-      await invoke("start_sharing", {
-        port: parseInt(port, 10),
-        password: savedPassword || null,
-        serverName: null,
-      });
-      setSavedPort(port);
-      // Persist to settings
+      await restartSharing(port, savedPassword);
       await updateSettings({ sharing_port: parseInt(port, 10) });
-      await fetchStatus();
+      setSavedPort(port);
       toast.success(`Port changed to ${port}`);
     } catch (error) {
       console.error("Failed to update port:", error);
+      try {
+        await restartSharing(previousPort, savedPassword);
+      } catch (rollbackError) {
+        console.error(
+          "Failed to restore previous sharing configuration after port save failure:",
+          rollbackError,
+        );
+      }
       toast.error("Failed to update port");
-      setPort(savedPort); // Revert on error
+      setPort(previousPort); // Revert on error
     } finally {
+      savingPortRef.current = false;
       setSavingPort(false);
     }
   };
@@ -289,23 +333,27 @@ export function NetworkSharingCard() {
   const handleSavePassword = async () => {
     if (!status.enabled) return;
     setSavingPassword(true);
+    savingPasswordRef.current = true;
+    const previousPassword = savedPassword;
     try {
-      await invoke("stop_sharing");
-      await invoke("start_sharing", {
-        port: parseInt(savedPort, 10),
-        password: password || null,
-        serverName: null,
-      });
-      setSavedPassword(password);
-      // Persist to settings
+      await restartSharing(savedPort, password);
       await updateSettings({ sharing_password: password || undefined });
-      await fetchStatus();
+      setSavedPassword(password);
       toast.success(password ? "Password updated" : "Password removed");
     } catch (error) {
       console.error("Failed to update password:", error);
+      try {
+        await restartSharing(savedPort, previousPassword);
+      } catch (rollbackError) {
+        console.error(
+          "Failed to restore previous sharing configuration after password save failure:",
+          rollbackError,
+        );
+      }
       toast.error("Failed to update password");
-      setPassword(savedPassword); // Revert on error
+      setPassword(previousPassword); // Revert on error
     } finally {
+      savingPasswordRef.current = false;
       setSavingPassword(false);
     }
   };
@@ -313,7 +361,7 @@ export function NetworkSharingCard() {
   const copyAddress = (ip: string) => {
     // Extract just the IP from "192.168.1.1 (eth0)" format
     const justIp = ip.split(" ")[0];
-    const address = `${justIp}:${savedPort}`;
+    const address = `${justIp}:${committedSharingPort}`;
     navigator.clipboard.writeText(address);
     toast.success("Address copied to clipboard");
   };
@@ -500,7 +548,7 @@ export function NetworkSharingCard() {
                         <div key={`success-${index}`} className="flex items-center gap-2">
                           <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
                           <div className="flex-1 px-3 py-2 rounded-md bg-muted/50 border border-green-500/30 font-mono text-sm">
-                            <span className="font-semibold">{result.ip}:{port}</span>
+                            <span className="font-semibold">{result.ip}:{committedSharingPort}</span>
                             {result.interface_name && (
                               <span className="ml-2 text-xs text-muted-foreground">
                                 ({result.interface_name})
@@ -527,7 +575,7 @@ export function NetworkSharingCard() {
                         >
                           <XCircle className="h-4 w-4 text-red-400 flex-shrink-0" />
                           <div className="flex-1 px-3 py-2 rounded-md bg-muted/30 border border-border/30 font-mono text-sm text-muted-foreground">
-                            <span>{result.ip}:{port}</span>
+                            <span>{result.ip}:{committedSharingPort}</span>
                             {result.interface_name && (
                               <span className="ml-2 text-xs text-muted-foreground">
                                 ({result.interface_name})

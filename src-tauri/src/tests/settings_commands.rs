@@ -713,7 +713,10 @@ mod tests {
         );
         assert_eq!(restored.selected_microphone, original.selected_microphone);
         assert_eq!(restored.recording_mode, original.recording_mode);
-        assert_eq!(restored.use_different_ptt_key, original.use_different_ptt_key);
+        assert_eq!(
+            restored.use_different_ptt_key,
+            original.use_different_ptt_key
+        );
         assert_eq!(restored.ptt_hotkey, original.ptt_hotkey);
         assert_eq!(
             restored.keep_transcription_in_clipboard,
@@ -732,7 +735,10 @@ mod tests {
             restored.pill_indicator_position,
             original.pill_indicator_position
         );
-        assert_eq!(restored.pill_indicator_offset, original.pill_indicator_offset);
+        assert_eq!(
+            restored.pill_indicator_offset,
+            original.pill_indicator_offset
+        );
         assert_eq!(
             restored.pause_media_during_recording,
             original.pause_media_during_recording
@@ -815,10 +821,7 @@ mod tests {
             settings.selected_microphone,
             Some("マイク 日本語".to_string())
         );
-        assert_eq!(
-            settings.sharing_password,
-            Some("пароль123".to_string())
-        );
+        assert_eq!(settings.sharing_password, Some("пароль123".to_string()));
 
         // Verify serialization preserves unicode
         let json = serde_json::to_string(&settings).unwrap();

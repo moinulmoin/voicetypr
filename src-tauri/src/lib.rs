@@ -22,6 +22,7 @@ mod menu;
 mod parakeet;
 mod recognition;
 mod recording;
+mod remote;
 mod secure_store;
 mod simple_cache;
 mod state;
@@ -29,7 +30,6 @@ mod state_machine;
 mod utils;
 mod whisper;
 mod window_manager;
-mod remote;
 
 #[cfg(test)]
 mod tests;
@@ -48,6 +48,7 @@ pub fn hide_dock_icon(app: &tauri::AppHandle) {
 }
 
 use audio::recorder::AudioRecorder;
+use commands::remote::load_remote_settings;
 use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
@@ -74,9 +75,10 @@ use commands::{
     remote::{
         add_remote_server, check_remote_server_status, get_active_remote_server,
         get_firewall_status, get_local_ips, get_local_machine_id, get_sharing_status,
-        list_remote_servers, open_firewall_settings, refresh_active_remote_server_status, refresh_remote_servers, remove_remote_server,
-        set_active_remote_server, start_sharing, stop_sharing, test_remote_connection,
-        test_remote_server, transcribe_remote, update_remote_server,
+        list_remote_servers, open_firewall_settings, refresh_active_remote_server_status,
+        refresh_remote_servers, remove_remote_server, set_active_remote_server, start_sharing,
+        stop_sharing, test_remote_connection, test_remote_server, transcribe_remote,
+        update_remote_server,
     },
     reset::reset_app_data,
     settings::*,
@@ -85,7 +87,6 @@ use commands::{
     utils::export_transcriptions,
     window::*,
 };
-use commands::remote::load_remote_settings;
 use remote::lifecycle::RemoteServerManager;
 use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
@@ -1333,17 +1334,25 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
     );
 
     if let Err(err) = crate::commands::license::check_license_status_internal(&app).await {
-        log::warn!("Failed to warm runtime license cache during startup checks: {}", err);
+        log::warn!(
+            "Failed to warm runtime license cache during startup checks: {}",
+            err
+        );
     }
 
-    if let Some(remote_settings) = app.try_state::<AsyncMutex<crate::remote::settings::RemoteSettings>>() {
+    if let Some(remote_settings) =
+        app.try_state::<AsyncMutex<crate::remote::settings::RemoteSettings>>()
+    {
         if let Err(err) = crate::commands::remote::refresh_active_remote_server_status_impl(
             &app,
             &*remote_settings,
         )
         .await
         {
-            log::warn!("Failed to refresh active remote status during startup checks: {}", err);
+            log::warn!(
+                "Failed to refresh active remote status during startup checks: {}",
+                err
+            );
         }
     }
 
@@ -1392,7 +1401,6 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
     } else {
         log::info!("✅ At least one speech recognition engine is ready");
     }
-
 
     // Validate AI settings if enabled
     if let Ok(store) = app.store("settings") {

@@ -97,10 +97,7 @@ mod tests {
         fs::create_dir_all(&model_dir)
             .map_err(|e| format!("Failed to create model directory {:?}: {}", model_dir, e))?;
 
-        println!(
-            "Downloading tiny.en model (~75MB) to {:?}...",
-            model_path
-        );
+        println!("Downloading tiny.en model (~75MB) to {:?}...", model_path);
         println!("URL: {}", TINY_MODEL_URL);
 
         // Download the model using reqwest blocking client
@@ -297,12 +294,15 @@ mod tests {
         println!("Transcribed text: '{}'", transcribed_text);
         // Note: Content verification is relaxed because the tiny model may produce
         // varying results. The key test is that transcription completes successfully.
-        assert!(!transcribed_text.is_empty(), "Transcription should not be empty");
+        assert!(
+            !transcribed_text.is_empty(),
+            "Transcription should not be empty"
+        );
         assert!(
             verify_transcription(&transcribed_text),
             "Transcription should contain expected phrases, got: '{}'",
             transcribed_text
-);
+        );
 
         // Shutdown server
         let _ = shutdown_tx.send(());
@@ -319,7 +319,8 @@ mod tests {
     #[ignore]
     #[serial]
     async fn test_server_authentication() {
-        let model_path = ensure_tiny_model_available().await
+        let model_path = ensure_tiny_model_available()
+            .await
             .expect("Failed to ensure model is available");
 
         // Create server with password
@@ -408,7 +409,8 @@ mod tests {
     #[ignore]
     #[serial]
     async fn test_rapid_sequential_requests_real_transcription() {
-        let model_path = ensure_tiny_model_available().await
+        let model_path = ensure_tiny_model_available()
+            .await
             .expect("Failed to ensure model is available");
 
         println!("Using model: {:?}", model_path);
@@ -418,9 +420,8 @@ mod tests {
         assert!(test_audio_path.exists(), "Test audio not found");
 
         let num_requests = 3;
-        let audio_files: Vec<PathBuf> = (0..num_requests)
-            .map(|_| test_audio_path.clone())
-            .collect();
+        let audio_files: Vec<PathBuf> =
+            (0..num_requests).map(|_| test_audio_path.clone()).collect();
         println!("Using test audio for {} concurrent requests", num_requests);
 
         // Create server
@@ -544,7 +545,8 @@ mod tests {
     #[ignore]
     #[serial]
     async fn test_sequential_requests_varying_sizes() {
-        let model_path = ensure_tiny_model_available().await
+        let model_path = ensure_tiny_model_available()
+            .await
             .expect("Failed to ensure model is available");
 
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -642,7 +644,8 @@ mod tests {
     #[ignore]
     #[serial]
     async fn test_concurrent_local_and_remote_transcription() {
-        let model_path = ensure_tiny_model_available().await
+        let model_path = ensure_tiny_model_available()
+            .await
             .expect("Failed to ensure model is available");
 
         println!("Using model: {:?}", model_path);
@@ -756,12 +759,15 @@ mod tests {
         let remote_text = remote_json["text"].as_str().unwrap_or("");
         println!("[Remote] Transcribed: '{}'", remote_text);
         // Note: Content verification is relaxed - key test is that transcription completes
-        assert!(!remote_text.is_empty(), "[Remote] Transcription should not be empty");
+        assert!(
+            !remote_text.is_empty(),
+            "[Remote] Transcription should not be empty"
+        );
         assert!(
             verify_transcription(&remote_text),
             "[Remote] Transcription should contain expected phrases, got: '{}'",
             remote_text
-);
+        );
 
         // Verify local transcription succeeded
         let local_response = local_result.expect("[Local] Task panicked");
@@ -774,12 +780,15 @@ mod tests {
         assert!(!local_response.model.is_empty(), "[Local] Empty model name");
         println!("[Local] Transcribed: '{}'", local_response.text);
         // Note: Content verification is relaxed - key test is that transcription completes
-        assert!(!local_response.text.is_empty(), "[Local] Transcription should not be empty");
+        assert!(
+            !local_response.text.is_empty(),
+            "[Local] Transcription should not be empty"
+        );
         assert!(
             verify_transcription(&local_response.text),
             "[Local] Transcription should contain expected phrases, got: '{}'",
             local_response.text
-);
+        );
 
         // Shutdown server
         let _ = shutdown_tx.send(());
@@ -798,7 +807,8 @@ mod tests {
     #[ignore]
     #[serial]
     async fn test_multiple_concurrent_remote_requests() {
-        let model_path = ensure_tiny_model_available().await
+        let model_path = ensure_tiny_model_available()
+            .await
             .expect("Failed to ensure model is available");
 
         println!("Using model: {:?}", model_path);
@@ -911,7 +921,11 @@ mod tests {
             let text = json["text"].as_str().unwrap_or("");
             println!("[Client {}] Transcribed: '{}'", client_id, text);
             // Note: Content verification is relaxed - key test is that transcription completes
-            assert!(!text.is_empty(), "[Client {}] Transcription should not be empty", client_id);
+            assert!(
+                !text.is_empty(),
+                "[Client {}] Transcription should not be empty",
+                client_id
+            );
             assert!(
                 verify_transcription(text),
                 "[Client {}] Transcription should contain expected phrases, got: '{}'",

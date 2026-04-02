@@ -8,8 +8,8 @@ use crate::remote::settings::{ConnectionStatus, RemoteSettings};
 use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
 use crate::whisper::manager::WhisperManager;
 use crate::AppState;
-use tauri::async_runtime::Mutex as AsyncMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tauri::async_runtime::Mutex as AsyncMutex;
 
 /// Generation counter for tray menu updates to prevent race conditions.
 /// Each update increments this and checks if it's still current before applying.
@@ -159,7 +159,6 @@ pub(crate) fn resolve_pill_indicator_mode(
     default_mode
 }
 
-
 pub(crate) fn recording_retention_count_from_store(
     value: Option<serde_json::Value>,
 ) -> Option<u32> {
@@ -170,9 +169,7 @@ pub(crate) fn recording_retention_count_from_store(
     }
 }
 
-pub(crate) fn recording_retention_count_to_value(
-    count: Option<u32>,
-) -> serde_json::Value {
+pub(crate) fn recording_retention_count_to_value(count: Option<u32>) -> serde_json::Value {
     match count {
         Some(count) => json!(count),
         None => serde_json::Value::Null,
@@ -306,7 +303,7 @@ async fn sync_running_sharing_server_to_model(
     app: &AppHandle,
     model_name: &str,
     engine: &str,
- ) -> Result<(), String> {
+) -> Result<(), String> {
     let server_manager = app.state::<AsyncMutex<RemoteServerManager>>();
     let mut server = server_manager.lock().await;
     if !server.is_running() {
@@ -319,7 +316,10 @@ async fn sync_running_sharing_server_to_model(
             Ok(())
         }
         Err(err) => {
-            log::warn!("Stopping sharing because the selected model is no longer shareable: {}", err);
+            log::warn!(
+                "Stopping sharing because the selected model is no longer shareable: {}",
+                err
+            );
             server.stop().await;
             drop(server);
 
@@ -340,7 +340,6 @@ async fn sync_running_sharing_server_to_model(
         }
     }
 }
-
 
 #[tauri::command]
 pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
@@ -562,7 +561,12 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         }
 
         // Update the sharing server's model if it's running
-        sync_running_sharing_server_to_model(&app, &settings.current_model, &settings.current_model_engine).await?;
+        sync_running_sharing_server_to_model(
+            &app,
+            &settings.current_model,
+            &settings.current_model_engine,
+        )
+        .await?;
 
         // Emit model-changed event so frontend can refresh remote server status
         if let Err(e) = app.emit(
@@ -832,6 +836,11 @@ pub async fn get_supported_languages() -> Result<Vec<LanguageInfo>, String> {
     Ok(languages)
 }
 
+fn apply_tray_model_selection(settings: &mut Settings, model_name: &str, engine: &str) {
+    settings.current_model = model_name.to_string();
+    settings.current_model_engine = engine.to_string();
+}
+
 #[tauri::command]
 pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(), String> {
     // Check if this is a remote server selection
@@ -850,8 +859,12 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
             }
         }
 
-        let refreshed_connection = crate::commands::remote::refresh_saved_connection_status(&app, connection_id).await?;
-        if matches!(refreshed_connection.status, ConnectionStatus::SelfConnection) {
+        let refreshed_connection =
+            crate::commands::remote::refresh_saved_connection_status(&app, connection_id).await?;
+        if matches!(
+            refreshed_connection.status,
+            ConnectionStatus::SelfConnection
+        ) {
             return Err("Cannot use this VoiceTypr instance as its own remote server".to_string());
         }
 
@@ -934,7 +947,11 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
                 .and_then(|h| h.into_string().ok())
                 .unwrap_or_else(|| "VoiceTypr Server".to_string());
 
-            log::info!("🔧 [TRAY] Auto-restoring network sharing on port {} with model {}", restore_port, model_name);
+            log::info!(
+                "🔧 [TRAY] Auto-restoring network sharing on port {} with model {}",
+                restore_port,
+                model_name
+            );
 
             let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
             let engine = if model_name == "soniox" {
@@ -948,9 +965,22 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
                 }
             };
 
-            if let Ok((model_path, engine)) = resolve_shareable_model_config(&app, &model_name, &engine).await {
+            if let Ok((model_path, engine)) =
+                resolve_shareable_model_config(&app, &model_name, &engine).await
+            {
                 let mut manager = server_manager.lock().await;
-                if let Err(e) = manager.start(restore_port, restore_password, server_name, model_path, model_name.clone(), engine, Some(app.clone())).await {
+                if let Err(e) = manager
+                    .start(
+                        restore_port,
+                        restore_password,
+                        server_name,
+                        model_path,
+                        model_name.clone(),
+                        engine,
+                        Some(app.clone()),
+                    )
+                    .await
+                {
                     log::warn!("🔧 [TRAY] Failed to auto-restore sharing: {}", e);
                 } else {
                     {
@@ -1001,9 +1031,7 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     };
 
     // Update the model
-    settings.current_model = model_name.clone();
-    settings.current_model_engine = engine.clone();
-    settings.language = "en".to_string();
+    apply_tray_model_selection(&mut settings, &model_name, &engine);
 
     // Save settings (this will also preload the model)
     save_settings(app.clone(), settings).await?;
@@ -1048,35 +1076,60 @@ pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
 
 /// Update tray menu with optional generation check.
 /// If generation is provided, the update will be skipped if a newer generation was requested.
-pub async fn update_tray_menu_with_generation(app: AppHandle, my_generation: Option<u64>) -> Result<(), String> {
+pub async fn update_tray_menu_with_generation(
+    app: AppHandle,
+    my_generation: Option<u64>,
+) -> Result<(), String> {
     use std::time::Instant;
     let start_time = Instant::now();
 
-    let gen_info = my_generation.map(|g| format!(" (gen={})", g)).unwrap_or_default();
+    let gen_info = my_generation
+        .map(|g| format!(" (gen={})", g))
+        .unwrap_or_default();
     log::info!("⏱️ [TRAY TIMING] update_tray_menu called{}", gen_info);
 
     // Build the new menu
-    log::info!("⏱️ [TRAY TIMING] Building tray menu...{} (+{}ms)", gen_info, start_time.elapsed().as_millis());
+    log::info!(
+        "⏱️ [TRAY TIMING] Building tray menu...{} (+{}ms)",
+        gen_info,
+        start_time.elapsed().as_millis()
+    );
     let new_menu = crate::build_tray_menu(&app)
         .await
         .map_err(|e| format!("Failed to build tray menu: {}", e))?;
-    log::info!("⏱️ [TRAY TIMING] Tray menu built{} (+{}ms)", gen_info, start_time.elapsed().as_millis());
+    log::info!(
+        "⏱️ [TRAY TIMING] Tray menu built{} (+{}ms)",
+        gen_info,
+        start_time.elapsed().as_millis()
+    );
 
     // Check if this update is still current (if generation was provided)
     if let Some(my_gen) = my_generation {
         let current_gen = current_tray_menu_generation();
         if my_gen < current_gen {
-            log::info!("⏱️ [TRAY TIMING] Skipping stale tray menu update (gen={} < current={})", my_gen, current_gen);
+            log::info!(
+                "⏱️ [TRAY TIMING] Skipping stale tray menu update (gen={} < current={})",
+                my_gen,
+                current_gen
+            );
             return Ok(());
         }
     }
 
     // Update the tray menu
     if let Some(tray) = app.tray_by_id("main") {
-        log::info!("⏱️ [TRAY TIMING] Setting tray menu...{} (+{}ms)", gen_info, start_time.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TRAY TIMING] Setting tray menu...{} (+{}ms)",
+            gen_info,
+            start_time.elapsed().as_millis()
+        );
         tray.set_menu(Some(new_menu))
             .map_err(|e| format!("Failed to set tray menu: {}", e))?;
-        log::info!("⏱️ [TRAY TIMING] Tray menu set{} - total: {}ms", gen_info, start_time.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TRAY TIMING] Tray menu set{} - total: {}ms",
+            gen_info,
+            start_time.elapsed().as_millis()
+        );
     } else {
         log::warn!("Tray icon not found");
     }
@@ -1143,8 +1196,8 @@ pub async fn set_audio_device(app: AppHandle, device_name: Option<String>) -> Re
 #[cfg(test)]
 mod tests {
     use super::{
-        resolve_pill_indicator_mode, recording_retention_count_from_store,
-        recording_retention_count_to_value,
+        recording_retention_count_from_store, recording_retention_count_to_value,
+        resolve_pill_indicator_mode,
     };
     use serde_json::json;
 
@@ -1203,6 +1256,28 @@ mod tests {
 
     #[test]
     fn recording_retention_count_none_saves_as_null() {
-        assert_eq!(recording_retention_count_to_value(None), serde_json::Value::Null);
+        assert_eq!(
+            recording_retention_count_to_value(None),
+            serde_json::Value::Null
+        );
+    }
+}
+
+#[cfg(test)]
+mod tray_model_selection_tests {
+    use super::*;
+
+    #[test]
+    fn tray_model_selection_preserves_language() {
+        let mut settings = Settings {
+            language: "es".to_string(),
+            ..Settings::default()
+        };
+
+        apply_tray_model_selection(&mut settings, "large-v3", "whisper");
+
+        assert_eq!(settings.language, "es");
+        assert_eq!(settings.current_model, "large-v3");
+        assert_eq!(settings.current_model_engine, "whisper");
     }
 }

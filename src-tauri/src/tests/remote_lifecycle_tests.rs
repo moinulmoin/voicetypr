@@ -3,8 +3,30 @@
 //! Comprehensive tests covering server startup, shutdown, state transitions,
 //! configuration management, and error handling.
 
-use std::path::PathBuf;
 use std::net::TcpListener;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
+
+async fn open_incomplete_transcribe_request(port: u16) -> TcpStream {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("Failed to connect to remote server");
+
+    let request = format!(
+        "POST /api/v1/transcribe HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: audio/wav\r\nContent-Length: 1024\r\nConnection: keep-alive\r\n\r\n",
+        port
+    );
+
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("Failed to write incomplete transcribe request headers");
+
+    stream
+}
 
 use crate::remote::lifecycle::{RemoteServerManager, SharingStatus};
 use crate::remote::transcription::SharedServerState;
@@ -344,6 +366,70 @@ async fn test_server_stop_sets_not_running() {
 }
 
 #[tokio::test]
+async fn test_server_stop_releases_port_for_immediate_restart_while_request_is_open() {
+    let mut manager = RemoteServerManager::new();
+    let port = 47894;
+
+    manager
+        .start(
+            port,
+            None,
+            "Shutdown Test".to_string(),
+            PathBuf::from("/fake/model.bin"),
+            "test-model".to_string(),
+            "whisper".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Open a transcribe request and do not send the full body so the handler stays in-flight.
+    let mut stream = open_incomplete_transcribe_request(port).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let stop_start = Instant::now();
+    let stop_result = tokio::time::timeout(Duration::from_secs(8), manager.stop()).await;
+    let stop_elapsed = stop_start.elapsed();
+
+    assert!(
+        stop_result.is_ok(),
+        "Server stop should complete and remain bounded even when requests are in-flight"
+    );
+    assert!(
+        stop_elapsed >= Duration::from_secs(5),
+        "Stop should reach the graceful-shutdown timeout before returning, got {stop_elapsed:?}"
+    );
+    assert!(
+        stop_elapsed <= Duration::from_secs(6),
+        "Stop should be bounded by shutdown timeout semantics, got {stop_elapsed:?}"
+    );
+
+    assert!(!manager.is_running());
+    assert!(manager.get_port().is_none());
+
+    manager
+        .start(
+            port,
+            None,
+            "Restarted Shutdown Test".to_string(),
+            PathBuf::from("/fake/model.bin"),
+            "test-model".to_string(),
+            "whisper".to_string(),
+            None,
+        )
+        .await
+        .expect("Should restart immediately on the same port while the original request is still open");
+
+    manager.stop().await;
+
+    // Explicitly close the socket after verifying restart so cleanup is deterministic.
+    stream
+        .shutdown()
+        .await
+        .expect("Failed to close in-flight request socket");
+}
+
+#[tokio::test]
 async fn test_server_stop_clears_port() {
     let mut manager = RemoteServerManager::new();
 
@@ -577,7 +663,10 @@ async fn test_update_model_status_reflects_change() {
         .await
         .unwrap();
 
-    assert_eq!(manager.get_status().model_name, Some("old-model".to_string()));
+    assert_eq!(
+        manager.get_status().model_name,
+        Some("old-model".to_string())
+    );
 
     manager.update_model(
         PathBuf::from("/models/new.bin"),
@@ -587,7 +676,10 @@ async fn test_update_model_status_reflects_change() {
 
     // Note: get_status reads from config, not shared_state
     // The status should reflect the updated config
-    assert_eq!(manager.get_status().model_name, Some("updated-model".to_string()));
+    assert_eq!(
+        manager.get_status().model_name,
+        Some("updated-model".to_string())
+    );
     manager.stop().await;
 }
 
@@ -822,7 +914,10 @@ async fn test_state_transition_running_to_running_different_config() {
         .unwrap();
 
     assert!(manager.is_running());
-    assert_eq!(manager.get_status().server_name, Some("Config A".to_string()));
+    assert_eq!(
+        manager.get_status().server_name,
+        Some("Config A".to_string())
+    );
 
     // Start with config B (implicit stop + start)
     manager
@@ -840,7 +935,10 @@ async fn test_state_transition_running_to_running_different_config() {
 
     // Still running but with new config
     assert!(manager.is_running());
-    assert_eq!(manager.get_status().server_name, Some("Config B".to_string()));
+    assert_eq!(
+        manager.get_status().server_name,
+        Some("Config B".to_string())
+    );
     assert_eq!(manager.get_status().port, Some(47884));
 
     manager.stop().await;

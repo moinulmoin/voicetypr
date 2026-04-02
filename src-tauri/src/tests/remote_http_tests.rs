@@ -236,7 +236,9 @@ fn create_test_wav_data() -> Vec<u8> {
     wav.extend_from_slice(&1u16.to_le_bytes()); // PCM format
     wav.extend_from_slice(&num_channels.to_le_bytes());
     wav.extend_from_slice(&sample_rate.to_le_bytes());
-    wav.extend_from_slice(&(sample_rate * num_channels as u32 * bits_per_sample as u32 / 8).to_le_bytes()); // byte rate
+    wav.extend_from_slice(
+        &(sample_rate * num_channels as u32 * bits_per_sample as u32 / 8).to_le_bytes(),
+    ); // byte rate
     wav.extend_from_slice(&(num_channels * bits_per_sample / 8).to_le_bytes()); // block align
     wav.extend_from_slice(&bits_per_sample.to_le_bytes());
 

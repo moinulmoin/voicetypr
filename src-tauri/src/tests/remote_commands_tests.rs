@@ -9,11 +9,13 @@
 //! - Constants and configurations
 
 use crate::commands::remote::{
-    normalize_loaded_active_remote_status,
-    DEFAULT_PORT, FirewallStatus, get_firewall_status, get_local_ips, get_local_machine_id,
-    open_firewall_settings,
+    apply_server_update, get_firewall_status, get_local_ips, get_local_machine_id,
+    normalize_loaded_active_remote_status, open_firewall_settings, FirewallStatus, DEFAULT_PORT,
 };
+use crate::remote::client::{RemoteClientError, RemoteEndpoint};
+use crate::remote::server::StatusResponse;
 use crate::remote::settings::{ConnectionStatus, RemoteSettings, SavedConnection};
+
 
 #[test]
 fn test_normalize_loaded_active_remote_status_preserves_last_checked() {
@@ -26,7 +28,9 @@ fn test_normalize_loaded_active_remote_status_preserves_last_checked() {
         None,
     );
     let conn_id = conn.id.clone();
-    settings.set_active_connection(Some(conn_id.clone())).unwrap();
+    settings
+        .set_active_connection(Some(conn_id.clone()))
+        .unwrap();
     let active = settings
         .saved_connections
         .iter_mut()
@@ -37,7 +41,9 @@ fn test_normalize_loaded_active_remote_status_preserves_last_checked() {
 
     normalize_loaded_active_remote_status(&mut settings);
 
-    let active = settings.get_active_connection().expect("active connection should remain");
+    let active = settings
+        .get_active_connection()
+        .expect("active connection should remain");
     assert_eq!(active.status, ConnectionStatus::Unknown);
     assert_eq!(active.last_checked, 42_4242);
 }
@@ -60,7 +66,9 @@ fn test_normalize_loaded_active_remote_status_is_noop_without_active_remote() {
     normalize_loaded_active_remote_status(&mut settings);
 
     assert!(settings.active_connection_id.is_none());
-    let connection = settings.get_connection(&conn_id).expect("connection should remain");
+    let connection = settings
+        .get_connection(&conn_id)
+        .expect("connection should remain");
     assert_eq!(connection.status, ConnectionStatus::Offline);
     assert_eq!(connection.last_checked, original_last_checked + 7);
 }
@@ -76,13 +84,103 @@ fn test_normalize_loaded_active_remote_status_clears_orphaned_active_id() {
         None,
     );
     let conn_id = conn.id.clone();
-    settings.set_active_connection(Some(conn_id.clone())).unwrap();
+    settings
+        .set_active_connection(Some(conn_id.clone()))
+        .unwrap();
     settings.remove_connection(&conn_id).unwrap();
 
     normalize_loaded_active_remote_status(&mut settings);
 
     assert!(settings.active_connection_id.is_none());
 }
+
+#[test]
+fn test_apply_server_update_uses_fresh_connection_state_after_probe() {
+    let mut settings = RemoteSettings::default();
+    let conn = settings.add_connection(
+        "192.168.1.10".to_string(),
+        47842,
+        None,
+        Some("Primary".to_string()),
+        Some("stale-model".to_string()),
+    );
+    let conn_id = conn.id.clone();
+    let created_at = conn.created_at;
+    let stale_snapshot = settings.get_connection(&conn_id).unwrap().clone();
+
+    settings.saved_connections[0].model = Some("fresh-model".to_string());
+    settings.saved_connections[0].status = ConnectionStatus::Offline;
+    settings.saved_connections[0].last_checked = 123;
+    settings
+        .set_active_connection(Some(conn_id.clone()))
+        .unwrap();
+
+    let updated = apply_server_update(
+        &mut settings,
+        &conn_id,
+        "192.168.1.11".to_string(),
+        47843,
+        Some("pw".to_string()),
+        Some("Updated".to_string()),
+        Err(RemoteClientError::ConnectFailed {
+            endpoint: RemoteEndpoint::Status,
+            detail: "timeout".to_string(),
+        }),
+        Some("machine-local"),
+    )
+    .unwrap();
+
+    assert_eq!(updated.id, conn_id);
+    assert_eq!(updated.created_at, created_at);
+    assert_eq!(updated.name, Some("Updated".to_string()));
+    assert_eq!(updated.model, Some("fresh-model".to_string()));
+    assert_ne!(updated.model, stale_snapshot.model);
+    assert_eq!(settings.active_connection_id, Some(updated.id.clone()));
+
+    let stored = settings.get_connection(&updated.id).unwrap();
+    assert_eq!(stored.created_at, created_at);
+    assert_eq!(stored.host, "192.168.1.11");
+    assert_eq!(stored.port, 47843);
+    assert_eq!(stored.password, Some("pw".to_string()));
+    assert_eq!(stored.name, Some("Updated".to_string()));
+    assert_eq!(stored.model, Some("fresh-model".to_string()));
+    assert_eq!(stored.status, ConnectionStatus::Offline);
+    assert!(stored.last_checked >= 123);
+}
+
+#[test]
+fn test_apply_server_update_errors_when_connection_disappears_before_apply() {
+    let mut settings = RemoteSettings::default();
+    let conn = settings.add_connection(
+        "192.168.1.20".to_string(),
+        47842,
+        None,
+        Some("Primary".to_string()),
+        Some("whisper-base".to_string()),
+    );
+    let conn_id = conn.id.clone();
+
+    settings.remove_connection(&conn_id).unwrap();
+
+    let error = apply_server_update(
+        &mut settings,
+        &conn_id,
+        "192.168.1.21".to_string(),
+        47843,
+        None,
+        Some("Updated".to_string()),
+        Err(RemoteClientError::ConnectFailed {
+            endpoint: RemoteEndpoint::Status,
+            detail: "timeout".to_string(),
+        }),
+        Some("machine-local"),
+    )
+    .unwrap_err();
+
+    assert_eq!(error, format!("Server '{}' not found", conn_id));
+    assert!(settings.get_connection(&conn_id).is_none());
+}
+
 
 // ============================================================================
 // Constants Tests
@@ -817,11 +915,7 @@ fn test_switch_active_connection() {
     assert!(settings.get_active_connection().is_none());
 }
 
-
-
 use crate::commands::remote::connection_status_for_remote_error;
-use crate::remote::client::{RemoteClientError, RemoteEndpoint};
-
 #[test]
 fn test_remote_client_auth_error_maps_to_auth_failed_status() {
     let error = RemoteClientError::AuthFailed {

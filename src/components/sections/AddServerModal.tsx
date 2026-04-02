@@ -46,10 +46,13 @@ export function AddServerModal({
   onServerAdded,
   editServer,
 }: AddServerModalProps) {
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState("47842");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
+  const initialServer = open ? editServer : null;
+  const [host, setHost] = useState(initialServer?.host ?? "");
+  const [port, setPort] = useState(
+    initialServer ? initialServer.port.toString() : "47842",
+  );
+  const [password, setPassword] = useState(initialServer?.password || "");
+  const [name, setName] = useState(initialServer?.name || "");
   const [testStatus, setTestStatus] = useState<TestStatus>("idle");
   const [showPassword, setShowPassword] = useState(false);
   const [testResult, setTestResult] = useState<StatusResponse | null>(null);
@@ -60,25 +63,41 @@ export function AddServerModal({
 
   const isEditMode = !!editServer;
 
-  // Populate form when editing
-  useState(() => {
-    if (editServer && open) {
-      setHost(editServer.host);
-      setPort(editServer.port.toString());
-      setPassword(editServer.password || "");
-      setName(editServer.name || "");
-    }
-  });
+  // Visibility drives all transient modal state.
+  const hasMountedRef = React.useRef(false);
 
-  // Update form when editServer changes
   React.useEffect(() => {
-    if (editServer && open) {
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      return;
+    }
+
+    const resetTransientState = () => {
+      setHost("");
+      setPort("47842");
+      setPassword("");
+      setName("");
+      setTestStatus("idle");
+      setTestResult(null);
+      setTestError(null);
+      setShowPassword(false);
+      setSaving(false);
+      setIsSelfConnection(false);
+    };
+
+    if (!open) {
+      resetTransientState();
+      return;
+    }
+
+    if (editServer) {
+      resetTransientState();
       setHost(editServer.host);
       setPort(editServer.port.toString());
       setPassword(editServer.password || "");
       setName(editServer.name || "");
     }
-  }, [editServer, open]);
+  }, [open, editServer]);
 
   // Fetch local machine ID for self-connection detection
   React.useEffect(() => {
@@ -89,19 +108,7 @@ export function AddServerModal({
     }
   }, [open, localMachineId]);
 
-  const resetForm = () => {
-    setHost("");
-    setPort("47842");
-    setPassword("");
-    setName("");
-    setTestStatus("idle");
-    setTestResult(null);
-    setTestError(null);
-    setIsSelfConnection(false);
-  };
-
   const handleClose = () => {
-    resetForm();
     onOpenChange(false);
   };
 
@@ -142,18 +149,24 @@ export function AddServerModal({
         setName(data.name);
       }
     } catch (error) {
+      const errorObject = error as { message?: unknown };
+      const errorText =
+        typeof error === "string"
+          ? error
+          : typeof error === "object" &&
+              error !== null &&
+              typeof errorObject.message === "string"
+            ? errorObject.message
+            : "";
       console.error("Connection test failed:", error);
       let errorMessage = "Connection failed";
 
-      if (typeof error === "string") {
-        // Backend returns specific error messages
-        if (error.includes("Authentication failed")) {
-          errorMessage = "Authentication failed - check password";
-        } else if (error.includes("Failed to connect")) {
-          errorMessage = "Cannot connect - check host and port";
-        } else {
-          errorMessage = error;
-        }
+      if (errorText.includes("Authentication failed")) {
+        errorMessage = "Authentication failed - check password";
+      } else if (errorText.includes("Failed to connect")) {
+        errorMessage = "Cannot connect - check host and port";
+      } else if (errorText) {
+        errorMessage = errorText;
       }
 
       setTestError(errorMessage);
