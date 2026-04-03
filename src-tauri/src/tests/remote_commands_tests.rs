@@ -209,6 +209,82 @@ fn test_apply_server_update_uses_fresh_connection_state_after_probe() {
 }
 
 #[test]
+fn test_apply_server_update_rejects_self_connection() {
+    let mut settings = RemoteSettings::default();
+    let conn = settings.add_connection(
+        "192.168.1.50".to_string(),
+        47842,
+        None,
+        Some("Primary".to_string()),
+        Some("whisper-base".to_string()),
+    );
+
+    let error = apply_server_update(
+        &mut settings,
+        &conn.id,
+        "192.168.1.51".to_string(),
+        47843,
+        None,
+        Some("Updated".to_string()),
+        Ok(StatusResponse {
+            status: "ok".to_string(),
+            version: "1.0.0".to_string(),
+            model: "whisper-base".to_string(),
+            name: "Remote Host".to_string(),
+            machine_id: "machine-local".to_string(),
+        }),
+        Some("machine-local"),
+    )
+    .unwrap_err();
+
+    assert_eq!(error, "Cannot use this VoiceTypr instance as its own remote server");
+    let stored = settings.get_connection(&conn.id).unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Unknown);
+    assert_eq!(stored.last_checked, 0);
+}
+
+#[test]
+fn test_apply_server_update_persists_online_status_and_last_checked() {
+    let mut settings = RemoteSettings::default();
+    let conn = settings.add_connection(
+        "192.168.1.60".to_string(),
+        47842,
+        None,
+        Some("Primary".to_string()),
+        Some("stale-model".to_string()),
+    );
+    let conn_id = conn.id.clone();
+
+    let updated = apply_server_update(
+        &mut settings,
+        &conn_id,
+        "192.168.1.61".to_string(),
+        47843,
+        Some("pw".to_string()),
+        Some("Updated".to_string()),
+        Ok(StatusResponse {
+            status: "ok".to_string(),
+            version: "1.0.0".to_string(),
+            model: "fresh-model".to_string(),
+            name: "Remote Host".to_string(),
+            machine_id: "remote-machine".to_string(),
+        }),
+        Some("local-machine"),
+    )
+    .unwrap();
+
+    assert_eq!(updated.status, ConnectionStatus::Online);
+    assert_eq!(updated.model, Some("fresh-model".to_string()));
+
+    let stored = settings.get_connection(&conn_id).unwrap();
+    assert_eq!(stored.status, ConnectionStatus::Online);
+    assert_eq!(stored.model, Some("fresh-model".to_string()));
+    assert!(stored.last_checked > 0);
+}
+
+
+
+#[test]
 fn test_apply_server_update_errors_when_connection_disappears_before_apply() {
     let mut settings = RemoteSettings::default();
     let conn = settings.add_connection(

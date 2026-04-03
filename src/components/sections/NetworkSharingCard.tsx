@@ -175,13 +175,32 @@ export function NetworkSharingCard() {
 
   const restartSharing = useCallback(
     async (sharingPort: string, sharingPassword: string) => {
-      await invoke("stop_sharing");
-      await invoke("start_sharing", {
-        port: parseInt(sharingPort, 10),
-        password: sharingPassword || null,
-        serverName: null,
-      });
-      await fetchStatus();
+      let restartError: unknown = null;
+
+      try {
+        await invoke("stop_sharing");
+        await invoke("start_sharing", {
+          port: parseInt(sharingPort, 10),
+          password: sharingPassword || null,
+          serverName: null,
+        });
+      } catch (error) {
+        restartError = error;
+      }
+
+      try {
+        await fetchStatus();
+      } catch (refreshError) {
+        console.error("Failed to refresh sharing status after restart:", refreshError);
+      }
+
+      if (restartError) {
+        if (restartError instanceof Error) {
+          throw restartError;
+        }
+
+        throw new Error(typeof restartError === "string" ? restartError : "Failed to restart sharing");
+      }
     },
     [fetchStatus],
   );
@@ -252,12 +271,24 @@ export function NetworkSharingCard() {
   }, [savedPort, savedPassword]);
 
 
+  const autoRestartAttemptRef = useRef<string | null>(null);
+
   // Auto-restart sharing when model selection changes
   useEffect(() => {
     const autoRestartSharing = async () => {
       // Only auto-restart if sharing is enabled, the shared model changed, and the selected model can actually be shared
-      if (!status.enabled || !status.model_name || !currentModel || !selectedModelCanBeShared) return;
-      if (status.model_name === currentModel) return;
+      if (!status.enabled || !status.model_name || !currentModel || !selectedModelCanBeShared) {
+        autoRestartAttemptRef.current = null;
+        return;
+      }
+      if (status.model_name === currentModel) {
+        autoRestartAttemptRef.current = null;
+        return;
+      }
+
+      const restartKey = `${status.model_name}->${currentModel}`;
+      if (autoRestartAttemptRef.current === restartKey) return;
+      autoRestartAttemptRef.current = restartKey;
 
       const { port: committedPort, password: committedPassword } = committedSharingConfigRef.current;
       console.log(`[Network Sharing] Model changed from ${status.model_name} to ${currentModel}, restarting...`);

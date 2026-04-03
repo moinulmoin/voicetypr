@@ -341,15 +341,28 @@ async fn sync_running_sharing_server_to_model(
     }
 }
 
+fn should_sync_running_sharing_server(
+    old_model: &str,
+    old_engine: &str,
+    new_model: &str,
+    new_engine: &str,
+) -> bool {
+    old_model != new_model || old_engine != new_engine
+}
+
 #[tauri::command]
 pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
-    // Check if model, recording mode, onboarding, and pill indicator mode changed
+    // Check if model, engine, recording mode, onboarding, and pill indicator mode changed
     let old_model = store
         .get("current_model")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_default();
+    let old_current_model_engine = store
+        .get("current_model_engine")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| Settings::default().current_model_engine.clone());
     let old_mode = store
         .get("recording_mode")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -521,52 +534,64 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     // Invalidate recording config cache when settings change
     crate::commands::audio::invalidate_recording_config_cache(&app).await;
 
-    // Preload new model and update tray menu if model changed
+    // Keep a running sharing server truthful after the selected model or engine changes
+    let model_changed = old_model != settings.current_model;
+    let selection_changed = should_sync_running_sharing_server(
+        &old_model,
+        &old_current_model_engine,
+        &settings.current_model,
+        &settings.current_model_engine,
+    );
     let is_parakeet_engine = settings.current_model_engine == "parakeet";
     let is_cloud_engine = settings.current_model_engine == "soniox";
+    if model_changed {
+        if !settings.current_model.is_empty() {
+            use crate::commands::model::preload_model;
+            use tauri::async_runtime::RwLock as AsyncRwLock;
 
-    if !settings.current_model.is_empty() && old_model != settings.current_model {
-        use crate::commands::model::preload_model;
-        use tauri::async_runtime::RwLock as AsyncRwLock;
-
-        log::info!(
-            "Model changed from '{}' to '{}', preloading new model and updating tray menu",
-            old_model,
-            settings.current_model
-        );
-
-        if !(is_parakeet_engine || is_cloud_engine) {
-            // Preload the new Whisper model
-            let app_clone = app.clone();
-            let model_name = settings.current_model.clone();
-            tokio::spawn(async move {
-                let whisper_state =
-                    app_clone.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
-                match preload_model(app_clone.clone(), model_name.clone(), whisper_state).await {
-                    Ok(_) => log::info!("Successfully preloaded new model: {}", model_name),
-                    Err(e) => log::warn!("Failed to preload new model: {}", e),
-                }
-            });
-        } else {
             log::info!(
-                "Skipping preload for {} engine selection",
-                settings.current_model_engine
+                "Model changed from '{}' to '{}', preloading new model",
+                old_model,
+                settings.current_model
             );
-        }
 
-        // Update the tray menu to reflect the new selection
-        if let Err(e) = update_tray_menu(app.clone()).await {
-            log::warn!("Failed to update tray menu after model change: {}", e);
-            // Don't fail the whole operation if tray update fails
+            if !(is_parakeet_engine || is_cloud_engine) {
+                // Preload the new Whisper model
+                let app_clone = app.clone();
+                let model_name = settings.current_model.clone();
+                tokio::spawn(async move {
+                    let whisper_state =
+                        app_clone.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
+                    match preload_model(app_clone.clone(), model_name.clone(), whisper_state).await {
+                        Ok(_) => log::info!("Successfully preloaded new model: {}", model_name),
+                        Err(e) => log::warn!("Failed to preload new model: {}", e),
+                    }
+                });
+            } else {
+                log::info!(
+                    "Skipping preload for {} engine selection",
+                    settings.current_model_engine
+                );
+            }
+        } else {
+            log::info!("Model selection cleared; skipping preload");
         }
+    }
 
-        // Update the sharing server's model if it's running
+    if selection_changed {
+        // Keep a running sharing server truthful after the selected model changes
         sync_running_sharing_server_to_model(
             &app,
             &settings.current_model,
             &settings.current_model_engine,
         )
         .await?;
+
+        // Update the tray menu to reflect the new selection
+        if let Err(e) = update_tray_menu(app.clone()).await {
+            log::warn!("Failed to update tray menu after model change: {}", e);
+            // Don't fail the whole operation if tray update fails
+        }
 
         // Emit model-changed event so frontend can refresh remote server status
         if let Err(e) = app.emit(
@@ -1197,7 +1222,7 @@ pub async fn set_audio_device(app: AppHandle, device_name: Option<String>) -> Re
 mod tests {
     use super::{
         recording_retention_count_from_store, recording_retention_count_to_value,
-        resolve_pill_indicator_mode,
+        resolve_pill_indicator_mode, should_sync_running_sharing_server,
     };
     use serde_json::json;
 
@@ -1231,6 +1256,36 @@ mod tests {
         let resolved = resolve_pill_indicator_mode(None, None, "when_recording".to_string());
 
         assert_eq!(resolved, "when_recording");
+    }
+
+    #[test]
+    fn should_sync_running_sharing_server_when_model_clears() {
+        assert!(should_sync_running_sharing_server(
+            "base",
+            "whisper",
+            "",
+            "whisper",
+        ));
+    }
+
+    #[test]
+    fn should_sync_running_sharing_server_when_engine_changes() {
+        assert!(should_sync_running_sharing_server(
+            "base",
+            "whisper",
+            "base",
+            "parakeet",
+        ));
+    }
+
+    #[test]
+    fn should_not_sync_running_sharing_server_when_selection_is_unchanged() {
+        assert!(!should_sync_running_sharing_server(
+            "base",
+            "whisper",
+            "base",
+            "whisper",
+        ));
     }
 
     #[test]

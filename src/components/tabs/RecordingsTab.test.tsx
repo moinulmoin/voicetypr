@@ -1,7 +1,6 @@
 import { render, screen, waitFor, act } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { RecordingsTab } from './RecordingsTab';
-import { emit } from '@tauri-apps/api/event';
 
 // Mock sonner
 vi.mock('sonner', () => ({
@@ -18,8 +17,17 @@ vi.mock('@/contexts/SettingsContext', () => ({
   })
 }));
 
-// Track registered events
-const registeredEvents: Record<string, any> = {};
+const registerEventMock = vi.fn((event: string, callback: any) => {
+  (window as any).__testEventCallbacks = (window as any).__testEventCallbacks || {};
+  (window as any).__testEventCallbacks[event] = callback;
+  return vi.fn();
+});
+
+vi.mock('@/hooks/useEventCoordinator', () => ({
+  useEventCoordinator: () => ({
+    registerEvent: registerEventMock
+  })
+}));
 
 // Mock Tauri core invoke so we don't depend on window.__TAURI_INTERNALS__
 let invokeMock = vi.fn<(
@@ -31,14 +39,12 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (cmd: string, args?: Record<string, unknown>) => invokeMock(cmd, args),
 }));
 
-// Use real useEventCoordinator; events are mocked globally in setup
-
 // Mock RecentRecordings component
 vi.mock('@/components/sections/RecentRecordings', () => ({
-  RecentRecordings: ({ history, onRefresh }: any) => (
+  RecentRecordings: ({ history, onHistoryUpdate }: any) => (
     <div data-testid="recent-recordings">
       <div>History count: {history.length}</div>
-      <button onClick={onRefresh}>Refresh</button>
+      <button onClick={onHistoryUpdate}>Refresh</button>
       {history.map((item: any) => (
         <div key={item.id}>{item.text}</div>
       ))}
@@ -50,17 +56,15 @@ describe('RecordingsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (window as any).__testEventCallbacks = {};
-    Object.keys(registeredEvents).forEach(key => delete registeredEvents[key]);
     invokeMock = vi.fn(async (cmd: string) => {
       if (cmd === 'get_transcription_history') return [];
       return null;
     });
   });
-  
+
   afterEach(() => {
     // no-op; mocks reset in beforeEach
   });
-
 
   it('loads history on mount', async () => {
     const mockHistory = [
@@ -110,7 +114,6 @@ describe('RecordingsTab', () => {
     consoleSpy.mockRestore();
   });
 
-
   it('reloads history when history-updated event is fired', async () => {
     const mockHistory = [
       {
@@ -137,8 +140,13 @@ describe('RecordingsTab', () => {
       expect(screen.getByText('History count: 0')).toBeInTheDocument();
     });
     
+    const historyUpdated = (window as any).__testEventCallbacks?.['history-updated'];
+    expect(historyUpdated).toBeInstanceOf(Function);
+
     // Fire the event (behavioral path)
-    await act(async () => { await emit('history-updated'); });
+    await act(async () => {
+      await historyUpdated();
+    });
     
     // Should reload and show updated history
     await waitFor(() => {
@@ -146,35 +154,13 @@ describe('RecordingsTab', () => {
     });
   });
 
-  it('reloads history when transcription-updated event is fired', async () => {
-    const mockHistory = [
-      {
-        timestamp: '2024-01-01T00:00:00Z',
-        text: 'Re-transcribed text',
-        model: 'Remote: Office PC'
-      }
-    ];
-
-    let callCount = 0;
-    invokeMock = vi.fn(async (cmd: string) => {
-      if (cmd === 'get_transcription_history') {
-        callCount++;
-        return callCount === 1 ? [] : mockHistory;
-      }
-      return null;
-    });
-
+  it('does not register a transcription-updated listener', async () => {
     render(<RecordingsTab />);
 
     await waitFor(() => {
-      expect(screen.getByText('History count: 0')).toBeInTheDocument();
+      expect((window as any).__testEventCallbacks?.['history-updated']).toBeInstanceOf(Function);
     });
 
-    await act(async () => { await emit('transcription-updated'); });
-
-    await waitFor(() => {
-      expect(screen.getByText('History count: 1')).toBeInTheDocument();
-    });
+    expect((window as any).__testEventCallbacks?.['transcription-updated']).toBeUndefined();
   });
-
 });

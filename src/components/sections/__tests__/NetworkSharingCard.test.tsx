@@ -641,6 +641,78 @@ describe("NetworkSharingCard", () => {
       );
     });
 
+
+    it("refreshes sharing status once after a failed auto-restart", async () => {
+      const deferredSettings = createDeferred<{
+        current_model: string;
+        auto_insert: boolean;
+        launch_at_startup: boolean;
+      }>();
+      let sharedModelName = "large-v3-turbo";
+      let startSharingAttempts = 0;
+
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return deferredSettings.promise;
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: true,
+              port: 47842,
+              model_name: sharedModelName,
+              server_name: "My-PC",
+              active_connections: 0,
+              password: "committed-secret",
+            });
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({
+              models: [
+                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                { name: "base.en", display_name: "Base (English)", downloaded: true },
+              ],
+            });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          case "stop_sharing":
+            return Promise.resolve();
+          case "start_sharing":
+            startSharingAttempts += 1;
+            if (startSharingAttempts === 1) {
+              return Promise.reject(new Error("Port already in use"));
+            }
+            sharedModelName = "base.en";
+            return Promise.resolve();
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Port")).toBeInTheDocument();
+      });
+
+      deferredSettings.resolve({
+        current_model: "base.en",
+        auto_insert: true,
+        launch_at_startup: false,
+      });
+
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalledWith("Failed to switch sharing model");
+      });
+
+      expect(getInvokeCalls("start_sharing")).toHaveLength(1);
+      expect(getInvokeCalls("get_sharing_status")).toHaveLength(2);
+      expect(screen.getByText("Model: Large v3 Turbo")).toBeInTheDocument();
+      expect(screen.queryByText("Model: Base (English)")).not.toBeInTheDocument();
+    });
+
     it("does not show manual Update button", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
@@ -914,6 +986,75 @@ describe("NetworkSharingCard", () => {
         expect(toast.success).toHaveBeenCalledWith("Network sharing enabled");
       });
     });
+
+
+    it("calls stop_sharing and clears the enabled state when toggle is turned off", async () => {
+      const user = userEvent.setup();
+      let sharingEnabled = true;
+      let sharingModelName: string | null = "large-v3-turbo";
+
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "large-v3-turbo",
+              auto_insert: true,
+              launch_at_startup: false,
+              sharing_port: 47842,
+            });
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: sharingEnabled,
+              port: sharingEnabled ? 47842 : null,
+              model_name: sharingModelName,
+              server_name: sharingEnabled ? "My-PC" : null,
+              active_connections: 0,
+            });
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({
+              models: [
+                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+              ],
+            });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          case "start_sharing":
+            return Promise.resolve();
+          case "stop_sharing":
+            sharingEnabled = false;
+            sharingModelName = null;
+            return Promise.resolve();
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByRole("switch")).toBeChecked();
+        expect(screen.getByText("Sharing Active")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("switch"));
+
+      await waitFor(() => {
+        expect(getInvokeCalls("stop_sharing")).toHaveLength(1);
+        expect(getInvokeCalls("get_sharing_status")).toHaveLength(2);
+      });
+
+      expect(getInvokeCalls("start_sharing")).toHaveLength(0);
+
+      await waitFor(() => {
+        expect(screen.getByRole("switch")).not.toBeChecked();
+        expect(screen.queryByText("Sharing Active")).not.toBeInTheDocument();
+      });
+    });
+
 
     it("shows error toast when start_sharing fails", async () => {
       mockInvoke.mockImplementation((command: string) => {

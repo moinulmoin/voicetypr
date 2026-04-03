@@ -497,6 +497,8 @@ pub async fn test_remote_server(
     server_id: String,
     remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
 ) -> Result<StatusResponse, String> {
+    let local_machine_id = get_local_machine_id().ok();
+
     // Get connection info and cached model
     let (connection, cached_model) = {
         let settings = remote_settings.lock().await;
@@ -517,29 +519,31 @@ pub async fn test_remote_server(
     .await
     .map_err(|e| e.to_string())?;
 
+    let updated_connection = {
+        let mut settings = remote_settings.lock().await;
+        let updated = apply_server_update(
+            &mut settings,
+            &server_id,
+            connection.host.clone(),
+            connection.port,
+            connection.password.clone(),
+            connection.name.clone(),
+            Ok(status.clone()),
+            local_machine_id.as_deref(),
+        )?;
+        save_remote_settings(&app, &settings)?;
+        updated
+    };
+
+    let updated_model = updated_connection.model.clone();
     // Check if model changed and update if needed
-    let new_model = Some(status.model.clone());
-    if cached_model != new_model {
+    if cached_model != updated_model {
         log::info!(
             "🔄 [REMOTE] Model changed for '{}': {:?} -> {:?}",
             connection.display_name(),
             cached_model,
-            new_model
+            updated_model
         );
-
-        // Update the cached model
-        {
-            let mut settings = remote_settings.lock().await;
-            if let Some(conn) = settings
-                .saved_connections
-                .iter_mut()
-                .find(|c| c.id == server_id)
-            {
-                conn.model = new_model;
-            }
-            // Save updated settings
-            save_remote_settings(&app, &settings)?;
-        }
 
         // Refresh tray menu to show new model
         if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
@@ -895,6 +899,7 @@ pub async fn set_active_remote_server(
 
         let Some((current_model, current_engine)) = restore_config else {
             log::warn!("⏱️ [TIMING] Skipping sharing restore: no valid local model stored");
+            clear_sharing_restore_state(&app, &*remote_settings).await?;
             return Ok(());
         };
 
@@ -908,7 +913,7 @@ pub async fn set_active_remote_server(
             Some(current_model)
         }) else {
             log::warn!("⏱️ [TIMING] Skipping sharing restore: no downloaded models available");
-            should_restore_sharing = false;
+            clear_sharing_restore_state(&app, &*remote_settings).await?;
             let manager = server_manager.lock().await;
             let status = manager.get_status();
             let _ = app.emit(
@@ -943,7 +948,7 @@ pub async fn set_active_remote_server(
                 Ok(config) => config,
                 Err(e) => {
                     log::warn!("⏱️ [TIMING] Skipping sharing restore: {}", e);
-                    should_restore_sharing = false;
+                    clear_sharing_restore_state(&app, &*remote_settings).await?;
                     let manager = server_manager.lock().await;
                     let status = manager.get_status();
                     let _ = app.emit(
@@ -1190,6 +1195,15 @@ pub fn save_remote_settings(app: &AppHandle, settings: &RemoteSettings) -> Resul
     Ok(())
 }
 
+
+async fn clear_sharing_restore_state(
+    app: &AppHandle,
+    remote_settings: &AsyncMutex<RemoteSettings>,
+) -> Result<(), String> {
+    let mut settings = remote_settings.lock().await;
+    settings.sharing_was_active = false;
+    save_remote_settings(app, &settings)
+}
 /// Load remote settings from the store
 pub(crate) fn normalize_loaded_active_remote_status(settings: &mut RemoteSettings) {
     let Some(active_id) = settings.active_connection_id.clone() else {

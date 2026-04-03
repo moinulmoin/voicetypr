@@ -198,15 +198,14 @@ impl RemoteServerManager {
         // Always include localhost
         bind_ips.push(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
 
-        // Add all network interface IPs (only IPv4 for now - IPv6 link-local addresses cause binding issues)
+        // Add only trusted private/LAN IPv4 interfaces (skip public, loopback, and IPv6)
         log::info!(
             "⏱️ [SERVER TIMING] Listing network interfaces... (+{}ms)",
             start_time.elapsed().as_millis()
         );
         if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
             for (name, ip) in interfaces {
-                // Skip loopback and IPv6 addresses (IPv6 link-local addresses like fe80:: can't be bound without scope ID)
-                if !ip.is_loopback() && ip.is_ipv4() {
+                if is_trusted_bind_ip(ip) {
                     log::info!("[Remote Server] Found interface {}: {}", name, ip);
                     bind_ips.push(ip);
                 }
@@ -517,5 +516,27 @@ mod tests {
         );
 
         manager.stop().await;
+    }
+    #[test]
+    fn test_trusted_bind_ip_only_allows_private_ipv4() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+        assert!(is_trusted_bind_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5))));
+        assert!(is_trusted_bind_ip(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1))));
+        assert!(is_trusted_bind_ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 25))));
+
+        assert!(!is_trusted_bind_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+        assert!(!is_trusted_bind_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 10, 2))));
+        assert!(!is_trusted_bind_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(!is_trusted_bind_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    }
+
+}
+
+
+fn is_trusted_bind_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => !ipv4.is_loopback() && ipv4.is_private(),
+        IpAddr::V6(_) => false,
     }
 }

@@ -321,6 +321,79 @@ describe('RecentRecordings re-transcription', () => {
     });
   });
 
+  it('re-transcribes through a remote server and persists the completed result', async () => {
+    const user = userEvent.setup();
+    const onHistoryUpdate = vi.fn();
+    const transcribeDeferred = createDeferred<string>();
+
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      switch (cmd) {
+        case 'check_recording_exists':
+          return true;
+        case 'get_model_status':
+          return {
+            models: [{ name: 'small.en', downloaded: true, engine: 'whisper' }],
+          };
+        case 'list_remote_servers':
+          return [
+            { id: 'online-server', name: 'Office PC', host: '10.0.0.4', port: 47842 },
+          ];
+        case 'test_remote_server':
+          if (args?.serverId === 'online-server') {
+            return { model: 'large-v3', engine: 'whisper' };
+          }
+          throw new Error('offline');
+        case 'get_recordings_directory':
+          return '/recordings';
+        case 'save_retranscription':
+          return 'retry-remote';
+        case 'transcribe_remote':
+          return transcribeDeferred.promise;
+        case 'update_transcription':
+          return null;
+        default:
+          return null;
+      }
+    });
+
+    render(<RecentRecordings history={[historyItem]} onHistoryUpdate={onHistoryUpdate} />);
+
+    const retranscribeButton = await screen.findByTitle('Re-transcribe');
+    await user.click(retranscribeButton);
+
+    const sourceOption = await screen.findByRole('menuitem', { name: 'Office PC - large-v3' });
+    await user.click(sourceOption);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('save_retranscription', {
+        text: 'In progress...',
+        model: 'Remote: Office PC - large-v3',
+        recordingFile: 'sample.wav',
+        sourceRecordingId: '2024-01-01T00:00:00Z',
+        status: 'in_progress',
+      });
+      expect(invokeMock).toHaveBeenCalledWith('transcribe_remote', {
+        serverId: 'online-server',
+        audioPath: '/recordings/sample.wav',
+      });
+    });
+
+    transcribeDeferred.resolve('Remote transcript result');
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('update_transcription', {
+        timestamp: 'retry-remote',
+        text: 'Remote transcript result',
+        model: 'Remote: Office PC - large-v3',
+        status: 'completed',
+      });
+    });
+
+    await waitFor(() => {
+      expect(onHistoryUpdate).toHaveBeenCalled();
+    });
+  });
+
 });
 
 it('shows Soniox as a cloud retranscription source when configured', async () => {

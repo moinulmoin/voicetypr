@@ -1061,9 +1061,7 @@ async fn test_start_on_occupied_port_behavior() {
     let mut manager = RemoteServerManager::new();
 
     // Try to start server on the same port
-    // Note: warp binds to 0.0.0.0 while our listener binds to 127.0.0.1
-    // so this may or may not fail depending on OS behavior
-    let _result = manager
+    let result = manager
         .start(
             47890,
             None,
@@ -1075,12 +1073,40 @@ async fn test_start_on_occupied_port_behavior() {
         )
         .await;
 
+    let status = manager.get_status();
+
+    match result {
+        Ok(()) => {
+            assert!(manager.is_running());
+            assert!(status.enabled);
+            assert_eq!(status.port, Some(47890));
+            assert_eq!(status.server_name, Some("Test".to_string()));
+            assert_eq!(status.model_name, Some("test".to_string()));
+            assert!(!status.binding_results.is_empty());
+            assert!(
+                status
+                    .binding_results
+                    .iter()
+                    .any(|binding| binding.ip == "127.0.0.1"),
+                "localhost binding result should be reported"
+            );
+            assert!(
+                status.binding_results.iter().any(|binding| binding.success),
+                "a successful start must record at least one bound address"
+            );
+        }
+        Err(err) => {
+            assert!(err.contains("bind"), "unexpected start error: {err}");
+            assert!(!manager.is_running());
+            assert!(!status.enabled);
+            assert!(status.port.is_none());
+            assert!(status.binding_results.is_empty());
+        }
+    }
+
     // Clean up regardless of result
     drop(listener);
     manager.stop().await;
-
-    // The test passes either way - we're just ensuring no panic occurs
-    // and the manager handles the situation gracefully
 }
 
 #[tokio::test]

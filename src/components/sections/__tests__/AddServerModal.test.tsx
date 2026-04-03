@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, Mock, vi } from "vitest";
 import { AddServerModal } from "../AddServerModal";
@@ -918,26 +919,42 @@ describe("AddServerModal", () => {
 
     it("does not close modal on save failure", async () => {
       const { invoke } = await import("@tauri-apps/api/core");
+      const { toast } = await import("sonner");
       const invokeMock = invoke as unknown as Mock;
       invokeMock.mockResolvedValueOnce("machine-123"); // get_local_machine_id
       invokeMock.mockRejectedValueOnce(new Error("Network error"));
 
       const user = userEvent.setup();
-      render(
-        <AddServerModal
-          open={true}
-          onOpenChange={mockOnOpenChange}
-          onServerAdded={mockOnServerAdded}
-        />
-      );
+
+      function ControlledModal() {
+        const [open, setOpen] = useState(true);
+
+        const handleOpenChange = (nextOpen: boolean) => {
+          mockOnOpenChange(nextOpen);
+          setOpen(nextOpen);
+        };
+
+        return (
+          <AddServerModal
+            open={open}
+            onOpenChange={handleOpenChange}
+            onServerAdded={mockOnServerAdded}
+          />
+        );
+      }
+
+      render(<ControlledModal />);
 
       await user.type(screen.getByLabelText("Host Address"), "192.168.1.100");
       fireEvent.click(screen.getByText("Add Server"));
 
       await waitFor(() => {
-        // Modal should still be open - onOpenChange should not be called with false
-        expect(screen.getByText("Add Remote VoiceTypr")).toBeInTheDocument();
+        expect(toast.error).toHaveBeenCalledWith("Network error");
       });
+
+      expect(mockOnOpenChange).not.toHaveBeenCalledWith(false);
+      expect(screen.getByRole("dialog")).toBeVisible();
+      expect(screen.getByLabelText("Host Address")).toBeVisible();
     });
   });
 });
