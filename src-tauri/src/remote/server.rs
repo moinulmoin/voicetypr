@@ -57,6 +57,7 @@ impl RemoteServerConfig {
     /// Returns true if:
     /// - No password is required (self.password is None)
     /// - The provided password matches the configured password
+    #[allow(dead_code)]
     pub fn validate_password(&self, provided: Option<&str>) -> bool {
         match &self.password {
             None => true, // No password required
@@ -69,7 +70,7 @@ impl RemoteServerConfig {
 }
 
 /// Current status of the remote server
-#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum ServerStatus {
     /// Server is not running
     Idle,
@@ -79,6 +80,7 @@ pub enum ServerStatus {
 
 impl ServerStatus {
     /// Check if the server is currently running
+    #[allow(dead_code)]
     pub fn is_running(&self) -> bool {
         matches!(self, ServerStatus::Running { .. })
     }

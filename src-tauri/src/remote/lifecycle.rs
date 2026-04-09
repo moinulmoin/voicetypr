@@ -33,6 +33,7 @@ pub struct ServerHandle {
     /// The port the server is listening on
     pub port: u16,
     /// The IPs the server is bound to
+    #[allow(dead_code)]
     pub bound_ips: Vec<IpAddr>,
     /// Results of binding attempts (for UI display)
     pub binding_results: Vec<BindingResult>,
@@ -120,6 +121,7 @@ impl RemoteServerManager {
         self.handle.is_some()
     }
 
+    #[allow(dead_code)]
     /// Get the port the server is listening on (if running)
     pub fn get_port(&self) -> Option<u16> {
         self.handle.as_ref().map(|h| h.port)
@@ -135,6 +137,7 @@ impl RemoteServerManager {
     /// * `model_name` - Name of the current model
     /// * `engine` - Transcription engine (whisper, parakeet, etc.)
     /// * `app_handle` - Optional AppHandle for Parakeet support
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &mut self,
         port: u16,
@@ -362,6 +365,7 @@ impl RemoteServerManager {
         }
     }
 
+    #[allow(dead_code)]
     /// Get the current server configuration
     pub fn get_config(&self) -> Option<&TranscriptionServerConfig> {
         self.config.as_ref()

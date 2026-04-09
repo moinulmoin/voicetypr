@@ -56,7 +56,7 @@ impl SavedConnection {
 }
 
 /// All remote transcription settings
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RemoteSettings {
     /// Server configuration (for sharing this machine's transcription)
     pub server_config: RemoteServerConfig,
@@ -70,16 +70,6 @@ pub struct RemoteSettings {
     pub sharing_was_active: bool,
 }
 
-impl Default for RemoteSettings {
-    fn default() -> Self {
-        Self {
-            server_config: RemoteServerConfig::default(),
-            saved_connections: Vec::new(),
-            active_connection_id: None,
-            sharing_was_active: false,
-        }
-    }
-}
 
 impl RemoteSettings {
     /// Add a new connection and return it

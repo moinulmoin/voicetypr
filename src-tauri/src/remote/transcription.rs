@@ -3,7 +3,7 @@
 //! Implements ServerContext using actual Whisper or Parakeet transcription.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::Instant;
 use tauri::AppHandle;
@@ -93,11 +93,13 @@ impl SharedServerState {
     }
 
     /// Get the current model path
+    #[allow(dead_code)]
     pub fn get_model_path(&self) -> PathBuf {
         self.get_snapshot().model_path
     }
 
     /// Get the current engine
+    #[allow(dead_code)]
     pub fn get_engine(&self) -> String {
         self.get_snapshot().engine
     }
@@ -138,6 +140,7 @@ impl RealTranscriptionContext {
     }
 
     /// Create a new transcription context (legacy, creates its own shared state)
+    #[allow(dead_code)]
     pub fn new(config: TranscriptionServerConfig) -> Self {
         // Default to whisper engine for legacy compatibility
         let shared_state =
@@ -152,27 +155,32 @@ impl RealTranscriptionContext {
     }
 
     /// Update the model being served
+    #[allow(dead_code)]
     pub fn update_model(&mut self, model_path: PathBuf, model_name: String, engine: String) {
         self.shared_state
             .update_model(model_name, model_path, engine);
     }
 
     /// Update the password
+    #[allow(dead_code)]
     pub fn update_password(&mut self, password: Option<String>) {
         self.password = password;
     }
 
     /// Get the current model path
+    #[allow(dead_code)]
     pub fn get_model_path(&self) -> PathBuf {
         self.shared_state.get_model_path()
     }
 
     /// Get the current model snapshot (coherent read)
+    #[allow(dead_code)]
     pub(crate) fn get_model_snapshot(&self) -> SharedServerStateSnapshot {
         self.shared_state.get_snapshot()
     }
 
     /// Get the shared state (for external updates)
+    #[allow(dead_code)]
     pub fn get_shared_state(&self) -> SharedServerState {
         self.shared_state.clone()
     }
@@ -260,8 +268,8 @@ impl RealTranscriptionContext {
     /// Transcribe using Whisper model
     fn transcribe_with_whisper(
         &self,
-        audio_path: &PathBuf,
-        model_path: &PathBuf,
+        audio_path: &Path,
+        model_path: &Path,
     ) -> Result<String, String> {
         // Get transcriber from cache (blocking lock - serializes all transcriptions)
         let transcriber = {
@@ -271,7 +279,7 @@ impl RealTranscriptionContext {
                 .map_err(|e| format!("Failed to acquire cache lock: {}", e))?;
 
             cache
-                .get_or_create(&model_path)
+                .get_or_create(model_path)
                 .map_err(|e| format!("Failed to load Whisper model: {}", e))?
         };
 
@@ -286,7 +294,7 @@ impl RealTranscriptionContext {
     /// Transcribe using Parakeet sidecar
     fn transcribe_with_parakeet(
         &self,
-        audio_path: &PathBuf,
+        audio_path: &Path,
         model_name: &str,
     ) -> Result<String, String> {
         let app_handle = self.app_handle.as_ref().ok_or_else(|| {
@@ -305,7 +313,7 @@ impl RealTranscriptionContext {
         // Clone what we need for the async block
         let app_handle_clone = app_handle.clone();
         let model_name_owned = model_name.to_string();
-        let audio_path_clone = audio_path.clone();
+        let audio_path_clone = audio_path.to_path_buf();
 
         // Run the async Parakeet transcription in a blocking context
         // Since we're already in a sync context (ServerContext::transcribe), use block_on

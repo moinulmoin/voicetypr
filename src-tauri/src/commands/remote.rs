@@ -346,6 +346,7 @@ pub async fn remove_remote_server(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_server_update(
     settings: &mut RemoteSettings,
     server_id: &str,
@@ -686,7 +687,7 @@ pub async fn refresh_active_remote_server_status(
     app: AppHandle,
     remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
 ) -> Result<Option<SavedConnection>, String> {
-    refresh_active_remote_server_status_impl(&app, &*remote_settings).await
+    refresh_active_remote_server_status_impl(&app, &remote_settings).await
 }
 
 #[tauri::command]
@@ -899,7 +900,7 @@ pub async fn set_active_remote_server(
 
         let Some((current_model, current_engine)) = restore_config else {
             log::warn!("⏱️ [TIMING] Skipping sharing restore: no valid local model stored");
-            clear_sharing_restore_state(&app, &*remote_settings).await?;
+            clear_sharing_restore_state(&app, &remote_settings).await?;
             return Ok(());
         };
 
@@ -913,7 +914,7 @@ pub async fn set_active_remote_server(
             Some(current_model)
         }) else {
             log::warn!("⏱️ [TIMING] Skipping sharing restore: no downloaded models available");
-            clear_sharing_restore_state(&app, &*remote_settings).await?;
+            clear_sharing_restore_state(&app, &remote_settings).await?;
             let manager = server_manager.lock().await;
             let status = manager.get_status();
             let _ = app.emit(
@@ -948,7 +949,7 @@ pub async fn set_active_remote_server(
                 Ok(config) => config,
                 Err(e) => {
                     log::warn!("⏱️ [TIMING] Skipping sharing restore: {}", e);
-                    clear_sharing_restore_state(&app, &*remote_settings).await?;
+                    clear_sharing_restore_state(&app, &remote_settings).await?;
                     let manager = server_manager.lock().await;
                     let status = manager.get_status();
                     let _ = app.emit(

@@ -53,6 +53,7 @@ impl RemoteServerConnection {
     }
 
     /// Get a display name for this connection
+    #[allow(dead_code)]
     pub fn display_name(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
@@ -64,6 +65,7 @@ pub struct TranscriptionRequest {
     /// Raw audio data (WAV format)
     pub audio_data: Vec<u8>,
     /// Source of the audio (affects timeout)
+    #[allow(dead_code)]
     pub source: TranscriptionSource,
 }
 
@@ -159,6 +161,7 @@ impl fmt::Display for RemoteClientError {
 impl std::error::Error for RemoteClientError {}
 
 impl RemoteClientError {
+    #[allow(dead_code)]
     pub fn endpoint(&self) -> RemoteEndpoint {
         match self {
             Self::AuthFailed { endpoint, .. }
@@ -176,10 +179,12 @@ impl RemoteClientError {
         matches!(self, Self::AuthFailed { .. })
     }
 
+    #[allow(dead_code)]
     pub fn is_timeout(&self) -> bool {
         matches!(self, Self::Timeout { .. })
     }
 
+    #[allow(dead_code)]
     pub fn status_code(&self) -> Option<StatusCode> {
         match self {
             Self::HttpStatus { status, .. } => Some(*status),

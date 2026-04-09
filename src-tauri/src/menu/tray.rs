@@ -262,7 +262,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
 
                 let remote_item = CheckMenuItem::with_id(
                     app,
-                    &format!("model_{}", model_id),
+                    format!("model_{}", model_id),
                     &display,
                     true,
                     is_selected,
