@@ -1,9 +1,10 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::level_meter::AudioLevelMeter;
 use super::silence_detector::SilenceDetector;
@@ -208,6 +209,10 @@ impl AudioRecorder {
             // Shared state for size tracking
             let bytes_written = Arc::new(Mutex::new(0u64));
 
+            // Drain barrier flags shared between callback and stop path
+            let stop_requested = Arc::new(AtomicBool::new(false));
+            let callback_drained = Arc::new(AtomicBool::new(false));
+
             // Common audio processing closure
             let process_audio = {
                 let writer_clone = writer.clone();
@@ -217,8 +222,33 @@ impl AudioRecorder {
                 let stop_tx_for_silence = stop_tx_clone.clone();
                 let silence_detector_clone = silence_detector.clone();
                 let level_meter_clone = level_meter.clone();
+                let stop_requested_clone = stop_requested.clone();
+                let callback_drained_clone = callback_drained.clone();
 
                 move |f32_samples: &[f32], i16_samples: &[i16]| {
+                    // Drain barrier: if stop was requested, handle final write then exit
+                    if stop_requested_clone.load(Ordering::SeqCst) {
+                        // Only write on the first callback after stop; skip all subsequent ones
+                        if !callback_drained_clone.load(Ordering::SeqCst) {
+                            if let Ok(mut guard) = writer_clone.try_lock() {
+                                if let Some(writer) = guard.as_mut() {
+                                    for &sample in i16_samples {
+                                        if let Err(e) = writer.write_sample(sample) {
+                                            if let Ok(mut error_guard) = error_clone.lock() {
+                                                *error_guard = Some(format!(
+                                                    "Failed to write audio sample: {}",
+                                                    e
+                                                ));
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            callback_drained_clone.store(true, Ordering::SeqCst);
+                        }
+                        return;
+                    }
                     // Calculate RMS for both level meter and silence detection
                     let sum: f32 = f32_samples.iter().map(|x| x * x).sum();
                     let rms = (sum / f32_samples.len() as f32).sqrt();
@@ -348,30 +378,53 @@ impl AudioRecorder {
             // Wait for stop signal
             let stop_reason = stop_rx.recv().ok();
 
-            // Stop and finalize the audio stream
-            // First pause the stream to stop audio capture (quick operation)
+            // Drain barrier: signal callback to drain and wait for acknowledgment
+            stop_requested.store(true, Ordering::SeqCst);
+            let drain_start = Instant::now();
+            while !callback_drained.load(Ordering::SeqCst) {
+                if drain_start.elapsed() > Duration::from_millis(200) {
+                    log::warn!(
+                        "Drain timeout: proceeding with finalization after {}ms",
+                        drain_start.elapsed().as_millis()
+                    );
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if callback_drained.load(Ordering::SeqCst) {
+                log::info!("Drain complete: callback acknowledged stop");
+            }
+
+            // Pause the stream to stop audio capture
             if let Err(e) = stream.pause() {
                 log::warn!("Failed to pause audio stream: {}", e);
             }
 
-            // Platform-specific stream cleanup
-            // On Windows, some USB/wireless audio devices (e.g., Astro A50) can hang
-            // indefinitely during drop(). We use mem::forget to prevent app freeze.
-            // On macOS/Linux, drop() is reliable so we clean up properly.
+            // Platform-specific stream cleanup.
+            // On Windows, some USB/wireless WASAPI devices can hang during
+            // Stream::drop(). We attempt a clean drop with a timeout guard;
+            // if it hangs beyond 3 seconds, we fall back to mem::forget.
             #[cfg(target_os = "windows")]
             {
-                // Intentionally leak the stream to prevent potential driver hang
-                // Resources will be reclaimed when the process exits
-                std::mem::forget(stream);
-                log::info!(
-                    "Audio stream released (Windows: leaked to prevent potential driver hang)"
-                );
+                let stream_drop_result = std::sync::mpsc::channel::<()>();
+                let (drop_tx, drop_rx) = stream_drop_result;
+                // Move stream into a thread so drop doesn't block the recording thread
+                std::thread::spawn(move || {
+                    drop(stream);
+                    let _ = drop_tx.send(());
+                });
+                match drop_rx.recv_timeout(Duration::from_secs(3)) {
+                    Ok(()) => log::info!("Audio stream stopped and cleaned up"),
+                    Err(_) => log::warn!(
+                        "Audio stream drop timed out (3s). Stream resources will be reclaimed on process exit."
+                    ),
+                }
             }
 
             #[cfg(not(target_os = "windows"))]
             {
                 drop(stream);
-                log::info!("Audio stream stopped");
+                log::info!("Audio stream stopped and cleaned up");
             }
 
             // Check if any errors occurred during recording
@@ -472,5 +525,67 @@ impl AudioRecorder {
         host.input_devices()
             .map(|devices| devices.filter_map(|device| device.name().ok()).collect())
             .unwrap_or_else(|_| Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_recording_size_check() {
+        // Under 500MB should be accepted
+        let under_limit: u64 = 499 * 1024 * 1024;
+        assert!(RecordingSize::check(under_limit).is_ok());
+
+        // Exactly 500MB should be accepted
+        let exactly_limit: u64 = 500 * 1024 * 1024;
+        assert!(RecordingSize::check(exactly_limit).is_ok());
+
+        // Over 500MB should be rejected
+        let over_limit: u64 = 500 * 1024 * 1024 + 1;
+        assert!(RecordingSize::check(over_limit).is_err());
+
+        // Zero bytes is fine
+        assert!(RecordingSize::check(0).is_ok());
+    }
+
+    #[test]
+    fn test_drain_flag_signaling() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::Duration;
+
+        let stop_requested = Arc::new(AtomicBool::new(false));
+        let callback_drained = Arc::new(AtomicBool::new(false));
+
+        let stop_clone = stop_requested.clone();
+        let drained_clone = callback_drained.clone();
+
+        // Spawn a thread simulating the audio callback
+        let handle = thread::spawn(move || {
+            // Simulate callback loop checking the drain flag
+            while !stop_clone.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(1));
+            }
+            // Acknowledge drain
+            drained_clone.store(true, Ordering::SeqCst);
+        });
+
+        // Main thread signals stop
+        stop_requested.store(true, Ordering::SeqCst);
+
+        // Spin-wait for drain acknowledgment with 200ms timeout
+        let drain_start = Instant::now();
+        while !callback_drained.load(Ordering::SeqCst) {
+            if drain_start.elapsed() > Duration::from_millis(200) {
+                panic!("Drain flag was not set within 200ms timeout");
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        handle.join().expect("Callback thread should not panic");
+        assert!(callback_drained.load(Ordering::SeqCst));
     }
 }

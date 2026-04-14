@@ -154,39 +154,11 @@ pub fn convert_to_wav(input_path: &Path, output_dir: &Path) -> Result<PathBuf, S
 
     // Resample to 16kHz if needed
     let final_samples = if sample_rate != 16000 {
-        use rubato::{
-            Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType,
-            WindowFunction,
-        };
-
-        // Convert i16 to f32 for resampling
         let samples_f32: Vec<f32> = mono_samples.iter().map(|&s| s as f32 / 32768.0).collect();
 
-        // Setup resampler
-        let params = SincInterpolationParameters {
-            sinc_len: 256,
-            f_cutoff: 0.95,
-            interpolation: SincInterpolationType::Cubic,
-            oversampling_factor: 256,
-            window: WindowFunction::BlackmanHarris2,
-        };
+        let resampled = super::resampler::resample_to_16khz(&samples_f32, sample_rate as u32)?;
 
-        let mut resampler = SincFixedIn::<f32>::new(
-            16000.0 / sample_rate as f64,
-            2.0,
-            params,
-            samples_f32.len(),
-            1,
-        )
-        .map_err(|e| format!("Failed to create resampler: {}", e))?;
-
-        // Resample
-        let resampled = resampler
-            .process(&[samples_f32], None)
-            .map_err(|e| format!("Failed to resample: {}", e))?;
-
-        // Convert back to i16
-        resampled[0]
+        resampled
             .iter()
             .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
             .collect()

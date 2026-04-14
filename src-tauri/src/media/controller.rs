@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(target_os = "windows")]
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 #[cfg(target_os = "macos")]
 use std::{
@@ -207,7 +207,7 @@ impl MediaPauseController {
 
         #[cfg(target_os = "windows")]
         {
-            *self.paused_session_source_app_user_model_id.lock().unwrap() = None;
+            *self.paused_session_source_app_user_model_id.lock() = None;
         }
     }
 }
@@ -457,7 +457,7 @@ impl MediaPauseController {
             log::debug!("No playing, pausable media session found");
             self.was_playing_before_recording
                 .store(false, Ordering::SeqCst);
-            *self.paused_session_source_app_user_model_id.lock().unwrap() = None;
+            *self.paused_session_source_app_user_model_id.lock() = None;
             return false;
         };
 
@@ -473,14 +473,13 @@ impl MediaPauseController {
                         log::info!("Media paused successfully via GSMTC");
                         self.was_playing_before_recording
                             .store(true, Ordering::SeqCst);
-                        *self.paused_session_source_app_user_model_id.lock().unwrap() =
-                            source_app_id;
+                        *self.paused_session_source_app_user_model_id.lock() = source_app_id;
                         true
                     } else {
                         log::warn!("GSMTC TryPauseAsync returned false");
                         self.was_playing_before_recording
                             .store(false, Ordering::SeqCst);
-                        *self.paused_session_source_app_user_model_id.lock().unwrap() = None;
+                        *self.paused_session_source_app_user_model_id.lock() = None;
                         false
                     }
                 }
@@ -488,7 +487,7 @@ impl MediaPauseController {
                     log::warn!("Failed to pause media: {:?}", e);
                     self.was_playing_before_recording
                         .store(false, Ordering::SeqCst);
-                    *self.paused_session_source_app_user_model_id.lock().unwrap() = None;
+                    *self.paused_session_source_app_user_model_id.lock() = None;
                     false
                 }
             },
@@ -496,7 +495,7 @@ impl MediaPauseController {
                 log::warn!("Failed to request pause: {:?}", e);
                 self.was_playing_before_recording
                     .store(false, Ordering::SeqCst);
-                *self.paused_session_source_app_user_model_id.lock().unwrap() = None;
+                *self.paused_session_source_app_user_model_id.lock() = None;
                 false
             }
         }
@@ -525,11 +524,7 @@ impl MediaPauseController {
             }
         };
 
-        let paused_id = self
-            .paused_session_source_app_user_model_id
-            .lock()
-            .unwrap()
-            .take();
+        let paused_id = self.paused_session_source_app_user_model_id.lock().take();
 
         let session = if let Some(paused_id) = paused_id {
             let sessions = match manager.GetSessions() {
@@ -709,5 +704,30 @@ mod tests {
         for handle in handles {
             let _ = handle.join().unwrap();
         }
+    }
+
+    #[test]
+    fn test_parking_lot_mutex_survives_panic() {
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+        use std::thread;
+
+        let mutex = Arc::new(Mutex::new(Some(String::from("test-value"))));
+        let mutex_clone = Arc::clone(&mutex);
+
+        // Spawn a thread that locks the mutex, sets a value, then panics while holding the lock
+        let handle = thread::spawn(move || {
+            let _guard = mutex_clone.lock();
+            // Guard is held when the thread panics
+            panic!("intentional test panic");
+        });
+
+        // The thread should have panicked
+        let result = handle.join();
+        assert!(result.is_err(), "Thread should have panicked");
+
+        // parking_lot::Mutex should NOT be poisoned — we can still lock it
+        let value = mutex.lock().clone();
+        assert_eq!(value, Some(String::from("test-value")));
     }
 }

@@ -30,7 +30,9 @@ whisper-rs = { version = "0.15.1" }
 cpal = "0.16.0"
 hound = "3.5.1"
 symphonia = { version = "0.5", features = ["all"] }
-rubato = "0.15"
+rubato = "2.0"
+audioadapter-buffers = "3.0"
+parking_lot = "0.12"
 futures-util = "0.3.31"
 tokio = { version = "1.46.0", features = ["full"] }
 reqwest = { version = "0.12.22", features = ["json", "stream", "multipart"] }
