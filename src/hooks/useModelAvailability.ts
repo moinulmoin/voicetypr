@@ -1,76 +1,259 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useSettings } from '@/contexts/SettingsContext';
 import type { ModelInfo } from '@/types';
 
+type RemoteAvailabilityStatus = 'unknown' | 'online' | 'offline' | 'auth_failed' | 'self_connection';
+
+type RemoteAvailabilityStatusPayload =
+  | RemoteAvailabilityStatus
+  | 'Unknown'
+  | 'Online'
+  | 'Offline'
+  | 'AuthFailed'
+  | 'SelfConnection';
+
 interface ModelStatusResponse {
   models: ModelInfo[];
 }
 
+interface RecognitionAvailabilitySnapshot {
+  whisper_available: boolean;
+  parakeet_available: boolean;
+  soniox_selected: boolean;
+  soniox_ready: boolean;
+  remote_selected: boolean;
+  remote_status?: RemoteAvailabilityStatusPayload;
+  remote_available: boolean;
+  remote_last_checked?: number | string | null;
+}
+
+interface ModelAvailabilityState {
+  hasModels: boolean | null;
+  selectedModelAvailable: boolean | null;
+  remoteSelected: boolean;
+  remoteAvailable: boolean;
+  remoteStatus: RemoteAvailabilityStatus;
+  remoteLastChecked: number | string | null;
+  isChecking: boolean;
+}
+
+type DerivedAvailabilityState = Omit<ModelAvailabilityState, 'isChecking'>;
+
+const FALLBACK_AVAILABILITY: RecognitionAvailabilitySnapshot = {
+  whisper_available: false,
+  parakeet_available: false,
+  soniox_selected: false,
+  soniox_ready: false,
+  remote_selected: false,
+  remote_status: 'unknown',
+  remote_available: false,
+  remote_last_checked: null,
+};
+
+const DEFAULT_STATE: ModelAvailabilityState = {
+  hasModels: null,
+  selectedModelAvailable: null,
+  remoteSelected: false,
+  remoteAvailable: false,
+  remoteStatus: 'unknown',
+  remoteLastChecked: null,
+  isChecking: false,
+};
+
+function getLocalSelectedModelAvailability(status: ModelStatusResponse, selectedModel?: string | null) {
+  if (!selectedModel) {
+    return false;
+  }
+
+  const match = status.models.find((model) => model.name === selectedModel);
+  return !!match && match.downloaded && !match.requires_setup;
+}
+
+function normalizeRemoteStatus(snapshot: RecognitionAvailabilitySnapshot): RemoteAvailabilityStatus {
+  switch (snapshot.remote_status) {
+    case 'online':
+    case 'Online':
+      return 'online';
+    case 'offline':
+    case 'Offline':
+      return 'offline';
+    case 'auth_failed':
+    case 'AuthFailed':
+      return 'auth_failed';
+    case 'self_connection':
+    case 'SelfConnection':
+      return 'self_connection';
+    case 'unknown':
+    case 'Unknown':
+      return 'unknown';
+    default:
+      if (!snapshot.remote_selected) {
+        return 'unknown';
+      }
+
+      return snapshot.remote_available ? 'online' : 'unknown';
+  }
+}
+
+function deriveAvailabilityState(
+  snapshot: RecognitionAvailabilitySnapshot,
+  fallbackSelectedModelAvailable: boolean | null,
+ ): DerivedAvailabilityState {
+  const remoteSelected = snapshot.remote_selected;
+  const remoteStatus = normalizeRemoteStatus(snapshot);
+  const remoteAvailable = remoteStatus === 'online';
+  const hasLocalReadySource =
+    snapshot.whisper_available ||
+    snapshot.parakeet_available ||
+    (snapshot.soniox_selected && snapshot.soniox_ready);
+
+  const hasModels = remoteSelected && remoteStatus === 'unknown'
+    ? (hasLocalReadySource ? true : null)
+    : hasLocalReadySource || remoteAvailable;
+
+  const selectedModelAvailable = remoteSelected
+    ? (remoteStatus === 'unknown' ? null : remoteAvailable)
+    : fallbackSelectedModelAvailable;
+
+  return {
+    hasModels,
+    selectedModelAvailable,
+    remoteSelected,
+    remoteAvailable,
+    remoteStatus,
+    remoteLastChecked: snapshot.remote_last_checked ?? null,
+  };
+}
+
 export function useModelAvailability() {
   const { settings } = useSettings();
-  const [hasModels, setHasModels] = useState<boolean | null>(null);
-  const [selectedModelAvailable, setSelectedModelAvailable] = useState<boolean | null>(null);
-  const [isChecking, setIsChecking] = useState(false);
+  const [state, setState] = useState<ModelAvailabilityState>(DEFAULT_STATE);
+  const remoteStateRef = useRef({
+    remoteSelected: DEFAULT_STATE.remoteSelected,
+    remoteStatus: DEFAULT_STATE.remoteStatus,
+    remoteLastChecked: DEFAULT_STATE.remoteLastChecked,
+  });
+
+  useEffect(() => {
+    remoteStateRef.current = {
+      remoteSelected: state.remoteSelected,
+      remoteStatus: state.remoteStatus,
+      remoteLastChecked: state.remoteLastChecked,
+    };
+  }, [state.remoteSelected, state.remoteStatus, state.remoteLastChecked]);
+
+  const applyCanonicalAvailability = useCallback(
+    (snapshot: RecognitionAvailabilitySnapshot, fallbackSelectedModelAvailable: boolean | null) => {
+      const derived = deriveAvailabilityState(snapshot, fallbackSelectedModelAvailable);
+      remoteStateRef.current = {
+        remoteSelected: derived.remoteSelected,
+        remoteStatus: derived.remoteStatus,
+        remoteLastChecked: derived.remoteLastChecked,
+      };
+      setState((current) => ({
+        ...current,
+        ...derived,
+        isChecking: false,
+      }));
+      return derived;
+    },
+    []
+  );
 
   const checkModels = useCallback(async () => {
-    setIsChecking(true);
-    try {
-      const status = await invoke<ModelStatusResponse>('get_model_status');
-      const readyModels = status.models.filter(
-        (model) => model.downloaded && !model.requires_setup
-      );
-      setHasModels(readyModels.length > 0);
+    setState((current) => ({ ...current, isChecking: true }));
 
-      const selectedModel = settings?.current_model;
-      if (selectedModel) {
-        const match = status.models.find((model) => model.name === selectedModel);
-        const isAvailable =
-          !!match && match.downloaded && !match.requires_setup;
-        setSelectedModelAvailable(isAvailable);
-      } else {
-        setSelectedModelAvailable(false);
-      }
+    try {
+      const [status, availabilityResult] = await Promise.all([
+        invoke<ModelStatusResponse>('get_model_status'),
+        invoke<RecognitionAvailabilitySnapshot | null>('get_recognition_availability_snapshot'),
+      ]);
+
+      const availability = availabilityResult ?? FALLBACK_AVAILABILITY;
+      const localSelectedModelAvailable = getLocalSelectedModelAvailability(status, settings?.current_model);
+      return applyCanonicalAvailability(availability, localSelectedModelAvailable);
     } catch (error) {
       console.error('Failed to check model availability:', error);
-      setHasModels(false);
-      setSelectedModelAvailable(false);
-    } finally {
-      setIsChecking(false);
+      const unresolved: DerivedAvailabilityState = {
+        hasModels: null,
+        selectedModelAvailable: null,
+        remoteSelected: remoteStateRef.current.remoteSelected,
+        remoteAvailable: false,
+        remoteStatus: 'unknown',
+        remoteLastChecked: remoteStateRef.current.remoteLastChecked,
+      };
+      remoteStateRef.current = {
+        remoteSelected: unresolved.remoteSelected,
+        remoteStatus: unresolved.remoteStatus,
+        remoteLastChecked: unresolved.remoteLastChecked,
+      };
+      setState((current) => ({
+        ...current,
+        ...unresolved,
+        isChecking: false,
+      }));
+      return unresolved;
     }
-  }, [settings]);
+  }, [applyCanonicalAvailability, settings?.current_model]);
 
-  // Check on mount and when settings change
   useEffect(() => {
-    checkModels();
-  }, [checkModels, settings]);
+    const timeoutId = window.setTimeout(() => {
+      void checkModels();
+    }, 0);
 
-  // Listen for model events
+    return () => window.clearTimeout(timeoutId);
+  }, [checkModels]);
+
+
+  useEffect(() => {
+    const handleFocus = () => {
+      const { remoteSelected, remoteStatus } = remoteStateRef.current;
+      if (remoteSelected && remoteStatus !== 'online') {
+        void invoke('refresh_active_remote_server_status');
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    const unlistenTauriFocus = listen('tauri://focus', handleFocus);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      unlistenTauriFocus.then((unlisten) => unlisten());
+    };
+  }, []);
+
   useEffect(() => {
     const unlistenDownloaded = listen('model-downloaded', () => {
-      console.log('[useModelAvailability] Model downloaded event received');
       checkModels();
     });
 
     const unlistenDeleted = listen('model-deleted', () => {
-      console.log('[useModelAvailability] Model deleted event received');
       checkModels();
     });
 
     const unlistenModelChanged = listen('model-changed', () => {
-      console.log('[useModelAvailability] Model changed event received');
       checkModels();
     });
 
     const unlistenCloudSaved = listen('stt-key-saved', () => {
-      console.log('[useModelAvailability] Cloud provider connected');
       checkModels();
     });
 
     const unlistenCloudRemoved = listen('stt-key-removed', () => {
-      console.log('[useModelAvailability] Cloud provider disconnected');
       checkModels();
+    });
+
+    const unlistenSharingChanged = listen('sharing-status-changed', () => {
+      checkModels();
+    });
+
+    const unlistenAvailability = listen('recognition-availability', (event) => {
+      applyCanonicalAvailability(
+        event.payload as RecognitionAvailabilitySnapshot,
+        state.selectedModelAvailable,
+      );
     });
 
     return () => {
@@ -79,17 +262,23 @@ export function useModelAvailability() {
         unlistenDeleted,
         unlistenModelChanged,
         unlistenCloudSaved,
-        unlistenCloudRemoved
-      ]).then(unsubs => {
-        unsubs.forEach(unsub => unsub());
+        unlistenCloudRemoved,
+        unlistenSharingChanged,
+        unlistenAvailability,
+      ]).then((unsubs) => {
+        unsubs.forEach((unsub) => unsub());
       });
     };
-  }, [checkModels]);
+  }, [applyCanonicalAvailability, checkModels, state.selectedModelAvailable]);
 
   return {
-    hasModels,
-    selectedModelAvailable,
-    isChecking,
-    checkModels
+    hasModels: state.hasModels,
+    selectedModelAvailable: state.selectedModelAvailable,
+    remoteSelected: state.remoteSelected,
+    remoteAvailable: state.remoteAvailable,
+    remoteStatus: state.remoteStatus,
+    remoteLastChecked: state.remoteLastChecked,
+    isChecking: state.isChecking,
+    checkModels,
   };
 }

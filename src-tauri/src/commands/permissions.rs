@@ -260,3 +260,34 @@ pub async fn test_automation_permission() -> Result<bool, String> {
         Ok(true)
     }
 }
+
+/// Open the system accessibility settings
+#[tauri::command]
+pub fn open_accessibility_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+
+        // Open Privacy & Security > Accessibility
+        let _ = Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        // Windows doesn't have the same accessibility permission model
+        // Open Ease of Access settings as closest equivalent
+        let _ = Command::new("ms-settings:easeofaccess")
+            .spawn();
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Ok(())
+    }
+}

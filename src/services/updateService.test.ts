@@ -35,12 +35,29 @@ vi.mock('sonner', () => ({
 import { UpdateService } from './updateService';
 
 const JUST_UPDATED_KEY = 'just_updated_version';
+const storage = new Map<string, string>();
+
+Object.defineProperty(window, 'localStorage', {
+  configurable: true,
+  value: {
+    getItem: vi.fn((key: string) => storage.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      storage.set(key, value);
+    }),
+    removeItem: vi.fn((key: string) => {
+      storage.delete(key);
+    }),
+    clear: vi.fn(() => {
+      storage.clear();
+    }),
+  },
+});
 
 describe('UpdateService version marker', () => {
   let service: UpdateService;
 
   beforeEach(() => {
-    localStorage.clear();
+    storage.clear();
     vi.clearAllMocks();
     // Get a fresh instance per test to reset internal state
     // @ts-expect-error accessing private static for test isolation

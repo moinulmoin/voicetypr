@@ -70,6 +70,12 @@ export interface AppSettings {
   pill_indicator_offset?: number;
   // Pause system media during recording
   pause_media_during_recording?: boolean;
+  // Network sharing settings
+  sharing_port?: number;
+  sharing_password?: string;
+  // Recording persistence settings
+  save_recordings?: boolean;
+  recording_retention_count?: number | null; // null = unlimited
 }
 
 export interface TranscriptionHistory {
@@ -77,6 +83,9 @@ export interface TranscriptionHistory {
   text: string;
   timestamp: Date;
   model: string;
+  recording_file?: string; // Filename of the saved recording (not full path)
+  source_recording_id?: string; // For re-transcriptions, references original transcription
+  status?: 'completed' | 'in_progress' | 'failed';
 }
 
 export interface LicenseStatus {

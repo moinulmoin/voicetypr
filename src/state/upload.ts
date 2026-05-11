@@ -2,6 +2,10 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 
 export type UploadStatus = 'idle' | 'processing' | 'done' | 'error'
+export type UploadResult =
+  | { outcome: 'success'; text: string }
+  | { outcome: 'blank' }
+  | { outcome: 'error'; message: string }
 
 export type SelectedFile = { path: string; name: string }
 
@@ -12,7 +16,7 @@ type UploadState = {
   error: string | null
   select: (path: string) => void
   clearSelection: () => void
-  start: (modelName: string, modelEngine: string) => Promise<void>
+  start: (modelName: string, modelEngine: string | null, historyModelName?: string) => Promise<UploadResult | null>
   reset: () => void
 }
 
@@ -29,10 +33,10 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
   clearSelection: () => set({ selectedFile: null }),
 
-  start: async (modelName: string, modelEngine: string) => {
+  start: async (modelName: string, modelEngine: string | null, historyModelName?: string) => {
     const { selectedFile, status } = get()
-    if (!selectedFile) return
-    if (status === 'processing') return
+    if (!selectedFile) return null
+    if (status === 'processing') return null
     set({ status: 'processing', error: null, resultText: null })
     try {
       const text = await invoke<string>('transcribe_audio_file', {
@@ -42,13 +46,19 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       })
       if (!text || text.trim() === '' || text === '[BLANK_AUDIO]') {
         set({ status: 'error', error: 'No speech detected in the audio file' })
-        return
+        return { outcome: 'blank' }
       }
 
-      await invoke('save_transcription', { text, model: modelName })
+      await invoke('save_transcription', {
+        text,
+        model: historyModelName || modelName,
+      })
       set({ status: 'done', resultText: text })
+      return { outcome: 'success', text }
     } catch (e: any) {
-      set({ status: 'error', error: String(e?.message || e) })
+      const message = String(e?.message || e)
+      set({ status: 'error', error: message })
+      return { outcome: 'error', message }
     }
   },
 

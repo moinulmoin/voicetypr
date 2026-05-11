@@ -59,7 +59,7 @@ impl ParakeetManager {
     ///
     /// # Platform Behavior
     /// - **macOS (Apple Silicon)**: Returns all Parakeet models
-    /// - **macOS (Intel)**: Returns only models compatible with x86_64 (excludes V2)
+    /// - **macOS (Intel)**: Returns an empty list (Parakeet requires Apple Silicon)
     /// - **Windows/Linux**: Returns empty vector (compile-time exclusion)
     pub fn list_models(&self) -> Vec<ParakeetModelStatus> {
         // Parakeet Swift/FluidAudio integration is macOS-only
