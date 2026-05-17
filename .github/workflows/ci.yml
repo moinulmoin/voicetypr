@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   # ===========================================
@@ -95,7 +96,7 @@ jobs:
   # Build Windows (full build = catches all issues)
   # ===========================================
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     env:
       # whisper.cpp/ggml Vulkan build generates very deep paths; keep Windows paths short to
       # avoid MSBuild/FileTracker failures.
