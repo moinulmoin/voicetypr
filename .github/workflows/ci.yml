@@ -23,10 +23,8 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 10.13.1
+      - name: Install pnpm
+        run: npm install -g pnpm@10.13.1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -60,10 +58,8 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 10.13.1
+      - name: Install pnpm
+        run: npm install -g pnpm@10.13.1
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -112,10 +108,8 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 10.13.1
+      - name: Install pnpm
+        run: npm install -g pnpm@10.13.1
 
       - name: Prepare cargo target dir
         shell: pwsh
