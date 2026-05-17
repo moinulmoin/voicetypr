@@ -4,7 +4,6 @@ use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 
 use crate::audio;
-use crate::remote::server::StatusResponse;
 use crate::remote::settings::ConnectionStatus;
 use crate::remote::settings::RemoteSettings;
 use crate::whisper;
@@ -263,7 +262,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
 
                 let remote_item = CheckMenuItem::with_id(
                     app,
-                    &format!("model_{}", model_id),
+                    format!("model_{}", model_id),
                     &display,
                     true,
                     is_selected,
@@ -530,37 +529,4 @@ mod tests {
             Some("remote-1".to_string())
         );
     }
-}
-
-/// Fetch server status with a short timeout (for getting model info)
-async fn fetch_server_status(
-    host: &str,
-    port: u16,
-    password: Option<&str>,
-) -> Result<StatusResponse, String> {
-    let url = format!("http://{}:{}/api/v1/status", host, port);
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let mut request = client.get(&url);
-    if let Some(pwd) = password {
-        request = request.header("X-VoiceTypr-Key", pwd);
-    }
-
-    let response = request
-        .send()
-        .await
-        .map_err(|e| format!("Failed to connect: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("Server error: {}", response.status()));
-    }
-
-    response
-        .json::<StatusResponse>()
-        .await
-        .map_err(|e| format!("Failed to parse response: {}", e))
 }

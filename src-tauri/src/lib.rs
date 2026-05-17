@@ -379,7 +379,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Initialize remote transcription state
             app.manage(AsyncMutex::new(RemoteServerManager::new()));
             // Load saved remote settings from store (persists connections across restarts)
-            let remote_settings = load_remote_settings(&app.handle());
+            let remote_settings = load_remote_settings(app.handle());
             let connection_count = remote_settings.saved_connections.len();
             let active_id = remote_settings.active_connection_id.clone();
             let sharing_was_enabled = remote_settings.server_config.enabled;
@@ -1356,7 +1356,7 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
     {
         if let Err(err) = crate::commands::remote::refresh_active_remote_server_status_impl(
             &app,
-            &*remote_settings,
+            &remote_settings,
         )
         .await
         {

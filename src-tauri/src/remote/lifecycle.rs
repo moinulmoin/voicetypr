@@ -32,8 +32,6 @@ pub struct ServerHandle {
     task_handles: Vec<tokio::task::JoinHandle<()>>,
     /// The port the server is listening on
     pub port: u16,
-    /// The IPs the server is bound to
-    pub bound_ips: Vec<IpAddr>,
     /// Results of binding attempts (for UI display)
     pub binding_results: Vec<BindingResult>,
 }
@@ -106,6 +104,7 @@ impl RemoteServerManager {
     }
 
     /// Get the port the server is listening on (if running)
+    #[cfg(test)]
     pub fn get_port(&self) -> Option<u16> {
         self.handle.as_ref().map(|h| h.port)
     }
@@ -120,6 +119,7 @@ impl RemoteServerManager {
     /// * `model_name` - Name of the current model
     /// * `engine` - Transcription engine (whisper, parakeet, etc.)
     /// * `app_handle` - Optional AppHandle for Parakeet support
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &mut self,
         port: u16,
@@ -294,7 +294,6 @@ impl RemoteServerManager {
             shutdown_txs,
             task_handles,
             port,
-            bound_ips,
             binding_results,
         });
 
@@ -345,6 +344,7 @@ impl RemoteServerManager {
     }
 
     /// Get the current server configuration
+    #[cfg(test)]
     pub fn get_config(&self) -> Option<&TranscriptionServerConfig> {
         self.config.as_ref()
     }

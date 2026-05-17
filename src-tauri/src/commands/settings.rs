@@ -242,7 +242,7 @@ pub fn normalize_speech_language_for_model(
         "whisper" if model_requires_english_speech(engine, model_name) => "en".to_string(),
         "parakeet" => {
             if let Some(definition) = AVAILABLE_MODELS.iter().find(|m| m.id == model_name) {
-                if definition.languages.iter().any(|code| *code == validated) {
+                if definition.languages.contains(&validated) {
                     validated.to_string()
                 } else {
                     definition

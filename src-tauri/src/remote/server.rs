@@ -70,6 +70,7 @@ impl Serialize for RemoteServerConfig {
     }
 }
 
+#[cfg(test)]
 impl RemoteServerConfig {
     /// Validate a password against the configured password
     ///
@@ -88,6 +89,7 @@ impl RemoteServerConfig {
 }
 
 /// Current status of the remote server
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ServerStatus {
     /// Server is not running
@@ -96,6 +98,7 @@ pub enum ServerStatus {
     Running { port: u16, connections: usize },
 }
 
+#[cfg(test)]
 impl ServerStatus {
     /// Check if the server is currently running
     pub fn is_running(&self) -> bool {

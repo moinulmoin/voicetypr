@@ -347,6 +347,7 @@ impl Transcriber {
         Ok(Self { context: ctx })
     }
 
+    #[allow(dead_code)]
     pub fn transcribe_with_translation(
         &self,
         audio_path: &Path,
@@ -357,6 +358,7 @@ impl Transcriber {
             .map(|result| result.raw_text)
     }
 
+    #[allow(dead_code)]
     pub fn transcribe_with_cancellation<F>(
         &self,
         audio_path: &Path,

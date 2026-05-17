@@ -3,7 +3,7 @@
 //! Implements ServerContext using actual Whisper or Parakeet transcription.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::Instant;
 use tauri::AppHandle;
@@ -124,6 +124,7 @@ impl RealTranscriptionContext {
     }
 
     /// Create a new transcription context (legacy, creates its own shared state)
+    #[cfg(test)]
     pub fn new(config: TranscriptionServerConfig) -> Self {
         // Default to whisper engine for legacy compatibility
         let shared_state =
@@ -138,22 +139,26 @@ impl RealTranscriptionContext {
     }
 
     /// Update the model being served
+    #[cfg(test)]
     pub fn update_model(&mut self, model_path: PathBuf, model_name: String, engine: String) {
         self.shared_state
             .update_model(model_name, model_path, engine);
     }
 
     /// Update the password
+    #[cfg(test)]
     pub fn update_password(&mut self, password: Option<String>) {
         self.password = password;
     }
 
     /// Get the current model path
+    #[cfg(test)]
     pub fn get_model_path(&self) -> PathBuf {
         self.shared_state.get_model_path()
     }
 
     /// Get the shared state (for external updates)
+    #[cfg(test)]
     pub fn get_shared_state(&self) -> SharedServerState {
         self.shared_state.clone()
     }
@@ -276,7 +281,7 @@ impl RealTranscriptionContext {
     /// Transcribe using Whisper model
     fn transcribe_with_whisper(
         &self,
-        audio_path: &PathBuf,
+        audio_path: &Path,
         spoken_language: Option<&str>,
         translate_to_english: bool,
     ) -> Result<crate::whisper::transcriber::WhisperTranscriptionOutput, String> {
@@ -305,7 +310,7 @@ impl RealTranscriptionContext {
     /// Transcribe using Parakeet sidecar
     fn transcribe_with_parakeet(
         &self,
-        audio_path: &PathBuf,
+        audio_path: &Path,
         model_name: &str,
         job: &TranscriptionJob,
         spoken_language: Option<String>,
@@ -327,7 +332,7 @@ impl RealTranscriptionContext {
         // Clone what we need for the async block
         let app_handle_clone = app_handle.clone();
         let model_name_owned = model_name.to_string();
-        let audio_path_clone = audio_path.clone();
+        let audio_path_clone = audio_path.to_path_buf();
 
         // Run the async Parakeet transcription in a blocking context
         // Since we're already in a sync context (ServerContext::transcribe), use block_on

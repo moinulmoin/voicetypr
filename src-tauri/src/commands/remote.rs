@@ -155,6 +155,7 @@ fn remote_settings_connection_password_markers(
 // ============================================================================
 
 /// Start sharing the currently selected model with other VoiceTypr instances
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn start_sharing(
     app: AppHandle,
@@ -529,6 +530,7 @@ fn ensure_remote_selection_is_allowed(
 }
 
 /// Update an existing remote server connection
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn update_remote_server(
     app: AppHandle,
@@ -796,7 +798,7 @@ pub async fn refresh_active_remote_server_status(
     app: AppHandle,
     remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
 ) -> Result<Option<SavedConnection>, String> {
-    refresh_active_remote_server_status_impl(&app, &*remote_settings).await
+    refresh_active_remote_server_status_impl(&app, &remote_settings).await
 }
 
 #[tauri::command]

@@ -52,7 +52,7 @@ impl RemoteServerConnection {
         )
     }
 
-    /// Get a display name for this connection
+    #[cfg(test)]
     pub fn display_name(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
@@ -63,6 +63,7 @@ impl RemoteServerConnection {
 pub struct TranscriptionRequest {
     /// Raw audio data (WAV format)
     pub audio_data: Vec<u8>,
+    #[cfg(test)]
     /// Source of the audio (affects timeout)
     pub source: TranscriptionSource,
     /// Optional spoken language hint for the remote engine.
@@ -74,8 +75,11 @@ pub struct TranscriptionRequest {
 impl TranscriptionRequest {
     /// Create a new transcription request
     pub fn new(audio_data: Vec<u8>, source: TranscriptionSource) -> Self {
+        #[cfg(not(test))]
+        let _ = source;
         Self {
             audio_data,
+            #[cfg(test)]
             source,
             spoken_language: None,
             transcription_task: None,
@@ -178,6 +182,7 @@ impl fmt::Display for RemoteClientError {
 impl std::error::Error for RemoteClientError {}
 
 impl RemoteClientError {
+    #[cfg(test)]
     pub fn endpoint(&self) -> RemoteEndpoint {
         match self {
             Self::AuthFailed { endpoint, .. }
@@ -195,10 +200,12 @@ impl RemoteClientError {
         matches!(self, Self::AuthFailed { .. })
     }
 
+    #[cfg(test)]
     pub fn is_timeout(&self) -> bool {
         matches!(self, Self::Timeout { .. })
     }
 
+    #[cfg(test)]
     pub fn status_code(&self) -> Option<StatusCode> {
         match self {
             Self::HttpStatus { status, .. } => Some(*status),

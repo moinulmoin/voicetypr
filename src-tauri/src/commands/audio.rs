@@ -1301,7 +1301,6 @@ enum ActiveEngineSelection {
         model_name: String,
     },
     Remote {
-        server_id: String,
         server_name: String,
         host: String,
         port: u16,
@@ -1390,7 +1389,6 @@ async fn resolve_engine_for_model(
                 crate::remote::settings::ConnectionStatus::Online
             ) {
                 return Ok(ActiveEngineSelection::Remote {
-                    server_id: remote_conn.id.clone(),
                     server_name: remote_conn.display_name(),
                     host: remote_conn.host,
                     port: remote_conn.port,
@@ -2513,7 +2511,6 @@ pub async fn stop_recording(
                 remote_conn.port
             );
             ActiveEngineSelection::Remote {
-                server_id: remote_conn.id.clone(),
                 server_name: remote_conn.display_name(),
                 host: remote_conn.host,
                 port: remote_conn.port,
@@ -3407,7 +3404,7 @@ pub async fn stop_recording(
                         }
 
                         // Emit specific feedback via pill toast
-                        pill_toast(&app_for_task, &e, 1000);
+                        pill_toast(&app_for_task, e, 1000);
 
                         // Hide pill after showing feedback
                         let app_for_reset = app_for_task.clone();

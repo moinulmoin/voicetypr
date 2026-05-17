@@ -25,10 +25,6 @@ impl TranscriptionTask {
         }
     }
 
-    pub fn translate_to_english(self) -> bool {
-        matches!(self, Self::TranslateToEnglish)
-    }
-
     pub fn fallback_transcript_language(self, spoken_language: Option<&str>) -> Option<String> {
         match self {
             Self::Transcribe => spoken_language.map(str::to_string),
