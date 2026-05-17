@@ -21,7 +21,8 @@ export interface SavedConnection {
   id: string;
   host: string;
   port: number;
-  password: string | null;
+  password?: string | null;
+  has_password?: boolean;
   name: string | null;
   created_at: number;
   model?: string | null;

@@ -18,7 +18,8 @@ interface SavedConnection {
   id: string;
   host: string;
   port: number;
-  password: string | null;
+  password?: string | null;
+  has_password?: boolean;
   name: string | null;
   created_at: number;
 }
@@ -57,18 +58,11 @@ export function AddServerModal({
   const [saving, setSaving] = useState(false);
   const [localMachineId, setLocalMachineId] = useState<string | null>(null);
   const [isSelfConnection, setIsSelfConnection] = useState(false);
+  const [clearSavedPassword, setClearSavedPassword] = useState(false);
 
   const isEditMode = !!editServer;
-
-  // Populate form when editing
-  useState(() => {
-    if (editServer && open) {
-      setHost(editServer.host);
-      setPort(editServer.port.toString());
-      setPassword(editServer.password || "");
-      setName(editServer.name || "");
-    }
-  });
+  const testRequiresReplacementPassword =
+    isEditMode && !!editServer?.has_password && !password && !clearSavedPassword;
 
   // Update form when editServer changes
   React.useEffect(() => {
@@ -77,6 +71,7 @@ export function AddServerModal({
       setPort(editServer.port.toString());
       setPassword(editServer.password || "");
       setName(editServer.name || "");
+      setClearSavedPassword(false);
     }
   }, [editServer, open]);
 
@@ -98,11 +93,19 @@ export function AddServerModal({
     setTestResult(null);
     setTestError(null);
     setIsSelfConnection(false);
+    setClearSavedPassword(false);
   };
 
   const handleClose = () => {
     resetForm();
     onOpenChange(false);
+  };
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      resetForm();
+    }
+    onOpenChange(nextOpen);
   };
 
   const handleTestConnection = async () => {
@@ -179,12 +182,14 @@ export function AddServerModal({
 
       let server: SavedConnection;
       if (isEditMode && editServer) {
+        const preservePassword = !!editServer.has_password && !password && !clearSavedPassword;
         // Update existing server
         server = await invoke<SavedConnection>("update_remote_server", {
           serverId: editServer.id,
           host: host.trim(),
           port: portNum,
-          password: password || null,
+          password: preservePassword ? null : password || null,
+          preservePassword,
           name: name.trim() || null,
         });
         toast.success(`"${server.name || server.host}" updated`);
@@ -212,7 +217,7 @@ export function AddServerModal({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -260,7 +265,7 @@ export function AddServerModal({
               <Input
                 id="server-password"
                 type={showPassword ? "text" : "password"}
-                placeholder="Leave empty if no password"
+                placeholder={isEditMode && editServer?.has_password ? "Leave empty to keep saved password" : "Leave empty if no password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={saving}
@@ -279,6 +284,17 @@ export function AddServerModal({
                 )}
               </button>
             </div>
+            {isEditMode && editServer?.has_password && !password && (
+              <Button
+                type="button"
+                variant={clearSavedPassword ? "destructive" : "outline"}
+                size="sm"
+                onClick={() => setClearSavedPassword((value) => !value)}
+                disabled={saving}
+              >
+                {clearSavedPassword ? "Password will be removed" : "Keep saved password"}
+              </Button>
+            )}
           </div>
 
           {/* Name Input */}
@@ -298,7 +314,7 @@ export function AddServerModal({
             variant="outline"
             className="w-full"
             onClick={handleTestConnection}
-            disabled={!host.trim() || testStatus === "testing" || saving}
+            disabled={!host.trim() || testStatus === "testing" || saving || testRequiresReplacementPassword}
           >
             {testStatus === "testing" ? (
               <>
@@ -309,6 +325,11 @@ export function AddServerModal({
               "Test Connection"
             )}
           </Button>
+          {testRequiresReplacementPassword && (
+            <p className="text-xs text-muted-foreground">
+              Enter a replacement password to test this server. Saving with this field empty keeps the saved password.
+            </p>
+          )}
 
           {/* Test Result - compact */}
           {testStatus === "success" && testResult && (

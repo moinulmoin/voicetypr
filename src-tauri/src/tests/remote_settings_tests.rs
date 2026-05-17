@@ -79,7 +79,9 @@ fn test_remove_active_connection_clears_active() {
 
     let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
 
-    settings.set_active_connection(Some(saved.id.clone())).unwrap();
+    settings
+        .set_active_connection(Some(saved.id.clone()))
+        .unwrap();
     assert_eq!(settings.active_connection_id, Some(saved.id.clone()));
 
     settings.remove_connection(&saved.id).unwrap();
@@ -94,10 +96,14 @@ fn test_set_active_connection() {
     let saved1 = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
     let saved2 = settings.add_connection("192.168.1.101".to_string(), 47842, None, None, None);
 
-    settings.set_active_connection(Some(saved1.id.clone())).unwrap();
+    settings
+        .set_active_connection(Some(saved1.id.clone()))
+        .unwrap();
     assert_eq!(settings.active_connection_id, Some(saved1.id.clone()));
 
-    settings.set_active_connection(Some(saved2.id.clone())).unwrap();
+    settings
+        .set_active_connection(Some(saved2.id.clone()))
+        .unwrap();
     assert_eq!(settings.active_connection_id, Some(saved2.id));
 
     settings.set_active_connection(None).unwrap();
@@ -114,7 +120,9 @@ fn test_get_active_connection() {
 
     let saved = settings.add_connection("192.168.1.100".to_string(), 47842, None, None, None);
 
-    settings.set_active_connection(Some(saved.id.clone())).unwrap();
+    settings
+        .set_active_connection(Some(saved.id.clone()))
+        .unwrap();
 
     let active = settings.get_active_connection();
     assert!(active.is_some());
@@ -147,17 +155,23 @@ fn test_remote_settings_serialization() {
         None,
     );
 
-    settings.set_active_connection(Some(saved1.id.clone())).unwrap();
+    settings
+        .set_active_connection(Some(saved1.id.clone()))
+        .unwrap();
 
     // Serialize and deserialize
     let json = serde_json::to_string(&settings).unwrap();
+    assert!(!json.contains("secret123"));
+    assert!(!json.contains("\"pass\""));
+    assert!(json.contains("\"has_password\":true"));
     let restored: RemoteSettings = serde_json::from_str(&json).unwrap();
 
     // Verify
     assert!(restored.server_config.enabled);
     assert_eq!(restored.server_config.port, 8080);
-    assert_eq!(restored.server_config.password, Some("secret123".to_string()));
+    assert!(restored.server_config.password.is_none());
     assert_eq!(restored.saved_connections.len(), 2);
+    assert!(restored.saved_connections[1].password.is_none());
     assert_eq!(restored.active_connection_id, Some(saved1.id));
 }
 
@@ -177,9 +191,27 @@ fn test_saved_connection_has_timestamp() {
 fn test_list_connections() {
     let mut settings = RemoteSettings::default();
 
-    settings.add_connection("192.168.1.100".to_string(), 47842, None, Some("A".to_string()), None);
-    settings.add_connection("192.168.1.101".to_string(), 47842, None, Some("B".to_string()), None);
-    settings.add_connection("192.168.1.102".to_string(), 47842, None, Some("C".to_string()), None);
+    settings.add_connection(
+        "192.168.1.100".to_string(),
+        47842,
+        None,
+        Some("A".to_string()),
+        None,
+    );
+    settings.add_connection(
+        "192.168.1.101".to_string(),
+        47842,
+        None,
+        Some("B".to_string()),
+        None,
+    );
+    settings.add_connection(
+        "192.168.1.102".to_string(),
+        47842,
+        None,
+        Some("C".to_string()),
+        None,
+    );
 
     let all = settings.list_connections();
     assert_eq!(all.len(), 3);

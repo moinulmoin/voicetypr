@@ -3,7 +3,7 @@
 //! HTTP server that allows other VoiceTypr instances to use this machine's
 //! transcription capabilities.
 
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeStruct, Deserialize, Serialize};
 
 /// Response from the /api/v1/status endpoint
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -22,6 +22,8 @@ pub struct TranscribeResponse {
     pub text: String,
     pub duration_ms: u64,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_language: Option<String>,
 }
 
 /// Error response for API endpoints
@@ -31,11 +33,12 @@ pub struct ErrorResponse {
 }
 
 /// Configuration for the remote transcription server
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct RemoteServerConfig {
     /// Port to listen on (default: 47842)
     pub port: u16,
     /// Optional password for authentication
+    #[serde(default)]
     pub password: Option<String>,
     /// Whether sharing is enabled
     pub enabled: bool,
@@ -48,6 +51,22 @@ impl Default for RemoteServerConfig {
             password: None,
             enabled: false,
         }
+    }
+}
+
+impl Serialize for RemoteServerConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("RemoteServerConfig", 3)?;
+        state.serialize_field("port", &self.port)?;
+        state.serialize_field(
+            "has_password",
+            &self.password.as_ref().is_some_and(|p| !p.is_empty()),
+        )?;
+        state.serialize_field("enabled", &self.enabled)?;
+        state.end()
     }
 }
 
@@ -74,10 +93,7 @@ pub enum ServerStatus {
     /// Server is not running
     Idle,
     /// Server is running and accepting connections
-    Running {
-        port: u16,
-        connections: usize,
-    },
+    Running { port: u16, connections: usize },
 }
 
 impl ServerStatus {

@@ -9,9 +9,8 @@
 //! - Constants and configurations
 
 use crate::commands::remote::{
-    normalize_loaded_active_remote_status,
-    DEFAULT_PORT, FirewallStatus, get_firewall_status, get_local_ips, get_local_machine_id,
-    open_firewall_settings,
+    get_firewall_status, get_local_ips, get_local_machine_id,
+    normalize_loaded_active_remote_status, open_firewall_settings, FirewallStatus, DEFAULT_PORT,
 };
 use crate::remote::settings::{ConnectionStatus, RemoteSettings, SavedConnection};
 
@@ -26,7 +25,9 @@ fn test_normalize_loaded_active_remote_status_preserves_last_checked() {
         None,
     );
     let conn_id = conn.id.clone();
-    settings.set_active_connection(Some(conn_id.clone())).unwrap();
+    settings
+        .set_active_connection(Some(conn_id.clone()))
+        .unwrap();
     let active = settings
         .saved_connections
         .iter_mut()
@@ -37,7 +38,9 @@ fn test_normalize_loaded_active_remote_status_preserves_last_checked() {
 
     normalize_loaded_active_remote_status(&mut settings);
 
-    let active = settings.get_active_connection().expect("active connection should remain");
+    let active = settings
+        .get_active_connection()
+        .expect("active connection should remain");
     assert_eq!(active.status, ConnectionStatus::Unknown);
     assert_eq!(active.last_checked, 42_4242);
 }
@@ -60,7 +63,9 @@ fn test_normalize_loaded_active_remote_status_is_noop_without_active_remote() {
     normalize_loaded_active_remote_status(&mut settings);
 
     assert!(settings.active_connection_id.is_none());
-    let connection = settings.get_connection(&conn_id).expect("connection should remain");
+    let connection = settings
+        .get_connection(&conn_id)
+        .expect("connection should remain");
     assert_eq!(connection.status, ConnectionStatus::Offline);
     assert_eq!(connection.last_checked, original_last_checked + 7);
 }
@@ -76,7 +81,9 @@ fn test_normalize_loaded_active_remote_status_clears_orphaned_active_id() {
         None,
     );
     let conn_id = conn.id.clone();
-    settings.set_active_connection(Some(conn_id.clone())).unwrap();
+    settings
+        .set_active_connection(Some(conn_id.clone()))
+        .unwrap();
     settings.remove_connection(&conn_id).unwrap();
 
     normalize_loaded_active_remote_status(&mut settings);
@@ -574,7 +581,8 @@ fn test_saved_connection_serialization() {
     assert!(json.contains("\"id\":\"conn_123\""));
     assert!(json.contains("\"host\":\"10.0.0.1\""));
     assert!(json.contains("\"port\":8080"));
-    assert!(json.contains("\"password\":\"secret\""));
+    assert!(!json.contains("secret"));
+    assert!(json.contains("\"has_password\":true"));
     assert!(json.contains("\"model\":\"whisper-large\""));
 }
 
@@ -694,6 +702,8 @@ fn test_remote_settings_serialization() {
     assert!(json.contains("saved_connections"));
     assert!(json.contains("192.168.1.100"));
     assert!(json.contains("\"sharing_was_active\":true"));
+    assert!(!json.contains("\"pass\""));
+    assert!(json.contains("\"has_password\":true"));
 }
 
 #[test]
@@ -734,6 +744,8 @@ fn test_remote_settings_roundtrip() {
         original.saved_connections.len(),
         restored.saved_connections.len()
     );
+    assert!(!json.contains("mypass"));
+    assert!(restored.saved_connections[0].password.is_none());
     assert_eq!(original.sharing_was_active, restored.sharing_was_active);
 }
 
@@ -816,8 +828,6 @@ fn test_switch_active_connection() {
     settings.set_active_connection(None).unwrap();
     assert!(settings.get_active_connection().is_none());
 }
-
-
 
 use crate::commands::remote::connection_status_for_remote_error;
 use crate::remote::client::{RemoteClientError, RemoteEndpoint};

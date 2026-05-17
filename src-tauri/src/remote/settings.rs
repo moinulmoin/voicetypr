@@ -3,7 +3,7 @@
 //! Manages storage and retrieval of remote server configurations
 //! and saved connections.
 
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::server::RemoteServerConfig;
@@ -21,7 +21,7 @@ pub enum ConnectionStatus {
 }
 
 /// A saved connection with metadata
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct SavedConnection {
     /// Unique identifier for this connection
     pub id: String,
@@ -30,6 +30,7 @@ pub struct SavedConnection {
     /// Port number
     pub port: u16,
     /// Optional password for authentication
+    #[serde(default)]
     pub password: Option<String>,
     /// Optional friendly name
     pub name: Option<String>,
@@ -170,6 +171,28 @@ impl RemoteSettings {
     /// List all saved connections
     pub fn list_connections(&self) -> Vec<SavedConnection> {
         self.saved_connections.clone()
+    }
+}
+
+impl Serialize for SavedConnection {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("SavedConnection", 9)?;
+        state.serialize_field("id", &self.id)?;
+        state.serialize_field("host", &self.host)?;
+        state.serialize_field("port", &self.port)?;
+        state.serialize_field(
+            "has_password",
+            &self.password.as_ref().is_some_and(|p| !p.is_empty()),
+        )?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("created_at", &self.created_at)?;
+        state.serialize_field("model", &self.model)?;
+        state.serialize_field("status", &self.status)?;
+        state.serialize_field("last_checked", &self.last_checked)?;
+        state.end()
     }
 }
 

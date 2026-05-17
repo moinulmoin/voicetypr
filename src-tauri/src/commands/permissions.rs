@@ -281,8 +281,7 @@ pub fn open_accessibility_settings() -> Result<(), String> {
         use std::process::Command;
         // Windows doesn't have the same accessibility permission model
         // Open Ease of Access settings as closest equivalent
-        let _ = Command::new("ms-settings:easeofaccess")
-            .spawn();
+        let _ = Command::new("ms-settings:easeofaccess").spawn();
         Ok(())
     }
 

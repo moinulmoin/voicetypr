@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 use super::server::{ErrorResponse, StatusResponse, TranscribeResponse};
+use crate::transcription::TranscriptionResult;
 
 /// Auth header name
 const AUTH_HEADER: &str = "X-VoiceTypr-Key";
@@ -19,7 +20,12 @@ pub trait ServerContext: Send + Sync {
     fn get_model_name(&self) -> String;
     fn get_server_name(&self) -> String;
     fn get_password(&self) -> Option<String>;
-    fn transcribe(&self, audio_data: &[u8]) -> Result<TranscribeResponse, String>;
+    fn transcribe(
+        &self,
+        audio_data: &[u8],
+        spoken_language: Option<&str>,
+        transcription_task: Option<&str>,
+    ) -> Result<TranscriptionResult, String>;
 }
 
 /// Create all warp routes for the remote transcription API
@@ -51,6 +57,12 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
         .and(warp::post())
         .and(warp::header::optional::<String>(AUTH_HEADER))
         .and(warp::header::<String>("content-type"))
+        .and(warp::header::optional::<String>(
+            "X-VoiceTypr-Speech-Language",
+        ))
+        .and(warp::header::optional::<String>(
+            "X-VoiceTypr-Transcription-Task",
+        ))
         .and(warp::body::content_length_limit(MAX_AUDIO_BODY_BYTES))
         .and(warp::body::bytes())
         .and(with_context(ctx))
@@ -72,7 +84,10 @@ async fn handle_status<T: ServerContext + 'static>(
     let ctx = ctx.read().await;
     let server_name = ctx.get_server_name();
 
-    info!("[Remote Server] Status request received on '{}'", server_name);
+    info!(
+        "[Remote Server] Status request received on '{}'",
+        server_name
+    );
 
     // Check authentication
     if let Some(required_password) = ctx.get_password() {
@@ -96,8 +111,8 @@ async fn handle_status<T: ServerContext + 'static>(
     }
 
     // Get unique machine ID to allow clients to detect self-connection
-    let machine_id = crate::license::device::get_device_hash()
-        .unwrap_or_else(|_| "unknown".to_string());
+    let machine_id =
+        crate::license::device::get_device_hash().unwrap_or_else(|_| "unknown".to_string());
 
     let response = StatusResponse {
         status: "ok".to_string(),
@@ -122,6 +137,8 @@ async fn handle_status<T: ServerContext + 'static>(
 async fn handle_transcribe<T: ServerContext + 'static>(
     auth_key: Option<String>,
     content_type: String,
+    spoken_language: Option<String>,
+    transcription_task: Option<String>,
     body: bytes::Bytes,
     ctx: Arc<RwLock<T>>,
 ) -> Result<impl Reply, Rejection> {
@@ -176,8 +193,18 @@ async fn handle_transcribe<T: ServerContext + 'static>(
     );
 
     // Perform transcription
-    match ctx.transcribe(&body) {
-        Ok(response) => {
+    match ctx.transcribe(
+        &body,
+        spoken_language.as_deref(),
+        transcription_task.as_deref(),
+    ) {
+        Ok(result) => {
+            let response = TranscribeResponse {
+                text: result.raw_text,
+                duration_ms: result.timings.processing_duration_ms.unwrap_or_default(),
+                model: result.model,
+                transcript_language: result.transcript_language,
+            };
             info!(
                 "🎯 [Remote Server] Transcription COMPLETED on '{}': {} chars in {}ms using '{}'",
                 server_name,
@@ -185,19 +212,6 @@ async fn handle_transcribe<T: ServerContext + 'static>(
                 response.duration_ms,
                 response.model
             );
-            // Log the actual transcription text (truncated for long texts)
-            let preview = if response.text.len() > 100 {
-                let cut = response
-                    .text
-                    .char_indices()
-                    .nth(100)
-                    .map(|(i, _)| i)
-                    .unwrap_or(response.text.len());
-                format!("{}...", &response.text[..cut])
-            } else {
-                response.text.clone()
-            };
-            info!("📝 [Remote Server] Transcription result: \"{}\"", preview);
             Ok(warp::reply::with_status(
                 warp::reply::json(&response),
                 StatusCode::OK,
@@ -235,12 +249,23 @@ mod tests {
         fn get_password(&self) -> Option<String> {
             None
         }
-        fn transcribe(&self, _audio_data: &[u8]) -> Result<TranscribeResponse, String> {
-            Ok(TranscribeResponse {
-                text: "mock transcription".to_string(),
-                duration_ms: 100,
-                model: "mock-model".to_string(),
-            })
+        fn transcribe(
+            &self,
+            _audio_data: &[u8],
+            _spoken_language: Option<&str>,
+            _transcription_task: Option<&str>,
+        ) -> Result<TranscriptionResult, String> {
+            let job = crate::transcription::TranscriptionJob::from_legacy_settings(
+                crate::transcription::TranscriptionSource::RemoteServer,
+                "remote",
+                "mock-model",
+                None,
+                false,
+            );
+            Ok(
+                crate::transcription::TranscriptionResult::new(&job, "mock transcription")
+                    .with_processing_duration_ms(Some(100)),
+            )
         }
     }
 
@@ -269,19 +294,31 @@ mod tests {
         fn get_password(&self) -> Option<String> {
             None
         }
-        fn transcribe(&self, audio_data: &[u8]) -> Result<TranscribeResponse, String> {
+        fn transcribe(
+            &self,
+            audio_data: &[u8],
+            _spoken_language: Option<&str>,
+            _transcription_task: Option<&str>,
+        ) -> Result<TranscriptionResult, String> {
             // Increment request counter
             let request_num = self.request_counter.fetch_add(1, Ordering::SeqCst) + 1;
 
             // Simulate transcription delay (blocking, as real transcription would be)
             std::thread::sleep(std::time::Duration::from_millis(self.delay_ms));
 
-            // Return response with request number for verification
-            Ok(TranscribeResponse {
-                text: format!("transcription-{}-len-{}", request_num, audio_data.len()),
-                duration_ms: self.delay_ms,
-                model: "delayed-mock-model".to_string(),
-            })
+            let job = crate::transcription::TranscriptionJob::from_legacy_settings(
+                crate::transcription::TranscriptionSource::RemoteServer,
+                "remote",
+                "delayed-mock-model",
+                None,
+                false,
+            );
+
+            Ok(crate::transcription::TranscriptionResult::new(
+                &job,
+                format!("transcription-{}-len-{}", request_num, audio_data.len()),
+            )
+            .with_processing_duration_ms(Some(self.delay_ms)))
         }
     }
 
@@ -310,18 +347,31 @@ mod tests {
         fn get_password(&self) -> Option<String> {
             None
         }
-        fn transcribe(&self, _audio_data: &[u8]) -> Result<TranscribeResponse, String> {
+        fn transcribe(
+            &self,
+            _audio_data: &[u8],
+            _spoken_language: Option<&str>,
+            _transcription_task: Option<&str>,
+        ) -> Result<TranscriptionResult, String> {
             let request_num = self.request_counter.fetch_add(1, Ordering::SeqCst) + 1;
 
             if self.fail_on_requests.contains(&request_num) {
                 return Err(format!("Simulated failure on request {}", request_num));
             }
 
-            Ok(TranscribeResponse {
-                text: format!("success-{}", request_num),
-                duration_ms: 10,
-                model: "failing-mock-model".to_string(),
-            })
+            let job = crate::transcription::TranscriptionJob::from_legacy_settings(
+                crate::transcription::TranscriptionSource::RemoteServer,
+                "remote",
+                "failing-mock-model",
+                None,
+                false,
+            );
+
+            Ok(crate::transcription::TranscriptionResult::new(
+                &job,
+                format!("success-{}", request_num),
+            )
+            .with_processing_duration_ms(Some(10)))
         }
     }
 
@@ -370,12 +420,26 @@ mod tests {
             None
         }
 
-        fn transcribe(&self, _audio_data: &[u8]) -> Result<TranscribeResponse, String> {
-            Ok(TranscribeResponse {
-                text: format!("{}é", "a".repeat(99)),
-                duration_ms: 1,
-                model: "utf8-preview-model".to_string(),
-            })
+        fn transcribe(
+            &self,
+            _audio_data: &[u8],
+            _spoken_language: Option<&str>,
+            _transcription_task: Option<&str>,
+        ) -> Result<TranscriptionResult, String> {
+            let job = crate::transcription::TranscriptionJob::from_legacy_settings(
+                crate::transcription::TranscriptionSource::RemoteServer,
+                "remote",
+                "utf8-preview-model",
+                None,
+                false,
+            );
+            Ok(
+                crate::transcription::TranscriptionResult::new(
+                    &job,
+                    format!("{}é", "a".repeat(99)),
+                )
+                .with_processing_duration_ms(Some(1)),
+            )
         }
     }
 
@@ -410,10 +474,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(server_context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -488,10 +551,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(server_context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -573,10 +635,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(server_context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -662,10 +723,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(server_context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -717,10 +777,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(server_context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;
@@ -822,10 +881,9 @@ mod tests {
             let addr = ([127, 0, 0, 1], 0u16);
             let routes = create_routes(server_context);
 
-            let (addr, server) = warp::serve(routes)
-                .bind_with_graceful_shutdown(addr, async {
-                    shutdown_rx.await.ok();
-                });
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
 
             let _ = addr_tx.send(addr);
             server.await;

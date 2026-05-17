@@ -3,8 +3,8 @@
 //! Comprehensive tests covering server startup, shutdown, state transitions,
 //! configuration management, and error handling.
 
-use std::path::PathBuf;
 use std::net::TcpListener;
+use std::path::PathBuf;
 
 use crate::remote::lifecycle::{RemoteServerManager, SharingStatus};
 use crate::remote::transcription::SharedServerState;
@@ -88,7 +88,7 @@ fn test_sharing_status_no_password_when_disabled() {
     let manager = RemoteServerManager::new();
     let status = manager.get_status();
 
-    assert!(status.password.is_none());
+    assert!(!status.password_configured);
 }
 
 // ============================================================================
@@ -292,7 +292,7 @@ async fn test_server_status_has_password_when_set() {
         .unwrap();
 
     let status = manager.get_status();
-    assert_eq!(status.password, Some("mypassword123".to_string()));
+    assert!(status.password_configured);
     manager.stop().await;
 }
 
@@ -314,7 +314,7 @@ async fn test_server_status_no_password_when_not_set() {
         .unwrap();
 
     let status = manager.get_status();
-    assert!(status.password.is_none());
+    assert!(!status.password_configured);
     manager.stop().await;
 }
 
@@ -577,7 +577,10 @@ async fn test_update_model_status_reflects_change() {
         .await
         .unwrap();
 
-    assert_eq!(manager.get_status().model_name, Some("old-model".to_string()));
+    assert_eq!(
+        manager.get_status().model_name,
+        Some("old-model".to_string())
+    );
 
     manager.update_model(
         PathBuf::from("/models/new.bin"),
@@ -587,7 +590,10 @@ async fn test_update_model_status_reflects_change() {
 
     // Note: get_status reads from config, not shared_state
     // The status should reflect the updated config
-    assert_eq!(manager.get_status().model_name, Some("updated-model".to_string()));
+    assert_eq!(
+        manager.get_status().model_name,
+        Some("updated-model".to_string())
+    );
     manager.stop().await;
 }
 
@@ -708,7 +714,7 @@ async fn test_start_while_running_stops_previous() {
     assert!(manager.is_running());
     assert_eq!(manager.get_port(), Some(47875));
     assert_eq!(manager.get_status().model_name, Some("model2".to_string()));
-    assert_eq!(manager.get_status().password, Some("newpass".to_string()));
+    assert!(manager.get_status().password_configured);
 
     manager.stop().await;
 }
@@ -822,7 +828,10 @@ async fn test_state_transition_running_to_running_different_config() {
         .unwrap();
 
     assert!(manager.is_running());
-    assert_eq!(manager.get_status().server_name, Some("Config A".to_string()));
+    assert_eq!(
+        manager.get_status().server_name,
+        Some("Config A".to_string())
+    );
 
     // Start with config B (implicit stop + start)
     manager
@@ -840,7 +849,10 @@ async fn test_state_transition_running_to_running_different_config() {
 
     // Still running but with new config
     assert!(manager.is_running());
-    assert_eq!(manager.get_status().server_name, Some("Config B".to_string()));
+    assert_eq!(
+        manager.get_status().server_name,
+        Some("Config B".to_string())
+    );
     assert_eq!(manager.get_status().port, Some(47884));
 
     manager.stop().await;
@@ -917,7 +929,7 @@ fn test_sharing_status_serializes_correctly() {
         model_name: Some("large-v3".to_string()),
         server_name: Some("Test Server".to_string()),
         active_connections: 5,
-        password: Some("secret".to_string()),
+        password_configured: true,
         binding_results: vec![],
     };
 
@@ -927,7 +939,8 @@ fn test_sharing_status_serializes_correctly() {
     assert!(json.contains("\"model_name\":\"large-v3\""));
     assert!(json.contains("\"server_name\":\"Test Server\""));
     assert!(json.contains("\"active_connections\":5"));
-    assert!(json.contains("\"password\":\"secret\""));
+    assert!(json.contains("\"password_configured\":true"));
+    assert!(!json.contains("secret"));
 }
 
 #[test]
@@ -938,7 +951,7 @@ fn test_sharing_status_disabled_serializes_correctly() {
         model_name: None,
         server_name: None,
         active_connections: 0,
-        password: None,
+        password_configured: false,
         binding_results: vec![],
     };
 
@@ -1042,7 +1055,8 @@ async fn test_empty_password_string_is_some() {
         .await
         .unwrap();
 
-    // Empty string should be stored as Some("")
-    assert_eq!(manager.get_status().password, Some("".to_string()));
+    // Empty string is treated as a configured auth value at runtime,
+    // but only the presence flag is exposed through status.
+    assert!(manager.get_status().password_configured);
     manager.stop().await;
 }

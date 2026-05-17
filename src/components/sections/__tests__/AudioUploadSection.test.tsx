@@ -13,7 +13,7 @@ const mockSettings = {
   current_model: 'base.en',
   current_model_engine: 'whisper',
   hotkey: 'Cmd+Shift+Space',
-  language: 'en',
+  speech_language: 'en',
   theme: 'system'
 };
 

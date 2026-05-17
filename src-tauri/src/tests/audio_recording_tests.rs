@@ -114,9 +114,8 @@ fn test_audio_recorder_stop_when_not_recording() {
 fn test_audio_recorder_get_devices() {
     // This should not panic even if no devices are available
     let devices = AudioRecorder::get_devices();
-    // We can't assert on the content since it depends on the system,
-    // but it should return a valid Vec
-    assert!(devices.len() >= 0);
+    // but the call should return normally.
+    drop(devices);
 }
 
 // ============================================================================
@@ -281,8 +280,7 @@ mod sound_settings_tests {
             // On other platforms, these are no-ops
         }
 
-        // Test passes if we reach here without panic
-        assert!(true);
+        // Test passes if we reach here without panic.
     }
 }
 

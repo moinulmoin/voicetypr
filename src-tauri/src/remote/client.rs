@@ -65,12 +65,31 @@ pub struct TranscriptionRequest {
     pub audio_data: Vec<u8>,
     /// Source of the audio (affects timeout)
     pub source: TranscriptionSource,
+    /// Optional spoken language hint for the remote engine.
+    pub spoken_language: Option<String>,
+    /// Optional transcription task (`transcribe` or `translate_to_english`).
+    pub transcription_task: Option<String>,
 }
 
 impl TranscriptionRequest {
     /// Create a new transcription request
     pub fn new(audio_data: Vec<u8>, source: TranscriptionSource) -> Self {
-        Self { audio_data, source }
+        Self {
+            audio_data,
+            source,
+            spoken_language: None,
+            transcription_task: None,
+        }
+    }
+
+    pub fn with_language_and_task(
+        mut self,
+        spoken_language: Option<String>,
+        transcription_task: Option<String>,
+    ) -> Self {
+        self.spoken_language = spoken_language;
+        self.transcription_task = transcription_task;
+        self
     }
 }
 
@@ -133,7 +152,9 @@ impl fmt::Display for RemoteClientError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AuthFailed { .. } => f.write_str("Authentication failed"),
-            Self::Timeout { timeout_ms, detail, .. } => {
+            Self::Timeout {
+                timeout_ms, detail, ..
+            } => {
                 if detail.trim().is_empty() {
                     write!(f, "Request timed out after {}ms", timeout_ms)
                 } else {
@@ -142,7 +163,9 @@ impl fmt::Display for RemoteClientError {
             }
             Self::ConnectFailed { detail, .. } => write!(f, "Failed to connect: {}", detail),
             Self::HttpStatus { status, .. } => write!(f, "Server error: {}", status),
-            Self::ResponseDecode { detail, .. } => write!(f, "Failed to parse response: {}", detail),
+            Self::ResponseDecode { detail, .. } => {
+                write!(f, "Failed to parse response: {}", detail)
+            }
             Self::ResponseSchema { detail, .. } => write!(f, "Invalid response: {}", detail),
             Self::RequestBuild { detail, .. } => {
                 write!(f, "Failed to create HTTP client: {}", detail)
@@ -225,20 +248,16 @@ fn classify_reqwest_error(
     }
 }
 
-fn parse_json_value<T>(
-    endpoint: RemoteEndpoint,
-    body: &[u8],
-) -> Result<T, RemoteClientError>
+fn parse_json_value<T>(endpoint: RemoteEndpoint, body: &[u8]) -> Result<T, RemoteClientError>
 where
     T: serde::de::DeserializeOwned,
 {
-    let value: serde_json::Value = serde_json::from_slice(body).map_err(|e| {
-        RemoteClientError::ResponseDecode {
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|e| RemoteClientError::ResponseDecode {
             endpoint,
             detail: e.to_string(),
             body: Some(lossy_body(body)),
-        }
-    })?;
+        })?;
 
     serde_json::from_value(value).map_err(|e| RemoteClientError::ResponseSchema {
         endpoint,
@@ -326,9 +345,13 @@ pub async fn test_connection(
             request = request.header("X-VoiceTypr-Key", pwd);
         }
 
-        let response = request.send().map_err(|e| classify_reqwest_error(endpoint, e, STATUS_TIMEOUT_MS))?;
+        let response = request
+            .send()
+            .map_err(|e| classify_reqwest_error(endpoint, e, STATUS_TIMEOUT_MS))?;
         let status = response.status();
-        let body = response.bytes().map_err(|e| classify_reqwest_error(endpoint, e, STATUS_TIMEOUT_MS))?;
+        let body = response
+            .bytes()
+            .map_err(|e| classify_reqwest_error(endpoint, e, STATUS_TIMEOUT_MS))?;
 
         if status == StatusCode::UNAUTHORIZED {
             return Err(RemoteClientError::AuthFailed {
@@ -378,6 +401,13 @@ pub async fn transcribe_audio(
 
     if let Some(pwd) = connection.password.as_ref() {
         request_builder = request_builder.header("X-VoiceTypr-Key", pwd);
+    }
+    if let Some(spoken_language) = request.spoken_language.as_deref() {
+        request_builder = request_builder.header("X-VoiceTypr-Speech-Language", spoken_language);
+    }
+    if let Some(transcription_task) = request.transcription_task.as_deref() {
+        request_builder =
+            request_builder.header("X-VoiceTypr-Transcription-Task", transcription_task);
     }
 
     let response = request_builder

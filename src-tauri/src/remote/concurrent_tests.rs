@@ -67,7 +67,12 @@ mod tests {
             None
         }
 
-        fn transcribe(&self, audio_data: &[u8]) -> Result<TranscribeResponse, String> {
+        fn transcribe(
+            &self,
+            audio_data: &[u8],
+            _spoken_language: Option<&str>,
+            _transcription_task: Option<&str>,
+        ) -> Result<crate::transcription::TranscriptionResult, String> {
             // Track concurrent transcriptions
             let current = self.active_transcriptions.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -93,11 +98,18 @@ mod tests {
             self.active_transcriptions.fetch_sub(1, Ordering::SeqCst);
             self.completed_count.fetch_add(1, Ordering::SeqCst);
 
-            Ok(TranscribeResponse {
-                text: format!("Transcribed {} bytes", audio_data.len()),
-                duration_ms: self.delay_ms,
-                model: self.model_name.clone(),
-            })
+            let job = crate::transcription::TranscriptionJob::from_legacy_settings(
+                crate::transcription::TranscriptionSource::RemoteServer,
+                "remote",
+                self.model_name.clone(),
+                None,
+                false,
+            );
+            Ok(crate::transcription::TranscriptionResult::new(
+                &job,
+                format!("Transcribed {} bytes", audio_data.len()),
+            )
+            .with_processing_duration_ms(Some(self.delay_ms)))
         }
     }
 

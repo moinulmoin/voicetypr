@@ -70,6 +70,8 @@ tempfile = "3.10"
 hostname = "0.4"
 local-ip-address = "0.6"
 uuid = { version = "1", features = ["v4"] }
+active-win-pos-rs = "0.10.1"
+clap = { version = "4.5", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.15.1", features = ["metal"] }

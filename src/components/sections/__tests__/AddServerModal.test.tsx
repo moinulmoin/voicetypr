@@ -314,6 +314,32 @@ describe("AddServerModal", () => {
       expect(screen.getByText("Test Connection")).not.toBeDisabled();
     });
 
+    it("disables Test Connection when edit mode would preserve a saved password", async () => {
+      const editServer = {
+        id: "existing-id",
+        host: "192.168.1.100",
+        port: 47842,
+        password: null,
+        has_password: true,
+        name: "Office Mac",
+        created_at: 1234567890,
+      };
+
+      render(
+        <AddServerModal
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onServerAdded={mockOnServerAdded}
+          editServer={editServer}
+        />
+      );
+
+      expect(await screen.findByText("Test Connection")).toBeDisabled();
+      expect(
+        screen.getByText(/Saving with this field empty keeps the saved password/i)
+      ).toBeInTheDocument();
+    });
+
     it("Add Server button is disabled when host is empty", () => {
       render(
         <AddServerModal
@@ -639,6 +665,7 @@ describe("AddServerModal", () => {
           host: "192.168.1.200",
           port: 47842,
           password: null,
+          preservePassword: false,
           name: "Old Server",
         });
       });

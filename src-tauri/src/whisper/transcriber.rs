@@ -13,6 +13,15 @@ pub struct Transcriber {
     context: WhisperContext,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhisperTranscriptionOutput {
+    pub raw_text: String,
+    pub transcript_language: Option<String>,
+    pub segments: Vec<crate::transcription::TranscriptionSegment>,
+    pub audio_duration_ms: u64,
+    pub processing_duration_ms: u64,
+}
+
 impl Transcriber {
     pub fn new(model_path: &Path) -> Result<Self, String> {
         let init_start = Instant::now();
@@ -344,7 +353,8 @@ impl Transcriber {
         language: Option<&str>,
         translate: bool,
     ) -> Result<String, String> {
-        self.transcribe_with_cancellation(audio_path, language, translate, || false)
+        self.transcribe_with_metadata(audio_path, language, translate, || false)
+            .map(|result| result.raw_text)
     }
 
     pub fn transcribe_with_cancellation<F>(
@@ -354,6 +364,20 @@ impl Transcriber {
         translate: bool,
         should_cancel: F,
     ) -> Result<String, String>
+    where
+        F: Fn() -> bool,
+    {
+        self.transcribe_with_metadata(audio_path, language, translate, should_cancel)
+            .map(|result| result.raw_text)
+    }
+
+    pub fn transcribe_with_metadata<F>(
+        &self,
+        audio_path: &Path,
+        language: Option<&str>,
+        translate: bool,
+        should_cancel: F,
+    ) -> Result<WhisperTranscriptionOutput, String>
     where
         F: Fn() -> bool,
     {
@@ -732,11 +756,17 @@ impl Transcriber {
         );
 
         let mut text = String::new();
+        let mut segments = Vec::with_capacity(num_segments as usize);
         for (i, segment) in state.as_iter().enumerate() {
             let segment_text = segment.to_string();
             log::info!("[TRANSCRIPTION_DEBUG] Segment {}: '{}'", i, segment_text);
             text.push_str(&segment_text);
             text.push(' ');
+            segments.push(crate::transcription::TranscriptionSegment {
+                text: segment_text,
+                start_ms: None,
+                end_ms: None,
+            });
         }
 
         let result = text.trim().to_string();
@@ -805,7 +835,19 @@ impl Transcriber {
             );
         }
 
-        Ok(result)
+        let transcript_language = if translate {
+            Some("en".to_string())
+        } else {
+            final_lang.map(str::to_string)
+        };
+
+        Ok(WhisperTranscriptionOutput {
+            raw_text: result,
+            transcript_language,
+            segments,
+            audio_duration_ms: (duration_seconds * 1000.0) as u64,
+            processing_duration_ms: total_time.as_millis() as u64,
+        })
     }
 }
 

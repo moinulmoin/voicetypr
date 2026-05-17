@@ -92,7 +92,8 @@ fn reconciliation_is_idempotent() {
     );
 
     let first_pass = reconcile_transcription_history_entry(input, CURRENT_SESSION_MARKER);
-    let second_pass = reconcile_transcription_history_entry(first_pass.clone(), CURRENT_SESSION_MARKER);
+    let second_pass =
+        reconcile_transcription_history_entry(first_pass.clone(), CURRENT_SESSION_MARKER);
 
     assert_eq!(first_pass, second_pass);
 }

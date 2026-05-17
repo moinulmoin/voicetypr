@@ -598,6 +598,8 @@ describe("NetworkSharingCard", () => {
       await waitFor(() => {
         expect(mockInvoke).toHaveBeenCalledWith("start_sharing", expect.objectContaining({
           port: 47842,
+          password: null,
+          preservePassword: true,
           serverName: null,
         }));
       });
@@ -911,6 +913,63 @@ describe("NetworkSharingCard", () => {
 
       await waitFor(() => {
         expect(screen.getByTitle("Save password")).toBeInTheDocument();
+      });
+    });
+
+    it("allows removing a saved sharing password", async () => {
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "large-v3-turbo",
+              auto_insert: true,
+              launch_at_startup: false,
+              sharing_port: 47842,
+            });
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: true,
+              port: 47842,
+              model_name: "large-v3-turbo",
+              server_name: "My-PC",
+              active_connections: 0,
+              password_configured: true,
+              binding_results: [],
+            });
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({
+              models: [
+                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+              ],
+            });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          case "stop_sharing":
+            return Promise.resolve();
+          case "start_sharing":
+            return Promise.resolve();
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+
+      const user = userEvent.setup();
+      renderWithProviders(<NetworkSharingCard />);
+
+      const removePassword = await screen.findByTitle("Remove saved password");
+      await user.click(removePassword);
+
+      await waitFor(() => {
+        expect(mockInvoke).toHaveBeenCalledWith("start_sharing", expect.objectContaining({
+          port: 47842,
+          password: null,
+          preservePassword: false,
+          serverName: null,
+        }));
       });
     });
   });

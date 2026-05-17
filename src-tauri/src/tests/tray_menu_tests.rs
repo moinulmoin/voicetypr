@@ -3,8 +3,7 @@
 //! Tests the tray menu changes for remote server selection and status display.
 
 use crate::menu::{
-    format_tray_model_label, should_include_remote_connection_in_tray,
-    should_mark_model_selected,
+    format_tray_model_label, should_include_remote_connection_in_tray, should_mark_model_selected,
 };
 use crate::remote::settings::ConnectionStatus;
 

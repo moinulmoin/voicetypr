@@ -2,23 +2,31 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
-use crate::commands::settings::{get_settings, resolve_pill_indicator_mode, Settings};
+use crate::commands::settings::{
+    get_settings, normalize_final_text_language, normalize_speech_language_for_model,
+    normalize_transcription_task, resolve_pill_indicator_mode, task_uses_translate_to_english,
+    Settings,
+};
 use crate::license::LicenseState;
 use crate::media::MediaPauseController;
-use crate::parakeet::messages::ParakeetResponse;
+use crate::parakeet::messages::{ParakeetResponse, ParakeetSegment};
 use crate::parakeet::ParakeetManager;
+use crate::remote::client::{
+    self, timeout_ms_for_wav_file, RemoteClientError, RemoteServerConnection,
+    TranscriptionRequest as RemoteTranscriptionRequest, TranscriptionSource as RemoteTimeoutSource,
+};
+use crate::remote::settings::RemoteSettings;
+use crate::transcription::{
+    TranscriptionJob, TranscriptionResult, TranscriptionSegment, TranscriptionSource,
+};
 use crate::utils::logger::*;
 #[cfg(debug_assertions)]
 use crate::utils::system_monitor;
-use crate::remote::client::{self, timeout_ms_for_wav_file, RemoteClientError, RemoteServerConnection, TranscriptionRequest, TranscriptionSource};
-use crate::remote::settings::RemoteSettings;
 use crate::whisper::cache::TranscriberCache;
-use crate::whisper::languages::validate_language;
 use crate::whisper::manager::WhisperManager;
 use crate::{emit_to_window, update_recording_state, AppState, RecordingMode, RecordingState};
 use cpal::traits::{DeviceTrait, HostTrait};
 use once_cell::sync::Lazy;
-use uuid::Uuid;
 use serde_json;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{Path, PathBuf};
@@ -27,6 +35,7 @@ use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_store::StoreExt;
+use uuid::Uuid;
 
 pub(crate) const PTT_START_ABORTED_AFTER_RELEASE: &str =
     "PTT key released before recording could start";
@@ -165,8 +174,7 @@ const RETRANSCRIPTION_SESSION_MARKER_FIELD: &str = "retranscription_session_mark
 
 const RETRANSCRIPTION_FAILURE_DETAIL_FIELD: &str = "failure_detail";
 
-const STALE_RETRANSCRIPTION_FAILURE_TEXT: &str =
-    "Retranscription interrupted before completion";
+const STALE_RETRANSCRIPTION_FAILURE_TEXT: &str = "Retranscription interrupted before completion";
 
 static RETRANSCRIPTION_SESSION_MARKER: Lazy<Uuid> = Lazy::new(Uuid::new_v4);
 
@@ -229,7 +237,10 @@ fn apply_retranscription_status(
         "status".to_string(),
         transcription_status_value(effective_status),
     );
-    map.insert("is_retranscription".to_string(), serde_json::Value::Bool(true));
+    map.insert(
+        "is_retranscription".to_string(),
+        serde_json::Value::Bool(true),
+    );
 
     match effective_status {
         TranscriptionStatus::InProgress => {
@@ -250,7 +261,7 @@ fn sync_retranscription_failure_metadata(
     map: &mut serde_json::Map<String, serde_json::Value>,
     status: TranscriptionStatus,
     text: &str,
- ) {
+) {
     match status {
         TranscriptionStatus::Completed | TranscriptionStatus::InProgress => {
             map.remove("error_kind");
@@ -330,12 +341,12 @@ pub(crate) fn reconcile_transcription_history_entry(
 
             let mut reconciled = entry.clone();
             if let Some(map) = reconciled.as_object_mut() {
-                if should_replace_placeholder_text(map.get("text").and_then(serde_json::Value::as_str)) {
+                if should_replace_placeholder_text(
+                    map.get("text").and_then(serde_json::Value::as_str),
+                ) {
                     map.insert(
                         "text".to_string(),
-                        serde_json::Value::String(
-                            STALE_RETRANSCRIPTION_FAILURE_TEXT.to_string(),
-                        ),
+                        serde_json::Value::String(STALE_RETRANSCRIPTION_FAILURE_TEXT.to_string()),
                     );
                 }
                 map.insert(
@@ -431,41 +442,116 @@ fn build_failed_transcription_row(
     })
 }
 
-fn build_remote_upload_transcription_request(
-    audio_path: &Path,
-    audio_data: Vec<u8>,
-) -> (TranscriptionRequest, u64) {
-    let audio_path = audio_path.to_string_lossy();
-    let timeout_ms = timeout_ms_for_wav_file(audio_path.as_ref(), TranscriptionSource::Upload);
-
-    (
-        TranscriptionRequest::new(audio_data, TranscriptionSource::Upload),
-        timeout_ms,
+fn build_transcription_job(
+    source: TranscriptionSource,
+    engine: impl Into<String>,
+    model: impl Into<String>,
+    spoken_language: Option<String>,
+    translate_to_english: bool,
+) -> TranscriptionJob {
+    TranscriptionJob::from_legacy_settings(
+        source,
+        engine,
+        model,
+        spoken_language,
+        translate_to_english,
     )
 }
 
+fn seconds_to_duration_ms(duration_seconds: Option<f32>) -> Option<u64> {
+    duration_seconds.map(|seconds| (seconds.max(0.0) * 1000.0) as u64)
+}
+
+fn parakeet_segments_to_transcription_segments(
+    segments: Vec<ParakeetSegment>,
+) -> Vec<TranscriptionSegment> {
+    segments
+        .into_iter()
+        .map(|segment| TranscriptionSegment {
+            text: segment.text,
+            start_ms: seconds_to_duration_ms(segment.start),
+            end_ms: seconds_to_duration_ms(segment.end),
+        })
+        .collect()
+}
+
+fn build_remote_transcription_result(
+    job: &TranscriptionJob,
+    response: crate::remote::server::TranscribeResponse,
+) -> TranscriptionResult {
+    let mut result = TranscriptionResult::new(job, response.text)
+        .with_processing_duration_ms(Some(response.duration_ms));
+    result.model = response.model;
+    result.transcript_language = response.transcript_language;
+    result
+}
+
+fn build_writing_history_metadata(
+    transcription: &TranscriptionResult,
+    writing_result: &crate::writing::WritingResult,
+) -> serde_json::Value {
+    serde_json::json!({
+        "mode": writing_result.mode,
+        "output_language": writing_result.output_language,
+        "transcript_language": transcription.transcript_language,
+        "spoken_language": transcription.spoken_language,
+        "ai_applied": writing_result.ai_applied,
+        "applied_operations": writing_result.applied_operations,
+        "warnings": writing_result.warnings,
+        "context_hint": writing_result.context_hint,
+    })
+}
+
+fn load_ai_enabled(app: &AppHandle) -> Result<bool, String> {
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    Ok(store
+        .get("ai_enabled")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false))
+}
+
+fn build_remote_upload_transcription_request(
+    audio_path: &Path,
+    audio_data: Vec<u8>,
+    job: Option<&TranscriptionJob>,
+) -> (RemoteTranscriptionRequest, u64) {
+    let audio_path = audio_path.to_string_lossy();
+    let timeout_ms = timeout_ms_for_wav_file(audio_path.as_ref(), RemoteTimeoutSource::Upload);
+    let request = RemoteTranscriptionRequest::new(audio_data, RemoteTimeoutSource::Upload)
+        .with_language_and_task(
+            job.and_then(|job| job.spoken_language.clone()),
+            job.map(|job| transcription_task_header_value(job.task)),
+        );
+
+    (request, timeout_ms)
+}
+
+fn transcription_task_header_value(task: crate::transcription::TranscriptionTask) -> String {
+    match task {
+        crate::transcription::TranscriptionTask::Transcribe => "transcribe".to_string(),
+        crate::transcription::TranscriptionTask::TranslateToEnglish => {
+            "translate_to_english".to_string()
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_failed_transcription_row,
-        build_remote_server_error_payload,
-        build_remote_upload_transcription_request,
-        recording_license_state,
-        remote_server_error_pill_message,
-        should_hide_pill_when_idle,
-        should_use_active_remote,
-        sync_retranscription_failure_metadata,
-        NormalizedTempFile,
-        RecordingLicenseState,
-        TranscriptionFailure,
-        TranscriptionStatus,
+        build_failed_transcription_row, build_remote_server_error_payload,
+        build_remote_upload_transcription_request, build_transcription_job,
+        build_writing_history_metadata, recording_license_state, remote_server_error_pill_message,
+        should_hide_pill_when_idle, should_use_active_remote,
+        sync_retranscription_failure_metadata, NormalizedTempFile, RecordingLicenseState,
+        TranscriptionFailure, TranscriptionStatus,
     };
     use crate::commands::license::CachedLicense;
     use crate::license::{LicenseState, LicenseStatus};
-    use std::fs;
-    use crate::remote::client::{calculate_timeout_ms, RemoteClientError, RemoteEndpoint, TranscriptionSource};
+    use crate::remote::client::{
+        calculate_timeout_ms, RemoteClientError, RemoteEndpoint, TranscriptionSource,
+    };
     use reqwest::StatusCode;
+    use std::fs;
 
     fn cached_license(status: LicenseState) -> CachedLicense {
         CachedLicense::new(LicenseStatus {
@@ -483,11 +569,14 @@ mod tests {
         let audio_data = vec![0x12, 0x34, 0x56];
 
         let (request, timeout_ms) =
-            build_remote_upload_transcription_request(audio_path, audio_data.clone());
+            build_remote_upload_transcription_request(audio_path, audio_data.clone(), None);
 
         assert_eq!(request.audio_data, audio_data);
         assert_eq!(request.source, TranscriptionSource::Upload);
-        assert_eq!(timeout_ms, calculate_timeout_ms(0, TranscriptionSource::Upload));
+        assert_eq!(
+            timeout_ms,
+            calculate_timeout_ms(0, TranscriptionSource::Upload)
+        );
     }
 
     #[test]
@@ -496,21 +585,94 @@ mod tests {
         let audio_data = vec![0x9a, 0xbc, 0xde];
 
         let (request, timeout_ms) =
-            build_remote_upload_transcription_request(audio_path, audio_data.clone());
+            build_remote_upload_transcription_request(audio_path, audio_data.clone(), None);
 
         assert_eq!(request.audio_data, audio_data);
         assert_eq!(request.source, TranscriptionSource::Upload);
-        assert_eq!(timeout_ms, calculate_timeout_ms(0, TranscriptionSource::Upload));
+        assert_eq!(
+            timeout_ms,
+            calculate_timeout_ms(0, TranscriptionSource::Upload)
+        );
+    }
+
+    #[test]
+    fn remote_upload_transcription_request_includes_language_and_task() {
+        let audio_path = std::path::Path::new("sample.wav");
+        let audio_data = vec![1, 2, 3];
+        let job = build_transcription_job(
+            crate::transcription::TranscriptionSource::AudioFile,
+            "whisper",
+            "base",
+            Some("es".to_string()),
+            true,
+        );
+
+        let (request, _) =
+            build_remote_upload_transcription_request(audio_path, audio_data, Some(&job));
+
+        assert_eq!(request.spoken_language.as_deref(), Some("es"));
+        assert_eq!(
+            request.transcription_task.as_deref(),
+            Some("translate_to_english")
+        );
+    }
+
+    #[test]
+    fn build_writing_history_metadata_uses_safe_fields_only() {
+        let transcription = crate::transcription::TranscriptionResult::new(
+            &build_transcription_job(
+                crate::transcription::TranscriptionSource::DesktopRecording,
+                "whisper",
+                "base",
+                Some("en".to_string()),
+                false,
+            ),
+            "raw transcript",
+        )
+        .with_transcript_language(Some("en".to_string()));
+        let writing_result = crate::writing::WritingResult {
+            raw_text: "raw transcript".to_string(),
+            final_text: "final transcript".to_string(),
+            output_language: "en".to_string(),
+            mode: crate::writing::WritingMode::CleanDictation,
+            ai_applied: true,
+            applied_operations: vec![crate::writing::AppliedWritingOperation {
+                kind: crate::writing::WritingOperationKind::AiCleanup,
+                detail: "Applied cleanup".to_string(),
+            }],
+            warnings: vec![],
+            context_hint: None,
+        };
+
+        let metadata = build_writing_history_metadata(&transcription, &writing_result);
+        assert_eq!(metadata["output_language"], "en");
+        assert!(metadata.get("raw_text").is_none());
+        assert!(metadata.get("final_text").is_none());
     }
 
     #[test]
     fn completed_retranscription_clears_stale_failure_metadata() {
         let mut map = serde_json::Map::new();
-        map.insert("recording_file".to_string(), serde_json::Value::String("sample.wav".to_string()));
-        map.insert("error_kind".to_string(), serde_json::Value::String("remote_timeout".to_string()));
-        map.insert("error_detail".to_string(), serde_json::Value::String("timed out".to_string()));
-        map.insert("error_body".to_string(), serde_json::Value::String("body".to_string()));
-        map.insert("can_retry_from_history".to_string(), serde_json::Value::Bool(true));
+        map.insert(
+            "recording_file".to_string(),
+            serde_json::Value::String("sample.wav".to_string()),
+        );
+        map.insert(
+            "error_kind".to_string(),
+            serde_json::Value::String("remote_timeout".to_string()),
+        );
+        map.insert(
+            "error_detail".to_string(),
+            serde_json::Value::String("timed out".to_string()),
+        );
+        map.insert(
+            "error_body".to_string(),
+            serde_json::Value::String("body".to_string()),
+        );
+        map.insert(
+            "can_retry_from_history".to_string(),
+            serde_json::Value::Bool(true),
+        );
 
         sync_retranscription_failure_metadata(&mut map, TranscriptionStatus::Completed, "done");
 
@@ -523,10 +685,22 @@ mod tests {
     #[test]
     fn failed_retranscription_rewrites_failure_metadata() {
         let mut map = serde_json::Map::new();
-        map.insert("recording_file".to_string(), serde_json::Value::String("sample.wav".to_string()));
-        map.insert("error_kind".to_string(), serde_json::Value::String("remote_timeout".to_string()));
-        map.insert("error_detail".to_string(), serde_json::Value::String("timed out".to_string()));
-        map.insert("error_body".to_string(), serde_json::Value::String("body".to_string()));
+        map.insert(
+            "recording_file".to_string(),
+            serde_json::Value::String("sample.wav".to_string()),
+        );
+        map.insert(
+            "error_kind".to_string(),
+            serde_json::Value::String("remote_timeout".to_string()),
+        );
+        map.insert(
+            "error_detail".to_string(),
+            serde_json::Value::String("timed out".to_string()),
+        );
+        map.insert(
+            "error_body".to_string(),
+            serde_json::Value::String("body".to_string()),
+        );
 
         sync_retranscription_failure_metadata(
             &mut map,
@@ -541,11 +715,11 @@ mod tests {
             Some("Re-transcription failed: Error: remote offline")
         );
         assert_eq!(
-            map.get("can_retry_from_history").and_then(serde_json::Value::as_bool),
+            map.get("can_retry_from_history")
+                .and_then(serde_json::Value::as_bool),
             Some(true)
         );
     }
-
 
     #[test]
     fn should_hide_pill_when_idle_for_never() {
@@ -564,35 +738,48 @@ mod tests {
 
     #[test]
     fn recording_license_state_is_loading_when_cache_absent() {
-        assert_eq!(recording_license_state(None), RecordingLicenseState::Loading);
+        assert_eq!(
+            recording_license_state(None),
+            RecordingLicenseState::Loading
+        );
     }
 
     #[test]
     fn recording_license_state_blocks_expired_license() {
         let cached = cached_license(LicenseState::Expired);
-        assert_eq!(recording_license_state(Some(&cached)), RecordingLicenseState::Blocked);
+        assert_eq!(
+            recording_license_state(Some(&cached)),
+            RecordingLicenseState::Blocked
+        );
     }
 
     #[test]
     fn recording_license_state_blocks_missing_license() {
         let cached = cached_license(LicenseState::None);
-        assert_eq!(recording_license_state(Some(&cached)), RecordingLicenseState::Blocked);
+        assert_eq!(
+            recording_license_state(Some(&cached)),
+            RecordingLicenseState::Blocked
+        );
     }
 
     #[test]
     fn recording_license_state_allows_trial_and_licensed() {
         let trial = cached_license(LicenseState::Trial);
         let licensed = cached_license(LicenseState::Licensed);
-        assert_eq!(recording_license_state(Some(&trial)), RecordingLicenseState::Ready);
-        assert_eq!(recording_license_state(Some(&licensed)), RecordingLicenseState::Ready);
+        assert_eq!(
+            recording_license_state(Some(&trial)),
+            RecordingLicenseState::Ready
+        );
+        assert_eq!(
+            recording_license_state(Some(&licensed)),
+            RecordingLicenseState::Ready
+        );
     }
 
     #[test]
     fn normalized_temp_file_removes_file_on_drop() {
-        let path = std::env::temp_dir().join(format!(
-            "voicetypr-normalized-{}.wav",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("voicetypr-normalized-{}.wav", std::process::id()));
         fs::write(&path, b"temp audio").unwrap();
 
         {
@@ -624,7 +811,10 @@ mod tests {
         });
         let payload = build_remote_server_error_payload(&failure, true);
 
-        assert_eq!(payload["title"].as_str().unwrap(), "Remote Transcription Failed");
+        assert_eq!(
+            payload["title"].as_str().unwrap(),
+            "Remote Transcription Failed"
+        );
         assert!(payload["message"].as_str().unwrap().contains("timed out"));
         assert_eq!(payload["error_kind"].as_str().unwrap(), "remote_timeout");
         assert!(payload["can_retry_from_history"].as_bool().unwrap());
@@ -639,9 +829,18 @@ mod tests {
         });
         let payload = build_remote_server_error_payload(&failure, false);
 
-        assert_eq!(payload["title"].as_str().unwrap(), "Remote Transcription Failed");
-        assert!(payload["message"].as_str().unwrap().contains("connection refused"));
-        assert_eq!(payload["error_kind"].as_str().unwrap(), "remote_connect_failed");
+        assert_eq!(
+            payload["title"].as_str().unwrap(),
+            "Remote Transcription Failed"
+        );
+        assert!(payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("connection refused"));
+        assert_eq!(
+            payload["error_kind"].as_str().unwrap(),
+            "remote_connect_failed"
+        );
         assert!(!payload["can_retry_from_history"].as_bool().unwrap());
         assert!(!remote_server_error_pill_message(false).contains("History"));
     }
@@ -660,8 +859,14 @@ mod tests {
 
         assert_eq!(row["status"].as_str().unwrap(), "failed");
         assert_eq!(row["error_kind"].as_str().unwrap(), "remote_http_status");
-        assert_eq!(row["error_detail"].as_str().unwrap(), "Server error: 502 Bad Gateway");
-        assert_eq!(row["recording_file"].as_str().unwrap(), "recordings/failure.wav");
+        assert_eq!(
+            row["error_detail"].as_str().unwrap(),
+            "Server error: 502 Bad Gateway"
+        );
+        assert_eq!(
+            row["recording_file"].as_str().unwrap(),
+            "recordings/failure.wav"
+        );
         assert_eq!(row["model"].as_str().unwrap(), "base.en");
         assert_eq!(row["can_retry_from_history"].as_bool().unwrap(), true);
         assert_ne!(
@@ -743,8 +948,9 @@ pub struct RecordingConfig {
     pub ai_model: String,
     pub current_model: String,
     pub current_engine: String,
-    pub language: String,
-    pub translate_to_english: bool,
+    pub speech_language: String,
+    pub transcription_task: String,
+    pub final_text_language: String,
     pub show_recording_status: bool,
     // Internal cache metadata
     loaded_at: Instant,
@@ -779,7 +985,34 @@ impl RecordingConfig {
             legacy_show
         );
 
-        Ok(Self {
+        let legacy_speech_language = store
+            .get("language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| Settings::default().speech_language.clone());
+        let legacy_translate_to_english = store
+            .get("translate_to_english")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let speech_language = store
+            .get("speech_language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or(legacy_speech_language);
+        let stored_transcription_task = store
+            .get("transcription_task")
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let transcription_task = normalize_transcription_task(
+            stored_transcription_task.as_deref(),
+            legacy_translate_to_english,
+        );
+        let stored_final_text_language = store
+            .get("final_text_language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let final_text_language = normalize_final_text_language(
+            stored_final_text_language.as_deref(),
+            &transcription_task,
+        );
+
+        let config = Self {
             show_pill_widget,
             pill_indicator_mode,
             ai_enabled: store
@@ -802,20 +1035,22 @@ impl RecordingConfig {
                 .get("current_model_engine")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| "whisper".to_string()),
-            language: store
-                .get("language")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| "en".to_string()),
-            translate_to_english: store
-                .get("translate_to_english")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
+            speech_language,
+            transcription_task,
+            final_text_language,
             show_recording_status: store
                 .get("show_recording_status")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true),
             loaded_at: Instant::now(),
-        })
+        };
+        let mut config = config;
+        config.speech_language = normalize_speech_language_for_model(
+            &config.current_engine,
+            &config.current_model,
+            &config.speech_language,
+        );
+        Ok(config)
     }
 
     /// Check if this cache entry is still fresh
@@ -842,7 +1077,11 @@ pub async fn maybe_save_recording(app: &AppHandle, audio_path: &Path) -> Option<
 }
 
 /// Internal function to save recording with optional settings check
-async fn save_recording_internal(app: &AppHandle, audio_path: &Path, check_settings: bool) -> Option<String> {
+async fn save_recording_internal(
+    app: &AppHandle,
+    audio_path: &Path,
+    check_settings: bool,
+) -> Option<String> {
     // Get settings store for retention count (always needed) and save_recordings check
     let store = match app.store("settings") {
         Ok(s) => s,
@@ -1133,7 +1372,6 @@ fn should_use_active_remote(engine_hint: Option<&str>) -> bool {
     engine_hint.is_none()
 }
 
-
 async fn resolve_engine_for_model(
     app: &AppHandle,
     model_name: &str,
@@ -1147,7 +1385,10 @@ async fn resolve_engine_for_model(
 
     if should_use_active_remote(engine_hint) {
         if let Some(remote_conn) = active_remote {
-            if matches!(remote_conn.status, crate::remote::settings::ConnectionStatus::Online) {
+            if matches!(
+                remote_conn.status,
+                crate::remote::settings::ConnectionStatus::Online
+            ) {
                 return Ok(ActiveEngineSelection::Remote {
                     server_id: remote_conn.id.clone(),
                     server_name: remote_conn.display_name(),
@@ -1157,7 +1398,9 @@ async fn resolve_engine_for_model(
                 });
             }
 
-            return Err("Selected remote unavailable. Reconnect or choose another source.".to_string());
+            return Err(
+                "Selected remote unavailable. Reconnect or choose another source.".to_string(),
+            );
         }
     }
 
@@ -1340,7 +1583,14 @@ fn recording_license_state(
     cache: Option<&crate::commands::license::CachedLicense>,
 ) -> RecordingLicenseState {
     match cache {
-        Some(cached) if matches!(cached.status.status, LicenseState::Expired | LicenseState::None) => RecordingLicenseState::Blocked,
+        Some(cached)
+            if matches!(
+                cached.status.status,
+                LicenseState::Expired | LicenseState::None
+            ) =>
+        {
+            RecordingLicenseState::Blocked
+        }
         Some(_) => RecordingLicenseState::Ready,
         None => RecordingLicenseState::Loading,
     }
@@ -1350,29 +1600,36 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
     let validate_start = std::time::Instant::now();
     log::info!("⏱️ [VALIDATE] starting recognition_availability_snapshot");
     let availability = crate::recognition_availability_snapshot(app).await;
-    log::info!("⏱️ [VALIDATE] recognition_availability_snapshot complete (+{}ms)", validate_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [VALIDATE] recognition_availability_snapshot complete (+{}ms)",
+        validate_start.elapsed().as_millis()
+    );
 
-    if !availability.any_available() || (availability.remote_selected && !availability.remote_available) {
+    if !availability.any_available()
+        || (availability.remote_selected && !availability.remote_available)
+    {
         log::error!("No usable speech recognition engines are ready");
-        let (title, message, error_text) = if availability.remote_selected && !availability.remote_available {
-            (
-                "Selected Remote Unavailable",
-                "Selected remote unavailable. Reconnect or choose another source.",
-                "Selected remote unavailable. Reconnect or choose another source.".to_string(),
-            )
-        } else if availability.soniox_selected && !availability.soniox_ready {
-            (
-                "No Speech Recognition Sources",
-                "Please configure your Soniox token in Models before recording.",
-                "Soniox token missing".to_string(),
-            )
-        } else {
-            (
+        let (title, message, error_text) =
+            if availability.remote_selected && !availability.remote_available {
+                (
+                    "Selected Remote Unavailable",
+                    "Selected remote unavailable. Reconnect or choose another source.",
+                    "Selected remote unavailable. Reconnect or choose another source.".to_string(),
+                )
+            } else if availability.soniox_selected && !availability.soniox_ready {
+                (
+                    "No Speech Recognition Sources",
+                    "Please configure your Soniox token in Models before recording.",
+                    "Soniox token missing".to_string(),
+                )
+            } else {
+                (
                 "No Speech Recognition Sources",
                 "Connect a cloud provider or download a local model in Models before recording.",
-                "No speech recognition sources available. Please configure a source first.".to_string(),
+                "No speech recognition sources available. Please configure a source first."
+                    .to_string(),
             )
-        };
+            };
         let _ = emit_to_window(
             app,
             "main",
@@ -1426,11 +1683,16 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
                     "action": "wait"
                 }),
             );
-            return Err("License status is still loading. Please try again in a moment.".to_string());
+            return Err(
+                "License status is still loading. Please try again in a moment.".to_string(),
+            );
         }
     }
 
-    log::info!("⏱️ [VALIDATE] validation complete (+{}ms)", validate_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [VALIDATE] validation complete (+{}ms)",
+        validate_start.elapsed().as_millis()
+    );
     Ok(())
 }
 
@@ -1482,11 +1744,17 @@ pub async fn start_recording(
             Some("recover".to_string()),
         );
     }
-    log::info!("⏱️ [REC TIMING] state check complete (+{}ms)", recording_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [REC TIMING] state check complete (+{}ms)",
+        recording_start.elapsed().as_millis()
+    );
 
     // Validate all requirements upfront
     let validation_start = Instant::now();
-    log::info!("⏱️ [REC TIMING] starting validation (+{}ms)", recording_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [REC TIMING] starting validation (+{}ms)",
+        recording_start.elapsed().as_millis()
+    );
     match validate_recording_requirements(&app).await {
         Ok(_) => {
             log_performance(
@@ -1524,7 +1792,10 @@ pub async fn start_recording(
     }
 
     // All validation passed, update state to starting
-    log::info!("⏱️ [REC TIMING] validation complete (+{}ms)", recording_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [REC TIMING] validation complete (+{}ms)",
+        recording_start.elapsed().as_millis()
+    );
     log_state_transition("RECORDING", "idle", "starting", true, None);
     update_recording_state(&app, RecordingState::Starting, None);
     // Ensure transition actually happened; if blocked, abort early
@@ -1536,7 +1807,10 @@ pub async fn start_recording(
     }
 
     // Play sound on recording start if enabled
-    log::info!("⏱️ [REC TIMING] about to play sound (+{}ms)", recording_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [REC TIMING] about to play sound (+{}ms)",
+        recording_start.elapsed().as_millis()
+    );
     if let Ok(store) = app.store("settings") {
         let play_sound = store
             .get("play_sound_on_recording")
@@ -1547,7 +1821,10 @@ pub async fn start_recording(
             // Delay to let sound complete before microphone initialization
             // This helps with Bluetooth headsets (e.g., AirPods) that switch audio modes
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            log::info!("⏱️ [REC TIMING] sound played + 300ms delay (+{}ms)", recording_start.elapsed().as_millis());
+            log::info!(
+                "⏱️ [REC TIMING] sound played + 300ms delay (+{}ms)",
+                recording_start.elapsed().as_millis()
+            );
         }
     }
 
@@ -1575,7 +1852,10 @@ pub async fn start_recording(
     };
 
     // Load recording config once to avoid repeated store access
-    log::info!("⏱️ [REC TIMING] loading recording config (+{}ms)", recording_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [REC TIMING] loading recording config (+{}ms)",
+        recording_start.elapsed().as_millis()
+    );
     let config = match get_recording_config(&app).await {
         Ok(config) => config,
         Err(e) => {
@@ -1631,7 +1911,10 @@ pub async fn start_recording(
     }
 
     // Get selected microphone from settings (before acquiring recorder lock)
-    log::info!("⏱️ [REC TIMING] getting microphone settings (+{}ms)", recording_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [REC TIMING] getting microphone settings (+{}ms)",
+        recording_start.elapsed().as_millis()
+    );
     let selected_microphone = match get_settings(app.clone()).await {
         Ok(settings) => {
             if let Some(mic) = settings.selected_microphone {
@@ -1652,7 +1935,10 @@ pub async fn start_recording(
     };
 
     // Start recording (scoped to release mutex before async operations)
-    log::info!("⏱️ [REC TIMING] acquiring recorder lock (+{}ms)", recording_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [REC TIMING] acquiring recorder lock (+{}ms)",
+        recording_start.elapsed().as_millis()
+    );
     {
         let mut recorder = match state.inner().0.lock() {
             Ok(recorder) => recorder,
@@ -1661,7 +1947,10 @@ pub async fn start_recording(
                 return Err(format!("Failed to acquire recorder lock: {}", e));
             }
         };
-        log::info!("⏱️ [REC TIMING] recorder lock acquired (+{}ms)", recording_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [REC TIMING] recorder lock acquired (+{}ms)",
+            recording_start.elapsed().as_millis()
+        );
 
         // Check if already recording
         if recorder.is_recording() {
@@ -1671,7 +1960,10 @@ pub async fn start_recording(
         }
 
         // Log the current audio device before starting
-        log::info!("⏱️ [REC TIMING] checking audio device (+{}ms)", recording_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [REC TIMING] checking audio device (+{}ms)",
+            recording_start.elapsed().as_millis()
+        );
         log_start("AUDIO_DEVICE_CHECK");
         log_with_context(
             log::Level::Debug,
@@ -1707,7 +1999,10 @@ pub async fn start_recording(
         }
 
         // Try to start recording with graceful error handling
-        log::info!("⏱️ [REC TIMING] about to call recorder.start_recording (+{}ms)", recording_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [REC TIMING] about to call recorder.start_recording (+{}ms)",
+            recording_start.elapsed().as_millis()
+        );
         let recorder_init_start = Instant::now();
         let audio_path_str = match audio_path.to_str() {
             Some(path) => path,
@@ -1723,7 +2018,10 @@ pub async fn start_recording(
         let audio_level_rx =
             match recorder.start_recording(audio_path_str, selected_microphone.clone()) {
                 Ok(_) => {
-                    log::info!("⏱️ [REC TIMING] recorder.start_recording returned Ok (+{}ms)", recording_start.elapsed().as_millis());
+                    log::info!(
+                        "⏱️ [REC TIMING] recorder.start_recording returned Ok (+{}ms)",
+                        recording_start.elapsed().as_millis()
+                    );
                     // Verify recording actually started
                     let is_recording = recorder.is_recording();
 
@@ -2191,14 +2489,23 @@ pub async fn stop_recording(
             settings.saved_connections.len()
         );
         let conn = settings.get_active_connection().cloned();
-        log::info!("🔍 [REMOTE DEBUG] get_active_connection returned: {:?}", conn.as_ref().map(|c| &c.id));
+        log::info!(
+            "🔍 [REMOTE DEBUG] get_active_connection returned: {:?}",
+            conn.as_ref().map(|c| &c.id)
+        );
         conn
     };
 
-    log::info!("🔍 [REMOTE DEBUG] active_remote is_some={}", active_remote.is_some());
+    log::info!(
+        "🔍 [REMOTE DEBUG] active_remote is_some={}",
+        active_remote.is_some()
+    );
 
     let engine_selection = if let Some(remote_conn) = active_remote {
-        if matches!(remote_conn.status, crate::remote::settings::ConnectionStatus::Online) {
+        if matches!(
+            remote_conn.status,
+            crate::remote::settings::ConnectionStatus::Online
+        ) {
             log::info!(
                 "🌐 Using remote server for transcription: {} ({}:{})",
                 remote_conn.display_name(),
@@ -2223,173 +2530,173 @@ pub async fn stop_recording(
         }
     } else {
         match config.current_engine.as_str() {
-        "parakeet" => {
-            if config.current_model.is_empty() {
-                return abort_due_to_missing_model(
-                    &app,
-                    &audio_path,
-                    "No Parakeet model selected",
-                    "Please select a Parakeet model before recording.",
-                )
-                .await;
-            }
-
-            let parakeet_manager = app.state::<ParakeetManager>();
-            let models = parakeet_manager.list_models();
-            if let Some(status) = models.into_iter().find(|m| m.name == config.current_model) {
-                if !status.downloaded {
+            "parakeet" => {
+                if config.current_model.is_empty() {
                     return abort_due_to_missing_model(
                         &app,
                         &audio_path,
-                        "Selected Parakeet model is not downloaded",
-                        "Please download the selected Parakeet model before recording.",
+                        "No Parakeet model selected",
+                        "Please select a Parakeet model before recording.",
                     )
                     .await;
                 }
-            } else {
-                return abort_due_to_missing_model(
-                    &app,
-                    &audio_path,
-                    "Selected Parakeet model is not available",
-                    "The selected Parakeet model is unavailable. Please download it again.",
-                )
-                .await;
-            }
 
-            ActiveEngineSelection::Parakeet {
-                model_name: config.current_model.clone(),
-            }
-        }
-        "soniox" => {
-            if config.current_model.is_empty() {
-                return abort_due_to_missing_model(
-                    &app,
-                    &audio_path,
-                    "No Soniox model selected",
-                    "Please select the Soniox cloud model before recording.",
-                )
-                .await;
-            }
+                let parakeet_manager = app.state::<ParakeetManager>();
+                let models = parakeet_manager.list_models();
+                if let Some(status) = models.into_iter().find(|m| m.name == config.current_model) {
+                    if !status.downloaded {
+                        return abort_due_to_missing_model(
+                            &app,
+                            &audio_path,
+                            "Selected Parakeet model is not downloaded",
+                            "Please download the selected Parakeet model before recording.",
+                        )
+                        .await;
+                    }
+                } else {
+                    return abort_due_to_missing_model(
+                        &app,
+                        &audio_path,
+                        "Selected Parakeet model is not available",
+                        "The selected Parakeet model is unavailable. Please download it again.",
+                    )
+                    .await;
+                }
 
-            if !crate::secure_store::secure_has(&app, "stt_api_key_soniox").unwrap_or(false) {
-                return abort_due_to_missing_model(
-                    &app,
-                    &audio_path,
-                    "Soniox token not configured",
-                    "Please configure your Soniox token in Models before recording.",
-                )
-                .await;
+                ActiveEngineSelection::Parakeet {
+                    model_name: config.current_model.clone(),
+                }
             }
+            "soniox" => {
+                if config.current_model.is_empty() {
+                    return abort_due_to_missing_model(
+                        &app,
+                        &audio_path,
+                        "No Soniox model selected",
+                        "Please select the Soniox cloud model before recording.",
+                    )
+                    .await;
+                }
 
-            ActiveEngineSelection::Soniox {
-                model_name: config.current_model.clone(),
+                if !crate::secure_store::secure_has(&app, "stt_api_key_soniox").unwrap_or(false) {
+                    return abort_due_to_missing_model(
+                        &app,
+                        &audio_path,
+                        "Soniox token not configured",
+                        "Please configure your Soniox token in Models before recording.",
+                    )
+                    .await;
+                }
+
+                ActiveEngineSelection::Soniox {
+                    model_name: config.current_model.clone(),
+                }
             }
-        }
-        _ => {
-            let downloaded_models = whisper_manager.read().await.get_downloaded_model_names();
-            log::debug!("Downloaded Whisper models: {:?}", downloaded_models);
+            _ => {
+                let downloaded_models = whisper_manager.read().await.get_downloaded_model_names();
+                log::debug!("Downloaded Whisper models: {:?}", downloaded_models);
 
-            if downloaded_models.is_empty() {
-                return abort_due_to_missing_model(
+                if downloaded_models.is_empty() {
+                    return abort_due_to_missing_model(
                     &app,
                     &audio_path,
                     "No speech recognition models installed",
                     "Please download at least one speech recognition model from Models to use VoiceTypr.",
                 )
                 .await;
-            }
+                }
 
-            log_start("MODEL_SELECTION");
-            log_with_context(
-                log::Level::Debug,
-                "Selecting model",
-                &[(
-                    "available_count",
-                    downloaded_models.len().to_string().as_str(),
-                )],
-            );
+                log_start("MODEL_SELECTION");
+                log_with_context(
+                    log::Level::Debug,
+                    "Selecting model",
+                    &[(
+                        "available_count",
+                        downloaded_models.len().to_string().as_str(),
+                    )],
+                );
 
-            let configured_model = if !config.current_model.is_empty() {
-                Some(config.current_model.clone())
-            } else {
-                None
-            };
+                let configured_model = if !config.current_model.is_empty() {
+                    Some(config.current_model.clone())
+                } else {
+                    None
+                };
 
-            let chosen_model = if let Some(configured_model) = configured_model {
-                if downloaded_models.contains(&configured_model) {
-                    log_model_operation(
-                        "SELECTION",
-                        &configured_model,
-                        "CONFIGURED_AVAILABLE",
-                        None,
-                    );
-                    configured_model
+                let chosen_model = if let Some(configured_model) = configured_model {
+                    if downloaded_models.contains(&configured_model) {
+                        log_model_operation(
+                            "SELECTION",
+                            &configured_model,
+                            "CONFIGURED_AVAILABLE",
+                            None,
+                        );
+                        configured_model
+                    } else {
+                        let models_by_size = whisper_manager.read().await.get_models_by_size();
+                        let fallback_model = select_best_fallback_model(
+                            &downloaded_models,
+                            &configured_model,
+                            &models_by_size,
+                        );
+
+                        log_model_operation(
+                            "FALLBACK",
+                            &fallback_model,
+                            "SELECTED",
+                            Some(&{
+                                let mut ctx = std::collections::HashMap::new();
+                                ctx.insert("requested".to_string(), configured_model.clone());
+                                ctx.insert(
+                                    "reason".to_string(),
+                                    "configured_not_available".to_string(),
+                                );
+                                ctx
+                            }),
+                        );
+
+                        let _ = emit_to_window(
+                            &app,
+                            "pill",
+                            "model-fallback",
+                            serde_json::json!({
+                                "requested": configured_model,
+                                "fallback": fallback_model
+                            }),
+                        );
+
+                        fallback_model
+                    }
                 } else {
                     let models_by_size = whisper_manager.read().await.get_models_by_size();
-                    let fallback_model = select_best_fallback_model(
-                        &downloaded_models,
-                        &configured_model,
-                        &models_by_size,
-                    );
+                    let best_model =
+                        select_best_fallback_model(&downloaded_models, "", &models_by_size);
 
                     log_model_operation(
-                        "FALLBACK",
-                        &fallback_model,
+                        "AUTO_SELECTION",
+                        &best_model,
                         "SELECTED",
                         Some(&{
                             let mut ctx = std::collections::HashMap::new();
-                            ctx.insert("requested".to_string(), configured_model.clone());
-                            ctx.insert(
-                                "reason".to_string(),
-                                "configured_not_available".to_string(),
-                            );
+                            ctx.insert("reason".to_string(), "no_model_configured".to_string());
+                            ctx.insert("strategy".to_string(), "best_available".to_string());
                             ctx
                         }),
                     );
 
-                    let _ = emit_to_window(
-                        &app,
-                        "pill",
-                        "model-fallback",
-                        serde_json::json!({
-                            "requested": configured_model,
-                            "fallback": fallback_model
-                        }),
-                    );
+                    best_model
+                };
 
-                    fallback_model
+                let model_path = whisper_manager
+                    .read()
+                    .await
+                    .get_model_path(&chosen_model)
+                    .ok_or_else(|| format!("Model '{}' path not found", chosen_model))?;
+
+                ActiveEngineSelection::Whisper {
+                    model_name: chosen_model,
+                    model_path,
                 }
-            } else {
-                let models_by_size = whisper_manager.read().await.get_models_by_size();
-                let best_model =
-                    select_best_fallback_model(&downloaded_models, "", &models_by_size);
-
-                log_model_operation(
-                    "AUTO_SELECTION",
-                    &best_model,
-                    "SELECTED",
-                    Some(&{
-                        let mut ctx = std::collections::HashMap::new();
-                        ctx.insert("reason".to_string(), "no_model_configured".to_string());
-                        ctx.insert("strategy".to_string(), "best_available".to_string());
-                        ctx
-                    }),
-                );
-
-                best_model
-            };
-
-            let model_path = whisper_manager
-                .read()
-                .await
-                .get_model_path(&chosen_model)
-                .ok_or_else(|| format!("Model '{}' path not found", chosen_model))?;
-
-            ActiveEngineSelection::Whisper {
-                model_name: chosen_model,
-                model_path,
             }
-        }
         }
     };
 
@@ -2400,7 +2707,10 @@ pub async fn stop_recording(
             audio_path
         }
         ActiveEngineSelection::Remote { server_name, .. } => {
-            log::info!("[RECORD] Remote server '{}' selected — skipping normalization", server_name);
+            log::info!(
+                "[RECORD] Remote server '{}' selected — skipping normalization",
+                server_name
+            );
             audio_path
         }
         _ => {
@@ -2498,19 +2808,24 @@ pub async fn stop_recording(
         ],
     );
     log::debug!(
-        "Using cached config: model={}, language={}, translate={}, ai_enabled={}",
+        "Using cached config: model={}, speech_language={}, transcription_task={}, final_text_language={}, ai_enabled={}",
         config.current_model,
-        config.language,
-        config.translate_to_english,
+        config.speech_language,
+        config.transcription_task,
+        config.final_text_language,
         config.ai_enabled
     );
 
-    let language = if config.language.is_empty() {
+    let language = if config.speech_language.is_empty() {
         None
     } else {
-        Some(config.language.clone())
+        Some(normalize_speech_language_for_model(
+            engine_selection.engine_name(),
+            engine_selection.model_name(),
+            &config.speech_language,
+        ))
     };
-    let translate_to_english = config.translate_to_english;
+    let translate_to_english = task_uses_translate_to_english(&config.transcription_task);
 
     let engine_label = engine_selection.engine_name().to_string();
     let selected_model_name = engine_selection.model_name().to_string();
@@ -2526,11 +2841,18 @@ pub async fn stop_recording(
         translate_to_english
     );
 
+    let transcription_job = build_transcription_job(
+        TranscriptionSource::DesktopRecording,
+        engine_label.clone(),
+        selected_model_name.clone(),
+        language.clone(),
+        translate_to_english,
+    );
     let audio_path_clone = audio_path.clone();
     let engine_selection_for_task = engine_selection;
     let language_for_task = language.clone();
     let selected_model_name_for_task = selected_model_name.clone();
-
+    let transcription_job_for_task = transcription_job.clone();
     // Spawn and track the transcription task
     let app_for_task = app.clone();
     let task_handle = tokio::spawn(async move {
@@ -2561,179 +2883,222 @@ pub async fn stop_recording(
             return;
         }
 
-        let transcription_result: Result<String, TranscriptionFailure> = match &engine_selection_for_task {
-            ActiveEngineSelection::Whisper { model_path, .. } => {
-                let transcriber = {
-                    let cache_state = app_for_task.state::<AsyncMutex<TranscriberCache>>();
-                    let mut cache = cache_state.lock().await;
-                    match cache.get_or_create(model_path) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            update_recording_state(
-                                &app_for_task,
-                                RecordingState::Error,
-                                Some(e.clone()),
-                            );
-                            if should_hide_pill(&app_for_task).await {
-                                let _ =
-                                    crate::commands::window::hide_pill_widget(app_for_task.clone())
-                                        .await;
+        let transcription_result: Result<TranscriptionResult, TranscriptionFailure> =
+            match &engine_selection_for_task {
+                ActiveEngineSelection::Whisper { model_path, .. } => {
+                    let transcriber = {
+                        let cache_state = app_for_task.state::<AsyncMutex<TranscriberCache>>();
+                        let mut cache = cache_state.lock().await;
+                        match cache.get_or_create(model_path) {
+                            Ok(t) => t,
+                            Err(e) => {
+                                update_recording_state(
+                                    &app_for_task,
+                                    RecordingState::Error,
+                                    Some(e.clone()),
+                                );
+                                if should_hide_pill(&app_for_task).await {
+                                    let _ = crate::commands::window::hide_pill_widget(
+                                        app_for_task.clone(),
+                                    )
+                                    .await;
+                                }
+                                pill_toast(&app_for_task, &e, 1500);
+                                return;
                             }
-                            pill_toast(&app_for_task, &e, 1500);
-                            return;
                         }
-                    }
-                };
+                    };
 
-                const MAX_RETRIES: u32 = 3;
-                const RETRY_DELAY_MS: u64 = 500;
+                    const MAX_RETRIES: u32 = 3;
+                    const RETRY_DELAY_MS: u64 = 500;
 
-                let mut result = Err("No attempt made".to_string());
+                    let mut result = Err("No attempt made".to_string());
 
-                for attempt in 1..=MAX_RETRIES {
-                    if app_state.is_cancellation_requested() {
-                        log::info!("Transcription cancelled at attempt {}", attempt);
-                        result = Err("Transcription cancelled".to_string());
-                        break;
-                    }
-
-                    result = transcriber.transcribe_with_cancellation(
-                        &audio_path_clone,
-                        language_for_task.as_deref(),
-                        translate_to_english,
-                        || app_state.is_cancellation_requested(),
-                    );
-
-                    match &result {
-                        Ok(_) => {
-                            if attempt > 1 {
-                                log::info!("Transcription succeeded on attempt {}", attempt);
-                            }
+                    for attempt in 1..=MAX_RETRIES {
+                        if app_state.is_cancellation_requested() {
+                            log::info!("Transcription cancelled at attempt {}", attempt);
+                            result = Err("Transcription cancelled".to_string());
                             break;
                         }
-                        Err(e) => {
-                            if attempt < MAX_RETRIES {
-                                log::warn!(
-                                    "Transcription attempt {} failed: {}. Retrying in {}ms...",
-                                    attempt,
-                                    e,
-                                    RETRY_DELAY_MS
-                                );
-                                tokio::time::sleep(std::time::Duration::from_millis(
-                                    RETRY_DELAY_MS,
-                                ))
-                                .await;
-                            } else {
-                                log::error!("Transcription failed after {} attempts: {}", MAX_RETRIES, e);
+
+                        result = transcriber.transcribe_with_metadata(
+                            &audio_path_clone,
+                            language_for_task.as_deref(),
+                            translate_to_english,
+                            || app_state.is_cancellation_requested(),
+                        );
+
+                        match &result {
+                            Ok(_) => {
+                                if attempt > 1 {
+                                    log::info!("Transcription succeeded on attempt {}", attempt);
+                                }
+                                break;
+                            }
+                            Err(e) => {
+                                if attempt < MAX_RETRIES {
+                                    log::warn!(
+                                        "Transcription attempt {} failed: {}. Retrying in {}ms...",
+                                        attempt,
+                                        e,
+                                        RETRY_DELAY_MS
+                                    );
+                                    tokio::time::sleep(std::time::Duration::from_millis(
+                                        RETRY_DELAY_MS,
+                                    ))
+                                    .await;
+                                } else {
+                                    log::error!(
+                                        "Transcription failed after {} attempts: {}",
+                                        MAX_RETRIES,
+                                        e
+                                    );
+                                }
                             }
                         }
                     }
-                }
 
-                result.map_err(TranscriptionFailure::Local)
-            },
-            ActiveEngineSelection::Parakeet { model_name } => {
-                let parakeet_manager = app_for_task.state::<ParakeetManager>();
-                if let Err(e) = parakeet_manager.load_model(&app_for_task, model_name).await {
-                    let message = format!("Parakeet model load failed: {e}");
-                    update_recording_state(
-                        &app_for_task,
-                        RecordingState::Error,
-                        Some(message.clone()),
-                    );
-                    pill_toast(&app_for_task, &message, 1500);
-                    return;
+                    result
+                        .map(|output| {
+                            TranscriptionResult::new(&transcription_job_for_task, output.raw_text)
+                                .with_transcript_language(output.transcript_language)
+                                .with_segments(output.segments)
+                                .with_audio_duration_ms(Some(output.audio_duration_ms))
+                                .with_processing_duration_ms(Some(output.processing_duration_ms))
+                        })
+                        .map_err(TranscriptionFailure::Local)
                 }
+                ActiveEngineSelection::Parakeet { model_name } => {
+                    let parakeet_manager = app_for_task.state::<ParakeetManager>();
+                    if let Err(e) = parakeet_manager.load_model(&app_for_task, model_name).await {
+                        let message = format!("Parakeet model load failed: {e}");
+                        update_recording_state(
+                            &app_for_task,
+                            RecordingState::Error,
+                            Some(message.clone()),
+                        );
+                        pill_toast(&app_for_task, &message, 1500);
+                        return;
+                    }
 
-                match parakeet_manager
-                    .transcribe(
+                    match parakeet_manager
+                        .transcribe(
+                            &app_for_task,
+                            model_name,
+                            audio_path_clone.clone(),
+                            language_for_task.clone(),
+                            translate_to_english,
+                        )
+                        .await
+                    {
+                        Ok(ParakeetResponse::Transcription {
+                            text,
+                            segments,
+                            language,
+                            duration,
+                        }) => Ok(TranscriptionResult::new(&transcription_job_for_task, text)
+                            .with_transcript_language(language)
+                            .with_segments(parakeet_segments_to_transcription_segments(segments))
+                            .with_audio_duration_ms(seconds_to_duration_ms(duration))),
+                        Ok(other) => {
+                            let message = format!("Unexpected Parakeet response: {:?}", other);
+                            Err(TranscriptionFailure::Local(message))
+                        }
+                        Err(e) => Err(TranscriptionFailure::Local(e.to_string())),
+                    }
+                }
+                ActiveEngineSelection::Soniox { .. } => {
+                    match soniox_transcribe_async(
                         &app_for_task,
-                        model_name,
-                        audio_path_clone.clone(),
-                        language_for_task.clone(),
-                        translate_to_english,
+                        &audio_path_clone,
+                        language_for_task.as_deref(),
                     )
                     .await
-                {
-                    Ok(ParakeetResponse::Transcription { text, .. }) => Ok(text),
-                    Ok(other) => {
-                        let message = format!("Unexpected Parakeet response: {:?}", other);
-                        Err(TranscriptionFailure::Local(message))
+                    {
+                        Ok(text) => {
+                            let soniox_job = build_transcription_job(
+                                TranscriptionSource::DesktopRecording,
+                                transcription_job_for_task.engine.clone(),
+                                transcription_job_for_task.model.clone(),
+                                transcription_job_for_task.spoken_language.clone(),
+                                false,
+                            );
+                            Ok(TranscriptionResult::new(&soniox_job, text))
+                        }
+                        Err(e) => Err(TranscriptionFailure::Local(e)),
                     }
-                    Err(e) => Err(TranscriptionFailure::Local(e.to_string())),
                 }
-            },
-            ActiveEngineSelection::Soniox { .. } => {
-                match soniox_transcribe_async(
-                    &app_for_task,
-                    &audio_path_clone,
-                    language_for_task.as_deref(),
-                )
-                .await
-                {
-                    Ok(text) => Ok(text),
-                    Err(e) => Err(TranscriptionFailure::Local(e)),
-                }
-            },
-            ActiveEngineSelection::Remote {
-                server_name,
-                host,
-                port,
-                password,
-                ..
-            } => async {
-                let remote_start = std::time::Instant::now();
-                log::info!(
-                    "🌐 [Remote] Starting transcription to '{}' ({}:{})",
+                ActiveEngineSelection::Remote {
                     server_name,
                     host,
-                    port
-                );
-
-                let audio_data = std::fs::read(&audio_path_clone)
-                    .map_err(|e| TranscriptionFailure::Local(format!("Failed to read audio file: {}", e)))?;
-
-                let audio_size_kb = audio_data.len() as f64 / 1024.0;
-                log::info!(
-                    "🌐 [Remote] Sending {:.1} KB audio to '{}' (+{}ms)",
-                    audio_size_kb,
-                    server_name,
-                    remote_start.elapsed().as_millis()
-                );
-
-                let server_conn = RemoteServerConnection::new(
-                    host.clone(),
-                    *port,
-                    password.clone(),
-                );
-
-                let request = TranscriptionRequest::new(audio_data, TranscriptionSource::LiveRecording);
-                let timeout_ms = timeout_ms_for_wav_file(
-                    audio_path_clone.to_string_lossy().as_ref(),
-                    TranscriptionSource::LiveRecording,
-                );
-                match client::transcribe_audio(&server_conn, request, timeout_ms).await {
-                    Ok(response) => {
+                    port,
+                    password,
+                    ..
+                } => {
+                    async {
+                        let remote_start = std::time::Instant::now();
                         log::info!(
-                            "🌐 [Remote] Transcription COMPLETED from '{}': {} chars received",
+                            "🌐 [Remote] Starting transcription to '{}' ({}:{})",
                             server_name,
-                            response.text.len()
+                            host,
+                            port
                         );
-                        Ok(response.text)
-                    }
-                    Err(error) => {
-                        log::warn!(
-                            "🌐 [Remote] Remote transcription FAILED to '{}' after {}ms: {}",
+
+                        let audio_data = std::fs::read(&audio_path_clone).map_err(|e| {
+                            TranscriptionFailure::Local(format!("Failed to read audio file: {}", e))
+                        })?;
+
+                        let audio_size_kb = audio_data.len() as f64 / 1024.0;
+                        log::info!(
+                            "🌐 [Remote] Sending {:.1} KB audio to '{}' (+{}ms)",
+                            audio_size_kb,
                             server_name,
-                            remote_start.elapsed().as_millis(),
-                            error
+                            remote_start.elapsed().as_millis()
                         );
-                        Err(TranscriptionFailure::Remote(error))
+
+                        let server_conn =
+                            RemoteServerConnection::new(host.clone(), *port, password.clone());
+
+                        let request = RemoteTranscriptionRequest::new(
+                            audio_data,
+                            RemoteTimeoutSource::LiveRecording,
+                        )
+                        .with_language_and_task(
+                            transcription_job_for_task.spoken_language.clone(),
+                            Some(transcription_task_header_value(
+                                transcription_job_for_task.task,
+                            )),
+                        );
+                        let timeout_ms = timeout_ms_for_wav_file(
+                            audio_path_clone.to_string_lossy().as_ref(),
+                            RemoteTimeoutSource::LiveRecording,
+                        );
+                        match client::transcribe_audio(&server_conn, request, timeout_ms).await {
+                            Ok(response) => {
+                                log::info!(
+                                "🌐 [Remote] Transcription COMPLETED from '{}': {} chars received",
+                                server_name,
+                                response.text.len()
+                            );
+                                Ok(build_remote_transcription_result(
+                                    &transcription_job_for_task,
+                                    response,
+                                ))
+                            }
+                            Err(error) => {
+                                log::warn!(
+                                "🌐 [Remote] Remote transcription FAILED to '{}' after {}ms: {}",
+                                server_name,
+                                remote_start.elapsed().as_millis(),
+                                error
+                            );
+                                Err(TranscriptionFailure::Remote(error))
+                            }
+                        }
                     }
+                    .await
                 }
-            }
-            .await,
-        };
+            };
 
         // Try to save recording to persistent storage BEFORE cleanup
         // On success: use maybe_save_recording (respects save_recordings setting)
@@ -2753,7 +3118,7 @@ pub async fn stop_recording(
         }
 
         match transcription_result {
-            Ok(text) => {
+            Ok(transcription) => {
                 // Final cancellation check before processing result
                 if app_state.is_cancellation_requested() {
                     log::info!("Transcription completed but was cancelled, discarding result");
@@ -2771,10 +3136,16 @@ pub async fn stop_recording(
                     return;
                 }
 
-                log::debug!("Transcription successful, {} chars", text.len());
+                log::debug!(
+                    "Transcription successful, {} chars",
+                    transcription.raw_text.len()
+                );
 
                 // Check if transcription is empty or just noise
-                if text.is_empty() || text.trim().is_empty() || text == "[BLANK_AUDIO]" {
+                if transcription.raw_text.is_empty()
+                    || transcription.raw_text.trim().is_empty()
+                    || transcription.raw_text == "[BLANK_AUDIO]"
+                {
                     log::info!("Whisper returned empty transcription - no speech detected");
 
                     // Emit graceful feedback to user via pill toast
@@ -2816,40 +3187,55 @@ pub async fn stop_recording(
 
                 // Backend handles the complete flow
                 let app_for_process = app_for_task.clone();
-                let text_for_process = text.clone();
-                let model_for_process = selected_model_name_for_task.clone();
+                let text_for_process = transcription.raw_text.clone();
+                let model_for_process = transcription.model.clone();
+                let transcription_for_process = transcription.clone();
                 let ai_enabled_for_task = ai_enabled; // Capture from cached config
                 let recording_file_for_task = recording_file.clone(); // Capture recording file
 
                 tokio::spawn(async move {
                     // 1. Process the transcription and enhancement
-                    let final_text = {
-                        // Use the captured AI enabled status from cached config
-                        if ai_enabled_for_task {
-                            match crate::commands::ai::enhance_transcription(
-                                text_for_process.clone(),
-                                app_for_process.clone(),
-                            )
-                            .await
-                            {
-                                Ok(enhanced) => {
+                    let (final_text, writing_metadata) =
+                        match crate::writing::process_transcription(
+                            app_for_process.clone(),
+                            transcription_for_process.clone(),
+                            ai_enabled_for_task,
+                        )
+                        .await
+                        {
+                            Ok(writing_result) => {
+                                if ai_enabled_for_task {
                                     // Emit enhancing completed event (global)
                                     let _ = app_for_process.emit("enhancing-completed", ());
-
-                                    if enhanced != text_for_process {
-                                        log::info!("AI enhancement applied successfully");
-                                    }
-                                    enhanced
                                 }
-                                Err(e) => {
-                                    log::warn!("Formatting failed, using original text: {}", e);
 
+                                if writing_result.ai_applied {
+                                    log::info!("AI enhancement applied successfully");
+                                } else if !ai_enabled_for_task {
+                                    log::debug!("AI enhancement is disabled, using original text");
+                                }
+                                (
+                                    writing_result.final_text.clone(),
+                                    Some(build_writing_history_metadata(
+                                        &transcription_for_process,
+                                        &writing_result,
+                                    )),
+                                )
+                            }
+                            Err(e) => {
+                                log::warn!("Formatting failed, using original text: {}", e);
+
+                                if ai_enabled_for_task {
                                     // Emit enhancing failed to reset pill state
                                     let _ = app_for_process.emit("enhancing-failed", ());
+                                }
 
-                                    // Check error type and create appropriate message
-                                    let error_message = e.to_string();
-                                    let user_message = if error_message.contains("400")
+                                // Check error type and create appropriate message
+                                let error_message = e.to_string();
+                                let user_message =
+                                    if error_message.contains("Final output language") {
+                                        "Final output language requires AI enhancement"
+                                    } else if error_message.contains("400")
                                         || error_message.contains("Bad Request")
                                     {
                                         "Formatting failed: API key missing or invalid"
@@ -2867,32 +3253,27 @@ pub async fn stop_recording(
                                         "Formatting failed: Service unavailable"
                                     };
 
-                                    // Show pill toast for formatting failure
-                                    log::warn!("Formatting failed; showing pill toast");
-                                    pill_toast(&app_for_process, user_message, 1500);
+                                // Show pill toast for formatting failure
+                                log::warn!("Formatting failed; showing pill toast");
+                                pill_toast(&app_for_process, user_message, 1500);
 
-                                    // Also notify main window for settings update if needed
-                                    if error_message.contains("400")
-                                        || error_message.contains("401")
-                                        || error_message.contains("Bad Request")
-                                        || error_message.contains("Unauthorized")
-                                    {
-                                        let _ = emit_to_window(
-                                            &app_for_process,
-                                            "main",
-                                            "ai-enhancement-auth-error",
-                                            "Please check your AI API key in settings.",
-                                        );
-                                    }
-
-                                    text_for_process.clone() // Fall back to original text
+                                // Also notify main window for settings update if needed
+                                if error_message.contains("400")
+                                    || error_message.contains("401")
+                                    || error_message.contains("Bad Request")
+                                    || error_message.contains("Unauthorized")
+                                {
+                                    let _ = emit_to_window(
+                                        &app_for_process,
+                                        "main",
+                                        "ai-enhancement-auth-error",
+                                        "Please check your AI API key in settings.",
+                                    );
                                 }
+
+                                (text_for_process.clone(), None)
                             }
-                        } else {
-                            log::debug!("AI enhancement is disabled, using original text");
-                            text_for_process.clone()
-                        }
-                    };
+                        };
 
                     // 2. Hide pill window first, then insert text with reduced delay
                     let app_state = app_for_process.state::<AppState>();
@@ -2973,12 +3354,14 @@ pub async fn stop_recording(
                     let history_text = final_text.clone();
                     let history_model = model_for_process.clone();
                     let recording_file_for_history = recording_file_for_task.clone();
+                    let writing_metadata_for_history = writing_metadata.clone();
                     tokio::spawn(async move {
                         match save_transcription_with_recording(
                             app_for_history.clone(),
                             history_text,
                             history_model,
                             recording_file_for_history,
+                            writing_metadata_for_history,
                         )
                         .await
                         {
@@ -2995,7 +3378,7 @@ pub async fn stop_recording(
                     // 6. Transition to idle state
                     update_recording_state(&app_for_process, RecordingState::Idle, None);
                 });
-            },
+            }
             Err(failure) => {
                 match &failure {
                     TranscriptionFailure::Local(e) if e.contains("cancelled") => {
@@ -3003,13 +3386,17 @@ pub async fn stop_recording(
                         // For cancellation, hide pill (only if show_pill_indicator is false) and go to Idle
                         if should_hide_pill(&app_for_task).await {
                             if let Err(hide_err) =
-                                crate::commands::window::hide_pill_widget(app_for_task.clone()).await
+                                crate::commands::window::hide_pill_widget(app_for_task.clone())
+                                    .await
                             {
-                                log::error!("Failed to hide pill window on cancellation: {}", hide_err);
+                                log::error!(
+                                    "Failed to hide pill window on cancellation: {}",
+                                    hide_err
+                                );
                             }
                         }
                         update_recording_state(&app_for_task, RecordingState::Idle, None);
-                    },
+                    }
                     TranscriptionFailure::Local(e) if e.contains("too short") => {
                         // Handle "too short" errors with specific user feedback
                         log::info!("Recording was too short: {}", e);
@@ -3039,32 +3426,36 @@ pub async fn stop_recording(
 
                             update_recording_state(&app_for_reset, RecordingState::Idle, None);
                         });
-                    },
+                    }
                     TranscriptionFailure::Remote(remote_error) => {
                         // Remote server error - emit specific event for system notification
                         log::warn!("Remote server error: {}", remote_error);
 
-                        let can_retry_from_history = if let Some(ref saved_recording) = recording_file {
-                            let app_for_history = app_for_task.clone();
-                            let model_name = selected_model_name_for_task.clone();
-                            let recording_filename = saved_recording.clone();
-                            match save_failed_transcription(
-                                &app_for_history,
-                                remote_error,
-                                model_name,
-                                recording_filename,
-                            )
-                            .await
-                            {
-                                Ok(_) => true,
-                                Err(save_err) => {
-                                    log::error!("Failed to save failed transcription: {}", save_err);
-                                    false
+                        let can_retry_from_history =
+                            if let Some(ref saved_recording) = recording_file {
+                                let app_for_history = app_for_task.clone();
+                                let model_name = selected_model_name_for_task.clone();
+                                let recording_filename = saved_recording.clone();
+                                match save_failed_transcription(
+                                    &app_for_history,
+                                    remote_error,
+                                    model_name,
+                                    recording_filename,
+                                )
+                                .await
+                                {
+                                    Ok(_) => true,
+                                    Err(save_err) => {
+                                        log::error!(
+                                            "Failed to save failed transcription: {}",
+                                            save_err
+                                        );
+                                        false
+                                    }
                                 }
-                            }
-                        } else {
-                            false
-                        };
+                            } else {
+                                false
+                            };
 
                         // Emit event for frontend to show system notification with guidance
                         let _ = app_for_task.emit(
@@ -3099,10 +3490,14 @@ pub async fn stop_recording(
                             }
                             update_recording_state(&app_for_reset, RecordingState::Idle, None);
                         });
-                    },
+                    }
                     TranscriptionFailure::Local(e) => {
                         // For other errors, show error state briefly
-                        update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
+                        update_recording_state(
+                            &app_for_task,
+                            RecordingState::Error,
+                            Some(e.clone()),
+                        );
 
                         // Emit error via pill toast
                         pill_toast(&app_for_task, e, 1500);
@@ -3131,7 +3526,8 @@ pub async fn stop_recording(
                     }
                 }
             }
-    }});
+        }
+    });
 
     // Track the transcription task
     let app_state = app.state::<AppState>();
@@ -3224,7 +3620,7 @@ pub async fn cleanup_old_transcriptions(app: AppHandle, days: Option<u32>) -> Re
 /// Save transcription to history without a recording file
 #[tauri::command]
 pub async fn save_transcription(app: AppHandle, text: String, model: String) -> Result<(), String> {
-    save_transcription_with_recording(app, text, model, None).await
+    save_transcription_with_recording(app, text, model, None, None).await
 }
 
 /// Save transcription to history with optional recording file reference
@@ -3233,6 +3629,7 @@ pub async fn save_transcription_with_recording(
     text: String,
     model: String,
     recording_file: Option<String>,
+    writing_metadata: Option<serde_json::Value>,
 ) -> Result<(), String> {
     // De-dup guard: skip saving if the most recent entry matches the same text & model within a short window
     if let Ok(store) = app.store("transcriptions") {
@@ -3296,6 +3693,9 @@ pub async fn save_transcription_with_recording(
         transcription_data["recording_file"] = serde_json::json!(file);
         log::info!("Saving transcription with recording file: {}", file);
     }
+    if let Some(metadata) = writing_metadata {
+        transcription_data["writing"] = metadata;
+    }
 
     store.set(&timestamp, transcription_data.clone());
 
@@ -3346,10 +3746,16 @@ pub async fn save_failed_transcription(
 
     // Refresh tray menu
     if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
-        log::warn!("Failed to update tray menu after saving failed transcription: {}", e);
+        log::warn!(
+            "Failed to update tray menu after saving failed transcription: {}",
+            e
+        );
     }
 
-    log::info!("Saved failed transcription with recording file: {}", recording_file);
+    log::info!(
+        "Saved failed transcription with recording file: {}",
+        recording_file
+    );
     Ok(())
 }
 
@@ -3367,7 +3773,8 @@ pub async fn get_transcription_history(
     // Collect all entries, reconciling stale retranscription rows before sorting.
     for key in store.keys() {
         if let Some(value) = store.get(&key) {
-            let reconciled = reconcile_transcription_history_entry(value.clone(), &current_session_marker);
+            let reconciled =
+                reconcile_transcription_history_entry(value.clone(), &current_session_marker);
             if reconciled != value {
                 pending_updates.push((key.to_string(), reconciled.clone()));
             }
@@ -3415,14 +3822,34 @@ pub async fn transcribe_audio_file(
     model_name: String,
     model_engine: Option<String>,
 ) -> Result<String, String> {
+    transcribe_audio_file_impl(app, file_path, model_name, model_engine, true).await
+}
+
+pub async fn transcribe_audio_file_for_cli(
+    app: AppHandle,
+    file_path: String,
+    model_name: String,
+    model_engine: Option<String>,
+) -> Result<String, String> {
+    transcribe_audio_file_impl(app, file_path, model_name, model_engine, false).await
+}
+
+async fn transcribe_audio_file_impl(
+    app: AppHandle,
+    file_path: String,
+    model_name: String,
+    model_engine: Option<String>,
+    validate_requirements: bool,
+) -> Result<String, String> {
     log::info!(
         "[UPLOAD] transcribe_audio_file START | file_path={:?}, model_name={}, engine_hint={:?}",
         file_path,
         model_name,
         model_engine
     );
-    // Validate requirements (includes license check)
-    validate_recording_requirements(&app).await?;
+    if validate_requirements {
+        validate_recording_requirements(&app).await?;
+    }
 
     // Use the provided file path directly
     let audio_path = std::path::Path::new(&file_path);
@@ -3456,19 +3883,32 @@ pub async fn transcribe_audio_file(
 
     // Get language and translation settings
     let store = app.store("settings").map_err(|e| e.to_string())?;
-    let language = {
-        let lang = store
-            .get("language")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| "en".to_string());
-
-        validate_language(Some(&lang)).to_string()
-    };
-
-    let translate_to_english = store
+    let legacy_speech_language = store
+        .get("language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "en".to_string());
+    let legacy_translate_to_english = store
         .get("translate_to_english")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let language = store
+        .get("speech_language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or(legacy_speech_language);
+    let stored_transcription_task = store
+        .get("transcription_task")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let transcription_task = normalize_transcription_task(
+        stored_transcription_task.as_deref(),
+        legacy_translate_to_english,
+    );
+    let translate_to_english = task_uses_translate_to_english(&transcription_task);
+
+    let language = normalize_speech_language_for_model(
+        engine_selection.engine_name(),
+        engine_selection.model_name(),
+        &language,
+    );
 
     log::info!(
         "[LANGUAGE] transcribe_audio_file using language: {}, translate: {}",
@@ -3476,8 +3916,16 @@ pub async fn transcribe_audio_file(
         translate_to_english
     );
 
+    let transcription_job = build_transcription_job(
+        TranscriptionSource::AudioFile,
+        engine_selection.engine_name().to_string(),
+        engine_selection.model_name().to_string(),
+        Some(language.clone()),
+        translate_to_english,
+    );
+
     // For Soniox, skip normalization and send original wav_path
-    let text = match engine_selection {
+    let transcription_result = match engine_selection {
         ActiveEngineSelection::Whisper { model_path, .. } => {
             // Normalize to Whisper contract
             log::debug!("[UPLOAD] Normalizing to Whisper WAV (16k mono s16)...");
@@ -3496,12 +3944,17 @@ pub async fn transcribe_audio_file(
                 cache.get_or_create(&model_path)?
             };
 
-            let result = transcriber.transcribe_with_translation(
+            let output = transcriber.transcribe_with_metadata(
                 normalized_file.path(),
                 Some(&language),
                 translate_to_english,
+                || false,
             )?;
-            result
+            TranscriptionResult::new(&transcription_job, output.raw_text)
+                .with_transcript_language(output.transcript_language)
+                .with_segments(output.segments)
+                .with_audio_duration_ms(Some(output.audio_duration_ms))
+                .with_processing_duration_ms(Some(output.processing_duration_ms))
         }
         ActiveEngineSelection::Parakeet { model_name } => {
             // Normalize to Whisper/Parakeet contract first
@@ -3532,7 +3985,15 @@ pub async fn transcribe_audio_file(
                 )
                 .await
             {
-                Ok(ParakeetResponse::Transcription { text, .. }) => text,
+                Ok(ParakeetResponse::Transcription {
+                    text,
+                    segments,
+                    language,
+                    duration,
+                }) => TranscriptionResult::new(&transcription_job, text)
+                    .with_transcript_language(language)
+                    .with_segments(parakeet_segments_to_transcription_segments(segments))
+                    .with_audio_duration_ms(seconds_to_duration_ms(duration)),
                 Ok(other) => {
                     return Err(format!("Unexpected Parakeet response: {:?}", other));
                 }
@@ -3542,7 +4003,15 @@ pub async fn transcribe_audio_file(
             }
         }
         ActiveEngineSelection::Soniox { .. } => {
-            soniox_transcribe_async(&app, &wav_path, Some(&language)).await?
+            let text = soniox_transcribe_async(&app, &wav_path, Some(&language)).await?;
+            let soniox_job = build_transcription_job(
+                TranscriptionSource::AudioFile,
+                transcription_job.engine.clone(),
+                transcription_job.model.clone(),
+                transcription_job.spoken_language.clone(),
+                false,
+            );
+            TranscriptionResult::new(&soniox_job, text)
         }
         ActiveEngineSelection::Remote {
             server_name,
@@ -3584,8 +4053,11 @@ pub async fn transcribe_audio_file(
             // Create HTTP client connection
             let server_conn = RemoteServerConnection::new(host.clone(), port, password.clone());
 
-            let (request, timeout_ms) =
-                build_remote_upload_transcription_request(normalized_file.path(), audio_data);
+            let (request, timeout_ms) = build_remote_upload_transcription_request(
+                normalized_file.path(),
+                audio_data,
+                Some(&transcription_job),
+            );
 
             let response = client::transcribe_audio(&server_conn, request, timeout_ms)
                 .await
@@ -3598,22 +4070,25 @@ pub async fn transcribe_audio_file(
                     e.to_string()
                 })?;
 
-            let text = response.text;
             log::info!(
                 "🌐 [Remote Upload] Transcription COMPLETED from '{}': {} chars received",
                 server_name,
-                text.len()
+                response.text.len()
             );
 
-            text
+            build_remote_transcription_result(&transcription_job, response)
         }
     };
 
     log::info!(
         "[UPLOAD] Completed transcription, {} characters",
-        text.len()
+        transcription_result.raw_text.len()
     );
-    Ok(text)
+    let ai_enabled = load_ai_enabled(&app)?;
+    let writing_result =
+        crate::writing::process_transcription(app.clone(), transcription_result, ai_enabled)
+            .await?;
+    Ok(writing_result.final_text)
 }
 
 #[tauri::command]
@@ -3652,19 +4127,32 @@ pub async fn transcribe_audio(
 
     // Get language and translation settings
     let store = app.store("settings").map_err(|e| e.to_string())?;
-    let language = {
-        let lang = store
-            .get("language")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| "en".to_string());
-
-        validate_language(Some(&lang)).to_string()
-    };
-
-    let translate_to_english = store
+    let legacy_speech_language = store
+        .get("language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "en".to_string());
+    let legacy_translate_to_english = store
         .get("translate_to_english")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let language = store
+        .get("speech_language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or(legacy_speech_language);
+    let stored_transcription_task = store
+        .get("transcription_task")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let transcription_task = normalize_transcription_task(
+        stored_transcription_task.as_deref(),
+        legacy_translate_to_english,
+    );
+    let translate_to_english = task_uses_translate_to_english(&transcription_task);
+
+    let language = normalize_speech_language_for_model(
+        engine_selection.engine_name(),
+        engine_selection.model_name(),
+        &language,
+    );
 
     log::info!(
         "[LANGUAGE] transcribe_audio using language: {}, translate: {}",
@@ -3672,7 +4160,15 @@ pub async fn transcribe_audio(
         translate_to_english
     );
 
-    let text = match engine_selection {
+    let transcription_job = build_transcription_job(
+        TranscriptionSource::AudioBytes,
+        engine_selection.engine_name().to_string(),
+        engine_selection.model_name().to_string(),
+        Some(language.clone()),
+        translate_to_english,
+    );
+
+    let transcription_result = match engine_selection {
         ActiveEngineSelection::Whisper { model_path, .. } => {
             let transcriber = {
                 let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
@@ -3680,11 +4176,17 @@ pub async fn transcribe_audio(
                 cache.get_or_create(&model_path)?
             };
 
-            transcriber.transcribe_with_translation(
+            let output = transcriber.transcribe_with_metadata(
                 &temp_path,
                 Some(language.as_str()),
                 translate_to_english,
-            )?
+                || false,
+            )?;
+            TranscriptionResult::new(&transcription_job, output.raw_text)
+                .with_transcript_language(output.transcript_language)
+                .with_segments(output.segments)
+                .with_audio_duration_ms(Some(output.audio_duration_ms))
+                .with_processing_duration_ms(Some(output.processing_duration_ms))
         }
         ActiveEngineSelection::Parakeet { model_name } => {
             let parakeet_manager = app.state::<ParakeetManager>();
@@ -3704,13 +4206,29 @@ pub async fn transcribe_audio(
                 )
                 .await
             {
-                Ok(ParakeetResponse::Transcription { text, .. }) => text,
+                Ok(ParakeetResponse::Transcription {
+                    text,
+                    segments,
+                    language,
+                    duration,
+                }) => TranscriptionResult::new(&transcription_job, text)
+                    .with_transcript_language(language)
+                    .with_segments(parakeet_segments_to_transcription_segments(segments))
+                    .with_audio_duration_ms(seconds_to_duration_ms(duration)),
                 Ok(other) => return Err(format!("Unexpected Parakeet response: {:?}", other)),
                 Err(err) => return Err(format!("Parakeet transcription failed: {}", err)),
             }
         }
         ActiveEngineSelection::Soniox { .. } => {
-            soniox_transcribe_async(&app, &temp_path, Some(&language)).await?
+            let text = soniox_transcribe_async(&app, &temp_path, Some(&language)).await?;
+            let soniox_job = build_transcription_job(
+                TranscriptionSource::AudioBytes,
+                transcription_job.engine.clone(),
+                transcription_job.model.clone(),
+                transcription_job.spoken_language.clone(),
+                false,
+            );
+            TranscriptionResult::new(&soniox_job, text)
         }
         ActiveEngineSelection::Remote {
             server_name,
@@ -3752,8 +4270,11 @@ pub async fn transcribe_audio(
             // Create HTTP client connection
             let server_conn = RemoteServerConnection::new(host.clone(), port, password.clone());
 
-            let (request, timeout_ms) =
-                build_remote_upload_transcription_request(normalized_file.path(), audio_data);
+            let (request, timeout_ms) = build_remote_upload_transcription_request(
+                normalized_file.path(),
+                audio_data,
+                Some(&transcription_job),
+            );
 
             let response = client::transcribe_audio(&server_conn, request, timeout_ms)
                 .await
@@ -3766,15 +4287,13 @@ pub async fn transcribe_audio(
                     e.to_string()
                 })?;
 
-            let text = response.text;
-
             log::info!(
                 "🌐 [Remote Clipboard] Transcription COMPLETED from '{}': {} chars received",
                 server_name,
-                text.len()
+                response.text.len()
             );
 
-            text
+            build_remote_transcription_result(&transcription_job, response)
         }
     };
 
@@ -3783,7 +4302,11 @@ pub async fn transcribe_audio(
         log::warn!("Failed to remove test audio file: {}", e);
     }
 
-    Ok(text)
+    let ai_enabled = load_ai_enabled(&app)?;
+    let writing_result =
+        crate::writing::process_transcription(app.clone(), transcription_result, ai_enabled)
+            .await?;
+    Ok(writing_result.final_text)
 }
 
 // Soniox async transcription via v1 Files + Transcriptions flow
@@ -4294,7 +4817,10 @@ pub async fn update_transcription(
         .ok_or_else(|| "Transcription entry is not an object".to_string())
         .map(|map| {
             map.insert("text".to_string(), serde_json::Value::String(text.clone()));
-            map.insert("model".to_string(), serde_json::Value::String(model.clone()));
+            map.insert(
+                "model".to_string(),
+                serde_json::Value::String(model.clone()),
+            );
             let effective_status = apply_retranscription_status(map, status);
             sync_retranscription_failure_metadata(map, effective_status, &text);
             effective_status
@@ -4307,12 +4833,17 @@ pub async fn update_transcription(
         .map_err(|e| format!("Failed to save updated transcription: {}", e))?;
 
     // Emit update event to frontend
-    let _ = emit_to_window(&app, "main", "transcription-updated", serde_json::json!({
-        "timestamp": timestamp,
-        "text": text,
-        "model": model,
-        "status": transcription_status_value(effective_status)
-    }));
+    let _ = emit_to_window(
+        &app,
+        "main",
+        "transcription-updated",
+        serde_json::json!({
+            "timestamp": timestamp,
+            "text": text,
+            "model": model,
+            "status": transcription_status_value(effective_status)
+        }),
+    );
 
     // Refresh tray menu (best-effort)
     if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {

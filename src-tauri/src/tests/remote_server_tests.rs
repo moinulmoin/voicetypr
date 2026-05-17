@@ -50,12 +50,14 @@ fn test_transcribe_response_serialization() {
         text: "Hello, world!".to_string(),
         duration_ms: 3500,
         model: "large-v3-turbo".to_string(),
+        transcript_language: Some("en".to_string()),
     };
 
     let json = serde_json::to_string(&response).unwrap();
     assert!(json.contains("\"text\":\"Hello, world!\""));
     assert!(json.contains("\"duration_ms\":3500"));
     assert!(json.contains("\"model\":\"large-v3-turbo\""));
+    assert!(json.contains("\"transcript_language\":\"en\""));
 }
 
 /// Test that TranscribeResponse deserializes correctly
@@ -71,6 +73,7 @@ fn test_transcribe_response_deserialization() {
     assert_eq!(response.text, "This is a test transcription.");
     assert_eq!(response.duration_ms, 2500);
     assert_eq!(response.model, "base.en");
+    assert_eq!(response.transcript_language, None);
 }
 
 /// Test default server configuration
@@ -106,10 +109,12 @@ fn test_server_config_serialization() {
     };
 
     let json = serde_json::to_string(&config).unwrap();
+    assert!(!json.contains("mypassword"));
+    assert!(json.contains("\"has_password\":true"));
     let restored: RemoteServerConfig = serde_json::from_str(&json).unwrap();
 
     assert_eq!(restored.port, config.port);
-    assert_eq!(restored.password, config.password);
+    assert!(restored.password.is_none());
     assert_eq!(restored.enabled, config.enabled);
 }
 

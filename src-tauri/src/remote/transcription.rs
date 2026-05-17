@@ -6,13 +6,15 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::Instant;
-use tempfile::NamedTempFile;
 use tauri::AppHandle;
+use tempfile::NamedTempFile;
 
 use super::http::ServerContext;
-use super::server::TranscribeResponse;
-use crate::parakeet::messages::ParakeetResponse;
+use crate::parakeet::messages::{ParakeetResponse, ParakeetSegment};
 use crate::parakeet::ParakeetManager;
+use crate::transcription::{
+    TranscriptionJob, TranscriptionResult, TranscriptionSegment, TranscriptionSource,
+};
 use crate::whisper::cache::TranscriberCache;
 
 /// Configuration for the transcription server
@@ -64,17 +66,26 @@ impl SharedServerState {
 
     /// Get the current model name
     pub fn get_model_name(&self) -> String {
-        self.model_name.read().map(|n| n.clone()).unwrap_or_default()
+        self.model_name
+            .read()
+            .map(|n| n.clone())
+            .unwrap_or_default()
     }
 
     /// Get the current model path
     pub fn get_model_path(&self) -> PathBuf {
-        self.model_path.read().map(|p| p.clone()).unwrap_or_default()
+        self.model_path
+            .read()
+            .map(|p| p.clone())
+            .unwrap_or_default()
     }
 
     /// Get the current engine
     pub fn get_engine(&self) -> String {
-        self.engine.read().map(|e| e.clone()).unwrap_or_else(|_| "whisper".to_string())
+        self.engine
+            .read()
+            .map(|e| e.clone())
+            .unwrap_or_else(|_| "whisper".to_string())
     }
 }
 
@@ -115,7 +126,8 @@ impl RealTranscriptionContext {
     /// Create a new transcription context (legacy, creates its own shared state)
     pub fn new(config: TranscriptionServerConfig) -> Self {
         // Default to whisper engine for legacy compatibility
-        let shared_state = SharedServerState::new(config.model_name, config.model_path, "whisper".to_string());
+        let shared_state =
+            SharedServerState::new(config.model_name, config.model_path, "whisper".to_string());
         Self {
             server_name: config.server_name,
             password: config.password,
@@ -127,7 +139,8 @@ impl RealTranscriptionContext {
 
     /// Update the model being served
     pub fn update_model(&mut self, model_path: PathBuf, model_name: String, engine: String) {
-        self.shared_state.update_model(model_name, model_path, engine);
+        self.shared_state
+            .update_model(model_name, model_path, engine);
     }
 
     /// Update the password
@@ -146,6 +159,19 @@ impl RealTranscriptionContext {
     }
 }
 
+fn parakeet_segments_to_transcription_segments(
+    segments: Vec<ParakeetSegment>,
+) -> Vec<TranscriptionSegment> {
+    segments
+        .into_iter()
+        .map(|segment| TranscriptionSegment {
+            text: segment.text,
+            start_ms: segment.start.map(|value| (value.max(0.0) * 1000.0) as u64),
+            end_ms: segment.end.map(|value| (value.max(0.0) * 1000.0) as u64),
+        })
+        .collect()
+}
+
 impl ServerContext for RealTranscriptionContext {
     fn get_model_name(&self) -> String {
         // Read current model name from shared state (dynamic)
@@ -160,12 +186,26 @@ impl ServerContext for RealTranscriptionContext {
         self.password.clone()
     }
 
-    fn transcribe(&self, audio_data: &[u8]) -> Result<TranscribeResponse, String> {
+    fn transcribe(
+        &self,
+        audio_data: &[u8],
+        spoken_language: Option<&str>,
+        transcription_task: Option<&str>,
+    ) -> Result<TranscriptionResult, String> {
         let start = Instant::now();
 
         // Get current engine and model info from shared state
         let engine = self.shared_state.get_engine();
         let model_name = self.shared_state.get_model_name();
+        let translate_to_english = transcription_task
+            == Some(crate::commands::settings::TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH);
+        let job = TranscriptionJob::from_legacy_settings(
+            TranscriptionSource::RemoteServer,
+            engine.clone(),
+            model_name.clone(),
+            spoken_language.map(str::to_string),
+            translate_to_english,
+        );
 
         log::info!(
             "Starting remote transcription: {} bytes of audio, engine='{}', model='{}'",
@@ -180,8 +220,8 @@ impl ServerContext for RealTranscriptionContext {
         }
 
         // Write audio data to a temporary WAV file
-        let mut temp_file = NamedTempFile::new()
-            .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        let mut temp_file =
+            NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {}", e))?;
 
         temp_file
             .write_all(audio_data)
@@ -196,38 +236,50 @@ impl ServerContext for RealTranscriptionContext {
         log::info!("Audio written to temp file: {:?}", temp_path);
 
         // Route to appropriate transcription engine
-        let text = match engine.as_str() {
-            "parakeet" => {
-                // Use Parakeet sidecar for transcription
-                self.transcribe_with_parakeet(&temp_path, &model_name)?
-            }
+        let result = match engine.as_str() {
+            "parakeet" => self.transcribe_with_parakeet(
+                &temp_path,
+                &model_name,
+                &job,
+                spoken_language.map(str::to_string),
+                translate_to_english,
+            )?,
             _ => {
-                // Default to Whisper transcription
-                self.transcribe_with_whisper(&temp_path)?
+                let output = self.transcribe_with_whisper(
+                    &temp_path,
+                    spoken_language,
+                    translate_to_english,
+                )?;
+                TranscriptionResult::new(&job, output.raw_text)
+                    .with_transcript_language(output.transcript_language)
+                    .with_segments(output.segments)
+                    .with_audio_duration_ms(Some(output.audio_duration_ms))
             }
         };
 
         let duration_ms = start.elapsed().as_millis() as u64;
+        let result = result.with_processing_duration_ms(Some(duration_ms));
 
         log::info!(
             "Remote transcription completed: {} chars in {}ms using {} ({})",
-            text.len(),
+            result.raw_text.len(),
             duration_ms,
             model_name,
             engine
         );
 
-        Ok(TranscribeResponse {
-            text,
-            duration_ms,
-            model: model_name,
-        })
+        Ok(result)
     }
 }
 
 impl RealTranscriptionContext {
     /// Transcribe using Whisper model
-    fn transcribe_with_whisper(&self, audio_path: &PathBuf) -> Result<String, String> {
+    fn transcribe_with_whisper(
+        &self,
+        audio_path: &PathBuf,
+        spoken_language: Option<&str>,
+        translate_to_english: bool,
+    ) -> Result<crate::whisper::transcriber::WhisperTranscriptionOutput, String> {
         let model_path = self.shared_state.get_model_path();
 
         // Get transcriber from cache (blocking lock - serializes all transcriptions)
@@ -246,16 +298,27 @@ impl RealTranscriptionContext {
 
         // Perform transcription (this can take a while)
         transcriber
-            .transcribe_with_translation(audio_path, None, false)
+            .transcribe_with_metadata(audio_path, spoken_language, translate_to_english, || false)
             .map_err(|e| format!("Whisper transcription failed: {}", e))
     }
 
     /// Transcribe using Parakeet sidecar
-    fn transcribe_with_parakeet(&self, audio_path: &PathBuf, model_name: &str) -> Result<String, String> {
-        let app_handle = self.app_handle.as_ref()
-            .ok_or_else(|| "Parakeet transcription requires AppHandle but none was provided".to_string())?;
+    fn transcribe_with_parakeet(
+        &self,
+        audio_path: &PathBuf,
+        model_name: &str,
+        job: &TranscriptionJob,
+        spoken_language: Option<String>,
+        translate_to_english: bool,
+    ) -> Result<TranscriptionResult, String> {
+        let app_handle = self.app_handle.as_ref().ok_or_else(|| {
+            "Parakeet transcription requires AppHandle but none was provided".to_string()
+        })?;
 
-        log::info!("Using Parakeet engine for transcription with model '{}'", model_name);
+        log::info!(
+            "Using Parakeet engine for transcription with model '{}'",
+            model_name
+        );
 
         // Get the ParakeetManager from app state
         use tauri::Manager;
@@ -282,15 +345,26 @@ impl RealTranscriptionContext {
                         &app_handle_clone,
                         &model_name_owned,
                         audio_path_clone,
-                        None,    // language
-                        false,   // translate
+                        spoken_language.clone(),
+                        translate_to_english,
                     )
                     .await
                     .map_err(|e| format!("Parakeet transcription failed: {}", e))?;
 
-                // Extract text from the ParakeetResponse enum
                 match response {
-                    ParakeetResponse::Transcription { text, .. } => Ok::<String, String>(text),
+                    ParakeetResponse::Transcription {
+                        text,
+                        segments,
+                        language,
+                        duration,
+                    } => Ok::<TranscriptionResult, String>(
+                        TranscriptionResult::new(job, text)
+                            .with_transcript_language(language)
+                            .with_segments(parakeet_segments_to_transcription_segments(segments))
+                            .with_audio_duration_ms(
+                                duration.map(|value| (value.max(0.0) * 1000.0) as u64),
+                            ),
+                    ),
                     ParakeetResponse::Error { code, message, .. } => {
                         Err(format!("Parakeet error {}: {}", code, message))
                     }
@@ -404,7 +478,7 @@ mod tests {
         let ctx = RealTranscriptionContext::new(config);
 
         // Empty audio should return error
-        let result = ctx.transcribe(&[]);
+        let result = ctx.transcribe(&[], None, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Empty audio data"));
     }
@@ -421,7 +495,7 @@ mod tests {
         let ctx = RealTranscriptionContext::new(config);
 
         // Some fake audio data (not valid WAV, but tests path validation)
-        let result = ctx.transcribe(&[1, 2, 3, 4, 5]);
+        let result = ctx.transcribe(&[1, 2, 3, 4, 5], None, None);
         assert!(result.is_err());
         // Should fail because model doesn't exist
         let error = result.unwrap_err();

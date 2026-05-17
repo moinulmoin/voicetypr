@@ -511,6 +511,24 @@ impl AudioRecorder {
         }
     }
 
+    pub fn wait_for_recording_end(&mut self) -> Result<String, String> {
+        let handle = self
+            .recording_handle
+            .lock()
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?
+            .take();
+
+        if let Some(handle) = handle {
+            match handle.thread_handle.join() {
+                Ok(Ok(msg)) => Ok(msg),
+                Ok(Err(e)) => Err(e),
+                Err(_) => Err("Recording thread panicked".to_string()),
+            }
+        } else {
+            Err("Not recording".to_string())
+        }
+    }
+
     pub fn is_recording(&self) -> bool {
         self.recording_handle
             .lock()
@@ -592,5 +610,26 @@ mod tests {
 
         handle.join().expect("Callback thread should not panic");
         assert!(callback_drained.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_wait_for_recording_end_returns_thread_result() {
+        let (stop_tx, _stop_rx) = mpsc::channel();
+        let thread_handle =
+            thread::spawn(|| Ok::<String, String>("Recording stopped due to silence".to_string()));
+        let handle = RecordingHandle {
+            stop_tx,
+            thread_handle,
+        };
+
+        let mut recorder = AudioRecorder::new();
+        {
+            let mut guard = recorder.recording_handle.lock().unwrap();
+            *guard = Some(handle);
+        }
+
+        let result = recorder.wait_for_recording_end().unwrap();
+        assert_eq!(result, "Recording stopped due to silence");
+        assert!(!recorder.is_recording());
     }
 }

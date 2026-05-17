@@ -7,14 +7,17 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { EnhancementOptions } from "@/types/ai";
 import { fromBackendOptions, toBackendOptions } from "@/types/ai";
+import type { WritingSettings } from "@/types/writing";
+import { defaultWritingSettings } from "@/types/writing";
 import { AI_PROVIDERS } from "@/types/providers";
 import { useAllProviderModels } from "@/hooks/useProviderModels";
 import { hasApiKey, removeApiKey, saveApiKey, getApiKey } from "@/utils/keyring";
 import { getErrorMessage } from "@/utils/error";
 import { useReadinessState } from "@/contexts/ReadinessContext";
+import { useSettings } from "@/contexts/SettingsContext";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { Info } from "lucide-react";
 
@@ -27,8 +30,10 @@ interface AISettings {
 
 export function EnhancementsSection() {
   const readiness = useReadinessState();
-  const { fetchModels, getModels, isLoading: isModelsLoading, getError, clearModels } = useAllProviderModels();
-  
+  const { settings, updateSettings } = useSettings();
+  const { fetchModels, getModels, isLoading: isModelsLoading, getError, clearModels } =
+    useAllProviderModels();
+
   const [aiSettings, setAISettings] = useState<AISettings>({
     enabled: false,
     provider: "",
@@ -38,19 +43,22 @@ export function EnhancementsSection() {
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [showOpenAIConfig, setShowOpenAIConfig] = useState(false);
-  const [openAIDefaultBaseUrl, setOpenAIDefaultBaseUrl] = useState("https://api.openai.com/v1");
+  const [openAIDefaultBaseUrl, setOpenAIDefaultBaseUrl] = useState(
+    "https://api.openai.com/v1",
+  );
   const [customModelName, setCustomModelName] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [providerApiKeys, setProviderApiKeys] = useState<Record<string, boolean>>({});
   const [enhancementOptions, setEnhancementOptions] = useState<{
     preset: "Default" | "Prompts" | "Email" | "Commit";
-    customVocabulary: string[];
   }>({
-    preset: 'Default',
-    customVocabulary: [],
+    preset: "Default",
   });
+  const [writingSettings, setWritingSettings] =
+    useState<WritingSettings>(defaultWritingSettings);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const writingSaveGeneration = useRef(0);
 
   const loadEnhancementOptions = async () => {
     try {
@@ -61,72 +69,82 @@ export function EnhancementsSection() {
     }
   };
 
+  const loadWritingSettings = async () => {
+    try {
+      const nextSettings = await invoke<WritingSettings>("get_writing_settings");
+      setWritingSettings(nextSettings);
+    } catch (error) {
+      console.error("Failed to load writing settings:", error);
+    }
+  };
+
   const loadAISettings = useCallback(async () => {
     try {
-      // Check and cache API keys for all providers
-      const allProviders = AI_PROVIDERS.map(p => p.id);
+      const allProviders = AI_PROVIDERS.map((provider) => provider.id);
       const keyStatus: Record<string, boolean> = {};
 
-      await Promise.all(allProviders.map(async (providerId) => {
-        const keyId = providerId;
-        let isConfigured = await hasApiKey(keyId);
+      await Promise.all(
+        allProviders.map(async (providerId) => {
+          const keyId = providerId;
+          let isConfigured = await hasApiKey(keyId);
 
-        // For providers that may be configured without a keyring key (no-auth),
-        // fall back to backend-derived readiness (covers legacy OpenAI-compatible configs).
-        if ((providerId === 'custom' || providerId === 'openai') && !isConfigured) {
-          try {
-            const providerSettings = await invoke<AISettings>('get_ai_settings_for_provider', {
-              provider: providerId
-            });
-            isConfigured = providerSettings.hasApiKey;
-          } catch (error) {
-            console.error(`Failed to resolve ${providerId} provider readiness:`, error);
-          }
-        }
-
-        keyStatus[providerId] = isConfigured;
-
-        if (isConfigured) {
-          try {
-            const apiKey = await getApiKey(keyId);
-            if (apiKey) {
-              console.log(`[AI Settings] Found ${keyId} API key in keyring, caching to backend`);
-              await invoke('cache_ai_api_key', { args: { provider: providerId, apiKey } });
+          if ((providerId === "custom" || providerId === "openai") && !isConfigured) {
+            try {
+              const providerSettings = await invoke<AISettings>(
+                "get_ai_settings_for_provider",
+                {
+                  provider: providerId,
+                },
+              );
+              isConfigured = providerSettings.hasApiKey;
+            } catch (error) {
+              console.error(`Failed to resolve ${providerId} provider readiness:`, error);
             }
-          } catch (error) {
-            console.error(`Failed to cache ${keyId} API key:`, error);
           }
-        }
-      }));
+
+          keyStatus[providerId] = isConfigured;
+
+          if (isConfigured) {
+            try {
+              const apiKey = await getApiKey(keyId);
+              if (apiKey) {
+                await invoke("cache_ai_api_key", {
+                  args: { provider: providerId, apiKey },
+                });
+              }
+            } catch (error) {
+              console.error(`Failed to cache ${keyId} API key:`, error);
+            }
+          }
+        }),
+      );
 
       setProviderApiKeys(keyStatus);
 
-      // Load custom provider config
       try {
-        const customConfig = await invoke<{ baseUrl: string }>('get_openai_config');
+        const customConfig = await invoke<{ baseUrl: string }>("get_openai_config");
         setOpenAIDefaultBaseUrl(customConfig.baseUrl || "https://api.openai.com/v1");
       } catch (error) {
-        console.error('Failed to load custom config:', error);
+        console.error("Failed to load custom config:", error);
       }
 
-      // Load AI settings from backend
-      const settings = await invoke<AISettings>("get_ai_settings");
-      
-      // If using custom provider, track model name
-      if (settings.provider === 'custom') {
-        setCustomModelName(settings.model);
+      const loadedAISettings = await invoke<AISettings>("get_ai_settings");
+      if (loadedAISettings.provider === "custom") {
+        setCustomModelName(loadedAISettings.model);
       }
-      
-      setAISettings(settings);
+      setAISettings(loadedAISettings);
 
-      // If readiness state shows AI is ready, update the provider key status
-      if (readiness?.ai_ready && settings.provider) {
-        setProviderApiKeys(prev => ({ ...prev, [settings.provider]: true }));
+      if (readiness?.ai_ready && loadedAISettings.provider) {
+        setProviderApiKeys((prev) => ({
+          ...prev,
+          [loadedAISettings.provider]: true,
+        }));
       }
 
-      // Pre-fetch models for all providers with API keys (list is static, so this is fast)
-      const providersWithKeys = allProviders.filter(p => keyStatus[p] && p !== 'custom');
-      providersWithKeys.forEach(providerId => {
+      const providersWithKeys = allProviders.filter(
+        (providerId) => keyStatus[providerId] && providerId !== "custom",
+      );
+      providersWithKeys.forEach((providerId) => {
         fetchModels(providerId);
       });
     } catch (error) {
@@ -134,99 +152,146 @@ export function EnhancementsSection() {
     }
   }, [readiness, fetchModels]);
 
-  // Load settings when component mounts
   useEffect(() => {
     if (!settingsLoaded) {
       loadAISettings();
       loadEnhancementOptions();
+      loadWritingSettings();
       setSettingsLoaded(true);
     }
   }, [settingsLoaded, loadAISettings]);
 
-  // Listen for AI events
   useEffect(() => {
-    const unlistenReady = listen('ai-ready', async () => {
+    const unlistenReady = listen("ai-ready", async () => {
       if (settingsLoaded) {
         await loadAISettings();
       }
     });
 
-    const unlistenApiKey = listen('api-key-saved', async (event) => {
-      console.log('[AI Settings] API key saved:', event.payload);
-      const settings = await invoke<AISettings>("get_ai_settings");
-      setAISettings(settings);
-      
+    const unlistenApiKey = listen("api-key-saved", async (event) => {
+      const loadedAISettings = await invoke<AISettings>("get_ai_settings");
+      setAISettings(loadedAISettings);
+
       const provider = (event.payload as { provider?: string }).provider;
       if (provider) {
-        setProviderApiKeys(prev => ({ ...prev, [provider]: true }));
+        setProviderApiKeys((prev) => ({ ...prev, [provider]: true }));
       }
     });
 
-    const unlistenApiKeyRemoved = listen<{ provider: string }>('api-key-removed', async (event) => {
-      console.log('[AI Settings] API key removed:', event.payload.provider);
-      let providerStillConfigured = false;
+    const unlistenApiKeyRemoved = listen<{ provider: string }>(
+      "api-key-removed",
+      async (event) => {
+        let providerStillConfigured = false;
 
-      if (event.payload.provider === 'custom' || event.payload.provider === 'openai') {
-        try {
-          const providerSettings = await invoke<AISettings>('get_ai_settings_for_provider', {
-            provider: event.payload.provider
-          });
-          providerStillConfigured = providerSettings.hasApiKey;
-          setProviderApiKeys(prev => ({ ...prev, [event.payload.provider]: providerStillConfigured }));
-        } catch (error) {
-          console.error(
-            `Failed to refresh ${event.payload.provider} provider readiness after key removal:`,
-            error
-          );
-          setProviderApiKeys(prev => ({ ...prev, [event.payload.provider]: false }));
+        if (event.payload.provider === "custom" || event.payload.provider === "openai") {
+          try {
+            const providerSettings = await invoke<AISettings>(
+              "get_ai_settings_for_provider",
+              {
+                provider: event.payload.provider,
+              },
+            );
+            providerStillConfigured = providerSettings.hasApiKey;
+            setProviderApiKeys((prev) => ({
+              ...prev,
+              [event.payload.provider]: providerStillConfigured,
+            }));
+          } catch (error) {
+            console.error(
+              `Failed to refresh ${event.payload.provider} provider readiness after key removal:`,
+              error,
+            );
+            setProviderApiKeys((prev) => ({
+              ...prev,
+              [event.payload.provider]: false,
+            }));
+          }
+        } else {
+          setProviderApiKeys((prev) => ({
+            ...prev,
+            [event.payload.provider]: false,
+          }));
         }
-      } else {
-        setProviderApiKeys(prev => ({ ...prev, [event.payload.provider]: false }));
-      }
-      
-      // Clear cached models for removed provider
-      clearModels(event.payload.provider);
-      
-      // If removed provider is currently selected, clear selection
-      const isCurrentProviderRemoved = aiSettings.provider === event.payload.provider && !providerStillConfigured;
-      
-      if (isCurrentProviderRemoved) {
-        setAISettings(prev => ({
-          ...prev,
-          enabled: false,
-          provider: "",
-          model: "",
-          hasApiKey: false
-        }));
-        
-        await invoke("update_ai_settings", {
-          enabled: false,
-          provider: "",
-          model: ""
-        });
-      }
-    });
 
-    const unlistenFormattingError = listen<string>('formatting-error', async (event) => {
-      const msg = event.payload || 'Formatting failed';
-      toast.error(typeof msg === 'string' ? msg : 'Formatting failed');
+        clearModels(event.payload.provider);
+
+        const isCurrentProviderRemoved =
+          aiSettings.provider === event.payload.provider && !providerStillConfigured;
+
+        if (isCurrentProviderRemoved) {
+          setAISettings((prev) => ({
+            ...prev,
+            enabled: false,
+            provider: "",
+            model: "",
+            hasApiKey: false,
+          }));
+
+          await invoke("update_ai_settings", {
+            enabled: false,
+            provider: "",
+            model: "",
+          });
+        }
+      },
+    );
+
+    const unlistenFormattingError = listen<string>("formatting-error", async (event) => {
+      const msg = event.payload || "Formatting failed";
+      toast.error(typeof msg === "string" ? msg : "Formatting failed");
     });
 
     return () => {
-      Promise.all([unlistenReady, unlistenApiKey, unlistenApiKeyRemoved, unlistenFormattingError]).then(fns => {
-        fns.forEach(fn => fn());
+      Promise.all([
+        unlistenReady,
+        unlistenApiKey,
+        unlistenApiKeyRemoved,
+        unlistenFormattingError,
+      ]).then((fns) => {
+        fns.forEach((fn) => fn());
       });
     };
   }, [settingsLoaded, aiSettings.provider, clearModels]);
 
-  const handleEnhancementOptionsChange = async (newOptions: typeof enhancementOptions) => {
-    setEnhancementOptions(newOptions);
+  const handlePresetChange = async (preset: typeof enhancementOptions.preset) => {
+    const nextOptions = { preset };
+    setEnhancementOptions(nextOptions);
     try {
       await invoke("update_enhancement_options", {
-        options: toBackendOptions(newOptions)
+        options: toBackendOptions(nextOptions),
       });
     } catch (error) {
       const message = getErrorMessage(error, "Failed to save enhancement options");
+      toast.error(message);
+    }
+  };
+
+  const handleWritingSettingsChange = async (nextSettings: WritingSettings) => {
+    const previousSettings = writingSettings;
+    const saveGeneration = writingSaveGeneration.current + 1;
+    writingSaveGeneration.current = saveGeneration;
+    setWritingSettings(nextSettings);
+    try {
+      await invoke("update_writing_settings", { settings: nextSettings });
+    } catch (error) {
+      if (writingSaveGeneration.current === saveGeneration) {
+        setWritingSettings(previousSettings);
+      }
+      const message = getErrorMessage(error, "Failed to save writing settings");
+      toast.error(message);
+    }
+  };
+
+  const handleFinalTextLanguageChange = async (value: string) => {
+    if (!settings) return;
+    const nextTask = value === "en" ? "translate_to_english" : "transcribe";
+    try {
+      await updateSettings({
+        final_text_language: value,
+        transcription_task: nextTask,
+      });
+    } catch (error) {
+      const message = getErrorMessage(error, "Failed to save final text language");
       toast.error(message);
     }
   };
@@ -243,10 +308,10 @@ export function EnhancementsSection() {
       await invoke("update_ai_settings", {
         enabled,
         provider: aiSettings.provider,
-        model: aiSettings.model
+        model: aiSettings.model,
       });
 
-      setAISettings(prev => ({ ...prev, enabled }));
+      setAISettings((prev) => ({ ...prev, enabled }));
       toast.success(enabled ? "AI formatting enabled" : "AI formatting disabled");
     } catch (error) {
       const message = getErrorMessage(error, "Failed to update AI settings");
@@ -256,18 +321,16 @@ export function EnhancementsSection() {
 
   const handleSetupApiKey = async (providerId: string) => {
     setSelectedProvider(providerId);
-    
+
     if (providerId === "custom") {
-      // Custom provider - show OpenAI config modal
       try {
-        const savedConfig = await invoke<{ baseUrl: string }>('get_openai_config');
+        const savedConfig = await invoke<{ baseUrl: string }>("get_openai_config");
         setOpenAIDefaultBaseUrl(savedConfig.baseUrl || "https://api.openai.com/v1");
       } catch (error) {
-        console.error('Failed to load custom config:', error);
+        console.error("Failed to load custom config:", error);
       }
       setShowOpenAIConfig(true);
     } else {
-      // Standard provider - show API key modal
       setShowApiKeyModal(true);
     }
   };
@@ -277,18 +340,12 @@ export function EnhancementsSection() {
     try {
       const trimmedKey = apiKey.trim();
       await saveApiKey(selectedProvider, trimmedKey);
-
-      // Update provider key status
-      setProviderApiKeys(prev => ({ ...prev, [selectedProvider]: true }));
-
-      // Don't auto-select model - user will do it from dropdown
-      // Just update the provider
-      setAISettings(prev => ({
+      setProviderApiKeys((prev) => ({ ...prev, [selectedProvider]: true }));
+      setAISettings((prev) => ({
         ...prev,
         provider: selectedProvider,
-        hasApiKey: true
+        hasApiKey: true,
       }));
-
       setShowApiKeyModal(false);
       toast.success("API key saved securely");
     } catch (error) {
@@ -302,7 +359,6 @@ export function EnhancementsSection() {
   const handleRemoveApiKey = async (providerId: string) => {
     try {
       await removeApiKey(providerId);
-      // Clear cached models
       clearModels(providerId);
       toast.success("API key removed");
     } catch (error) {
@@ -319,15 +375,15 @@ export function EnhancementsSection() {
       await invoke("update_ai_settings", {
         enabled: shouldEnable,
         provider: providerId,
-        model: modelId
+        model: modelId,
       });
 
-      setAISettings(prev => ({
+      setAISettings((prev) => ({
         ...prev,
         enabled: shouldEnable,
         provider: providerId,
         model: modelId,
-        hasApiKey: hasKey
+        hasApiKey: hasKey,
       }));
 
       toast.success("Model selected");
@@ -337,25 +393,21 @@ export function EnhancementsSection() {
     }
   };
 
-  // Check if any provider has a valid API key
-  const hasAnyValidConfig = Object.values(providerApiKeys).some(v => v);
-  
-  // Check if we have a selected model
-  const isUsingCustomProvider = aiSettings.provider === 'custom';
+  const hasAnyValidConfig = Object.values(providerApiKeys).some(Boolean);
+  const isUsingCustomProvider = aiSettings.provider === "custom";
   const hasSelectedModel = Boolean(
-    aiSettings.provider && 
-    aiSettings.model && 
-    (isUsingCustomProvider || providerApiKeys[aiSettings.provider])
+    aiSettings.provider &&
+      aiSettings.model &&
+      (isUsingCustomProvider || providerApiKeys[aiSettings.provider]),
   );
 
-  // Get active model name for display
-  const activeModelName = isUsingCustomProvider 
-    ? customModelName 
-    : getModels(aiSettings.provider).find(m => m.id === aiSettings.model)?.name || aiSettings.model;
+  const activeModelName = isUsingCustomProvider
+    ? customModelName
+    : getModels(aiSettings.provider).find((model) => model.id === aiSettings.model)?.name ||
+      aiSettings.model;
 
   return (
     <div className="h-full min-h-0 flex flex-col">
-      {/* Header */}
       <div className="shrink-0 px-6 py-4 border-b border-border/40">
         <div className="flex items-center justify-between">
           <div>
@@ -380,7 +432,6 @@ export function EnhancementsSection() {
 
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-6 space-y-6">
-          {/* AI Providers Section */}
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <h2 className="text-base font-semibold">AI Providers</h2>
@@ -391,29 +442,33 @@ export function EnhancementsSection() {
                 </span>
               )}
             </div>
-            
+
             <div className="grid gap-3">
               {AI_PROVIDERS.map((provider) => {
-                // For custom provider, check if it's active
                 const isCustomActive = Boolean(
-                  provider.isCustom && 
-                  aiSettings.provider === 'custom' && 
-                  providerApiKeys['custom'] && 
-                  aiSettings.enabled
+                  provider.isCustom &&
+                    aiSettings.provider === "custom" &&
+                    providerApiKeys.custom &&
+                    aiSettings.enabled,
                 );
-                const isActive = provider.isCustom 
+                const isActive = provider.isCustom
                   ? isCustomActive
                   : Boolean(aiSettings.provider === provider.id && aiSettings.enabled);
-                
+
                 return (
                   <ProviderCard
                     key={provider.id}
                     provider={provider}
                     hasApiKey={providerApiKeys[provider.id] || false}
                     isActive={isActive}
-                    selectedModel={provider.isCustom 
-                      ? (isCustomActive ? customModelName : null)
-                      : (aiSettings.provider === provider.id ? aiSettings.model : null)
+                    selectedModel={
+                      provider.isCustom
+                        ? isCustomActive
+                          ? customModelName
+                          : null
+                        : aiSettings.provider === provider.id
+                          ? aiSettings.model
+                          : null
                     }
                     onSetupApiKey={() => handleSetupApiKey(provider.id)}
                     onRemoveApiKey={() => handleRemoveApiKey(provider.id)}
@@ -429,22 +484,31 @@ export function EnhancementsSection() {
             </div>
           </div>
 
-          {/* Formatting Options */}
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <h2 className="text-base font-semibold">Formatting Options</h2>
               <div className="h-px bg-border/50 flex-1" />
             </div>
 
-            <div className={!aiSettings.enabled ? "opacity-50 pointer-events-none" : ""}>
+            <div className="space-y-3">
+              {!aiSettings.enabled &&
+                settings?.final_text_language &&
+                settings.final_text_language !== "same_as_transcript" && (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                    Final text language changes beyond the raw transcript require AI formatting to be enabled.
+                  </div>
+                )}
               <EnhancementSettings
-                settings={enhancementOptions}
-                onSettingsChange={handleEnhancementOptionsChange}
+                preset={enhancementOptions.preset}
+                finalTextLanguage={settings?.final_text_language ?? "same_as_transcript"}
+                writingSettings={writingSettings}
+                onPresetChange={handlePresetChange}
+                onFinalTextLanguageChange={handleFinalTextLanguageChange}
+                onWritingSettingsChange={handleWritingSettingsChange}
               />
             </div>
           </div>
 
-          {/* Setup Guide */}
           {!aiSettings.enabled && (
             <div className="rounded-lg border border-border/50 bg-card p-4">
               <div className="flex items-start gap-3">
@@ -460,7 +524,7 @@ export function EnhancementsSection() {
                     <li>Toggle "AI Formatting" on to enable</li>
                   </ol>
                   <p className="text-xs text-muted-foreground mt-3">
-                    AI formatting automatically improves your transcribed text with proper punctuation, grammar, and style in your selected language.
+                    AI formatting improves punctuation, grammar, style, language conversion, and context-aware cleanup. Replacements, dictionary words, and snippets still save even if AI is off.
                   </p>
                 </div>
               </div>
@@ -476,50 +540,47 @@ export function EnhancementsSection() {
         providerName={selectedProvider}
         isLoading={isLoading}
       />
-      
+
       <OpenAICompatConfigModal
         isOpen={showOpenAIConfig}
         defaultBaseUrl={openAIDefaultBaseUrl}
-        defaultModel={customModelName || ''}
+        defaultModel={customModelName || ""}
         onClose={() => setShowOpenAIConfig(false)}
         onSubmit={async ({ baseUrl, model, apiKey }) => {
           try {
             setIsLoading(true);
             const trimmedBase = baseUrl.trim();
             const trimmedModel = model.trim();
-            const trimmedKey = apiKey?.trim() || '';
+            const trimmedKey = apiKey?.trim() || "";
 
-            // Save custom OpenAI-compatible config (base URL)
-            await invoke('set_openai_config', { args: { baseUrl: trimmedBase } });
+            await invoke("set_openai_config", { args: { baseUrl: trimmedBase } });
 
-            // Save API key under 'custom' provider
             if (trimmedKey) {
-              await saveApiKey('custom', trimmedKey);
+              await saveApiKey("custom", trimmedKey);
             }
 
-            // Update settings
             const nextEnabled = aiSettings.enabled || !aiSettings.model;
-            await invoke('update_ai_settings', { enabled: nextEnabled, provider: 'custom', model: trimmedModel });
+            await invoke("update_ai_settings", {
+              enabled: nextEnabled,
+              provider: "custom",
+              model: trimmedModel,
+            });
 
-            // Update local state
             setCustomModelName(trimmedModel);
             setOpenAIDefaultBaseUrl(trimmedBase);
-            
-            setAISettings(prev => ({
+            setAISettings((prev) => ({
               ...prev,
               enabled: nextEnabled,
-              provider: 'custom',
+              provider: "custom",
               model: trimmedModel,
-              hasApiKey: true
+              hasApiKey: true,
             }));
+            setProviderApiKeys((prev) => ({ ...prev, custom: true }));
 
-            // Mark custom as configured (not openai)
-            setProviderApiKeys(prev => ({ ...prev, custom: true }));
-
-            toast.success('Custom provider configured');
+            toast.success("Custom provider configured");
             setShowOpenAIConfig(false);
           } catch (error) {
-            const message = getErrorMessage(error, 'Failed to save configuration');
+            const message = getErrorMessage(error, "Failed to save configuration");
             toast.error(message);
           } finally {
             setIsLoading(false);

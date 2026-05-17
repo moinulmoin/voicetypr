@@ -120,7 +120,7 @@ pub async fn recognition_availability_snapshot(
 #[tauri::command]
 pub async fn get_recognition_availability_snapshot(
     app: tauri::AppHandle,
- ) -> Result<RecognitionAvailabilitySnapshot, String> {
+) -> Result<RecognitionAvailabilitySnapshot, String> {
     Ok(recognition_availability_snapshot(&app).await)
 }
 
@@ -173,7 +173,10 @@ pub async fn auto_select_model_if_needed(
             store.set("onboarding_completed", serde_json::Value::Bool(true));
             store.save().map_err(|e| e.to_string())?;
             if let Err(e) = app.emit("settings-changed", ()) {
-                log::warn!("Failed to emit settings-changed after onboarding repair: {}", e);
+                log::warn!(
+                    "Failed to emit settings-changed after onboarding repair: {}",
+                    e
+                );
             }
         }
         return Ok(());
@@ -208,12 +211,13 @@ pub async fn auto_select_model_if_needed(
             store.set("onboarding_completed", serde_json::Value::Bool(true));
             store.save().map_err(|e| e.to_string())?;
             if let Err(e) = app.emit("settings-changed", ()) {
-                log::warn!("Failed to emit settings-changed after remote onboarding completion: {}", e);
+                log::warn!(
+                    "Failed to emit settings-changed after remote onboarding completion: {}",
+                    e
+                );
             }
 
-            log::info!(
-                "Marked onboarding complete because an active remote server is available"
-            );
+            log::info!("Marked onboarding complete because an active remote server is available");
         }
 
         return Ok(());
@@ -227,7 +231,10 @@ pub async fn auto_select_model_if_needed(
     store.set("onboarding_completed", serde_json::Value::Bool(true));
     store.save().map_err(|e| e.to_string())?;
     if let Err(e) = app.emit("settings-changed", ()) {
-        log::warn!("Failed to emit settings-changed after auto-selection: {}", e);
+        log::warn!(
+            "Failed to emit settings-changed after auto-selection: {}",
+            e
+        );
     }
 
     log::info!(
@@ -281,7 +288,9 @@ mod tests {
             None,
         );
         let conn_id = conn.id.clone();
-        settings.set_active_connection(Some(conn_id.clone())).unwrap();
+        settings
+            .set_active_connection(Some(conn_id.clone()))
+            .unwrap();
         let active = settings
             .saved_connections
             .iter_mut()
@@ -298,7 +307,6 @@ mod tests {
         assert_eq!(remote_last_checked, 1_717_000_000_000);
         assert!(!remote_available);
     }
-
 
     #[test]
     fn any_available_is_true_when_authenticated_remote_is_available() {

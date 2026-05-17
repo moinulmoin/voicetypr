@@ -22,7 +22,7 @@ interface SharingStatus {
   model_name: string | null;
   server_name: string | null;
   active_connections: number;
-  password: string | null;
+  password_configured: boolean;
   binding_results: BindingResult[];
 }
 
@@ -50,7 +50,7 @@ export function NetworkSharingCard() {
     model_name: null,
     server_name: null,
     active_connections: 0,
-    password: null,
+    password_configured: false,
     binding_results: [],
   });
   const [showPassword, setShowPassword] = useState(false);
@@ -104,10 +104,6 @@ export function NetworkSharingCard() {
           const portStr = normalizedResult.port.toString();
           setPort(portStr);
           setSavedPort(portStr);
-        }
-        if (normalizedResult.password !== undefined) {
-          setPassword(normalizedResult.password || "");
-          setSavedPassword(normalizedResult.password || "");
         }
       }
     } catch (error) {
@@ -199,12 +195,8 @@ export function NetworkSharingCard() {
         setPort(portStr);
         setSavedPort(portStr);
       }
-      if (settings.sharing_password !== undefined) {
-        setPassword(settings.sharing_password || "");
-        setSavedPassword(settings.sharing_password || "");
-      }
     }
-  }, [settings?.sharing_port, settings?.sharing_password]);
+  }, [settings?.sharing_port]);
 
   // Auto-restart sharing when model selection changes
   useEffect(() => {
@@ -219,7 +211,8 @@ export function NetworkSharingCard() {
         await invoke("stop_sharing");
         await invoke("start_sharing", {
           port: parseInt(port, 10),
-          password: password || null,
+          password: null,
+          preservePassword: true,
           serverName: null,
         });
         await fetchStatus();
@@ -240,6 +233,7 @@ export function NetworkSharingCard() {
         await invoke("start_sharing", {
           port: parseInt(port, 10),
           password: password || null,
+          preservePassword: !password,
           serverName: null, // Use hostname
         });
         toast.success("Network sharing enabled");
@@ -268,7 +262,8 @@ export function NetworkSharingCard() {
       await invoke("stop_sharing");
       await invoke("start_sharing", {
         port: parseInt(port, 10),
-        password: savedPassword || null,
+        password: null,
+        preservePassword: true,
         serverName: null,
       });
       setSavedPort(port);
@@ -294,11 +289,10 @@ export function NetworkSharingCard() {
       await invoke("start_sharing", {
         port: parseInt(savedPort, 10),
         password: password || null,
+        preservePassword: false,
         serverName: null,
       });
       setSavedPassword(password);
-      // Persist to settings
-      await updateSettings({ sharing_password: password || undefined });
       await fetchStatus();
       toast.success(password ? "Password updated" : "Password removed");
     } catch (error) {
@@ -610,7 +604,7 @@ export function NetworkSharingCard() {
                           handleSavePassword();
                         }
                       }}
-                      placeholder="No password"
+                      placeholder={status.password_configured ? "Password saved" : "No password"}
                       className="h-9 pr-10 [&::-ms-reveal]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
                     />
                     <button
@@ -634,6 +628,16 @@ export function NetworkSharingCard() {
                       title="Save password"
                     >
                       <Check className="h-4 w-4" />
+                    </button>
+                  )}
+                  {status.enabled && status.password_configured && !password && (
+                    <button
+                      onClick={handleSavePassword}
+                      disabled={savingPassword}
+                      className="px-3 py-2 rounded-md border border-destructive/30 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50 transition-colors"
+                      title="Remove saved password"
+                    >
+                      Remove
                     </button>
                   )}
                 </div>

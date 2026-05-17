@@ -85,11 +85,11 @@ describe('RecentRecordings re-transcription', () => {
             { id: 'online-server', name: 'Office PC', host: '10.0.0.4', port: 47842 },
             { id: 'offline-server', name: 'Old PC', host: '10.0.0.8', port: 47842 },
           ];
-        case 'test_remote_server':
+        case 'check_remote_server_status':
           if (args?.serverId === 'online-server') {
-            return { model: 'large-v3', engine: 'whisper' };
+            return { id: 'online-server', name: 'Office PC', host: '10.0.0.4', port: 47842, model: 'large-v3', status: 'Online' };
           }
-          throw new Error('offline');
+          return { id: 'offline-server', name: 'Old PC', host: '10.0.0.8', port: 47842, model: 'large-v3', status: 'Offline' };
         default:
           return null;
       }

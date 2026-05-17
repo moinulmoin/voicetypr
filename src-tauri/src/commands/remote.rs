@@ -22,6 +22,48 @@ use crate::whisper::manager::WhisperManager;
 
 /// Default port for remote transcription
 pub const DEFAULT_PORT: u16 = 47842;
+const SHARING_PASSWORD_KEY: &str = "remote_sharing_password";
+
+fn remote_connection_password_key(server_id: &str) -> String {
+    format!("remote_connection_password_{}", server_id)
+}
+
+fn secure_get_optional(app: &AppHandle, key: &str) -> Result<Option<String>, String> {
+    crate::secure_store::secure_get(app, key)
+}
+
+fn secure_set_optional(
+    app: &AppHandle,
+    key: &str,
+    value: Option<&str>,
+) -> Result<Option<String>, String> {
+    match value {
+        Some(value) if !value.is_empty() => {
+            crate::secure_store::secure_set(app, key, value)?;
+            Ok(Some(value.to_string()))
+        }
+        _ => {
+            crate::secure_store::secure_delete(app, key)?;
+            Ok(None)
+        }
+    }
+}
+
+fn set_connection_password(
+    app: &AppHandle,
+    server_id: &str,
+    password: Option<&str>,
+) -> Result<Option<String>, String> {
+    secure_set_optional(app, &remote_connection_password_key(server_id), password)
+}
+
+fn get_connection_password(app: &AppHandle, server_id: &str) -> Result<Option<String>, String> {
+    secure_get_optional(app, &remote_connection_password_key(server_id))
+}
+
+fn delete_connection_password(app: &AppHandle, server_id: &str) -> Result<(), String> {
+    crate::secure_store::secure_delete(app, &remote_connection_password_key(server_id))
+}
 
 fn ensure_sharing_engine_supported(engine: &str) -> Result<(), String> {
     if engine == "soniox" {
@@ -77,6 +119,37 @@ fn is_self_connection(local_machine_id: Option<&str>, remote_machine_id: &str) -
     local_machine_id == Some(remote_machine_id)
 }
 
+fn remote_settings_has_server_password_marker(raw_value: Option<&serde_json::Value>) -> bool {
+    raw_value
+        .and_then(|value| value.get("server_config"))
+        .and_then(|server_config| server_config.get("has_password"))
+        .and_then(|has_password| has_password.as_bool())
+        .unwrap_or(false)
+}
+
+fn remote_settings_connection_password_markers(
+    raw_value: Option<&serde_json::Value>,
+) -> std::collections::HashSet<String> {
+    raw_value
+        .and_then(|value| value.get("saved_connections"))
+        .and_then(|connections| connections.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|connection| {
+            connection
+                .get("has_password")
+                .and_then(|has_password| has_password.as_bool())
+                .unwrap_or(false)
+        })
+        .filter_map(|connection| {
+            connection
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(str::to_string)
+        })
+        .collect()
+}
+
 // ============================================================================
 // Server Mode Commands
 // ============================================================================
@@ -87,17 +160,26 @@ pub async fn start_sharing(
     app: AppHandle,
     port: Option<u16>,
     password: Option<String>,
+    preserve_password: Option<bool>,
     server_name: Option<String>,
     server_manager: State<'_, AsyncMutex<RemoteServerManager>>,
     whisper_manager: State<'_, AsyncRwLock<WhisperManager>>,
     remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
 ) -> Result<(), String> {
     let port = port.unwrap_or(DEFAULT_PORT);
+    let preserve_password = preserve_password.unwrap_or(false);
 
     {
         let settings = remote_settings.lock().await;
         ensure_sharing_can_start(&settings)?;
     }
+
+    let previous_password = secure_get_optional(&app, SHARING_PASSWORD_KEY)?;
+    let password = if preserve_password {
+        previous_password.clone()
+    } else {
+        password.filter(|password| !password.is_empty())
+    };
 
     // Get server name from hostname if not provided
     let server_name = server_name.unwrap_or_else(|| {
@@ -136,7 +218,8 @@ pub async fn start_sharing(
             stored_model
         };
 
-        let (path, engine) = resolve_shareable_model_config(&app, &model_name, &stored_engine).await?;
+        let (path, engine) =
+            resolve_shareable_model_config(&app, &model_name, &stored_engine).await?;
 
         (model_name, path, engine)
     };
@@ -155,17 +238,42 @@ pub async fn start_sharing(
         )
         .await?;
 
+    if !preserve_password {
+        if let Err(error) = secure_set_optional(&app, SHARING_PASSWORD_KEY, password.as_deref()) {
+            manager.stop().await;
+            return Err(error);
+        }
+    }
+
     // Persist the sharing enabled state so it auto-starts on next launch
-    {
+    let save_result = {
         let mut settings = remote_settings.lock().await;
         settings.server_config.enabled = true;
         settings.server_config.port = port;
-        settings.server_config.password = password;
-        save_remote_settings(&app, &settings)?;
-        log::info!(
-            "🌐 [SHARING] Saved sharing state: enabled=true, port={}",
-            port
-        );
+        settings.server_config.password = password.clone();
+        let save_result = save_remote_settings(&app, &settings);
+        if save_result.is_ok() {
+            log::info!(
+                "🌐 [SHARING] Saved sharing state: enabled=true, port={}",
+                port
+            );
+        }
+        save_result
+    };
+
+    if let Err(error) = save_result {
+        if !preserve_password {
+            if let Err(rollback_error) =
+                secure_set_optional(&app, SHARING_PASSWORD_KEY, previous_password.as_deref())
+            {
+                log::warn!(
+                    "🌐 [SHARING] Failed to roll back sharing password after save failure: {}",
+                    rollback_error
+                );
+            }
+        }
+        manager.stop().await;
+        return Err(error);
     }
 
     log::info!("Sharing started on port {}", port);
@@ -303,8 +411,23 @@ pub async fn add_remote_server(
 
     // Add to settings
     let mut settings = remote_settings.lock().await;
-    let connection =
-        settings.add_connection(host, port, password, Some(display_name), model.clone());
+    let mut connection =
+        settings.add_connection(host, port, None, Some(display_name), model.clone());
+    let password_result = set_connection_password(&app, &connection.id, password.as_deref());
+    connection.password = match password_result {
+        Ok(password) => password,
+        Err(error) => {
+            let _ = settings.remove_connection(&connection.id);
+            return Err(error);
+        }
+    };
+    if let Some(stored) = settings
+        .saved_connections
+        .iter_mut()
+        .find(|c| c.id == connection.id)
+    {
+        stored.password = connection.password.clone();
+    }
 
     log::info!(
         "Added remote server: {} (model: {:?})",
@@ -328,7 +451,12 @@ pub async fn remove_remote_server(
 ) -> Result<(), String> {
     let was_active = {
         let mut settings = remote_settings.lock().await;
+        if settings.get_connection(&server_id).is_none() {
+            return Err(format!("Connection '{}' not found", server_id));
+        }
+
         let was_active = settings.active_connection_id.as_deref() == Some(server_id.as_str());
+        delete_connection_password(&app, &server_id)?;
         settings.remove_connection(&server_id)?;
 
         log::info!("Removed remote server: {}", server_id);
@@ -359,8 +487,7 @@ fn apply_server_update(
     settings.remove_connection(server_id)?;
 
     let display_name = name.unwrap_or_else(|| format!("{}:{}", host, port));
-    let mut connection =
-        settings.add_connection(host, port, password, Some(display_name), model);
+    let mut connection = settings.add_connection(host, port, password, Some(display_name), model);
 
     // Preserve the existing connection ID to keep external references stable
     connection.id = server_id.to_string();
@@ -386,7 +513,10 @@ fn ensure_sharing_can_start(settings: &RemoteSettings) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_remote_selection_is_allowed(settings: &RemoteSettings, server_id: &str) -> Result<(), String> {
+fn ensure_remote_selection_is_allowed(
+    settings: &RemoteSettings,
+    server_id: &str,
+) -> Result<(), String> {
     let connection = settings
         .get_connection(server_id)
         .ok_or_else(|| format!("Server '{}' not found", server_id))?;
@@ -406,29 +536,42 @@ pub async fn update_remote_server(
     host: String,
     port: u16,
     password: Option<String>,
+    preserve_password: Option<bool>,
     name: Option<String>,
     remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
 ) -> Result<SavedConnection, String> {
-    let mut settings = remote_settings.lock().await;
+    let existing = {
+        let settings = remote_settings.lock().await;
+        settings
+            .get_connection(&server_id)
+            .ok_or_else(|| format!("Server '{}' not found", server_id))?
+            .clone()
+    };
 
-    // Find the existing connection
-    let existing = settings
-        .get_connection(&server_id)
-        .ok_or_else(|| format!("Server '{}' not found", server_id))?
-        .clone();
+    let preserve_password = preserve_password.unwrap_or(false);
+    let resolved_password = if preserve_password {
+        get_connection_password(&app, &server_id)?.or(existing.password.clone())
+    } else {
+        secure_set_optional(
+            &app,
+            &remote_connection_password_key(&server_id),
+            password.as_deref(),
+        )?
+    };
 
     // Try to test connection to get model info, but don't require it
-    let model = match test_connection(&host, port, password.as_deref()).await {
+    let model = match test_connection(&host, port, resolved_password.as_deref()).await {
         Ok(status) => Some(status.model),
         Err(_) => existing.model.clone(), // Keep existing model if connection fails
     };
 
+    let mut settings = remote_settings.lock().await;
     let connection = apply_server_update(
         &mut settings,
         &server_id,
         host,
         port,
-        password,
+        resolved_password,
         name,
         model,
     )?;
@@ -487,7 +630,7 @@ pub async fn test_remote_server(
         &connection.host,
         connection.port,
         connection.password.as_deref(),
-)
+    )
     .await
     .map_err(|e| e.to_string())?;
 
@@ -547,17 +690,15 @@ pub(crate) async fn refresh_saved_connection_status(
             .ok_or_else(|| format!("Server '{}' not found", server_id))?
     };
 
-    let check_result = test_connection(
-        &server.host,
-        server.port,
-        server.password.as_deref(),
-)
-    .await;
+    let check_result = test_connection(&server.host, server.port, server.password.as_deref()).await;
 
     let (new_status, new_model) = match check_result {
         Ok(status_response) => {
             if is_self_connection(local_machine_id.as_deref(), &status_response.machine_id) {
-                (ConnectionStatus::SelfConnection, Some(status_response.model))
+                (
+                    ConnectionStatus::SelfConnection,
+                    Some(status_response.model),
+                )
             } else {
                 (ConnectionStatus::Online, Some(status_response.model))
             }
@@ -600,8 +741,13 @@ pub(crate) async fn refresh_saved_connection_status(
 
     if was_active {
         let availability = crate::recognition::emit_recognition_availability(app).await;
-        if let Err(error) = crate::recognition::auto_select_model_if_needed(app, &availability).await {
-            log::warn!("Failed to reconcile onboarding/model selection after active remote refresh: {}", error);
+        if let Err(error) =
+            crate::recognition::auto_select_model_if_needed(app, &availability).await
+        {
+            log::warn!(
+                "Failed to reconcile onboarding/model selection after active remote refresh: {}",
+                error
+            );
         }
     }
 
@@ -632,7 +778,9 @@ pub(crate) async fn refresh_active_remote_server_status_impl(
         settings.active_connection_id = None;
         save_remote_settings(app, &settings)?;
         let availability = crate::recognition::emit_recognition_availability(app).await;
-        if let Err(error) = crate::recognition::auto_select_model_if_needed(app, &availability).await {
+        if let Err(error) =
+            crate::recognition::auto_select_model_if_needed(app, &availability).await
+        {
             log::warn!("Failed to reconcile onboarding/model selection after clearing orphaned active remote: {}", error);
         }
         return Ok(None);
@@ -657,7 +805,10 @@ pub async fn check_remote_server_status(
     server_id: String,
     _remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
 ) -> Result<SavedConnection, String> {
-    log::debug!("🔄 [REMOTE] check_remote_server_status called for {}", server_id);
+    log::debug!(
+        "🔄 [REMOTE] check_remote_server_status called for {}",
+        server_id
+    );
     refresh_saved_connection_status(&app, &server_id).await
 }
 
@@ -705,28 +856,49 @@ pub async fn set_active_remote_server(
             return Err("Cannot use this VoiceTypr instance as its own remote server".to_string());
         }
 
-        log::info!("⏱️ [TIMING] Acquiring server_manager lock... (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] Acquiring server_manager lock... (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
         let manager = server_manager.lock().await;
-        log::info!("⏱️ [TIMING] server_manager lock acquired (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] server_manager lock acquired (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
         if manager.get_status().enabled {
             // Get current sharing settings before stopping
             let status = manager.get_status();
             restore_port = status.port;
-            restore_password = status.password.clone();
+            restore_password = secure_get_optional(&app, SHARING_PASSWORD_KEY)?;
 
             drop(manager); // Release lock before calling stop
-            log::info!("⏱️ [TIMING] Stopping network sharing... (+{}ms)", cmd_start.elapsed().as_millis());
+            log::info!(
+                "⏱️ [TIMING] Stopping network sharing... (+{}ms)",
+                cmd_start.elapsed().as_millis()
+            );
             let mut manager = server_manager.lock().await;
             manager.stop().await;
-            log::info!("⏱️ [TIMING] Network sharing stopped (+{}ms)", cmd_start.elapsed().as_millis());
+            log::info!(
+                "⏱️ [TIMING] Network sharing stopped (+{}ms)",
+                cmd_start.elapsed().as_millis()
+            );
 
             // Set flag in remote settings to remember sharing was active
-            log::info!("⏱️ [TIMING] Acquiring remote_settings lock... (+{}ms)", cmd_start.elapsed().as_millis());
+            log::info!(
+                "⏱️ [TIMING] Acquiring remote_settings lock... (+{}ms)",
+                cmd_start.elapsed().as_millis()
+            );
             let mut settings = remote_settings.lock().await;
-            log::info!("⏱️ [TIMING] remote_settings lock acquired (+{}ms)", cmd_start.elapsed().as_millis());
+            log::info!(
+                "⏱️ [TIMING] remote_settings lock acquired (+{}ms)",
+                cmd_start.elapsed().as_millis()
+            );
             settings.sharing_was_active = true;
             save_remote_settings(&app, &settings)?;
-            log::info!("⏱️ [TIMING] Settings saved (+{}ms)", cmd_start.elapsed().as_millis());
+            log::info!(
+                "⏱️ [TIMING] Settings saved (+{}ms)",
+                cmd_start.elapsed().as_millis()
+            );
 
             // Emit event to notify frontend of sharing status change
             let _ = app.emit(
@@ -741,22 +913,37 @@ pub async fn set_active_remote_server(
         }
     } else {
         // Clearing remote server - check if we should restore sharing
-        log::info!("⏱️ [TIMING] Acquiring remote_settings lock (clearing)... (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] Acquiring remote_settings lock (clearing)... (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
         let settings = remote_settings.lock().await;
-        log::info!("⏱️ [TIMING] remote_settings lock acquired (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] remote_settings lock acquired (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
         if settings.sharing_was_active {
             should_restore_sharing = true;
             restore_port = Some(settings.server_config.port);
             restore_password = settings.server_config.password.clone();
-            log::info!("⏱️ [TIMING] Will restore sharing (sharing_was_active=true) (+{}ms)", cmd_start.elapsed().as_millis());
+            log::info!(
+                "⏱️ [TIMING] Will restore sharing (sharing_was_active=true) (+{}ms)",
+                cmd_start.elapsed().as_millis()
+            );
         }
     }
 
     // Update settings (scoped to release lock before tray update)
     {
-        log::info!("⏱️ [TIMING] Acquiring remote_settings lock (update)... (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] Acquiring remote_settings lock (update)... (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
         let mut settings = remote_settings.lock().await;
-        log::info!("⏱️ [TIMING] remote_settings lock acquired (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] remote_settings lock acquired (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
         log::info!(
             "🔧 [REMOTE] Before change: active_connection_id={:?}",
             settings.active_connection_id
@@ -776,28 +963,39 @@ pub async fn set_active_remote_server(
         );
 
         // Save settings
-        log::info!("⏱️ [TIMING] Saving remote settings... (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] Saving remote settings... (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
         save_remote_settings(&app, &settings)?;
-        log::info!("⏱️ [TIMING] Remote settings saved (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] Remote settings saved (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
     }
-
 
     let availability = crate::recognition::emit_recognition_availability(&app).await;
     if let Err(error) = crate::recognition::auto_select_model_if_needed(&app, &availability).await {
-        log::warn!("Failed to reconcile onboarding/model selection after active remote change: {}", error);
+        log::warn!(
+            "Failed to reconcile onboarding/model selection after active remote change: {}",
+            error
+        );
     }
-
 
     // Restore sharing if we were using it before switching to remote
     if should_restore_sharing {
         let port = restore_port.unwrap_or(DEFAULT_PORT);
         log::info!(
             "⏱️ [TIMING] Auto-restoring network sharing on port {} (+{}ms)",
-            port, cmd_start.elapsed().as_millis()
+            port,
+            cmd_start.elapsed().as_millis()
         );
 
         // Get current model and engine from store
-        log::info!("⏱️ [TIMING] Reading model/engine from store... (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] Reading model/engine from store... (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
         let restore_config = app.store("settings").ok().and_then(|store| {
             let model = store
                 .get("current_model")
@@ -816,14 +1014,14 @@ pub async fn set_active_remote_server(
 
         // Normalize empty model to first available (matching start_sharing behavior)
         let Some(current_model) = (if current_model.is_empty() {
-            let whisper_manager = app.state::<tauri::async_runtime::RwLock<crate::whisper::manager::WhisperManager>>();
+            let whisper_manager = app
+                .state::<tauri::async_runtime::RwLock<crate::whisper::manager::WhisperManager>>();
             let manager = whisper_manager.read().await;
             manager.get_first_downloaded_model()
         } else {
             Some(current_model)
         }) else {
             log::warn!("⏱️ [TIMING] Skipping sharing restore: no downloaded models available");
-            should_restore_sharing = false;
             let manager = server_manager.lock().await;
             let status = manager.get_status();
             let _ = app.emit(
@@ -838,45 +1036,59 @@ pub async fn set_active_remote_server(
             return Ok(());
         };
 
-        log::info!("⏱️ [TIMING] Got model={}, engine={} (+{}ms)", current_model, current_engine, cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] Got model={}, engine={} (+{}ms)",
+            current_model,
+            current_engine,
+            cmd_start.elapsed().as_millis()
+        );
         let server_name = hostname::get()
             .ok()
             .and_then(|h| h.into_string().ok())
             .unwrap_or_else(|| "VoiceTypr Server".to_string());
 
-        log::info!("⏱️ [TIMING] Getting model path... (+{}ms)", cmd_start.elapsed().as_millis());
-        let (model_path, current_engine) = match resolve_shareable_model_config(
-            &app,
-            &current_model,
-            &current_engine,
-        )
-        .await
-        {
-            Ok(config) => config,
-            Err(e) => {
-                log::warn!("⏱️ [TIMING] Skipping sharing restore: {}", e);
-                should_restore_sharing = false;
-                let manager = server_manager.lock().await;
-                let status = manager.get_status();
-                let _ = app.emit(
-                    "sharing-status-changed",
-                    serde_json::json!({
-                        "enabled": status.enabled,
-                        "port": status.port,
-                        "model_name": status.model_name
-                    }),
-                );
-                let _ = crate::commands::settings::update_tray_menu(app.clone()).await;
-                return Ok(());
-            }
-        };
-        log::info!("⏱️ [TIMING] Got model path (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] Getting model path... (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
+        let (model_path, current_engine) =
+            match resolve_shareable_model_config(&app, &current_model, &current_engine).await {
+                Ok(config) => config,
+                Err(e) => {
+                    log::warn!("⏱️ [TIMING] Skipping sharing restore: {}", e);
+                    let manager = server_manager.lock().await;
+                    let status = manager.get_status();
+                    let _ = app.emit(
+                        "sharing-status-changed",
+                        serde_json::json!({
+                            "enabled": status.enabled,
+                            "port": status.port,
+                            "model_name": status.model_name
+                        }),
+                    );
+                    let _ = crate::commands::settings::update_tray_menu(app.clone()).await;
+                    return Ok(());
+                }
+            };
+        log::info!(
+            "⏱️ [TIMING] Got model path (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
 
-        log::info!("⏱️ [TIMING] Acquiring server_manager lock (restore)... (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] Acquiring server_manager lock (restore)... (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
         let mut manager = server_manager.lock().await;
-        log::info!("⏱️ [TIMING] server_manager lock acquired (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] server_manager lock acquired (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
 
-        log::info!("⏱️ [TIMING] Starting server... (+{}ms)", cmd_start.elapsed().as_millis());
+        log::info!(
+            "⏱️ [TIMING] Starting server... (+{}ms)",
+            cmd_start.elapsed().as_millis()
+        );
         if let Err(e) = manager
             .start(
                 port,
@@ -889,9 +1101,16 @@ pub async fn set_active_remote_server(
             )
             .await
         {
-            log::warn!("⏱️ [TIMING] Server start FAILED after {}ms: {}", cmd_start.elapsed().as_millis(), e);
+            log::warn!(
+                "⏱️ [TIMING] Server start FAILED after {}ms: {}",
+                cmd_start.elapsed().as_millis(),
+                e
+            );
         } else {
-            log::info!("⏱️ [TIMING] Server started successfully (+{}ms)", cmd_start.elapsed().as_millis());
+            log::info!(
+                "⏱️ [TIMING] Server started successfully (+{}ms)",
+                cmd_start.elapsed().as_millis()
+            );
 
             // NOW clear the sharing_was_active flag
             {
@@ -931,19 +1150,43 @@ pub async fn set_active_remote_server(
     // This is important because tray menu build checks remote server status which can timeout
     // Use generation counter to prevent stale updates from overwriting newer ones
     let my_generation = crate::commands::settings::next_tray_menu_generation();
-    log::info!("⏱️ [TIMING] Spawning tray menu update in background (gen={})... (+{}ms)", my_generation, cmd_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [TIMING] Spawning tray menu update in background (gen={})... (+{}ms)",
+        my_generation,
+        cmd_start.elapsed().as_millis()
+    );
     let app_for_tray = app.clone();
     tokio::spawn(async move {
-        log::info!("⏱️ [TIMING] Background tray menu update starting (gen={})...", my_generation);
+        log::info!(
+            "⏱️ [TIMING] Background tray menu update starting (gen={})...",
+            my_generation
+        );
         let tray_start = std::time::Instant::now();
-        if let Err(e) = crate::commands::settings::update_tray_menu_with_generation(app_for_tray, Some(my_generation)).await {
-            log::warn!("⏱️ [TIMING] Background tray menu update FAILED (gen={}) after {}ms: {}", my_generation, tray_start.elapsed().as_millis(), e);
+        if let Err(e) = crate::commands::settings::update_tray_menu_with_generation(
+            app_for_tray,
+            Some(my_generation),
+        )
+        .await
+        {
+            log::warn!(
+                "⏱️ [TIMING] Background tray menu update FAILED (gen={}) after {}ms: {}",
+                my_generation,
+                tray_start.elapsed().as_millis(),
+                e
+            );
         } else {
-            log::info!("⏱️ [TIMING] Background tray menu update completed (gen={}) in {}ms", my_generation, tray_start.elapsed().as_millis());
+            log::info!(
+                "⏱️ [TIMING] Background tray menu update completed (gen={}) in {}ms",
+                my_generation,
+                tray_start.elapsed().as_millis()
+            );
         }
     });
 
-    log::info!("⏱️ [TIMING] set_active_remote_server COMPLETE - total: {}ms", cmd_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [TIMING] set_active_remote_server COMPLETE - total: {}ms",
+        cmd_start.elapsed().as_millis()
+    );
     Ok(())
 }
 
@@ -968,6 +1211,7 @@ pub async fn get_active_remote_server(
 /// Transcribe audio using a remote server
 #[tauri::command]
 pub async fn transcribe_remote(
+    app: AppHandle,
     server_id: String,
     audio_path: String,
     remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
@@ -987,7 +1231,7 @@ pub async fn transcribe_remote(
         display_name,
         connection.host,
         connection.port
-);
+    );
 
     // Read the audio file
     let audio_data =
@@ -998,15 +1242,39 @@ pub async fn transcribe_remote(
         "[Remote Client] Sending {:.1} KB audio to '{}'",
         audio_size_kb,
         display_name
-);
+    );
 
     let timeout_ms = timeout_ms_for_wav_file(&audio_path, TranscriptionSource::Upload);
+
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    let legacy_speech_language = store
+        .get("language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let legacy_translate_to_english = store
+        .get("translate_to_english")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let spoken_language = store
+        .get("speech_language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .or(legacy_speech_language);
+    let stored_transcription_task = store
+        .get("transcription_task")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let transcription_task = crate::commands::settings::normalize_transcription_task(
+        stored_transcription_task.as_deref(),
+        legacy_translate_to_english,
+    );
 
     // Create HTTP client connection
     let server_conn =
         RemoteServerConnection::new(connection.host, connection.port, connection.password);
 
-    let request = TranscriptionRequest::new(audio_data, TranscriptionSource::Upload);
+    let translate_to_english =
+        transcription_task == crate::commands::settings::TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH;
+    let request_spoken_language = spoken_language.clone();
+    let request = TranscriptionRequest::new(audio_data, TranscriptionSource::Upload)
+        .with_language_and_task(spoken_language, Some(transcription_task));
     let response = client::transcribe_audio(&server_conn, request, timeout_ms)
         .await
         .map_err(|e| e.to_string())?;
@@ -1017,7 +1285,23 @@ pub async fn transcribe_remote(
         response.text.len()
     );
 
-    Ok(response.text)
+    let job = crate::transcription::TranscriptionJob::from_legacy_settings(
+        crate::transcription::TranscriptionSource::RemoteServer,
+        "remote",
+        response.model.clone(),
+        request_spoken_language,
+        translate_to_english,
+    );
+    let transcription = crate::transcription::TranscriptionResult::new(&job, response.text)
+        .with_transcript_language(response.transcript_language)
+        .with_processing_duration_ms(Some(response.duration_ms));
+    let ai_enabled = store
+        .get("ai_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let writing_result =
+        crate::writing::process_transcription(app.clone(), transcription, ai_enabled).await?;
+    Ok(writing_result.final_text)
 }
 
 /// Test connection to a remote server
@@ -1034,9 +1318,7 @@ async fn test_connection(
     client::test_connection(&conn).await
 }
 
-pub(crate) fn connection_status_for_remote_error(
-    error: &RemoteClientError,
-) -> ConnectionStatus {
+pub(crate) fn connection_status_for_remote_error(error: &RemoteClientError) -> ConnectionStatus {
     if error.is_auth_failure() {
         ConnectionStatus::AuthFailed
     } else {
@@ -1067,14 +1349,17 @@ pub(crate) fn normalize_loaded_active_remote_status(settings: &mut RemoteSetting
         return;
     };
 
-    if let Some(connection) = settings.saved_connections.iter_mut().find(|c| c.id == active_id) {
+    if let Some(connection) = settings
+        .saved_connections
+        .iter_mut()
+        .find(|c| c.id == active_id)
+    {
         connection.status = ConnectionStatus::Unknown;
         return;
     }
 
     settings.active_connection_id = None;
 }
-
 
 pub fn load_remote_settings(app: &AppHandle) -> RemoteSettings {
     log::info!("🔧 [REMOTE] load_remote_settings called");
@@ -1096,14 +1381,132 @@ pub fn load_remote_settings(app: &AppHandle) -> RemoteSettings {
         raw_value.is_some()
     );
 
+    let server_had_password_marker = remote_settings_has_server_password_marker(raw_value.as_ref());
+    let connection_password_markers =
+        remote_settings_connection_password_markers(raw_value.as_ref());
+
     let mut settings: RemoteSettings = raw_value
         .and_then(|v| {
             log::debug!("🔧 [REMOTE] Raw JSON: {:?}", v);
             serde_json::from_value(v.clone()).ok()
         })
         .unwrap_or_default();
+    let mut migrated_legacy_secret = false;
+
+    match secure_get_optional(app, SHARING_PASSWORD_KEY) {
+        Ok(Some(stored_password)) => {
+            settings.server_config.password = Some(stored_password);
+        }
+        Ok(None)
+            if settings
+                .server_config
+                .password
+                .as_ref()
+                .is_some_and(|p| !p.is_empty()) =>
+        {
+            match secure_set_optional(
+                app,
+                SHARING_PASSWORD_KEY,
+                settings.server_config.password.as_deref(),
+            ) {
+                Ok(_) => migrated_legacy_secret = true,
+                Err(error) => {
+                    log::warn!(
+                        "🔧 [REMOTE] Failed to migrate sharing password to secure store: {}",
+                        error
+                    );
+                }
+            }
+        }
+        Ok(None) if server_had_password_marker => {
+            log::warn!(
+                "🔧 [REMOTE] Sharing was saved with a password marker, but no secure password was available; disabling auto-start to fail closed"
+            );
+            settings.server_config.password = None;
+            settings.server_config.enabled = false;
+            settings.sharing_was_active = false;
+            migrated_legacy_secret = true;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            log::warn!(
+                "🔧 [REMOTE] Failed to read sharing password from secure store: {}",
+                error
+            );
+            if settings.server_config.password.is_none() && server_had_password_marker {
+                settings.server_config.enabled = false;
+                settings.sharing_was_active = false;
+            }
+        }
+    }
+
+    if settings.server_config.password.is_none() {
+        if let Ok(settings_store) = app.store("settings") {
+            if let Some(legacy_password) = settings_store
+                .get("sharing_password")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+            {
+                match secure_set_optional(app, SHARING_PASSWORD_KEY, Some(&legacy_password)) {
+                    Ok(migrated) => {
+                        settings.server_config.password = migrated;
+                        settings_store.delete("sharing_password");
+                        let _ = settings_store.save();
+                        migrated_legacy_secret = true;
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "🔧 [REMOTE] Failed to migrate legacy sharing password to secure store: {}; disabling auto-start to fail closed",
+                            error
+                        );
+                        settings.server_config.password = None;
+                        settings.server_config.enabled = false;
+                        settings.sharing_was_active = false;
+                        migrated_legacy_secret = true;
+                    }
+                }
+            }
+        }
+    }
+
+    for connection in &mut settings.saved_connections {
+        match get_connection_password(app, &connection.id) {
+            Ok(Some(stored_password)) => {
+                connection.password = Some(stored_password);
+            }
+            Ok(None) if connection.password.as_ref().is_some_and(|p| !p.is_empty()) => {
+                match set_connection_password(app, &connection.id, connection.password.as_deref()) {
+                    Ok(_) => migrated_legacy_secret = true,
+                    Err(error) => {
+                        log::warn!(
+                            "🔧 [REMOTE] Failed to migrate password for saved connection '{}': {}",
+                            connection.id,
+                            error
+                        );
+                    }
+                }
+            }
+            Ok(None) if connection_password_markers.contains(&connection.id) => {
+                log::warn!(
+                    "🔧 [REMOTE] Saved connection '{}' has a password marker, but no secure password was available",
+                    connection.id
+                );
+                connection.password = None;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                log::warn!(
+                    "🔧 [REMOTE] Failed to read password for saved connection '{}': {}",
+                    connection.id,
+                    error
+                );
+            }
+        }
+    }
 
     normalize_loaded_active_remote_status(&mut settings);
+    if migrated_legacy_secret {
+        let _ = save_remote_settings(app, &settings);
+    }
 
     log::info!(
         "🔧 [REMOTE] Loaded settings: {} connections, active_id={:?}",
@@ -1451,4 +1854,34 @@ mod tests {
         assert!(!is_self_connection(None, "machine-a"));
     }
 
+    #[test]
+    fn test_remote_settings_password_marker_helpers_detect_serialized_markers() {
+        let raw = serde_json::json!({
+            "server_config": {
+                "enabled": true,
+                "port": 47842,
+                "has_password": true
+            },
+            "saved_connections": [
+                {
+                    "id": "with-password",
+                    "host": "192.168.1.2",
+                    "port": 47842,
+                    "has_password": true
+                },
+                {
+                    "id": "without-password",
+                    "host": "192.168.1.3",
+                    "port": 47842,
+                    "has_password": false
+                }
+            ]
+        });
+
+        assert!(remote_settings_has_server_password_marker(Some(&raw)));
+
+        let markers = remote_settings_connection_password_markers(Some(&raw));
+        assert!(markers.contains("with-password"));
+        assert!(!markers.contains("without-password"));
+    }
 }

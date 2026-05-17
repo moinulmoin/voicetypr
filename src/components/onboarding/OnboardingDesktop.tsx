@@ -119,7 +119,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         updateSettings({
           current_model: modelName,
           current_model_engine: info.engine ?? 'whisper',
-          language: 'en'
+          speech_language: 'en'
         }).catch((error) => {
           console.error('[OnboardingDesktop] Failed to auto-select model:', error);
         });
@@ -195,7 +195,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         hotkey: hotkey,
         current_model: selectedModelName,
         current_model_engine: engine,
-        language: 'en',
+        speech_language: 'en',
         onboarding_completed: true
       });
     } catch (error) {
@@ -491,7 +491,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                                 await updateSettings({
                                   current_model: modelName,
                                   current_model_engine: info?.engine ?? 'whisper',
-                                  language: 'en'
+                                  speech_language: 'en'
                                 });
                               }}
                               onCancelDownload={cancelDownload}

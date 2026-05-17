@@ -44,8 +44,9 @@ export type PillIndicatorPosition = 'top-left' | 'top-center' | 'top-right' | 'b
 export interface AppSettings {
   hotkey: string;
   current_model: string;
-  language: string;
-  translate_to_english?: boolean;
+  speech_language: string;
+  transcription_task?: 'transcribe' | 'translate_to_english';
+  final_text_language?: string;
   theme: string;
   transcription_cleanup_days?: number | null;
   launch_at_startup?: boolean;

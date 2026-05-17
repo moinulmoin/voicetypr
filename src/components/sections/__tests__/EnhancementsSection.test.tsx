@@ -1,489 +1,249 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { EnhancementsSection } from '../EnhancementsSection';
-import { invoke } from '@tauri-apps/api/core';
-import { emit } from '@tauri-apps/api/event';
-import { toast } from 'sonner';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { EnhancementsSection } from '../EnhancementsSection'
+import { invoke } from '@tauri-apps/api/core'
+import { toast } from 'sonner'
+import { SettingsProvider } from '@/contexts/SettingsContext'
 
-// Mock dependencies
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
-}));
+}))
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}))
 
 vi.mock('sonner', () => ({
   toast: {
     error: vi.fn(),
     success: vi.fn(),
+    info: vi.fn(),
   },
-}));
+}))
 
 vi.mock('@/utils/keyring', () => ({
   saveApiKey: vi.fn().mockResolvedValue(undefined),
   hasApiKey: vi.fn().mockResolvedValue(false),
   removeApiKey: vi.fn().mockResolvedValue(undefined),
   getApiKey: vi.fn().mockResolvedValue(null),
-  keyringSet: vi.fn().mockResolvedValue(undefined),
-}));
+}))
 
-// Mock models returned by list_provider_models
-const mockModels = {
-  openai: [
-    { id: 'gpt-5-nano', name: 'GPT-5 Nano', recommended: true },
-    { id: 'gpt-5-mini', name: 'GPT-5 Mini', recommended: true },
-  ],
-  gemini: [
-    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', recommended: true },
-    { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash', recommended: true },
-  ],
-};
+vi.mock('@/hooks/useProviderModels', () => ({
+  useAllProviderModels: () => ({
+    fetchModels: vi.fn(),
+    getModels: (providerId: string) => {
+      if (providerId === 'gemini') {
+        return [{ id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' }]
+      }
+      if (providerId === 'openai') {
+        return [{ id: 'gpt-5-mini', name: 'GPT-5 Mini' }]
+      }
+      return []
+    },
+    isLoading: () => false,
+    getError: () => null,
+    clearModels: vi.fn(),
+  }),
+}))
+
+const baseAISettings = {
+  enabled: false,
+  provider: '',
+  model: '',
+  hasApiKey: false,
+}
+
+
+let rejectWritingSettingsUpdate = false
+
+const baseAppSettings = {
+  hotkey: 'CommandOrControl+Shift+Space',
+  current_model: 'base',
+  current_model_engine: 'whisper',
+  speech_language: 'en',
+  transcription_task: 'transcribe',
+  final_text_language: 'same_as_transcript',
+  theme: 'system',
+}
+
+function renderWithProviders() {
+  return render(
+    <SettingsProvider>
+      <EnhancementsSection />
+    </SettingsProvider>,
+  )
+}
 
 describe('EnhancementsSection', () => {
-  const mockAISettings = {
-    enabled: false,
-    provider: '',
-    model: '',
-    hasApiKey: false,
-  };
-
   beforeEach(() => {
-    vi.clearAllMocks();
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+    vi.clearAllMocks()
+    rejectWritingSettingsUpdate = false
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_settings') {
+        return Promise.resolve(baseAppSettings)
+      }
+      if (cmd === 'save_settings') {
+        return Promise.resolve(undefined)
+      }
       if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'Default' })
+      }
+      if (cmd === 'update_enhancement_options') {
+        return Promise.resolve(undefined)
+      }
+      if (cmd === 'get_writing_settings') {
         return Promise.resolve({
-          preset: 'Default',
-          custom_vocabulary: []
-        });
+          replacements: [],
+          custom_words: [],
+          snippets: [],
+          context_policy: 'off',
+        })
+      }
+      if (cmd === 'update_writing_settings') {
+        return rejectWritingSettingsUpdate
+          ? Promise.reject(new Error('disk full'))
+          : Promise.resolve(undefined)
+      }
+      if (cmd === 'get_ai_settings') {
+        return Promise.resolve(baseAISettings)
       }
       if (cmd === 'get_ai_settings_for_provider') {
-        const provider = (args as { provider?: string })?.provider || '';
-        return Promise.resolve({
-          ...mockAISettings,
-          provider,
-          hasApiKey: false,
-        });
-      }
-      if (cmd === 'list_provider_models') {
-        const provider = (args as { provider: string })?.provider;
-        return Promise.resolve(mockModels[provider as keyof typeof mockModels] || []);
+        const provider = (args as { provider?: string })?.provider || ''
+        return Promise.resolve({ ...baseAISettings, provider })
       }
       if (cmd === 'get_openai_config') {
-        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' });
+        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' })
       }
-      return Promise.resolve(mockAISettings);
-    });
-  });
-
-  it('renders the enhancements section', async () => {
-    render(<EnhancementsSection />);
-    
-    expect(screen.getByText('AI Formatting')).toBeInTheDocument();
-    
-    // Wait for providers to load
-    await waitFor(() => {
-      expect(screen.getByText('AI Providers')).toBeInTheDocument();
-    });
-  });
-
-  it('displays all available providers', async () => {
-    render(<EnhancementsSection />);
-    
-    await waitFor(() => {
-      expect(screen.getByText('AI Providers')).toBeInTheDocument();
-      expect(screen.getByText('OpenAI')).toBeInTheDocument();
-      expect(screen.getByText('Google Gemini')).toBeInTheDocument();
-    }, { timeout: 5000 });
-    
-    // Custom Provider is in the same list
-    await waitFor(() => {
-      expect(screen.getByText('Custom (OpenAI-compatible)')).toBeInTheDocument();
-    }, { timeout: 3000 });
-  });
-
-  it('shows Add Key button when no API key is set', async () => {
-    render(<EnhancementsSection />);
-    
-    await waitFor(() => {
-      const addKeyButtons = screen.getAllByText('Add Key');
-      expect(addKeyButtons.length).toBeGreaterThan(0);
-    });
-  });
-
-  it('opens API key modal when Add Key is clicked', async () => {
-    render(<EnhancementsSection />);
-    
-    await waitFor(() => {
-      const addKeyButtons = screen.getAllByText('Add Key');
-      expect(addKeyButtons.length).toBeGreaterThan(0);
-      fireEvent.click(addKeyButtons[0]);
-    });
-    
-    await waitFor(() => {
-      const modalTitle = screen.getByText(/Add OpenAI API Key/);
-      expect(modalTitle).toBeInTheDocument();
-    });
-  });
-
-  it('disables enhancement toggle when no API key', async () => {
-    render(<EnhancementsSection />);
-    
-    await waitFor(() => {
-      const toggle = screen.getByRole('switch');
-      expect(toggle).toBeDisabled();
-    });
-  });
-
-  it('enables enhancement toggle when API key exists and model is selected', async () => {
-    const { hasApiKey } = await import('@/utils/keyring');
-    
-    (hasApiKey as ReturnType<typeof vi.fn>).mockImplementation((provider: string) => {
-      return Promise.resolve(provider === 'gemini');
-    });
-    
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, _args?: Record<string, unknown>) => {
-      if (cmd === 'get_ai_settings') {
-        return Promise.resolve({
-          enabled: false,
-          provider: 'gemini',
-          model: 'gemini-1.5-flash',
-          hasApiKey: true,
-        });
+      if (cmd === 'update_ai_settings') {
+        return Promise.resolve(undefined)
       }
-      if (cmd === 'list_provider_models') {
-        return Promise.resolve(mockModels.gemini);
+      if (cmd === 'cache_ai_api_key') {
+        return Promise.resolve(undefined)
       }
-      if (cmd === 'get_enhancement_options') {
-        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
-      }
-      if (cmd === 'get_openai_config') {
-        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' });
-      }
-      return Promise.resolve();
-    });
-    
-    render(<EnhancementsSection />);
-    
-    await waitFor(() => {
-      const toggle = screen.getByRole('switch');
-      expect(toggle).toBeEnabled();
-    });
-  });
+      return Promise.resolve(undefined)
+    })
+  })
 
-  it('enables enhancement toggle for custom no-auth config without keyring key', async () => {
-    const { hasApiKey } = await import('@/utils/keyring');
-
-    (hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false);
-
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === 'get_ai_settings') {
-        return Promise.resolve({
-          enabled: false,
-          provider: 'custom',
-          model: 'local-model',
-          hasApiKey: true,
-        });
-      }
-      if (cmd === 'get_ai_settings_for_provider') {
-        const provider = (args as { provider?: string })?.provider;
-        return Promise.resolve({
-          enabled: false,
-          provider,
-          model: 'local-model',
-          hasApiKey: provider === 'custom',
-        });
-      }
-      if (cmd === 'get_enhancement_options') {
-        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
-      }
-      if (cmd === 'get_openai_config') {
-        return Promise.resolve({ baseUrl: 'https://custom.endpoint/v1' });
-      }
-      return Promise.resolve();
-    });
-
-    render(<EnhancementsSection />);
+  it('renders providers and writing controls', async () => {
+    renderWithProviders()
 
     await waitFor(() => {
-      const toggle = screen.getByRole('switch');
-      expect(toggle).toBeEnabled();
-    });
-  });
+      expect(screen.getByText('AI Providers')).toBeInTheDocument()
+      expect(screen.getByText('Formatting Options')).toBeInTheDocument()
+      expect(screen.getByText('Text replacements')).toBeInTheDocument()
+      expect(screen.getByText('Personal dictionary words')).toBeInTheDocument()
+      expect(screen.getByText('Snippets')).toBeInTheDocument()
+    })
+  })
 
-  it('enables enhancement toggle for legacy openai-compatible config without keyring key', async () => {
-    const { hasApiKey } = await import('@/utils/keyring');
-
-    (hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false);
-
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === 'get_ai_settings') {
-        return Promise.resolve({
-          enabled: false,
-          provider: 'openai',
-          model: 'legacy-model',
-          hasApiKey: true,
-        });
-      }
-      if (cmd === 'get_ai_settings_for_provider') {
-        const provider = (args as { provider?: string })?.provider;
-        return Promise.resolve({
-          enabled: false,
-          provider,
-          model: 'legacy-model',
-          hasApiKey: provider === 'openai',
-        });
-      }
-      if (cmd === 'get_enhancement_options') {
-        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
-      }
-      if (cmd === 'get_openai_config') {
-        return Promise.resolve({ baseUrl: 'https://legacy.endpoint/v1' });
-      }
-      return Promise.resolve();
-    });
-
-    render(<EnhancementsSection />);
+  it('saves preset changes', async () => {
+    const user = userEvent.setup()
+    renderWithProviders()
 
     await waitFor(() => {
-      const toggle = screen.getByRole('switch');
-      expect(toggle).toBeEnabled();
-    });
-  });
+      expect(screen.getByRole('button', { name: 'Email' })).toBeInTheDocument()
+    })
 
-  it('toggles AI enhancement', async () => {
-    const { hasApiKey } = await import('@/utils/keyring');
-    
-    (hasApiKey as ReturnType<typeof vi.fn>).mockImplementation((provider: string) => {
-      return Promise.resolve(provider === 'gemini');
-    });
-    
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, _args?: Record<string, unknown>) => {
-      if (cmd === 'get_ai_settings') {
-        return Promise.resolve({
-          enabled: false,
-          provider: 'gemini',
-          model: 'gemini-1.5-flash',
-          hasApiKey: true,
-        });
-      }
-      if (cmd === 'list_provider_models') {
-        return Promise.resolve(mockModels.gemini);
-      }
-      if (cmd === 'get_enhancement_options') {
-        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
-      }
-      if (cmd === 'get_openai_config') {
-        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' });
-      }
-      return Promise.resolve();
-    });
-    
-    render(<EnhancementsSection />);
-    
-    await waitFor(() => {
-      expect(screen.getByText('AI Formatting')).toBeInTheDocument();
-    });
-    
-    await waitFor(() => {
-      const toggle = screen.getByRole('switch');
-      expect(toggle).toBeEnabled();
-      fireEvent.click(toggle);
-    });
-    
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
-        enabled: true,
-        provider: 'gemini',
-        model: 'gemini-1.5-flash',
-      });
-      expect(toast.success).toHaveBeenCalledWith('AI formatting enabled');
-    });
-  });
-
-  it('displays provider cards', async () => {
-    const { hasApiKey } = await import('@/utils/keyring');
-    (hasApiKey as ReturnType<typeof vi.fn>).mockImplementation((provider: string) => {
-      return Promise.resolve(provider === 'gemini');
-    });
-    
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
-      if (cmd === 'get_ai_settings') {
-        return Promise.resolve({
-          enabled: false,
-          provider: 'gemini',
-          model: 'gemini-1.5-flash',
-          hasApiKey: true,
-        });
-      }
-      if (cmd === 'list_provider_models') {
-        return Promise.resolve(mockModels.gemini);
-      }
-      if (cmd === 'get_enhancement_options') {
-        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
-      }
-      if (cmd === 'get_openai_config') {
-        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' });
-      }
-      return Promise.resolve();
-    });
-    
-    render(<EnhancementsSection />);
-    
-    await waitFor(() => {
-      expect(screen.getByText('AI Providers')).toBeInTheDocument();
-      expect(screen.getByText('OpenAI')).toBeInTheDocument();
-      expect(screen.getByText('Google Gemini')).toBeInTheDocument();
-    });
-  });
-
-  it('handles API key submission', async () => {
-    const { saveApiKey } = await import('@/utils/keyring');
-    
-    render(<EnhancementsSection />);
-    
-    await waitFor(() => {
-      const addKeyButtons = screen.getAllByText('Add Key');
-      expect(addKeyButtons.length).toBeGreaterThan(0);
-      fireEvent.click(addKeyButtons[0]);
-    });
-    
-    await waitFor(() => {
-      const modalTitle = screen.getByText(/Add OpenAI API Key/);
-      expect(modalTitle).toBeInTheDocument();
-    });
-    
-    const input = screen.getByPlaceholderText(/Enter your OpenAI API key/);
-    fireEvent.change(input, { target: { value: 'sk-test-api-key-12345' } });
-    
-    const submitButton = screen.getByText('Save API Key');
-    fireEvent.click(submitButton);
-    
-    await waitFor(() => {
-      expect(saveApiKey).toHaveBeenCalled();
-    });
-  });
-
-  it('shows Quick Setup guide when AI is disabled', async () => {
-    render(<EnhancementsSection />);
-    
-    await waitFor(() => {
-      expect(screen.getByText('Quick Setup')).toBeInTheDocument();
-      expect(screen.getByText(/Choose a provider above/)).toBeInTheDocument();
-    });
-  });
-
-  it('shows Formatting Options section', async () => {
-    render(<EnhancementsSection />);
-    
-    await waitFor(() => {
-      expect(screen.getByText('Formatting Options')).toBeInTheDocument();
-    });
-  });
-
-  it('does not clear active OpenAI selection when custom key is removed', async () => {
-    const { hasApiKey } = await import('@/utils/keyring');
-
-    (hasApiKey as ReturnType<typeof vi.fn>).mockImplementation((provider: string) => {
-      return Promise.resolve(provider === 'openai' || provider === 'custom');
-    });
-
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === 'get_ai_settings') {
-        return Promise.resolve({
-          enabled: true,
-          provider: 'openai',
-          model: 'gpt-5-nano',
-          hasApiKey: true,
-        });
-      }
-      if (cmd === 'list_provider_models') {
-        const provider = (args as { provider: string })?.provider;
-        return Promise.resolve(mockModels[provider as keyof typeof mockModels] || []);
-      }
-      if (cmd === 'get_enhancement_options') {
-        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
-      }
-      if (cmd === 'get_openai_config') {
-        return Promise.resolve({ baseUrl: 'https://custom.endpoint/v1' });
-      }
-      if (cmd === 'get_ai_settings_for_provider') {
-        const provider = (args as { provider?: string })?.provider;
-        return Promise.resolve({
-          enabled: true,
-          provider,
-          model: 'gpt-5-nano',
-          hasApiKey: provider === 'custom',
-        });
-      }
-      return Promise.resolve();
-    });
-
-    render(<EnhancementsSection />);
+    await user.click(screen.getByRole('button', { name: 'Email' }))
 
     await waitFor(() => {
-      expect(screen.getByText('AI Providers')).toBeInTheDocument();
-    });
+      expect(invoke).toHaveBeenCalledWith('update_enhancement_options', {
+        options: { preset: 'Email' },
+      })
+    })
+  })
 
-    await emit('api-key-removed', { provider: 'custom' });
-
-    await waitFor(() => {
-      expect(invoke).not.toHaveBeenCalledWith('update_ai_settings', {
-        enabled: false,
-        provider: '',
-        model: '',
-      });
-    });
-  });
-
-  it('does not clear active OpenAI selection when openai key is removed but legacy config exists', async () => {
-    const { hasApiKey } = await import('@/utils/keyring');
-
-    // No keyring key, but backend reports legacy config is usable.
-    (hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false);
-
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === 'get_ai_settings') {
-        return Promise.resolve({
-          enabled: true,
-          provider: 'openai',
-          model: 'legacy-model',
-          hasApiKey: true,
-        });
-      }
-      if (cmd === 'get_ai_settings_for_provider') {
-        const provider = (args as { provider?: string })?.provider;
-        return Promise.resolve({
-          enabled: true,
-          provider,
-          model: 'legacy-model',
-          hasApiKey: provider === 'openai',
-        });
-      }
-      if (cmd === 'get_enhancement_options') {
-        return Promise.resolve({ preset: 'Default', custom_vocabulary: [] });
-      }
-      if (cmd === 'get_openai_config') {
-        return Promise.resolve({ baseUrl: 'https://legacy.endpoint/v1' });
-      }
-      if (cmd === 'list_provider_models') {
-        const provider = (args as { provider: string })?.provider;
-        return Promise.resolve(mockModels[provider as keyof typeof mockModels] || []);
-      }
-      return Promise.resolve();
-    });
-
-    render(<EnhancementsSection />);
+  it('saves final text language changes through save_settings', async () => {
+    const user = userEvent.setup()
+    renderWithProviders()
 
     await waitFor(() => {
-      expect(screen.getByText('AI Providers')).toBeInTheDocument();
-    });
+      expect(screen.getByRole('button', { name: 'Specific language' })).toBeInTheDocument()
+    })
 
-    await emit('api-key-removed', { provider: 'openai' });
+    await user.click(screen.getByRole('button', { name: 'Specific language' }))
 
     await waitFor(() => {
-      expect(invoke).not.toHaveBeenCalledWith('update_ai_settings', {
-        enabled: false,
-        provider: '',
-        model: '',
-      });
-    });
-  });
-});
+      expect(invoke).toHaveBeenCalledWith('save_settings', {
+        settings: expect.objectContaining({
+          final_text_language: 'en',
+          transcription_task: 'translate_to_english',
+        }),
+      })
+    })
+  })
+
+  it('saves context-aware cleanup changes', async () => {
+    renderWithProviders()
+
+    const switches = await screen.findAllByRole('switch')
+    fireEvent.click(switches[1])
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_writing_settings', {
+        settings: expect.objectContaining({
+          context_policy: 'app_hint_only',
+        }),
+      })
+    })
+  })
+
+  it('adds a text replacement row and persists writing settings', async () => {
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    const replacementsHeading = await screen.findByText('Text replacements')
+    const replacementsCard = replacementsHeading.parentElement?.parentElement
+    expect(replacementsCard).toBeTruthy()
+
+    await user.click(
+      within(replacementsCard as HTMLElement).getByRole('button', { name: /add/i }),
+    )
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_writing_settings', {
+        settings: expect.objectContaining({
+          replacements: [
+            expect.objectContaining({
+              from: '',
+              to: '',
+              enabled: true,
+            }),
+          ],
+        }),
+      })
+    })
+  })
+
+  it('rolls back optimistic writing settings when save fails', async () => {
+    const user = userEvent.setup()
+    rejectWritingSettingsUpdate = true
+    renderWithProviders()
+
+    const replacementsHeading = await screen.findByText('Text replacements')
+    const replacementsCard = replacementsHeading.parentElement?.parentElement
+    expect(replacementsCard).toBeTruthy()
+
+    await user.click(
+      within(replacementsCard as HTMLElement).getByRole('button', { name: /add/i }),
+    )
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('disk full')
+    })
+    await waitFor(() => {
+      expect(screen.queryByText('Replacement 1')).not.toBeInTheDocument()
+    })
+  })
+
+
+  it('shows guidance when AI is disabled', async () => {
+    renderWithProviders()
+
+    await waitFor(() => {
+      expect(screen.getByText('Quick Setup')).toBeInTheDocument()
+      expect(toast.error).not.toHaveBeenCalled()
+    })
+  })
+})

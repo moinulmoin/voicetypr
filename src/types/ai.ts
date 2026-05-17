@@ -4,7 +4,6 @@ export type EnhancementPreset = 'Default' | 'Prompts' | 'Email' | 'Commit';
 
 export interface EnhancementOptions {
   preset: EnhancementPreset;
-  custom_vocabulary: string[];
 }
 
 export interface AISettings {
@@ -22,19 +21,14 @@ export interface AIModel {
   description?: string;
 }
 
-// Helper to convert between frontend camelCase and backend snake_case
 export const toBackendOptions = (options: {
   preset: EnhancementPreset;
-  customVocabulary: string[];
 }): EnhancementOptions => ({
   preset: options.preset,
-  custom_vocabulary: options.customVocabulary,
 });
 
 export const fromBackendOptions = (options: EnhancementOptions): {
   preset: EnhancementPreset;
-  customVocabulary: string[];
 } => ({
   preset: options.preset,
-  customVocabulary: options.custom_vocabulary,
 });

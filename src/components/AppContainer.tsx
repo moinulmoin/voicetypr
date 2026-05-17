@@ -123,7 +123,7 @@ export function AppContainer() {
       try {
         await register("navigate-to-settings", () => {
           console.log("Navigate to settings requested from tray menu");
-          setActiveSection("overview");
+          setActiveSection("general");
         });
 
         await register("tray-check-updates", async () => {

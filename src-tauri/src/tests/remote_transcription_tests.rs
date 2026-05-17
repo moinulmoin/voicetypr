@@ -52,11 +52,7 @@ fn test_shared_server_state_update_model() {
 /// Test SharedServerState get_model_name returns empty string on default
 #[test]
 fn test_shared_server_state_empty_model_name() {
-    let state = SharedServerState::new(
-        "".to_string(),
-        PathBuf::new(),
-        "whisper".to_string(),
-    );
+    let state = SharedServerState::new("".to_string(), PathBuf::new(), "whisper".to_string());
 
     assert_eq!(state.get_model_name(), "");
 }
@@ -64,11 +60,7 @@ fn test_shared_server_state_empty_model_name() {
 /// Test SharedServerState get_model_path returns empty path on default
 #[test]
 fn test_shared_server_state_empty_model_path() {
-    let state = SharedServerState::new(
-        "test".to_string(),
-        PathBuf::new(),
-        "whisper".to_string(),
-    );
+    let state = SharedServerState::new("test".to_string(), PathBuf::new(), "whisper".to_string());
 
     assert_eq!(state.get_model_path(), PathBuf::new());
 }
@@ -86,7 +78,10 @@ fn test_shared_server_state_clone() {
 
     // Both should have same values
     assert_eq!(cloned.get_model_name(), "original");
-    assert_eq!(cloned.get_model_path(), PathBuf::from("/models/original.bin"));
+    assert_eq!(
+        cloned.get_model_path(),
+        PathBuf::from("/models/original.bin")
+    );
 
     // Update original - cloned should also see the update (shared Arc)
     state.update_model(
@@ -96,7 +91,10 @@ fn test_shared_server_state_clone() {
     );
 
     assert_eq!(cloned.get_model_name(), "updated");
-    assert_eq!(cloned.get_model_path(), PathBuf::from("/models/updated.bin"));
+    assert_eq!(
+        cloned.get_model_path(),
+        PathBuf::from("/models/updated.bin")
+    );
 }
 
 /// Test SharedServerState is thread-safe
@@ -123,7 +121,10 @@ fn test_shared_server_state_thread_safety() {
 
     // Main thread should see the update
     assert_eq!(state.get_model_name(), "from-thread");
-    assert_eq!(state.get_model_path(), PathBuf::from("/models/from-thread.bin"));
+    assert_eq!(
+        state.get_model_path(),
+        PathBuf::from("/models/from-thread.bin")
+    );
     assert_eq!(state.get_engine(), "parakeet");
 }
 
@@ -197,7 +198,10 @@ fn test_context_get_model_path() {
 
     let ctx = RealTranscriptionContext::new(config);
 
-    assert_eq!(ctx.get_model_path(), PathBuf::from("/custom/path/model.bin"));
+    assert_eq!(
+        ctx.get_model_path(),
+        PathBuf::from("/custom/path/model.bin")
+    );
 }
 
 /// Test RealTranscriptionContext implements ServerContext trait

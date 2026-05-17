@@ -9,7 +9,9 @@ use tauri::AppHandle;
 use tokio::sync::{oneshot, RwLock};
 
 use super::http::create_routes;
-use super::transcription::{RealTranscriptionContext, SharedServerState, TranscriptionServerConfig};
+use super::transcription::{
+    RealTranscriptionContext, SharedServerState, TranscriptionServerConfig,
+};
 
 /// Result of attempting to bind to an IP address
 #[derive(Debug, Clone, serde::Serialize)]
@@ -42,16 +44,22 @@ impl ServerHandle {
         for tx in self.shutdown_txs.drain(..) {
             let _ = tx.send(());
         }
-        log::info!("[Remote Server] Shutdown signal sent for port {}", self.port);
+        log::info!(
+            "[Remote Server] Shutdown signal sent for port {}",
+            self.port
+        );
 
         for handle in self.task_handles.drain(..) {
             match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
-                Ok(Ok(())) => {},
+                Ok(Ok(())) => {}
                 Ok(Err(e)) => log::warn!("[Remote Server] Server task panicked: {}", e),
                 Err(_) => log::warn!("[Remote Server] Server task did not stop within 5s timeout"),
             }
         }
-        log::info!("[Remote Server] All server tasks stopped for port {}", self.port);
+        log::info!(
+            "[Remote Server] All server tasks stopped for port {}",
+            self.port
+        );
     }
 }
 
@@ -128,9 +136,15 @@ impl RemoteServerManager {
 
         // Stop existing server if running
         if self.handle.is_some() {
-            log::info!("⏱️ [SERVER TIMING] Stopping existing server... (+{}ms)", start_time.elapsed().as_millis());
+            log::info!(
+                "⏱️ [SERVER TIMING] Stopping existing server... (+{}ms)",
+                start_time.elapsed().as_millis()
+            );
             self.stop().await;
-            log::info!("⏱️ [SERVER TIMING] Existing server stopped (+{}ms)", start_time.elapsed().as_millis());
+            log::info!(
+                "⏱️ [SERVER TIMING] Existing server stopped (+{}ms)",
+                start_time.elapsed().as_millis()
+            );
         }
 
         let config = TranscriptionServerConfig {
@@ -148,13 +162,18 @@ impl RemoteServerManager {
 
         // Create the transcription context with shared state and app handle
         // App handle is needed for Parakeet engine support
-        let ctx = Arc::new(RwLock::new(RealTranscriptionContext::new_with_shared_state(
-            server_name.clone(),
-            password,
-            shared_state,
-            app_handle,
-        )));
-        log::info!("⏱️ [SERVER TIMING] Context created (+{}ms)", start_time.elapsed().as_millis());
+        let ctx = Arc::new(RwLock::new(
+            RealTranscriptionContext::new_with_shared_state(
+                server_name.clone(),
+                password,
+                shared_state,
+                app_handle,
+            ),
+        ));
+        log::info!(
+            "⏱️ [SERVER TIMING] Context created (+{}ms)",
+            start_time.elapsed().as_millis()
+        );
 
         // Get all local IPs to bind to
         // On Intel Macs, binding to 0.0.0.0 doesn't work properly for non-localhost connections,
@@ -165,7 +184,10 @@ impl RemoteServerManager {
         bind_ips.push(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
 
         // Add all network interface IPs (only IPv4 for now - IPv6 link-local addresses cause binding issues)
-        log::info!("⏱️ [SERVER TIMING] Listing network interfaces... (+{}ms)", start_time.elapsed().as_millis());
+        log::info!(
+            "⏱️ [SERVER TIMING] Listing network interfaces... (+{}ms)",
+            start_time.elapsed().as_millis()
+        );
         if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
             for (name, ip) in interfaces {
                 // Skip loopback and IPv6 addresses (IPv6 link-local addresses like fe80:: can't be bound without scope ID)
@@ -175,11 +197,17 @@ impl RemoteServerManager {
                 }
             }
         }
-        log::info!("⏱️ [SERVER TIMING] Found {} IPs to bind (+{}ms)", bind_ips.len(), start_time.elapsed().as_millis());
+        log::info!(
+            "⏱️ [SERVER TIMING] Found {} IPs to bind (+{}ms)",
+            bind_ips.len(),
+            start_time.elapsed().as_millis()
+        );
 
         log::info!(
             "[Remote Server] Starting server on {} IPs as '{}': {:?}",
-            bind_ips.len(), server_name, bind_ips
+            bind_ips.len(),
+            server_name,
+            bind_ips
         );
 
         let mut shutdown_txs = Vec::new();
@@ -201,7 +229,11 @@ impl RemoteServerManager {
             let ip_str_clone = ip_str.clone();
 
             // Try to bind to this address using try_bind
-            log::info!("⏱️ [SERVER TIMING] Binding to {}... (+{}ms)", addr, start_time.elapsed().as_millis());
+            log::info!(
+                "⏱️ [SERVER TIMING] Binding to {}... (+{}ms)",
+                addr,
+                start_time.elapsed().as_millis()
+            );
             match warp::serve(routes).try_bind_ephemeral(addr) {
                 Ok((bound_addr, server_future)) => {
                     shutdown_txs.push(shutdown_tx);
@@ -227,12 +259,22 @@ impl RemoteServerManager {
                         success: true,
                         error: None,
                     });
-                    log::info!("⏱️ [SERVER TIMING] Bound to {} in {}ms (+{}ms total)", bound_addr, bind_start.elapsed().as_millis(), start_time.elapsed().as_millis());
+                    log::info!(
+                        "⏱️ [SERVER TIMING] Bound to {} in {}ms (+{}ms total)",
+                        bound_addr,
+                        bind_start.elapsed().as_millis(),
+                        start_time.elapsed().as_millis()
+                    );
                 }
                 Err(e) => {
                     // Log the error but continue with other IPs
                     let error_msg = format!("{}", e);
-                    log::warn!("⏱️ [SERVER TIMING] Failed to bind to {} in {}ms: {}", addr, bind_start.elapsed().as_millis(), error_msg);
+                    log::warn!(
+                        "⏱️ [SERVER TIMING] Failed to bind to {} in {}ms: {}",
+                        addr,
+                        bind_start.elapsed().as_millis(),
+                        error_msg
+                    );
                     binding_results.push(BindingResult {
                         ip: ip_str,
                         success: false,
@@ -260,7 +302,10 @@ impl RemoteServerManager {
             "⏱️ [SERVER TIMING] Server STARTED - total: {}ms (port={}, model='{}')",
             start_time.elapsed().as_millis(),
             port,
-            self.config.as_ref().map(|c| c.model_name.as_str()).unwrap_or("unknown")
+            self.config
+                .as_ref()
+                .map(|c| c.model_name.as_str())
+                .unwrap_or("unknown")
         );
 
         Ok(())
@@ -291,7 +336,11 @@ impl RemoteServerManager {
         // Update shared state - this is what the running server actually reads
         if let Some(shared_state) = &self.shared_state {
             shared_state.update_model(model_name.clone(), model_path, engine.clone());
-            log::info!("[Remote Server] Model dynamically updated to '{}' (engine: {})", model_name, engine);
+            log::info!(
+                "[Remote Server] Model dynamically updated to '{}' (engine: {})",
+                model_name,
+                engine
+            );
         }
     }
 
@@ -314,8 +363,8 @@ pub struct SharingStatus {
     pub server_name: Option<String>,
     /// Number of active connections (placeholder for future)
     pub active_connections: u32,
-    /// The password for authentication (if set)
-    pub password: Option<String>,
+    /// Whether authentication is required.
+    pub password_configured: bool,
     /// Results of IP binding attempts (shows which addresses are active)
     pub binding_results: Vec<BindingResult>,
 }
@@ -331,7 +380,7 @@ impl RemoteServerManager {
                 model_name: config.map(|c| c.model_name.clone()),
                 server_name: config.map(|c| c.server_name.clone()),
                 active_connections: 0, // TODO: track actual connections
-                password: config.and_then(|c| c.password.clone()),
+                password_configured: config.is_some_and(|c| c.password.is_some()),
                 binding_results: handle.binding_results.clone(),
             }
         } else {
@@ -341,7 +390,7 @@ impl RemoteServerManager {
                 model_name: None,
                 server_name: None,
                 active_connections: 0,
-                password: None,
+                password_configured: false,
                 binding_results: Vec::new(),
             }
         }

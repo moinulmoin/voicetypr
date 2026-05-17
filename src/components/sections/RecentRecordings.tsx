@@ -34,12 +34,7 @@ interface SavedConnection {
   host: string;
   port: number;
   model?: string;
-}
-
-// Interface for remote server status response
-interface StatusResponse {
-  model: string;
-  engine: string;
+  status?: "Unknown" | "Online" | "Offline" | "AuthFailed" | "SelfConnection";
 }
 
 // Static mapping for model display names
@@ -91,9 +86,14 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       const servers = await invoke<SavedConnection[]>("list_remote_servers");
       const checks = servers.map(async (server) => {
         try {
-          const status = await invoke<StatusResponse>("test_remote_server", { serverId: server.id });
+          const updated = await invoke<SavedConnection>("check_remote_server_status", { serverId: server.id });
           const displayName = server.name || `${server.host}:${server.port}`;
-          return { id: server.id, name: displayName, model: status.model, online: true };
+          return {
+            id: server.id,
+            name: displayName,
+            model: updated.model || "",
+            online: updated.status === "Online",
+          };
         } catch {
           return { id: server.id, name: server.name || `${server.host}:${server.port}`, model: '', online: false };
         }

@@ -102,7 +102,7 @@ export function ModelsSection({
     | "parakeet"
     | "soniox";
   const currentModelName = settings?.current_model ?? "";
-  const languageValue = settings?.language ?? "en";
+  const languageValue = settings?.speech_language ?? "en";
 
   const isEnglishOnlyModel = useMemo(() => {
     if (!settings) return false;
@@ -118,10 +118,10 @@ export function ModelsSection({
   const handleLanguageChange = useCallback(
     async (value: string) => {
       try {
-        await updateSettings({ language: value });
+        await updateSettings({ speech_language: value });
       } catch (error) {
-        console.error("Failed to update language:", error);
-        toast.error("Failed to update language");
+        console.error("Failed to update spoken language:", error);
+        toast.error("Failed to update spoken language");
       }
     },
     [updateSettings],
@@ -331,8 +331,8 @@ export function ModelsSection({
 
   useEffect(() => {
     if (!settings) return;
-    if (isEnglishOnlyModel && settings.language !== "en") {
-      updateSettings({ language: "en" }).catch((error) => {
+    if (isEnglishOnlyModel && settings.speech_language !== "en") {
+      updateSettings({ speech_language: "en" }).catch((error) => {
         console.error("Failed to enforce English fallback:", error);
       });
     }

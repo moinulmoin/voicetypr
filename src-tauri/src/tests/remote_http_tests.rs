@@ -38,12 +38,23 @@ impl ServerContext for TestContext {
         self.password.clone()
     }
 
-    fn transcribe(&self, _audio_data: &[u8]) -> Result<TranscribeResponse, String> {
-        Ok(TranscribeResponse {
-            text: self.mock_result.clone(),
-            duration_ms: 1000,
-            model: self.model_name.clone(),
-        })
+    fn transcribe(
+        &self,
+        _audio_data: &[u8],
+        _spoken_language: Option<&str>,
+        _transcription_task: Option<&str>,
+    ) -> Result<crate::transcription::TranscriptionResult, String> {
+        let job = crate::transcription::TranscriptionJob::from_legacy_settings(
+            crate::transcription::TranscriptionSource::RemoteServer,
+            "remote",
+            self.model_name.clone(),
+            None,
+            false,
+        );
+        Ok(
+            crate::transcription::TranscriptionResult::new(&job, self.mock_result.clone())
+                .with_processing_duration_ms(Some(1000)),
+        )
     }
 }
 
@@ -236,7 +247,9 @@ fn create_test_wav_data() -> Vec<u8> {
     wav.extend_from_slice(&1u16.to_le_bytes()); // PCM format
     wav.extend_from_slice(&num_channels.to_le_bytes());
     wav.extend_from_slice(&sample_rate.to_le_bytes());
-    wav.extend_from_slice(&(sample_rate * num_channels as u32 * bits_per_sample as u32 / 8).to_le_bytes()); // byte rate
+    wav.extend_from_slice(
+        &(sample_rate * num_channels as u32 * bits_per_sample as u32 / 8).to_le_bytes(),
+    ); // byte rate
     wav.extend_from_slice(&(num_channels * bits_per_sample / 8).to_le_bytes()); // block align
     wav.extend_from_slice(&bits_per_sample.to_le_bytes());
 
@@ -275,7 +288,12 @@ impl ServerContext for FailingContext {
         self.password.clone()
     }
 
-    fn transcribe(&self, _audio_data: &[u8]) -> Result<TranscribeResponse, String> {
+    fn transcribe(
+        &self,
+        _audio_data: &[u8],
+        _spoken_language: Option<&str>,
+        _transcription_task: Option<&str>,
+    ) -> Result<crate::transcription::TranscriptionResult, String> {
         Err(self.error_message.clone())
     }
 }
@@ -795,8 +813,8 @@ fn test_context_implements_trait() {
     assert_eq!(ctx.get_server_name(), "server");
     assert_eq!(ctx.get_password(), Some("pass".to_string()));
 
-    let result = ctx.transcribe(&[1, 2, 3]).unwrap();
-    assert_eq!(result.text, "result");
+    let result = ctx.transcribe(&[1, 2, 3], None, None).unwrap();
+    assert_eq!(result.raw_text, "result");
 }
 
 /// Test that FailingContext correctly returns errors
@@ -809,7 +827,7 @@ fn test_failing_context_returns_error() {
         error_message: "Test error".to_string(),
     };
 
-    let result = ctx.transcribe(&[1, 2, 3]);
+    let result = ctx.transcribe(&[1, 2, 3], None, None);
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), "Test error");
 }

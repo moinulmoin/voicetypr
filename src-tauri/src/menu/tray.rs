@@ -3,9 +3,9 @@ use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem, PredefinedMenuItem, Subm
 use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 
-use crate::remote::settings::ConnectionStatus;
 use crate::audio;
 use crate::remote::server::StatusResponse;
+use crate::remote::settings::ConnectionStatus;
 use crate::remote::settings::RemoteSettings;
 use crate::whisper;
 
@@ -24,7 +24,6 @@ fn effective_active_remote_id(
             .then(|| id.to_string())
     })
 }
-
 
 /// Determines if a model should appear as selected in the tray given onboarding status
 pub fn should_mark_model_selected(
@@ -76,16 +75,25 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             Err(_) => ("".to_string(), None, false),
         }
     };
-    log::info!("⏱️ [TRAY BUILD TIMING] Settings loaded (+{}ms)", build_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [TRAY BUILD TIMING] Settings loaded (+{}ms)",
+        build_start.elapsed().as_millis()
+    );
 
     // Get remote server info (active connection and saved connections)
     // Use CACHED data - do NOT make HTTP calls here (that would block tray menu for seconds)
     // The frontend/background tasks handle status polling separately
     let (effective_active_id, active_remote_display, active_remote_model, remote_connections) = {
         if let Some(remote_state) = app.try_state::<AsyncMutex<RemoteSettings>>() {
-            log::info!("⏱️ [TRAY BUILD TIMING] Acquiring remote_settings lock... (+{}ms)", build_start.elapsed().as_millis());
+            log::info!(
+                "⏱️ [TRAY BUILD TIMING] Acquiring remote_settings lock... (+{}ms)",
+                build_start.elapsed().as_millis()
+            );
             let settings = remote_state.lock().await;
-            log::info!("⏱️ [TRAY BUILD TIMING] remote_settings lock acquired (+{}ms)", build_start.elapsed().as_millis());
+            log::info!(
+                "⏱️ [TRAY BUILD TIMING] remote_settings lock acquired (+{}ms)",
+                build_start.elapsed().as_millis()
+            );
             // Build connections list using cached data (no HTTP calls!)
             // Include all servers with cached model info - let the user see what's available
             let mut connections: Vec<(String, String, Option<String>)> = Vec::new();
@@ -94,26 +102,36 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
                     connections.push((conn.id.clone(), conn.display_name(), conn.model.clone()));
                 }
             }
-            log::info!("⏱️ [TRAY BUILD TIMING] Loaded {} cached connections (+{}ms)", connections.len(), build_start.elapsed().as_millis());
-
-            let effective_active_id = effective_active_remote_id(
-                settings.active_connection_id.as_deref(),
-                &connections,
+            log::info!(
+                "⏱️ [TRAY BUILD TIMING] Loaded {} cached connections (+{}ms)",
+                connections.len(),
+                build_start.elapsed().as_millis()
             );
 
+            let effective_active_id =
+                effective_active_remote_id(settings.active_connection_id.as_deref(), &connections);
+
             // Get effective active connection info
-            let active_conn_info = effective_active_id.as_ref().and_then(|id| {
-                connections.iter().find(|(cid, _, _)| cid == id)
-            });
+            let active_conn_info = effective_active_id
+                .as_ref()
+                .and_then(|id| connections.iter().find(|(cid, _, _)| cid == id));
             let active_display = active_conn_info.map(|(_, name, _)| name.clone());
             let active_model = active_conn_info.and_then(|(_, _, model)| model.clone());
 
-            (effective_active_id, active_display, active_model, connections)
+            (
+                effective_active_id,
+                active_display,
+                active_model,
+                connections,
+            )
         } else {
             (None, None, None, Vec::new())
         }
     };
-    log::info!("⏱️ [TRAY BUILD TIMING] Remote server info collected (+{}ms)", build_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [TRAY BUILD TIMING] Remote server info collected (+{}ms)",
+        build_start.elapsed().as_millis()
+    );
 
     let (available_models, whisper_models_info) = {
         // Store (name, display_name, accuracy_score, speed_score) for sorting to match UI order
@@ -127,7 +145,12 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             whisper_all = manager.get_models_status();
             for (name, info) in whisper_all.iter() {
                 if info.downloaded {
-                    models.push((name.clone(), info.display_name.clone(), info.accuracy_score, info.speed_score));
+                    models.push((
+                        name.clone(),
+                        info.display_name.clone(),
+                        info.accuracy_score,
+                        info.speed_score,
+                    ));
                 }
             }
         } else {
@@ -137,7 +160,12 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         if let Some(parakeet_manager) = app.try_state::<crate::parakeet::ParakeetManager>() {
             for m in parakeet_manager.list_models().into_iter() {
                 if m.downloaded {
-                    models.push((m.name.clone(), m.display_name.clone(), m.accuracy_score, m.speed_score));
+                    models.push((
+                        m.name.clone(),
+                        m.display_name.clone(),
+                        m.accuracy_score,
+                        m.speed_score,
+                    ));
                 }
             }
         } else {
@@ -148,7 +176,12 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
         if has_soniox {
             // Soniox is cloud, put at end with max accuracy score, min speed
-            models.push(("soniox".to_string(), "Soniox (Cloud)".to_string(), u8::MAX, 0));
+            models.push((
+                "soniox".to_string(),
+                "Soniox (Cloud)".to_string(),
+                u8::MAX,
+                0,
+            ));
         }
 
         // Sort by accuracy_score (descending), then by speed_score (descending) as tiebreaker
@@ -206,7 +239,13 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             }
 
             // Add "Remote VoiceTypr" header (disabled item)
-            let header = MenuItem::with_id(app, "remote_header", "Remote VoiceTypr", false, None::<&str>)?;
+            let header = MenuItem::with_id(
+                app,
+                "remote_header",
+                "Remote VoiceTypr",
+                false,
+                None::<&str>,
+            )?;
             remote_header_items.push(header);
             for item in &remote_header_items {
                 model_items.push(item);
@@ -239,43 +278,47 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         }
 
         // Resolve display name for the menu label - prioritize active remote server
-        let (effective_model, resolved_display_name) = if let Some(ref remote_display) = active_remote_display {
-            // Remote server is active - show "ServerName - ModelName"
-            let display = if let Some(ref model) = active_remote_model {
-                format!("{} - {}", remote_display, model)
-            } else {
-                remote_display.clone()
-            };
-            ("remote".to_string(), Some(display))
-        } else if onboarding_done && !current_model.is_empty() {
-            let display = if let Some(info) = whisper_models_info.get(&current_model) {
-                Some(info.display_name.clone())
-            } else if let Some(parakeet_manager) =
-                app.try_state::<crate::parakeet::ParakeetManager>()
-            {
-                if let Some(pm) = parakeet_manager
-                    .list_models()
-                    .into_iter()
-                    .find(|m| m.name == current_model)
+        let (effective_model, resolved_display_name) =
+            if let Some(ref remote_display) = active_remote_display {
+                // Remote server is active - show "ServerName - ModelName"
+                let display = if let Some(ref model) = active_remote_model {
+                    format!("{} - {}", remote_display, model)
+                } else {
+                    remote_display.clone()
+                };
+                ("remote".to_string(), Some(display))
+            } else if onboarding_done && !current_model.is_empty() {
+                let display = if let Some(info) = whisper_models_info.get(&current_model) {
+                    Some(info.display_name.clone())
+                } else if let Some(parakeet_manager) =
+                    app.try_state::<crate::parakeet::ParakeetManager>()
                 {
-                    Some(pm.display_name)
+                    if let Some(pm) = parakeet_manager
+                        .list_models()
+                        .into_iter()
+                        .find(|m| m.name == current_model)
+                    {
+                        Some(pm.display_name)
+                    } else if current_model == "soniox" {
+                        Some("Soniox (Cloud)".to_string())
+                    } else {
+                        Some(current_model.clone())
+                    }
                 } else if current_model == "soniox" {
                     Some("Soniox (Cloud)".to_string())
                 } else {
                     Some(current_model.clone())
-                }
-            } else if current_model == "soniox" {
-                Some("Soniox (Cloud)".to_string())
+                };
+                (current_model.clone(), display)
             } else {
-                Some(current_model.clone())
+                (String::new(), None)
             };
-            (current_model.clone(), display)
-        } else {
-            (String::new(), None)
-        };
 
-        let current_model_display =
-            format_tray_model_label(onboarding_done || effective_active_id.is_some(), &effective_model, resolved_display_name);
+        let current_model_display = format_tray_model_label(
+            onboarding_done || effective_active_id.is_some(),
+            &effective_model,
+            resolved_display_name,
+        );
 
         Some(Submenu::with_id_and_items(
             app,
@@ -462,7 +505,10 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         .item(&quit_i)
         .build()?;
 
-    log::info!("⏱️ [TRAY BUILD TIMING] build_tray_menu COMPLETE - total: {}ms", build_start.elapsed().as_millis());
+    log::info!(
+        "⏱️ [TRAY BUILD TIMING] build_tray_menu COMPLETE - total: {}ms",
+        build_start.elapsed().as_millis()
+    );
     Ok(menu)
 }
 
@@ -486,9 +532,12 @@ mod tests {
     }
 }
 
-
 /// Fetch server status with a short timeout (for getting model info)
-async fn fetch_server_status(host: &str, port: u16, password: Option<&str>) -> Result<StatusResponse, String> {
+async fn fetch_server_status(
+    host: &str,
+    port: u16,
+    password: Option<&str>,
+) -> Result<StatusResponse, String> {
     let url = format!("http://{}:{}/api/v1/status", host, port);
 
     let client = reqwest::Client::builder()

@@ -1,6 +1,11 @@
 #[cfg(test)]
 mod tests {
-    use crate::commands::settings::{get_supported_languages, Settings};
+    use crate::commands::settings::{
+        get_supported_languages, normalize_final_text_language,
+        normalize_speech_language_for_model, task_uses_translate_to_english, Settings,
+        FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT, TRANSCRIPTION_TASK_TRANSCRIBE,
+        TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH,
+    };
     use serde_json::json;
 
     #[test]
@@ -9,7 +14,12 @@ mod tests {
 
         assert_eq!(settings.hotkey, "CommandOrControl+Shift+Space");
         assert_eq!(settings.current_model, ""); // Empty means auto-select
-        assert_eq!(settings.language, "en");
+        assert_eq!(settings.speech_language, "en");
+        assert_eq!(settings.transcription_task, TRANSCRIPTION_TASK_TRANSCRIBE);
+        assert_eq!(
+            settings.final_text_language,
+            FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT
+        );
         assert_eq!(settings.theme, "system");
         assert_eq!(settings.transcription_cleanup_days, None);
         assert_eq!(settings.launch_at_startup, false);
@@ -26,13 +36,14 @@ mod tests {
             hotkey: "CommandOrControl+A".to_string(),
             current_model: "base".to_string(),
             current_model_engine: "whisper".to_string(),
-            language: "es".to_string(),
+            speech_language: "es".to_string(),
+            transcription_task: TRANSCRIPTION_TASK_TRANSCRIBE.to_string(),
+            final_text_language: FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string(),
             theme: "dark".to_string(),
             transcription_cleanup_days: Some(7),
             pill_position: Some((100.0, 200.0)),
             launch_at_startup: false,
             onboarding_completed: true,
-            translate_to_english: false,
             check_updates_automatically: true,
             selected_microphone: None,
             recording_mode: "toggle".to_string(),
@@ -56,7 +67,9 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         assert!(json.contains("\"hotkey\":\"CommandOrControl+A\""));
         assert!(json.contains("\"current_model\":\"base\""));
-        assert!(json.contains("\"language\":\"es\""));
+        assert!(json.contains("\"speech_language\":\"es\""));
+        assert!(json.contains("\"transcription_task\":\"transcribe\""));
+        assert!(json.contains("\"final_text_language\":\"same_as_transcript\""));
         assert!(json.contains("\"theme\":\"dark\""));
         assert!(json.contains("\"transcription_cleanup_days\":7"));
         assert!(json.contains("\"auto_paste_transcription\":true"));
@@ -65,7 +78,12 @@ mod tests {
         let deserialized: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.hotkey, settings.hotkey);
         assert_eq!(deserialized.current_model, settings.current_model);
-        assert_eq!(deserialized.language, settings.language);
+        assert_eq!(deserialized.speech_language, settings.speech_language);
+        assert_eq!(deserialized.transcription_task, settings.transcription_task);
+        assert_eq!(
+            deserialized.final_text_language,
+            settings.final_text_language
+        );
         assert_eq!(deserialized.theme, settings.theme);
         assert_eq!(
             deserialized.transcription_cleanup_days,
@@ -99,13 +117,14 @@ mod tests {
             hotkey: "CommandOrControl+B".to_string(),
             current_model: "tiny".to_string(),
             current_model_engine: "whisper".to_string(),
-            language: "fr".to_string(),
+            speech_language: "fr".to_string(),
+            transcription_task: TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH.to_string(),
+            final_text_language: "en".to_string(),
             theme: "light".to_string(),
             transcription_cleanup_days: Some(30),
             pill_position: None,
             launch_at_startup: true,
             onboarding_completed: false,
-            translate_to_english: true,
             check_updates_automatically: true,
             selected_microphone: Some("USB Microphone".to_string()),
             recording_mode: "push_to_talk".to_string(),
@@ -128,7 +147,9 @@ mod tests {
         let cloned = settings.clone();
         assert_eq!(cloned.hotkey, settings.hotkey);
         assert_eq!(cloned.current_model, settings.current_model);
-        assert_eq!(cloned.language, settings.language);
+        assert_eq!(cloned.speech_language, settings.speech_language);
+        assert_eq!(cloned.transcription_task, settings.transcription_task);
+        assert_eq!(cloned.final_text_language, settings.final_text_language);
         assert_eq!(cloned.theme, settings.theme);
         assert_eq!(
             cloned.transcription_cleanup_days,
@@ -175,11 +196,31 @@ mod tests {
 
         for lang in valid_languages {
             let settings = Settings {
-                language: lang.to_string(),
+                speech_language: lang.to_string(),
                 ..Settings::default()
             };
-            assert_eq!(settings.language, lang);
+            assert_eq!(settings.speech_language, lang);
         }
+    }
+
+    #[test]
+    fn test_model_language_normalization() {
+        assert_eq!(
+            normalize_speech_language_for_model("whisper", "base.en", "es"),
+            "en"
+        );
+        assert_eq!(
+            normalize_speech_language_for_model("parakeet", "parakeet-tdt-0.6b-v2", "fr"),
+            "en"
+        );
+        assert_eq!(
+            normalize_speech_language_for_model("parakeet", "parakeet-tdt-0.6b-v3", "ja"),
+            "en"
+        );
+        assert_eq!(
+            normalize_speech_language_for_model("parakeet", "parakeet-tdt-0.6b-v3", "fr"),
+            "fr"
+        );
     }
 
     #[test]
@@ -209,7 +250,9 @@ mod tests {
         let value = json!({
             "hotkey": settings.hotkey,
             "current_model": settings.current_model,
-            "language": settings.language,
+            "speech_language": settings.speech_language,
+            "transcription_task": settings.transcription_task,
+            "final_text_language": settings.final_text_language,
             "theme": settings.theme,
             "transcription_cleanup_days": settings.transcription_cleanup_days,
             "launch_at_startup": settings.launch_at_startup,
@@ -218,7 +261,9 @@ mod tests {
 
         assert_eq!(value["hotkey"], "CommandOrControl+Shift+Space");
         assert_eq!(value["current_model"], "");
-        assert_eq!(value["language"], "en");
+        assert_eq!(value["speech_language"], "en");
+        assert_eq!(value["transcription_task"], "transcribe");
+        assert_eq!(value["final_text_language"], "same_as_transcript");
         assert_eq!(value["theme"], "system");
         assert_eq!(value["transcription_cleanup_days"], serde_json::Value::Null);
         assert_eq!(value["launch_at_startup"], false);
@@ -566,19 +611,39 @@ mod tests {
     // ==================== Translate Settings Tests ====================
 
     #[test]
-    fn test_translate_to_english_default() {
+    fn test_transcription_task_default() {
         let settings = Settings::default();
-        assert!(!settings.translate_to_english);
+        assert_eq!(settings.transcription_task, TRANSCRIPTION_TASK_TRANSCRIBE);
+        assert!(!task_uses_translate_to_english(
+            &settings.transcription_task
+        ));
     }
 
     #[test]
-    fn test_translate_to_english_enabled() {
+    fn test_transcription_task_translate_to_english() {
         let settings = Settings {
-            translate_to_english: true,
+            transcription_task: TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH.to_string(),
+            final_text_language: "en".to_string(),
             ..Settings::default()
         };
 
-        assert!(settings.translate_to_english);
+        assert!(task_uses_translate_to_english(&settings.transcription_task));
+    }
+
+    #[test]
+    fn test_normalize_final_text_language_preserves_supported_target_language() {
+        assert_eq!(
+            normalize_final_text_language(Some("es"), TRANSCRIPTION_TASK_TRANSCRIBE),
+            "es"
+        );
+    }
+
+    #[test]
+    fn test_normalize_final_text_language_translate_task_forces_english() {
+        assert_eq!(
+            normalize_final_text_language(Some("fr"), TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH),
+            "en"
+        );
     }
 
     // ==================== Pill Position Tests ====================
@@ -670,44 +735,42 @@ mod tests {
             hotkey: "CommandOrControl+Alt+V".to_string(),
             current_model: "large-v3".to_string(),
             current_model_engine: "whisper".to_string(),
-            language: "ja".to_string(),
-            translate_to_english: true,
+            speech_language: "ja".to_string(),
+            transcription_task: TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH.to_string(),
+            final_text_language: "en".to_string(),
             theme: "dark".to_string(),
             transcription_cleanup_days: Some(14),
             pill_position: Some((500.0, 200.0)),
             launch_at_startup: true,
             onboarding_completed: true,
             check_updates_automatically: false,
-            selected_microphone: Some("Blue Yeti".to_string()),
+            selected_microphone: Some("Studio Mic".to_string()),
             recording_mode: "push_to_talk".to_string(),
             use_different_ptt_key: true,
             ptt_hotkey: Some("Alt+R".to_string()),
             keep_transcription_in_clipboard: true,
             play_sound_on_recording: false,
-            play_sound_on_recording_end: true,
+            play_sound_on_recording_end: false,
             pill_indicator_mode: "always".to_string(),
-            pill_indicator_position: "top-center".to_string(),
-            pill_indicator_offset: 25,
-            pause_media_during_recording: true,
-            auto_paste_transcription: true,
-            sharing_port: Some(12345),
-            sharing_password: Some("mysecret".to_string()),
+            pill_indicator_position: "top-left".to_string(),
+            pill_indicator_offset: 42,
+            pause_media_during_recording: false,
+            auto_paste_transcription: false,
+            sharing_port: Some(5555),
+            sharing_password: Some("pw".to_string()),
             save_recordings: true,
-            recording_retention_count: Some(100),
+            recording_retention_count: None,
         };
 
-        // Serialize to JSON
         let json = serde_json::to_string(&original).unwrap();
-
-        // Deserialize back
         let restored: Settings = serde_json::from_str(&json).unwrap();
 
-        // Verify all fields match
         assert_eq!(restored.hotkey, original.hotkey);
         assert_eq!(restored.current_model, original.current_model);
         assert_eq!(restored.current_model_engine, original.current_model_engine);
-        assert_eq!(restored.language, original.language);
-        assert_eq!(restored.translate_to_english, original.translate_to_english);
+        assert_eq!(restored.speech_language, original.speech_language);
+        assert_eq!(restored.transcription_task, original.transcription_task);
+        assert_eq!(restored.final_text_language, original.final_text_language);
         assert_eq!(restored.theme, original.theme);
         assert_eq!(
             restored.transcription_cleanup_days,
@@ -722,7 +785,10 @@ mod tests {
         );
         assert_eq!(restored.selected_microphone, original.selected_microphone);
         assert_eq!(restored.recording_mode, original.recording_mode);
-        assert_eq!(restored.use_different_ptt_key, original.use_different_ptt_key);
+        assert_eq!(
+            restored.use_different_ptt_key,
+            original.use_different_ptt_key
+        );
         assert_eq!(restored.ptt_hotkey, original.ptt_hotkey);
         assert_eq!(
             restored.keep_transcription_in_clipboard,
@@ -741,7 +807,10 @@ mod tests {
             restored.pill_indicator_position,
             original.pill_indicator_position
         );
-        assert_eq!(restored.pill_indicator_offset, original.pill_indicator_offset);
+        assert_eq!(
+            restored.pill_indicator_offset,
+            original.pill_indicator_offset
+        );
         assert_eq!(
             restored.pause_media_during_recording,
             original.pause_media_during_recording
@@ -764,8 +833,9 @@ mod tests {
         assert!(json_value.get("hotkey").is_some());
         assert!(json_value.get("current_model").is_some());
         assert!(json_value.get("current_model_engine").is_some());
-        assert!(json_value.get("language").is_some());
-        assert!(json_value.get("translate_to_english").is_some());
+        assert!(json_value.get("speech_language").is_some());
+        assert!(json_value.get("transcription_task").is_some());
+        assert!(json_value.get("final_text_language").is_some());
         assert!(json_value.get("theme").is_some());
         assert!(json_value.get("transcription_cleanup_days").is_some());
         assert!(json_value.get("pill_position").is_some());
@@ -797,7 +867,9 @@ mod tests {
             hotkey: "".to_string(),
             current_model: "".to_string(),
             current_model_engine: "".to_string(),
-            language: "".to_string(),
+            speech_language: "".to_string(),
+            transcription_task: "".to_string(),
+            final_text_language: "".to_string(),
             theme: "".to_string(),
             recording_mode: "".to_string(),
             pill_indicator_mode: "".to_string(),
@@ -805,11 +877,10 @@ mod tests {
             ..Settings::default()
         };
 
-        // Empty strings should be preserved
         assert_eq!(settings.hotkey, "");
         assert_eq!(settings.current_model, "");
         assert_eq!(settings.current_model_engine, "");
-        assert_eq!(settings.language, "");
+        assert_eq!(settings.speech_language, "");
     }
 
     #[test]
@@ -824,10 +895,7 @@ mod tests {
             settings.selected_microphone,
             Some("マイク 日本語".to_string())
         );
-        assert_eq!(
-            settings.sharing_password,
-            Some("пароль123".to_string())
-        );
+        assert_eq!(settings.sharing_password, Some("пароль123".to_string()));
 
         // Verify serialization preserves unicode
         let json = serde_json::to_string(&settings).unwrap();
