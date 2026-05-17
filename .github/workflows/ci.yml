@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   # ===========================================
@@ -16,17 +17,15 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 10.13.1
+      - name: Install pnpm
+        run: npm install -g pnpm@10.13.1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -53,17 +52,15 @@ jobs:
             arch: x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 10.13.1
+      - name: Install pnpm
+        run: npm install -g pnpm@10.13.1
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -89,7 +86,7 @@ jobs:
         run: cd src-tauri && cargo build --release
 
       - name: Upload preview artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-macos-${{ matrix.arch }}-preview
           path: src-tauri/target/release/voicetypr
@@ -99,23 +96,21 @@ jobs:
   # Build Windows (full build = catches all issues)
   # ===========================================
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     env:
       # whisper.cpp/ggml Vulkan build generates very deep paths; keep Windows paths short to
       # avoid MSBuild/FileTracker failures.
       CARGO_TARGET_DIR: D:\cargo-target
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 10.13.1
+      - name: Install pnpm
+        run: npm install -g pnpm@10.13.1
 
       - name: Prepare cargo target dir
         shell: pwsh
@@ -155,7 +150,7 @@ jobs:
         run: cd src-tauri && cargo build --release
 
       - name: Upload preview artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-windows-x64-preview
           path: D:/cargo-target/release/voicetypr.exe

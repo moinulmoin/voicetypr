@@ -38,11 +38,33 @@ export function useAccessibilityPermission(options?: AccessibilityPermissionOpti
     }
   }, []);
 
+
+  const checkPermissionSilently = useCallback(async () => {
+    try {
+      const result = await invoke<boolean>('check_accessibility_permission');
+      setHasPermission(result);
+    } catch {
+      // Silently ignore errors during background polling
+    }
+  }, []);
   // Optionally check permission on mount
   useEffect(() => {
     if (!checkOnMount) return;
     checkPermission();
   }, [checkPermission, checkOnMount]);
+
+  // Poll for permission changes when permission is not granted
+  // This catches when user grants permission manually in System Settings
+  useEffect(() => {
+    if (!checkOnMount) return;
+    if (hasPermission === true) return; // Stop polling once granted
+
+    const interval = setInterval(() => {
+      void checkPermissionSilently();
+    }, 3000); // Check every 3 seconds
+
+    return () => clearInterval(interval);
+  }, [checkOnMount, hasPermission, checkPermissionSilently]);
 
   // Listen for permission changes
   useEffect(() => {

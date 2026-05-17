@@ -1,9 +1,20 @@
 use crate::audio::device_watcher::try_start_device_watcher_if_ready;
 use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_combination};
+use crate::commands::remote::{resolve_shareable_model_config, save_remote_settings};
+use crate::menu::should_include_remote_connection_in_tray;
+use crate::parakeet::models::AVAILABLE_MODELS;
 use crate::parakeet::ParakeetManager;
+use crate::remote::lifecycle::RemoteServerManager;
+use crate::remote::settings::{ConnectionStatus, RemoteSettings};
 use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
 use crate::whisper::manager::WhisperManager;
 use crate::AppState;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tauri::async_runtime::Mutex as AsyncMutex;
+
+/// Generation counter for tray menu updates to prevent race conditions.
+/// Each update increments this and checks if it's still current before applying.
+static TRAY_MENU_GENERATION: AtomicU64 = AtomicU64::new(0);
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
@@ -15,13 +26,18 @@ pub const MIN_INDICATOR_OFFSET: u32 = 10;
 pub const MAX_INDICATOR_OFFSET: u32 = 50;
 pub const DEFAULT_INDICATOR_OFFSET: u32 = 10;
 
+pub const TRANSCRIPTION_TASK_TRANSCRIBE: &str = "transcribe";
+pub const TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH: &str = "translate_to_english";
+pub const FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT: &str = "same_as_transcript";
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub hotkey: String,
     pub current_model: String,
     pub current_model_engine: String,
-    pub language: String,
-    pub translate_to_english: bool,
+    pub speech_language: String,
+    pub transcription_task: String,
+    pub final_text_language: String,
     pub theme: String,
     pub transcription_cleanup_days: Option<u32>,
     pub pill_position: Option<(f64, f64)>,
@@ -39,7 +55,7 @@ pub struct Settings {
     pub play_sound_on_recording_end: bool,
     // Pill indicator visibility mode: "never", "always", or "when_recording"
     pub pill_indicator_mode: String,
-    // Pill indicator screen position: "top", "center", or "bottom"
+    // Pill indicator screen position
     pub pill_indicator_position: String,
     // Pill indicator offset from screen edge in pixels (10-100)
     pub pill_indicator_offset: u32,
@@ -47,6 +63,12 @@ pub struct Settings {
     pub pause_media_during_recording: bool,
     // Automatically paste transcription text into the active window
     pub auto_paste_transcription: bool,
+    // Network sharing settings
+    pub sharing_port: Option<u16>,
+    pub sharing_password: Option<String>,
+    // Recording persistence settings
+    pub save_recordings: bool,
+    pub recording_retention_count: Option<u32>, // None = unlimited
 }
 
 impl Default for Settings {
@@ -55,8 +77,9 @@ impl Default for Settings {
             hotkey: "CommandOrControl+Shift+Space".to_string(),
             current_model: "".to_string(), // Empty means auto-select
             current_model_engine: "whisper".to_string(),
-            language: "en".to_string(),
-            translate_to_english: false, // Default to transcribe mode
+            speech_language: "en".to_string(),
+            transcription_task: TRANSCRIPTION_TASK_TRANSCRIBE.to_string(),
+            final_text_language: FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string(),
             theme: "system".to_string(),
             transcription_cleanup_days: None, // None means keep forever
             pill_position: None,              // No saved position initially
@@ -75,6 +98,48 @@ impl Default for Settings {
             pill_indicator_offset: DEFAULT_INDICATOR_OFFSET,
             pause_media_during_recording: !cfg!(target_os = "macos"),
             auto_paste_transcription: true, // Default to auto-pasting transcription
+            sharing_port: Some(47842),      // Default network sharing port
+            sharing_password: None,         // No password by default
+            save_recordings: false,         // Default to not saving recordings
+            recording_retention_count: Some(50), // Default retention when saving is enabled
+        }
+    }
+}
+
+pub fn transcription_task_from_legacy(translate_to_english: bool) -> String {
+    if translate_to_english {
+        TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH.to_string()
+    } else {
+        TRANSCRIPTION_TASK_TRANSCRIBE.to_string()
+    }
+}
+
+pub fn normalize_transcription_task(
+    task: Option<&str>,
+    legacy_translate_to_english: bool,
+) -> String {
+    match task {
+        Some(TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH) => {
+            TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH.to_string()
+        }
+        Some(TRANSCRIPTION_TASK_TRANSCRIBE) => TRANSCRIPTION_TASK_TRANSCRIBE.to_string(),
+        _ => transcription_task_from_legacy(legacy_translate_to_english),
+    }
+}
+
+pub fn task_uses_translate_to_english(task: &str) -> bool {
+    task == TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH
+}
+
+pub fn normalize_final_text_language(value: Option<&str>, transcription_task: &str) -> String {
+    if task_uses_translate_to_english(transcription_task) {
+        "en".to_string()
+    } else {
+        match value {
+            Some(FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT) | None => {
+                FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string()
+            }
+            Some(value) => validate_language(Some(value)).to_string(),
         }
     }
 }
@@ -142,9 +207,101 @@ pub(crate) fn resolve_pill_indicator_mode(
     default_mode
 }
 
+pub(crate) fn recording_retention_count_from_store(
+    value: Option<serde_json::Value>,
+) -> Option<u32> {
+    match value {
+        None => Some(50),
+        Some(v) if v.is_null() => None,
+        Some(v) => v.as_u64().map(|n| n as u32).or(Some(50)),
+    }
+}
+
+pub(crate) fn recording_retention_count_to_value(count: Option<u32>) -> serde_json::Value {
+    match count {
+        Some(count) => json!(count),
+        None => serde_json::Value::Null,
+    }
+}
+
+pub fn model_requires_english_speech(engine: &str, model_name: &str) -> bool {
+    match engine {
+        "whisper" => model_name.ends_with(".en"),
+        "parakeet" => model_name.contains("-v2"),
+        _ => false,
+    }
+}
+
+pub fn normalize_speech_language_for_model(
+    engine: &str,
+    model_name: &str,
+    speech_language: &str,
+) -> String {
+    let validated = validate_language(Some(speech_language));
+    match engine {
+        "whisper" if model_requires_english_speech(engine, model_name) => "en".to_string(),
+        "parakeet" => {
+            if let Some(definition) = AVAILABLE_MODELS.iter().find(|m| m.id == model_name) {
+                if definition.languages.contains(&validated) {
+                    validated.to_string()
+                } else {
+                    definition
+                        .languages
+                        .first()
+                        .copied()
+                        .unwrap_or("en")
+                        .to_string()
+                }
+            } else if model_requires_english_speech(engine, model_name) {
+                "en".to_string()
+            } else {
+                validated.to_string()
+            }
+        }
+        "soniox" => {
+            const SONIOX_SUPPORTED_LANGUAGES: &[&str] = &[
+                "en", "es", "fr", "de", "it", "pt", "nl", "ru", "zh", "ja", "ko", "ar", "hi", "tr",
+                "pl", "sv", "no", "da", "fi", "el", "cs", "ro", "hu", "sk", "uk", "he", "id", "vi",
+                "th", "ms", "tl", "fa", "ur", "bn", "ta", "te", "gu", "pa", "bg", "hr", "sr", "sl",
+                "lv", "lt", "et", "is", "ca", "gl",
+            ];
+            if SONIOX_SUPPORTED_LANGUAGES.contains(&validated) {
+                validated.to_string()
+            } else {
+                "en".to_string()
+            }
+        }
+        _ => validated.to_string(),
+    }
+}
+
 #[tauri::command]
 pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
+    let legacy_speech_language = store
+        .get("language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| Settings::default().speech_language.clone());
+    let legacy_translate_to_english = store
+        .get("translate_to_english")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let speech_language = store
+        .get("speech_language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or(legacy_speech_language);
+    let stored_transcription_task = store
+        .get("transcription_task")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let transcription_task = normalize_transcription_task(
+        stored_transcription_task.as_deref(),
+        legacy_translate_to_english,
+    );
+    let stored_final_text_language = store
+        .get("final_text_language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let final_text_language =
+        normalize_final_text_language(stored_final_text_language.as_deref(), &transcription_task);
 
     let settings = Settings {
         hotkey: store
@@ -159,14 +316,9 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("current_model_engine")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().current_model_engine.clone()),
-        language: store
-            .get("language")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| Settings::default().language),
-        translate_to_english: store
-            .get("translate_to_english")
-            .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| Settings::default().translate_to_english),
+        speech_language,
+        transcription_task,
+        final_text_language,
         theme: store
             .get("theme")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -250,9 +402,70 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("auto_paste_transcription")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().auto_paste_transcription),
+        sharing_port: store
+            .get("sharing_port")
+            .and_then(|v| v.as_u64().map(|n| n as u16))
+            .or(Settings::default().sharing_port),
+        sharing_password: None,
+        save_recordings: store
+            .get("save_recordings")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().save_recordings),
+        recording_retention_count: recording_retention_count_from_store(
+            store.get("recording_retention_count"),
+        ),
     };
+    let normalized_speech_language = normalize_speech_language_for_model(
+        &settings.current_model_engine,
+        &settings.current_model,
+        &settings.speech_language,
+    );
+    let mut settings = settings;
+    settings.speech_language = normalized_speech_language;
 
     Ok(settings)
+}
+
+async fn sync_running_sharing_server_to_model(
+    app: &AppHandle,
+    model_name: &str,
+    engine: &str,
+) -> Result<(), String> {
+    let server_manager = app.state::<AsyncMutex<RemoteServerManager>>();
+    let mut server = server_manager.lock().await;
+    if !server.is_running() {
+        return Ok(());
+    }
+
+    match resolve_shareable_model_config(app, model_name, engine).await {
+        Ok((model_path, resolved_engine)) => {
+            server.update_model(model_path, model_name.to_string(), resolved_engine);
+            Ok(())
+        }
+        Err(err) => {
+            log::warn!(
+                "Stopping sharing because the selected model is no longer shareable: {}",
+                err
+            );
+            server.stop().await;
+            drop(server);
+
+            let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+            let mut remote_settings = remote_state.lock().await;
+            remote_settings.server_config.enabled = false;
+            save_remote_settings(app, &remote_settings)?;
+
+            let _ = app.emit(
+                "sharing-status-changed",
+                json!({
+                    "enabled": false,
+                    "port": null,
+                    "model_name": null
+                }),
+            );
+            Ok(())
+        }
+    }
 }
 
 #[tauri::command]
@@ -290,10 +503,28 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set("current_model", json!(settings.current_model));
     store.set("current_model_engine", json!(settings.current_model_engine));
 
-    // Validate language before saving
-    let validated_language = validate_language(Some(&settings.language));
-    store.set("language", json!(validated_language));
-    store.set("translate_to_english", json!(settings.translate_to_english));
+    let validated_speech_language = normalize_speech_language_for_model(
+        &settings.current_model_engine,
+        &settings.current_model,
+        &settings.speech_language,
+    );
+    let normalized_transcription_task =
+        normalize_transcription_task(Some(&settings.transcription_task), false);
+    let normalized_final_text_language = normalize_final_text_language(
+        Some(&settings.final_text_language),
+        &normalized_transcription_task,
+    );
+    store.set("speech_language", json!(validated_speech_language));
+    store.set("transcription_task", json!(normalized_transcription_task));
+    store.set("final_text_language", json!(normalized_final_text_language));
+    // Keep legacy keys in sync during migration.
+    store.set("language", json!(validated_speech_language));
+    store.set(
+        "translate_to_english",
+        json!(task_uses_translate_to_english(
+            &normalized_transcription_task
+        )),
+    );
 
     store.set("theme", json!(settings.theme));
     store.set(
@@ -347,6 +578,27 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set(
         "auto_paste_transcription",
         json!(settings.auto_paste_transcription),
+    );
+
+    // Network sharing settings
+    if let Some(port) = settings.sharing_port {
+        store.set("sharing_port", json!(port));
+    }
+    store.delete("sharing_password");
+
+    if let Some(remote_state) = app.try_state::<AsyncMutex<RemoteSettings>>() {
+        let mut remote_settings = remote_state.lock().await;
+        if let Some(port) = settings.sharing_port {
+            remote_settings.server_config.port = port;
+        }
+        save_remote_settings(&app, &remote_settings)?;
+    }
+
+    // Recording persistence settings
+    store.set("save_recordings", json!(settings.save_recordings));
+    store.set(
+        "recording_retention_count",
+        recording_retention_count_to_value(settings.recording_retention_count),
     );
 
     // Save pill position if provided
@@ -450,6 +702,25 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         if let Err(e) = update_tray_menu(app.clone()).await {
             log::warn!("Failed to update tray menu after model change: {}", e);
             // Don't fail the whole operation if tray update fails
+        }
+
+        // Update the sharing server's model if it's running
+        sync_running_sharing_server_to_model(
+            &app,
+            &settings.current_model,
+            &settings.current_model_engine,
+        )
+        .await?;
+
+        // Emit model-changed event so frontend can refresh remote server status
+        if let Err(e) = app.emit(
+            "model-changed",
+            json!({
+                "model": settings.current_model,
+                "engine": settings.current_model_engine
+            }),
+        ) {
+            log::warn!("Failed to emit model-changed event: {}", e);
         }
     }
 
@@ -711,6 +982,161 @@ pub async fn get_supported_languages() -> Result<Vec<LanguageInfo>, String> {
 
 #[tauri::command]
 pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(), String> {
+    // Check if this is a remote server selection
+    if let Some(connection_id) = model_name.strip_prefix("remote_") {
+        log::info!("Setting active remote server from tray: {}", connection_id);
+
+        {
+            let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+            let settings = remote_state.lock().await;
+            let connection = settings
+                .get_connection(connection_id)
+                .ok_or_else(|| format!("Connection '{}' not found", connection_id))?;
+
+            if !should_include_remote_connection_in_tray(&connection.status) {
+                return Err("Cannot select this VoiceTypr instance as a remote server".to_string());
+            }
+        }
+
+        let refreshed_connection =
+            crate::commands::remote::refresh_saved_connection_status(&app, connection_id).await?;
+        if matches!(
+            refreshed_connection.status,
+            ConnectionStatus::SelfConnection
+        ) {
+            return Err("Cannot use this VoiceTypr instance as its own remote server".to_string());
+        }
+
+        // Stop network sharing if enabled (can't share while using remote)
+        // and remember that it was active for auto-restore later
+        if let Some(server_manager) = app.try_state::<AsyncMutex<RemoteServerManager>>() {
+            let manager = server_manager.lock().await;
+            if manager.get_status().enabled {
+                drop(manager); // Release lock before calling stop
+                log::info!("🔧 [TRAY] Stopping network sharing - selecting remote server (will remember for auto-restore)");
+                let mut manager = server_manager.lock().await;
+                manager.stop().await;
+
+                // Set flag to remember sharing was active
+                let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+                let mut settings = remote_state.lock().await;
+                settings.sharing_was_active = true;
+                save_remote_settings(&app, &settings)?;
+                log::info!("🔧 [TRAY] Network sharing stopped, sharing_was_active flag set");
+            }
+        }
+
+        // Set the remote server as active
+        let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+        {
+            let mut settings = remote_state.lock().await;
+            settings.set_active_connection(Some(connection_id.to_string()))?;
+            save_remote_settings(&app, &settings)?;
+        }
+
+        // Update the tray menu to reflect the new selection
+        update_tray_menu(app.clone()).await?;
+
+        // Emit event to update UI
+        if let Err(e) = app.emit(
+            "model-changed",
+            json!({
+                "model": model_name,
+                "engine": "remote"
+            }),
+        ) {
+            log::warn!("Failed to emit model-changed event: {}", e);
+        }
+
+        if let Err(e) = app.emit("sharing-status-changed", json!({ "refresh": true })) {
+            log::warn!("Failed to emit sharing-status-changed event: {}", e);
+        }
+
+        return Ok(());
+    }
+
+    // Clear any active remote server when selecting a local model
+    // and restore sharing if it was previously active
+    let should_restore_sharing;
+    let restore_port: u16;
+    let restore_password: Option<String>;
+    {
+        let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+        let mut settings = remote_state.lock().await;
+        should_restore_sharing = settings.sharing_was_active;
+        restore_port = settings.server_config.port;
+        restore_password = settings.server_config.password.clone();
+
+        if settings.active_connection_id.is_some() {
+            log::info!("Clearing active remote server - switching to local model");
+            settings.set_active_connection(None)?;
+        }
+
+        save_remote_settings(&app, &settings)?;
+    }
+
+    if let Err(e) = app.emit("sharing-status-changed", json!({ "refresh": true })) {
+        log::warn!("Failed to emit sharing-status-changed event: {}", e);
+    }
+
+    if should_restore_sharing {
+        if let Some(server_manager) = app.try_state::<AsyncMutex<RemoteServerManager>>() {
+            let server_name = hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "VoiceTypr Server".to_string());
+
+            log::info!(
+                "🔧 [TRAY] Auto-restoring network sharing on port {} with model {}",
+                restore_port,
+                model_name
+            );
+
+            let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
+            let engine = if model_name == "soniox" {
+                "soniox".to_string()
+            } else {
+                let guard = whisper_state.read().await;
+                if guard.get_models_status().contains_key(&model_name) {
+                    "whisper".to_string()
+                } else {
+                    "parakeet".to_string()
+                }
+            };
+
+            if let Ok((model_path, engine)) =
+                resolve_shareable_model_config(&app, &model_name, &engine).await
+            {
+                let mut manager = server_manager.lock().await;
+                if let Err(e) = manager
+                    .start(
+                        restore_port,
+                        restore_password,
+                        server_name,
+                        model_path,
+                        model_name.clone(),
+                        engine,
+                        Some(app.clone()),
+                    )
+                    .await
+                {
+                    log::warn!("🔧 [TRAY] Failed to auto-restore sharing: {}", e);
+                } else {
+                    {
+                        let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+                        let mut settings = remote_state.lock().await;
+                        settings.sharing_was_active = false;
+                        save_remote_settings(&app, &settings)?;
+                    }
+                    let _ = app.emit("sharing-status-changed", json!({ "refresh": true }));
+                    log::info!("🔧 [TRAY] Network sharing auto-restored successfully");
+                }
+            } else {
+                log::warn!("🔧 [TRAY] Skipping auto-restore of network sharing: selected model '{}' is not shareable", model_name);
+            }
+        }
+    }
+
     // Get current settings
     let mut settings = get_settings(app.clone()).await?;
 
@@ -746,10 +1172,14 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     // Update the model
     settings.current_model = model_name.clone();
     settings.current_model_engine = engine.clone();
-    settings.language = "en".to_string();
-
+    if model_requires_english_speech(&engine, &model_name) {
+        settings.speech_language = "en".to_string();
+    }
     // Save settings (this will also preload the model)
     save_settings(app.clone(), settings).await?;
+
+    // Keep a running sharing server truthful after the selected model changes
+    sync_running_sharing_server_to_model(&app, &model_name, &engine).await?;
 
     // Update the tray menu to reflect the new selection
     update_tray_menu(app.clone()).await?;
@@ -770,18 +1200,78 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     Ok(())
 }
 
+/// Increment the tray menu generation and return the new value.
+/// Used by callers who want to spawn background updates.
+pub fn next_tray_menu_generation() -> u64 {
+    TRAY_MENU_GENERATION.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// Get the current tray menu generation.
+pub fn current_tray_menu_generation() -> u64 {
+    TRAY_MENU_GENERATION.load(Ordering::SeqCst)
+}
+
 #[tauri::command]
 pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
+    update_tray_menu_with_generation(app, None).await
+}
+
+/// Update tray menu with optional generation check.
+/// If generation is provided, the update will be skipped if a newer generation was requested.
+pub async fn update_tray_menu_with_generation(
+    app: AppHandle,
+    my_generation: Option<u64>,
+) -> Result<(), String> {
+    use std::time::Instant;
+    let start_time = Instant::now();
+
+    let gen_info = my_generation
+        .map(|g| format!(" (gen={})", g))
+        .unwrap_or_default();
+    log::info!("⏱️ [TRAY TIMING] update_tray_menu called{}", gen_info);
+
     // Build the new menu
+    log::info!(
+        "⏱️ [TRAY TIMING] Building tray menu...{} (+{}ms)",
+        gen_info,
+        start_time.elapsed().as_millis()
+    );
     let new_menu = crate::build_tray_menu(&app)
         .await
         .map_err(|e| format!("Failed to build tray menu: {}", e))?;
+    log::info!(
+        "⏱️ [TRAY TIMING] Tray menu built{} (+{}ms)",
+        gen_info,
+        start_time.elapsed().as_millis()
+    );
+
+    // Check if this update is still current (if generation was provided)
+    if let Some(my_gen) = my_generation {
+        let current_gen = current_tray_menu_generation();
+        if my_gen < current_gen {
+            log::info!(
+                "⏱️ [TRAY TIMING] Skipping stale tray menu update (gen={} < current={})",
+                my_gen,
+                current_gen
+            );
+            return Ok(());
+        }
+    }
 
     // Update the tray menu
     if let Some(tray) = app.tray_by_id("main") {
+        log::info!(
+            "⏱️ [TRAY TIMING] Setting tray menu...{} (+{}ms)",
+            gen_info,
+            start_time.elapsed().as_millis()
+        );
         tray.set_menu(Some(new_menu))
             .map_err(|e| format!("Failed to set tray menu: {}", e))?;
-        log::info!("Tray menu updated successfully");
+        log::info!(
+            "⏱️ [TRAY TIMING] Tray menu set{} - total: {}ms",
+            gen_info,
+            start_time.elapsed().as_millis()
+        );
     } else {
         log::warn!("Tray icon not found");
     }
@@ -890,9 +1380,11 @@ pub async fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String
 
 #[cfg(test)]
 mod tests {
-    use super::{get_autostart_status, set_autostart};
-
-    use super::resolve_pill_indicator_mode;
+    use super::{
+        get_autostart_status, recording_retention_count_from_store,
+        recording_retention_count_to_value, resolve_pill_indicator_mode, set_autostart,
+    };
+    use serde_json::json;
 
     #[test]
     fn resolve_pill_indicator_mode_prefers_new_value() {
@@ -936,5 +1428,34 @@ mod tests {
         // further compile-time signature validation in lib.rs.
         let _get = get_autostart_status;
         let _set = set_autostart;
+    }
+
+    #[test]
+    fn recording_retention_count_missing_key_uses_default() {
+        assert_eq!(recording_retention_count_from_store(None), Some(50));
+    }
+
+    #[test]
+    fn recording_retention_count_null_loads_as_none() {
+        assert_eq!(
+            recording_retention_count_from_store(Some(serde_json::Value::Null)),
+            None
+        );
+    }
+
+    #[test]
+    fn recording_retention_count_numeric_loads_as_some() {
+        assert_eq!(
+            recording_retention_count_from_store(Some(json!(12))),
+            Some(12)
+        );
+    }
+
+    #[test]
+    fn recording_retention_count_none_saves_as_null() {
+        assert_eq!(
+            recording_retention_count_to_value(None),
+            serde_json::Value::Null
+        );
     }
 }

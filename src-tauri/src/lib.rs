@@ -14,6 +14,7 @@ use crate::utils::logger::*;
 
 mod ai;
 mod audio;
+pub mod cli;
 mod commands;
 mod ffmpeg;
 mod license;
@@ -22,13 +23,16 @@ mod menu;
 mod parakeet;
 mod recognition;
 mod recording;
+mod remote;
 mod secure_store;
 mod simple_cache;
 mod state;
 mod state_machine;
+mod transcription;
 mod utils;
 mod whisper;
 mod window_manager;
+mod writing;
 
 #[cfg(test)]
 mod tests;
@@ -47,12 +51,14 @@ pub fn hide_dock_icon(app: &tauri::AppHandle) {
 }
 
 use audio::recorder::AudioRecorder;
+use commands::remote::load_remote_settings;
 use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
         get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
-        list_provider_models, set_openai_config, test_openai_endpoint, update_ai_settings,
-        update_enhancement_options, validate_and_cache_api_key,
+        get_writing_settings, list_provider_models, set_openai_config, test_openai_endpoint,
+        update_ai_settings, update_enhancement_options, update_writing_settings,
+        validate_and_cache_api_key,
     },
     audio::*,
     clipboard::{copy_image_to_clipboard, save_image_to_file},
@@ -66,9 +72,17 @@ use commands::{
         preload_model, verify_model,
     },
     permissions::{
-        check_accessibility_permission, check_microphone_permission,
+        check_accessibility_permission, check_microphone_permission, open_accessibility_settings,
         request_accessibility_permission, request_microphone_permission,
         test_automation_permission,
+    },
+    remote::{
+        add_remote_server, check_remote_server_status, get_active_remote_server,
+        get_firewall_status, get_local_ips, get_local_machine_id, get_sharing_status,
+        list_remote_servers, open_firewall_settings, refresh_active_remote_server_status,
+        refresh_remote_servers, remove_remote_server, set_active_remote_server, start_sharing,
+        stop_sharing, test_remote_connection, test_remote_server, transcribe_remote,
+        update_remote_server,
     },
     reset::reset_app_data,
     settings::*,
@@ -77,12 +91,14 @@ use commands::{
     utils::export_transcriptions,
     window::*,
 };
+use remote::lifecycle::RemoteServerManager;
 use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
 
 use menu::build_tray_menu;
 pub use recognition::{
-    auto_select_model_if_needed, recognition_availability_snapshot, RecognitionAvailabilitySnapshot,
+    auto_select_model_if_needed, get_recognition_availability_snapshot,
+    recognition_availability_snapshot, RecognitionAvailabilitySnapshot,
 };
 pub use state::{
     emit_to_all, emit_to_window, flush_pill_event_queue, get_recording_state,
@@ -359,6 +375,127 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Cache size is 1: only the current model (1-3GB RAM)
             // When user switches models, old one is unloaded immediately
             app.manage(AsyncMutex::new(TranscriberCache::new()));
+
+            // Initialize remote transcription state
+            app.manage(AsyncMutex::new(RemoteServerManager::new()));
+            // Load saved remote settings from store (persists connections across restarts)
+            let remote_settings = load_remote_settings(app.handle());
+            let connection_count = remote_settings.saved_connections.len();
+            let active_id = remote_settings.active_connection_id.clone();
+            let sharing_was_enabled = remote_settings.server_config.enabled;
+            log::info!(
+                "🌐 [STARTUP] Remote settings loaded: {} connections, active_connection_id={:?}, sharing_enabled={}",
+                connection_count,
+                active_id,
+                sharing_was_enabled
+            );
+            app.manage(AsyncMutex::new(remote_settings));
+            log::info!("🌐 Remote transcription state initialized ({} saved connections)", connection_count);
+
+            // Auto-start network sharing if it was enabled before app closed
+            // BUT only if no remote server is active (can't share and use remote at same time)
+            if sharing_was_enabled && active_id.is_none() {
+                let app_handle_for_sharing = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+
+                    log::info!("🌐 [STARTUP] Auto-starting network sharing (was enabled before shutdown)");
+
+                    let server_manager = app_handle_for_sharing.state::<AsyncMutex<crate::remote::lifecycle::RemoteServerManager>>();
+                    let whisper_manager = app_handle_for_sharing.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
+                    let remote_state = app_handle_for_sharing.state::<AsyncMutex<crate::remote::settings::RemoteSettings>>();
+
+                    let refreshed_remote_settings = {
+                        let settings = remote_state.lock().await;
+                        settings.clone()
+                    };
+
+                    if !refreshed_remote_settings.server_config.enabled {
+                        log::info!("🌐 [STARTUP] Skipping network sharing auto-start: sharing was disabled during startup delay");
+                        return;
+                    }
+
+                    if refreshed_remote_settings.active_connection_id.is_some() {
+                        log::info!(
+                            "🌐 [STARTUP] Skipping network sharing auto-start: remote server became active during startup delay (id={:?})",
+                            refreshed_remote_settings.active_connection_id
+                        );
+                        return;
+                    }
+
+                    let restore_port = refreshed_remote_settings.server_config.port;
+                    let restore_password = refreshed_remote_settings.server_config.password.clone();
+
+                    let result = async {
+                        let server_name = hostname::get()
+                            .ok()
+                            .and_then(|h| h.into_string().ok())
+                            .unwrap_or_else(|| "VoiceTypr Server".to_string());
+
+                        let store = app_handle_for_sharing
+                            .store("settings")
+                            .map_err(|e| format!("Failed to access store: {}", e))?;
+
+                        let stored_model = store
+                            .get("current_model")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                            .unwrap_or_default();
+
+                        let stored_engine = store
+                            .get("current_model_engine")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                            .unwrap_or_else(|| "whisper".to_string());
+
+                        let model_name = if stored_model.is_empty() {
+                            let wm = whisper_manager.read().await;
+                            wm.get_first_downloaded_model()
+                                .ok_or("No model downloaded")?
+                        } else {
+                            stored_model
+                        };
+
+                        let (model_path, validated_engine) = match crate::commands::remote::resolve_shareable_model_config(
+                            &app_handle_for_sharing,
+                            &model_name,
+                            &stored_engine,
+                        ).await {
+                            Ok(config) => config,
+                            Err(e) => {
+                                let mut settings = remote_state.lock().await;
+                                settings.server_config.enabled = false;
+                                settings.sharing_was_active = false;
+                                let _ = crate::commands::remote::save_remote_settings(&app_handle_for_sharing, &settings);
+                                return Err(e);
+                            }
+                        };
+
+                        let mut manager = server_manager.lock().await;
+                        manager
+                            .start(
+                                restore_port,
+                                restore_password,
+                                server_name,
+                                model_path,
+                                model_name,
+                                validated_engine,
+                                Some(app_handle_for_sharing.clone()),
+                            )
+                            .await?;
+
+                        Ok::<(), String>(())
+                    }.await;
+
+                    match result {
+                        Ok(()) => log::info!("🌐 [STARTUP] Network sharing auto-started successfully on port {}", restore_port),
+                        Err(e) => log::warn!("🌐 [STARTUP] Failed to auto-start network sharing: {}", e),
+                    }
+                });
+            } else if sharing_was_enabled && active_id.is_some() {
+                log::info!(
+                    "🌐 [STARTUP] Skipping network sharing auto-start: remote server is active (id={:?})",
+                    active_id
+                );
+            }
 
             // Initialize unified application state
             app.manage(AppState::new());
@@ -1004,12 +1141,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Hide main window on start (menu bar only)
-            // Check if this is first launch by looking for current_model setting
+            // Only a configured local/cloud model hides the main window immediately.
+            // Remote-only sessions stay visible until startup checks verify the remote is available.
             let should_hide_main = if let Ok(store) = app.store("settings") {
-                // If user has a model configured, they've completed onboarding
-                store.get("current_model")
+                let has_local_or_cloud_model = store
+                    .get("current_model")
                     .and_then(|v| v.as_str().map(|s| !s.is_empty()))
-                    .unwrap_or(false)
+                    .unwrap_or(false);
+
+                has_local_or_cloud_model && active_id.is_none()
             } else {
                 false
             };
@@ -1023,7 +1163,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 #[cfg(target_os = "macos")]
                 hide_dock_icon(app.app_handle());
             } else {
-                log::info!("👋 First launch or no model configured - keeping main window visible");
+                log::info!("👋 First launch or no source configured - keeping main window visible");
                 // Show dock icon when main window is visible
                 #[cfg(target_os = "macos")]
                 show_dock_icon(app.app_handle());
@@ -1064,17 +1204,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             list_downloaded_models,
             cancel_download,
             cleanup_old_transcriptions,
+            get_recordings_directory,
+            open_recordings_folder,
+            check_recording_exists,
+            get_recording_path,
+            save_retranscription,
+            update_transcription,
+            show_in_folder,
             get_transcription_history,
+            get_transcription_count,
             delete_transcription_entry,
             clear_all_transcriptions,
             export_transcriptions,
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,
+            recreate_pill_widget,
             hide_toast_window,
             focus_main_window,
             check_accessibility_permission,
             request_accessibility_permission,
+            open_accessibility_settings,
             check_microphone_permission,
             request_microphone_permission,
             test_automation_permission,
@@ -1101,6 +1251,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             disable_ai_enhancement,
             get_enhancement_options,
             update_enhancement_options,
+            get_writing_settings,
+            update_writing_settings,
             list_provider_models,
             keyring_set,
             keyring_get,
@@ -1114,6 +1266,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_autostart_status,
             set_autostart,
             get_device_id,
+            // Remote transcription commands
+            refresh_active_remote_server_status,
+            get_recognition_availability_snapshot,
+            start_sharing,
+            stop_sharing,
+            get_sharing_status,
+            get_local_ips,
+            get_local_machine_id,
+            get_firewall_status,
+            open_firewall_settings,
+            add_remote_server,
+            remove_remote_server,
+            update_remote_server,
+            list_remote_servers,
+            test_remote_connection,
+            test_remote_server,
+            set_active_remote_server,
+            get_active_remote_server,
+            transcribe_remote,
+            refresh_remote_servers,
+            check_remote_server_status,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1171,7 +1344,31 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         &[("stage", "comprehensive_validation")],
     );
 
-    let availability = recognition_availability_snapshot(&app).await;
+    if let Err(err) = crate::commands::license::check_license_status_internal(&app).await {
+        log::warn!(
+            "Failed to warm runtime license cache during startup checks: {}",
+            err
+        );
+    }
+
+    if let Some(remote_settings) =
+        app.try_state::<AsyncMutex<crate::remote::settings::RemoteSettings>>()
+    {
+        if let Err(err) = crate::commands::remote::refresh_active_remote_server_status_impl(
+            &app,
+            &remote_settings,
+        )
+        .await
+        {
+            log::warn!(
+                "Failed to refresh active remote status during startup checks: {}",
+                err
+            );
+        }
+    }
+
+    let availability = crate::recognition::emit_recognition_availability(&app).await;
+
     log_model_operation(
         "AVAILABILITY_CHECK",
         "all",
@@ -1183,19 +1380,35 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         None,
     );
 
-    if let Err(err) = app.emit("recognition-availability", availability.clone()) {
-        log::warn!("Failed to emit recognition availability event: {}", err);
-    }
-
     if availability.any_available() {
         if let Err(e) = auto_select_model_if_needed(&app, &availability).await {
             log::warn!("Failed to auto-select default model: {}", e);
+        }
+        if availability.remote_available {
+            let onboarding_completed = app
+                .store("settings")
+                .ok()
+                .and_then(|store| store.get("onboarding_completed").and_then(|v| v.as_bool()))
+                .unwrap_or(false);
+
+            if onboarding_completed {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+                #[cfg(target_os = "macos")]
+                hide_dock_icon(&app);
+            }
         }
     }
 
     if !availability.any_available() {
         log::warn!("⚠️  No speech recognition engines are ready");
         let _ = app.emit("no-models-on-startup", ());
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+        }
+        #[cfg(target_os = "macos")]
+        show_dock_icon(&app);
     } else {
         log::info!("✅ At least one speech recognition engine is ready");
     }
@@ -1261,19 +1474,24 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
 
     // Pre-check recording settings
     if let Ok(store) = app.store("settings") {
-        // Validate language setting
-        let language = store
-            .get("language")
+        // Validate speech language setting and keep the legacy key in sync.
+        let speech_language = store
+            .get("speech_language")
+            .or_else(|| store.get("language"))
             .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-        if let Some(lang) = language {
+        if let Some(lang) = speech_language {
             use crate::whisper::languages::validate_language;
             let validated = validate_language(Some(&lang));
             if validated != lang.as_str() {
                 log::warn!(
-                    "Invalid language '{}' in settings, resetting to '{}'",
+                    "Invalid speech language '{}' in settings, resetting to '{}'",
                     lang,
                     validated
+                );
+                store.set(
+                    "speech_language",
+                    serde_json::Value::String(validated.to_string()),
                 );
                 store.set("language", serde_json::Value::String(validated.to_string()));
                 let _ = store.save();

@@ -59,10 +59,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     loadSettings();
   }, [loadSettings]);
 
-  // Listen for settings changes from other sources (e.g., tray menu)
-  // Note: We don't listen to 'settings-changed' here because it causes race conditions
-  // with the optimistic updates in updateSettings. The frontend already updates state
-  // after save_settings completes, so we don't need to reload.
+  // Listen for settings changes from other sources (e.g., tray menu or backend auto-selection)
   useEffect(() => {
     const unlistenModel = listen('model-changed', () => {
       loadSettings();
@@ -76,8 +73,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       loadSettings();
     });
 
+    const unlistenSettings = listen('settings-changed', () => {
+      loadSettings();
+    });
+
     return () => {
-      Promise.all([unlistenModel, unlistenLanguage, unlistenAudioDevice]).then(unsubs => {
+      Promise.all([unlistenModel, unlistenLanguage, unlistenAudioDevice, unlistenSettings]).then(unsubs => {
         unsubs.forEach(unsub => unsub());
       });
     };

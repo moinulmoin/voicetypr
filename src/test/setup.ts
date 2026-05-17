@@ -22,7 +22,7 @@ const defaultIpcHandler = (cmd: string) => {
     case 'get_settings':
       return {
         hotkey: 'CommandOrControl+Shift+Space',
-        language: 'en',
+        speech_language: 'en',
         theme: 'system',
         current_model: 'base.en',
         current_model_engine: 'whisper',
@@ -112,7 +112,7 @@ const defaultIpcHandler = (cmd: string) => {
       return { enabled: false, provider: '', model: '', hasApiKey: false };
 
     case 'get_enhancement_options':
-      return { preset: 'Default', custom_vocabulary: [] };
+      return { preset: 'Default' };
 
     case 'init_cleanup_schedule':
       return true;

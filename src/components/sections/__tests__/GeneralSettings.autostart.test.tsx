@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeneralSettings } from '../GeneralSettings';
 
@@ -118,6 +118,10 @@ vi.mock('@/components/MicrophoneSelection', () => ({
   MicrophoneSelection: () => <div data-testid="microphone-selection" />,
 }));
 
+vi.mock('../NetworkSharingCard', () => ({
+  NetworkSharingCard: () => <div data-testid="network-sharing-card" />,
+}));
+
 vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
@@ -159,8 +163,15 @@ describe('GeneralSettings autostart via backend commands', () => {
   });
 
   it('calls set_autostart when toggled and updates UI from response', async () => {
-    mockInvoke.mockResolvedValueOnce(false); // initial mount
-    mockInvoke.mockResolvedValueOnce(true); // toggle response
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'get_autostart_status') {
+        return Promise.resolve(false);
+      }
+      if (command === 'set_autostart') {
+        return Promise.resolve(true);
+      }
+      return Promise.resolve(false);
+    });
 
     render(<GeneralSettings />);
 
@@ -169,7 +180,9 @@ describe('GeneralSettings autostart via backend commands', () => {
     });
 
     const autostartSwitch = screen.getByRole('switch', { name: /autostart/i });
-    fireEvent.click(autostartSwitch);
+    await act(async () => {
+      fireEvent.click(autostartSwitch);
+    });
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('set_autostart', {
@@ -191,9 +204,16 @@ describe('GeneralSettings autostart via backend commands', () => {
   });
 
   it('shows correct UI when backend returns different state than requested', async () => {
-    mockInvoke.mockResolvedValueOnce(false); // initial mount
-    // User requests enable, but backend returns false (OS failure)
-    mockInvoke.mockResolvedValueOnce(false);
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'get_autostart_status') {
+        return Promise.resolve(false);
+      }
+      if (command === 'set_autostart') {
+        // User requests enable, but backend returns false (OS failure)
+        return Promise.resolve(false);
+      }
+      return Promise.resolve(false);
+    });
 
     render(<GeneralSettings />);
 
@@ -202,7 +222,9 @@ describe('GeneralSettings autostart via backend commands', () => {
     });
 
     const autostartSwitch = screen.getByRole('switch', { name: /autostart/i });
-    fireEvent.click(autostartSwitch);
+    await act(async () => {
+      fireEvent.click(autostartSwitch);
+    });
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('set_autostart', {

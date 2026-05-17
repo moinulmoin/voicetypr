@@ -10,7 +10,7 @@ import {
   AlertCircle
 } from "lucide-react";
 import { toast } from "sonner";
-// invoke handled inside zustand store
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useModelAvailability } from "@/hooks/useModelAvailability";
@@ -24,8 +24,9 @@ import { useUploadStore } from "@/state/upload";
 export function AudioUploadSection() {
   const [copied, setCopied] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [activeRemoteServer, setActiveRemoteServer] = useState<string | null>(null);
   const { settings } = useSettings();
-  const { selectedModelAvailable } = useModelAvailability();
+  const { selectedModelAvailable, remoteAvailable } = useModelAvailability();
   const {
     selectedFile,
     status,
@@ -39,6 +40,59 @@ export function AudioUploadSection() {
   const isProcessing = status === 'processing';
   const effectiveFileName = selectedFile?.name || null;
   const hasEffectiveSelection = !!selectedFile;
+
+  const resolveHistoryModelName = async (remoteServerIdOverride?: string | null) => {
+    const effectiveRemoteId = remoteServerIdOverride ?? activeRemoteServer;
+    if (!effectiveRemoteId) {
+      return settings?.current_model_engine === 'soniox' ? 'Soniox (Cloud)' : (settings?.current_model || '');
+    }
+
+    try {
+      const servers = await invoke<Array<{
+        id: string;
+        name?: string;
+        host: string;
+        port: number;
+      }>>('list_remote_servers');
+      if (!Array.isArray(servers)) {
+        return `Remote: ${effectiveRemoteId}`;
+      }
+
+      const activeServer = servers.find((server) => server.id === effectiveRemoteId);
+
+      if (!activeServer) {
+        return `Remote: ${effectiveRemoteId}`;
+      }
+
+      const displayName = activeServer.name || `${activeServer.host}:${activeServer.port}`;
+      return `Remote: ${displayName}`;
+    } catch (error) {
+      console.error('Failed to resolve active remote server name:', error);
+      return `Remote: ${effectiveRemoteId}`;
+    }
+  };
+
+  useEffect(() => {
+    const loadActiveRemoteServer = async () => {
+      try {
+        const activeId = await invoke<string | null>('get_active_remote_server');
+        setActiveRemoteServer(activeId);
+      } catch (error) {
+        console.error('Failed to get active remote server:', error);
+        setActiveRemoteServer(null);
+      }
+    };
+
+    loadActiveRemoteServer();
+
+    const unlistenModelChanged = listen('model-changed', loadActiveRemoteServer);
+    const unlistenSharingChanged = listen('sharing-status-changed', loadActiveRemoteServer);
+
+    return () => {
+      unlistenModelChanged.then((fn) => fn());
+      unlistenSharingChanged.then((fn) => fn());
+    };
+  }, []);
 
   const handleFileSelect = async () => {
     try {
@@ -67,13 +121,25 @@ export function AudioUploadSection() {
       return;
     }
 
-    if (!settings?.current_model) {
-      toast.error("Select a speech model in Models before transcribing.");
+    const latestActiveRemoteServer = await invoke<string | null>('get_active_remote_server')
+      .catch(() => activeRemoteServer);
+    const latestAvailability = await invoke<{ remote_available?: boolean } | null>('get_recognition_availability_snapshot')
+      .catch(() => null);
+    const effectiveRemoteSelected = !!latestActiveRemoteServer;
+    const effectiveRemoteAvailable = latestAvailability?.remote_available ?? remoteAvailable;
+
+    if (effectiveRemoteSelected && !effectiveRemoteAvailable) {
+      toast.error('Selected remote unavailable. Reconnect or choose another source.');
       return;
     }
 
-    if (selectedModelAvailable === false) {
-      const engine = settings.current_model_engine || 'whisper';
+    if (!settings?.current_model && !effectiveRemoteAvailable) {
+      toast.error('Select a speech model in Models before transcribing.');
+      return;
+    }
+
+    if (!effectiveRemoteSelected && selectedModelAvailable === false) {
+      const engine = settings?.current_model_engine || 'whisper';
       toast.error(
         engine === 'soniox'
           ? 'Connect your cloud provider before transcribing audio.'
@@ -87,12 +153,16 @@ export function AudioUploadSection() {
       return;
     }
 
-    await start(settings.current_model, settings.current_model_engine || 'whisper');
+    const result = await start(
+      settings?.current_model || '',
+      effectiveRemoteSelected ? null : (settings?.current_model_engine || 'whisper'),
+      await resolveHistoryModelName(latestActiveRemoteServer)
+    );
 
     try {
-      if (storeError) {
-        toast.error(storeError);
-      } else if (status === 'done') {
+      if (result?.outcome === 'error') {
+        toast.error(result.message);
+      } else if (result?.outcome === 'success') {
         toast.success("Transcription completed and saved to history!");
       }
     } catch (error) {
@@ -174,7 +244,7 @@ export function AudioUploadSection() {
           <div>
             <h1 className="text-2xl font-semibold">Upload files</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Transcribe audio or video files locally
+              Transcribe audio or video files using your selected transcription source
             </p>
           </div>
         </div>
@@ -340,7 +410,7 @@ export function AudioUploadSection() {
                     <p>• <strong>Supported Formats:</strong> WAV, MP3, M4A, FLAC, OGG, MP4, WebM</p>
                     <p>• <strong>Conversion:</strong> Non-WAV files will be converted to 16 kHz mono WAV before transcription; this may take time</p>
                     <p>• <strong>Video:</strong> Video files are supported; audio is extracted first</p>
-                    <p>• <strong>Processing:</strong> Happens locally on your device</p>
+                    <p>• <strong>Processing:</strong> Uses your selected local, cloud, or remote transcription source</p>
                     <p>• <strong>Duration:</strong> Longer media may take longer and use more memory</p>
                     <p className="text-amber-600 font-medium mt-2">
                       ⚠️ Long media (4-5+ hours) may take several minutes and use significant memory

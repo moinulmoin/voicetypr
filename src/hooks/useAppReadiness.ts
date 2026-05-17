@@ -21,7 +21,9 @@ export function useAppReadiness() {
   const canRecord = Boolean(
     microphone.hasPermission && 
     models.hasModels && 
-    models.selectedModelAvailable
+    models.selectedModelAvailable &&
+    license.isValid &&
+    !license.isChecking
   );
 
   const canAutoInsert = Boolean(accessibility.hasPermission);
@@ -30,7 +32,9 @@ export function useAppReadiness() {
     microphone.hasPermission &&
     accessibility.hasPermission &&
     models.hasModels &&
-    models.selectedModelAvailable
+    models.selectedModelAvailable &&
+    license.isValid &&
+    !license.isChecking
   );
 
   // Check if any hook is still loading

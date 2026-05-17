@@ -1,6 +1,6 @@
 # VoiceTypr
 
-macOS desktop app for offline voice transcription using Whisper AI. Built with Tauri v2 (Rust backend) and React 19 (TypeScript frontend). Features system-wide hotkey recording, automatic text insertion at cursor, and local model management.
+macOS desktop app for offline voice transcription using Whisper AI. Built with Tauri v2 (Rust backend) and React 19 (TypeScript frontend). Features system-wide hotkey recording, automatic text insertion at cursor, local model management, and **remote transcription via network sharing**.
 
 ## Core Commands
 
@@ -41,6 +41,12 @@ src-tauri/src/                # Rust backend
 ├── commands/                 # Tauri command handlers
 ├── audio/                    # CoreAudio recording
 ├── whisper/                  # Transcription engine
+├── remote/                   # Network sharing (server + client)
+│   ├── server.rs             # HTTP server (warp)
+│   ├── client.rs             # HTTP client for remote transcription
+│   ├── lifecycle.rs          # Server start/stop management
+│   └── settings.rs           # Saved connections persistence
+├── menu/                     # System tray menu
 ├── ai/                       # AI model management
 ├── parakeet/                 # Parakeet sidecar integration
 ├── state/                    # Backend state management
@@ -98,13 +104,16 @@ git add -A && git commit -m "feat: description"
 
 - `src-tauri/src/lib.rs` — Main Rust entry, command registration
 - `src-tauri/src/commands/` — All Tauri command implementations
+- `src-tauri/src/commands/audio.rs` — Recording and transcription flow
+- `src-tauri/src/commands/remote.rs` — Remote server commands
+- `src-tauri/src/remote/` — Network sharing implementation
+- `src-tauri/src/menu/tray.rs` — System tray menu
 - `src/hooks/` — React hooks for Tauri integration
 - `src/components/tabs/` — Main UI tab components
+- `src/components/sections/` — Section components (ModelsSection, NetworkSharingSection)
 - `src-tauri/capabilities/` — Tauri permission definitions
 
 ## References
 
-- `agent-docs/ARCHITECTURE.md` — Detailed architecture diagrams
-- `agent-docs/EVENT-FLOW-ANALYSIS.md` — Event system documentation
-- `CLAUDE.md` — Coding assistant guidelines
+- `CLAUDE.md` — Full coding guidelines
 - `README.md` — Product overview

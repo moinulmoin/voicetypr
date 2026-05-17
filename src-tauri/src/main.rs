@@ -2,6 +2,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    match voicetypr_lib::cli::maybe_run_from_env_with_context(tauri::generate_context!()) {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("VoiceTypr CLI failed: {}", e);
+            std::process::exit(1);
+        }
+    }
+
     if let Err(e) = voicetypr_lib::run() {
         eprintln!("VoiceTypr failed to start: {}", e);
         std::process::exit(1);

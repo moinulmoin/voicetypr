@@ -1,7 +1,13 @@
 use crate::ai::openai::{is_unsupported_token_parameter_error, model_uses_max_completion_tokens};
 use crate::ai::{AIEnhancementRequest, AIProviderConfig, AIProviderFactory, EnhancementOptions};
 use crate::commands::audio::pill_toast;
+use crate::commands::settings::{
+    normalize_final_text_language, normalize_speech_language_for_model,
+    normalize_transcription_task, task_uses_translate_to_english,
+    FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+};
 use crate::secure_store;
+use crate::writing::{load_writing_settings, save_writing_settings, WritingSettings};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -749,7 +755,27 @@ pub async fn update_enhancement_options(
 }
 
 #[tauri::command]
-pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Result<String, String> {
+pub async fn get_writing_settings(app: tauri::AppHandle) -> Result<WritingSettings, String> {
+    load_writing_settings(&app)
+}
+
+#[tauri::command]
+pub async fn update_writing_settings(
+    settings: WritingSettings,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    save_writing_settings(&app, &settings)
+}
+
+#[tauri::command]
+pub async fn enhance_transcription(
+    text: String,
+    transcript_language: Option<String>,
+    ai_enabled_override: Option<bool>,
+    output_language_override: Option<String>,
+    context_override: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
     // Quick validation
     if text.trim().is_empty() {
         log::debug!("Skipping enhancement for empty text");
@@ -758,10 +784,12 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
 
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
-    let enabled = store
-        .get("ai_enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let enabled = ai_enabled_override.unwrap_or_else(|| {
+        store
+            .get("ai_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    });
 
     if !enabled {
         log::debug!("AI enhancement is disabled");
@@ -893,12 +921,61 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
     // Load enhancement options
     let enhancement_options = get_enhancement_options(app.clone()).await.ok();
 
-    // Get the user's selected language for formatting output
-    let language = {
+    let language = if let Some(output_language) = output_language_override {
+        Some(output_language)
+    } else {
         let lang_store = app.store("settings").map_err(|e| e.to_string())?;
-        lang_store
+        let legacy_speech_language = lang_store
             .get("language")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "en".to_string());
+        let legacy_translate_to_english = lang_store
+            .get("translate_to_english")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let raw_speech_language = lang_store
+            .get("speech_language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or(legacy_speech_language);
+        let current_model = lang_store
+            .get("current_model")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+        let current_model_engine = lang_store
+            .get("current_model_engine")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "whisper".to_string());
+        let speech_language = normalize_speech_language_for_model(
+            &current_model_engine,
+            &current_model,
+            &raw_speech_language,
+        );
+        let stored_transcription_task = lang_store
+            .get("transcription_task")
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let transcription_task = normalize_transcription_task(
+            stored_transcription_task.as_deref(),
+            legacy_translate_to_english,
+        );
+        let stored_final_text_language = lang_store
+            .get("final_text_language")
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let final_text_language = normalize_final_text_language(
+            stored_final_text_language.as_deref(),
+            &transcription_task,
+        );
+
+        if final_text_language == FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT {
+            if let Some(transcript_language) = transcript_language.clone() {
+                Some(transcript_language)
+            } else if task_uses_translate_to_english(&transcription_task) {
+                Some("en".to_string())
+            } else {
+                Some(speech_language)
+            }
+        } else {
+            Some(final_text_language)
+        }
     };
 
     log::info!(
@@ -925,7 +1002,7 @@ pub async fn enhance_transcription(text: String, app: tauri::AppHandle) -> Resul
 
     let request = AIEnhancementRequest {
         text: text.clone(),
-        context: None,
+        context: context_override,
         options: enhancement_options,
         language,
     };

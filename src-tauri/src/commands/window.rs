@@ -158,6 +158,33 @@ pub async fn hide_toast_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Force recreate the pill widget window
+/// Use this when the pill window exists but isn't rendering properly
+#[tauri::command]
+pub async fn recreate_pill_widget(app: AppHandle) -> Result<(), String> {
+    log::info!("Force recreating pill widget...");
+
+    // Get the window manager from app state
+    let app_state = app.state::<AppState>();
+    let window_manager = app_state
+        .get_window_manager()
+        .ok_or("Window manager not initialized")?;
+
+    // First, close any existing pill window
+    if let Err(e) = window_manager.close_pill_window().await {
+        log::warn!("Error closing existing pill window (may not exist): {}", e);
+    }
+
+    // Wait a moment for the window to fully close
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Now show a fresh pill window
+    window_manager.show_pill_window().await?;
+
+    log::info!("Pill widget recreated successfully");
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn focus_main_window(app: AppHandle) -> Result<(), String> {
     // Get the window manager from app state

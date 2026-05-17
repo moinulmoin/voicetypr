@@ -146,4 +146,35 @@ describe('RecordingsTab', () => {
     });
   });
 
+  it('reloads history when transcription-updated event is fired', async () => {
+    const mockHistory = [
+      {
+        timestamp: '2024-01-01T00:00:00Z',
+        text: 'Re-transcribed text',
+        model: 'Remote: Office PC'
+      }
+    ];
+
+    let callCount = 0;
+    invokeMock = vi.fn(async (cmd: string) => {
+      if (cmd === 'get_transcription_history') {
+        callCount++;
+        return callCount === 1 ? [] : mockHistory;
+      }
+      return null;
+    });
+
+    render(<RecordingsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('History count: 0')).toBeInTheDocument();
+    });
+
+    await act(async () => { await emit('transcription-updated'); });
+
+    await waitFor(() => {
+      expect(screen.getByText('History count: 1')).toBeInTheDocument();
+    });
+  });
+
 });
