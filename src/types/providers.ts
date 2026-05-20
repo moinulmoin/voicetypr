@@ -26,16 +26,16 @@ export const AI_PROVIDERS: AIProviderConfig[] = [
     apiKeyUrl: "https://platform.openai.com/api-keys",
   },
   {
-    id: "anthropic",
-    name: "Anthropic",
-    color: "text-orange-600",
-    apiKeyUrl: "https://console.anthropic.com/settings/keys",
-  },
-  {
     id: "gemini",
     name: "Google Gemini",
     color: "text-blue-600",
     apiKeyUrl: "https://aistudio.google.com/apikey",
+  },
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    color: "text-orange-600",
+    apiKeyUrl: "https://console.anthropic.com/settings/keys",
   },
   {
     id: "custom",
