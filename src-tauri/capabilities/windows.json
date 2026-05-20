@@ -31,7 +31,11 @@
     "shell:allow-open",
     { "identifier": "shell:allow-spawn", "allow": [
       { "name": "ffmpeg.exe", "sidecar": true },
-      { "name": "ffprobe.exe", "sidecar": true }
+      { "name": "ffprobe.exe", "sidecar": true },
+      { "name": "formatting-sidecar", "sidecar": true }
+    ] },
+    { "identifier": "shell:allow-stdin-write", "allow": [
+      { "name": "formatting-sidecar", "sidecar": true }
     ] },
     "autostart:allow-enable",
     "autostart:allow-disable",

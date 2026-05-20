@@ -26,18 +26,20 @@ fn default_preserve_literal() -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum WritingMode {
     CleanDictation,
-    Prompt,
-    Email,
-    Commit,
+    Writing,
+    Notes,
+    Message,
+    Coding,
 }
 
 impl From<EnhancementPreset> for WritingMode {
     fn from(value: EnhancementPreset) -> Self {
         match value {
             EnhancementPreset::Default => Self::CleanDictation,
-            EnhancementPreset::Prompts => Self::Prompt,
-            EnhancementPreset::Email => Self::Email,
-            EnhancementPreset::Commit => Self::Commit,
+            EnhancementPreset::Writing => Self::Writing,
+            EnhancementPreset::Notes => Self::Notes,
+            EnhancementPreset::Message => Self::Message,
+            EnhancementPreset::Coding => Self::Coding,
         }
     }
 }
@@ -536,6 +538,23 @@ fn build_ai_context(
     (!sections.is_empty()).then(|| sections.join(" "))
 }
 
+fn record_output_language_transform_fallback(
+    warnings: &mut Vec<WritingWarning>,
+    output_language: &mut String,
+    transcript_language: Option<&str>,
+    code: &str,
+    message: String,
+) {
+    warnings.push(WritingWarning {
+        code: code.to_string(),
+        message,
+    });
+
+    if let Some(language) = transcript_language {
+        *output_language = language.to_string();
+    }
+}
+
 pub async fn process_transcription(
     app: AppHandle,
     transcription: TranscriptionResult,
@@ -548,7 +567,7 @@ pub async fn process_transcription(
             .task
             .fallback_transcript_language(transcription.spoken_language.as_deref())
     });
-    let output_language = resolve_output_language(&profile, &transcription);
+    let mut output_language = resolve_output_language(&profile, &transcription);
     let context_hint = capture_context_hint(settings.context_policy);
 
     let mut applied_operations = Vec::new();
@@ -589,11 +608,13 @@ pub async fn process_transcription(
 
     let final_text = if literal_locked {
         if needs_output_language_transform {
-            warnings.push(WritingWarning {
-                code: "snippet_literal_preserved".to_string(),
-                message: "Snippet preserved literally; output language was not transformed"
-                    .to_string(),
-            });
+            record_output_language_transform_fallback(
+                &mut warnings,
+                &mut output_language,
+                transcript_language.as_deref(),
+                "snippet_literal_preserved",
+                "Snippet preserved literally; output language was not transformed".to_string(),
+            );
         }
         working_text.clone()
     } else if ai_enabled {
@@ -629,13 +650,26 @@ pub async fn process_transcription(
                             format!("Applied {:?} cleanup", profile.mode)
                         },
                     });
+                } else if needs_output_language_transform {
+                    record_output_language_transform_fallback(
+                        &mut warnings,
+                        &mut output_language,
+                        transcript_language.as_deref(),
+                        "output_language_transform_failed",
+                        format!(
+                            "AI formatting returned the original transcript; output language remains {}",
+                            transcript_language.as_deref().unwrap_or("the transcript language")
+                        ),
+                    );
                 }
+
                 if context_hint.is_some() {
                     applied_operations.push(AppliedWritingOperation {
                         kind: WritingOperationKind::ContextHint,
                         detail: "Used active app context hint".to_string(),
                     });
                 }
+
                 enhanced
             }
             Err(error) if !needs_output_language_transform => {
@@ -695,16 +729,20 @@ mod tests {
             WritingMode::CleanDictation
         );
         assert_eq!(
-            WritingMode::from(EnhancementPreset::Prompts),
-            WritingMode::Prompt
+            WritingMode::from(EnhancementPreset::Writing),
+            WritingMode::Writing
         );
         assert_eq!(
-            WritingMode::from(EnhancementPreset::Email),
-            WritingMode::Email
+            WritingMode::from(EnhancementPreset::Notes),
+            WritingMode::Notes
         );
         assert_eq!(
-            WritingMode::from(EnhancementPreset::Commit),
-            WritingMode::Commit
+            WritingMode::from(EnhancementPreset::Message),
+            WritingMode::Message
+        );
+        assert_eq!(
+            WritingMode::from(EnhancementPreset::Coding),
+            WritingMode::Coding
         );
     }
 
@@ -722,6 +760,24 @@ mod tests {
         );
 
         assert_eq!(resolve_output_language(&profile, &transcription), "es");
+    }
+
+    #[test]
+    fn test_output_language_transform_fallback_restores_transcript_language() {
+        let mut warnings = Vec::new();
+        let mut output_language = "fr".to_string();
+
+        record_output_language_transform_fallback(
+            &mut warnings,
+            &mut output_language,
+            Some("es"),
+            "output_language_transform_failed",
+            "AI formatting returned original text".to_string(),
+        );
+
+        assert_eq!(output_language, "es");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, "output_language_transform_failed");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 packages:
   - '.'
+  - 'sidecar/formatting-engine'
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'

@@ -13,6 +13,16 @@ require_cmd() {
   fi
 }
 
+require_node_22_19() {
+  local version major minor patch
+  version="$(node -p "process.versions.node")"
+  IFS='.' read -r major minor patch <<< "$version"
+  if (( major < 22 || (major == 22 && minor < 19) )); then
+    err "Node >= 22.19.0 required for the formatting SEA sidecar (found v$version)"
+    exit 1
+  fi
+}
+
 cd "$ROOT_DIR"
 
 require_cmd node
@@ -23,6 +33,7 @@ info "Repo: $ROOT_DIR"
 info "Node: $(node -v)"
 info "pnpm: $(pnpm -v)"
 info "cargo: $(cargo -V)"
+require_node_22_19
 
 if [[ "${CI_RUN_ACT_FRONTEND:-}" == "1" ]]; then
   require_cmd act

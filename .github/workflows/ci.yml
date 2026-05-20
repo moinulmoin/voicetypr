@@ -8,7 +8,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   # ===========================================
@@ -17,18 +16,23 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22.19.0'
 
-      - name: Install pnpm
-        run: npm install -g pnpm@10.13.1
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.13.1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Formatting sidecar TypeScript check
+        run: pnpm --filter @voicetypr/formatting-engine-sidecar exec tsc --noEmit
 
       - name: Lint
         run: pnpm lint
@@ -52,15 +56,17 @@ jobs:
             arch: x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22.19.0'
 
-      - name: Install pnpm
-        run: npm install -g pnpm@10.13.1
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.13.1
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -86,7 +92,7 @@ jobs:
         run: cd src-tauri && cargo build --release
 
       - name: Upload preview artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: ci-macos-${{ matrix.arch }}-preview
           path: src-tauri/target/release/voicetypr
@@ -96,21 +102,23 @@ jobs:
   # Build Windows (full build = catches all issues)
   # ===========================================
   build-windows:
-    runs-on: windows-2022
+    runs-on: windows-latest
     env:
       # whisper.cpp/ggml Vulkan build generates very deep paths; keep Windows paths short to
       # avoid MSBuild/FileTracker failures.
       CARGO_TARGET_DIR: D:\cargo-target
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22.19.0'
 
-      - name: Install pnpm
-        run: npm install -g pnpm@10.13.1
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.13.1
 
       - name: Prepare cargo target dir
         shell: pwsh
@@ -150,7 +158,7 @@ jobs:
         run: cd src-tauri && cargo build --release
 
       - name: Upload preview artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: ci-windows-x64-preview
           path: D:/cargo-target/release/voicetypr.exe

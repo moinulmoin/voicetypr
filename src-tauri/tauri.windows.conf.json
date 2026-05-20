@@ -8,7 +8,8 @@
       "../sidecar/ffmpeg/dist/ffmpeg",
       "../sidecar/ffmpeg/dist/ffprobe",
       "../sidecar/ffmpeg/dist/ffmpeg.exe",
-      "../sidecar/ffmpeg/dist/ffprobe.exe"
+      "../sidecar/ffmpeg/dist/ffprobe.exe",
+      "../sidecar/dist/formatting-sidecar"
     ],
     "windows": {
       "allowDowngrades": false,

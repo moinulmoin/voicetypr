@@ -17,6 +17,7 @@ mod audio;
 pub mod cli;
 mod commands;
 mod ffmpeg;
+mod formatting;
 mod license;
 mod media;
 mod menu;
@@ -56,9 +57,9 @@ use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
         get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
-        get_writing_settings, list_provider_models, set_openai_config, test_openai_endpoint,
-        update_ai_settings, update_enhancement_options, update_writing_settings,
-        validate_and_cache_api_key,
+        get_writing_settings, list_ai_providers, list_provider_models, set_openai_config,
+        test_openai_endpoint, update_ai_settings, update_enhancement_options,
+        update_writing_settings, validate_and_cache_api_key,
     },
     audio::*,
     clipboard::{copy_image_to_clipboard, save_image_to_file},
@@ -375,6 +376,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Cache size is 1: only the current model (1-3GB RAM)
             // When user switches models, old one is unloaded immediately
             app.manage(AsyncMutex::new(TranscriberCache::new()));
+            app.manage(formatting::FormattingClient::new("formatting-sidecar"));
 
             // Initialize remote transcription state
             app.manage(AsyncMutex::new(RemoteServerManager::new()));
@@ -629,12 +631,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     log::info!("Tray menu event: {:?}", event.id);
                     let event_id = event.id.as_ref().to_string();
 
-                    if event_id == "settings" {
+                    if event_id == "dashboard" {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
-                            // Emit event to navigate to settings
-                            let _ = window.emit("navigate-to-settings", ());
+                            let _ = window.emit("navigate-to-overview", ());
                         }
                     } else if event_id == "quit" {
                         app.exit(0);
@@ -1253,6 +1254,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             update_enhancement_options,
             get_writing_settings,
             update_writing_settings,
+            list_ai_providers,
             list_provider_models,
             keyring_set,
             keyring_get,

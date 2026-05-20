@@ -142,14 +142,14 @@ describe('EnhancementsSection', () => {
     renderWithProviders()
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Email' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Writing' })).toBeInTheDocument()
     })
 
-    await user.click(screen.getByRole('button', { name: 'Email' }))
+    await user.click(screen.getByRole('button', { name: 'Writing' }))
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('update_enhancement_options', {
-        options: { preset: 'Email' },
+        options: { preset: 'Writing' },
       })
     })
   })
@@ -233,16 +233,19 @@ describe('EnhancementsSection', () => {
       expect(toast.error).toHaveBeenCalledWith('disk full')
     })
     await waitFor(() => {
-      expect(screen.queryByText('Replacement 1')).not.toBeInTheDocument()
+      expect(screen.queryByText('Rule 1')).not.toBeInTheDocument()
     })
   })
 
 
-  it('shows guidance when AI is disabled', async () => {
+  it('shows formatting setup guidance in the guide dialog', async () => {
+    const user = userEvent.setup()
     renderWithProviders()
 
+    await user.click(await screen.findByRole('button', { name: /formatting guide/i }))
+
     await waitFor(() => {
-      expect(screen.getByText('Quick Setup')).toBeInTheDocument()
+      expect(screen.getByText(/set up one provider, save its API key/i)).toBeInTheDocument()
       expect(toast.error).not.toHaveBeenCalled()
     })
   })

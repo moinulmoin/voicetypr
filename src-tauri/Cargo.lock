@@ -8235,7 +8235,6 @@ dependencies = [
  "active-win-pos-rs",
  "aes-gcm",
  "arboard",
- "async-trait",
  "audioadapter-buffers",
  "base64 0.22.1",
  "bytes",

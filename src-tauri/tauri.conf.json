@@ -13,9 +13,11 @@
       {
         "title": "Voicetypr",
         "label": "main",
-        "width": 800,
-        "height": 600,
-        "resizable": false,
+        "width": 1120,
+        "height": 760,
+        "minWidth": 1040,
+        "minHeight": 700,
+        "resizable": true,
         "center": true,
         "visible": false,
         "skipTaskbar": true,
@@ -48,7 +50,8 @@
       "../sidecar/ffmpeg/dist/ffmpeg",
       "../sidecar/ffmpeg/dist/ffprobe",
       "../sidecar/ffmpeg/dist/ffmpeg.exe",
-      "../sidecar/ffmpeg/dist/ffprobe.exe"
+      "../sidecar/ffmpeg/dist/ffprobe.exe",
+      "../sidecar/dist/formatting-sidecar"
     ],
     "icon": [
       "icons/32x32.png",

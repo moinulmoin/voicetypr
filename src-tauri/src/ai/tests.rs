@@ -1,137 +1,5 @@
 #[cfg(test)]
 mod tests {
-    use super::super::*;
-    use std::collections::HashMap;
-
-    #[test]
-    fn test_ai_error_display() {
-        let err = AIError::ApiError("Test error".to_string());
-        assert_eq!(err.to_string(), "API error: Test error");
-
-        let err = AIError::ValidationError("Invalid input".to_string());
-        assert_eq!(err.to_string(), "Validation error: Invalid input");
-
-        let err = AIError::RateLimitExceeded;
-        assert_eq!(err.to_string(), "Rate limit exceeded");
-    }
-
-    #[test]
-    fn test_ai_enhancement_request_validation() {
-        // Empty text
-        let request = AIEnhancementRequest {
-            text: "".to_string(),
-            context: None,
-            options: None,
-            language: None,
-        };
-        assert!(request.validate().is_err());
-
-        // Whitespace only
-        let request = AIEnhancementRequest {
-            text: "   \n\t  ".to_string(),
-            context: None,
-            options: None,
-            language: None,
-        };
-        assert!(request.validate().is_err());
-
-        // Valid text
-        let request = AIEnhancementRequest {
-            text: "Hello, world!".to_string(),
-            context: None,
-            options: None,
-            language: None,
-        };
-        assert!(request.validate().is_ok());
-
-        // Text at max length
-        let request = AIEnhancementRequest {
-            text: "a".repeat(MAX_TEXT_LENGTH),
-            context: None,
-            options: None,
-            language: None,
-        };
-        assert!(request.validate().is_ok());
-
-        // Text exceeding max length
-        let request = AIEnhancementRequest {
-            text: "a".repeat(MAX_TEXT_LENGTH + 1),
-            context: None,
-            options: None,
-            language: None,
-        };
-        assert!(request.validate().is_err());
-    }
-
-    #[test]
-    fn test_ai_provider_config_serialization() {
-        let config = AIProviderConfig {
-            provider: "openai".to_string(),
-            model: "gpt-5-nano".to_string(),
-            api_key: "secret_key".to_string(),
-            enabled: true,
-            options: HashMap::new(),
-        };
-
-        // API key should not be serialized
-        let serialized = serde_json::to_string(&config).unwrap();
-        assert!(!serialized.contains("secret_key"));
-        assert!(serialized.contains("openai"));
-        assert!(serialized.contains("gpt-5-nano"));
-    }
-
-    #[test]
-    fn test_ai_provider_factory_validation() {
-        let config = AIProviderConfig {
-            provider: "invalid_provider".to_string(),
-            model: "test".to_string(),
-            api_key: "test".to_string(),
-            enabled: true,
-            options: HashMap::new(),
-        };
-
-        let result = AIProviderFactory::create(&config);
-        assert!(result.is_err());
-
-        if let Err(err) = result {
-            match err {
-                AIError::ProviderNotFound(provider) => {
-                    assert_eq!(provider, "invalid_provider");
-                }
-                _ => panic!("Expected ProviderNotFound error"),
-            }
-        }
-    }
-
-    #[test]
-    fn test_ai_provider_factory_creates_anthropic() {
-        let config = AIProviderConfig {
-            provider: "anthropic".to_string(),
-            model: "claude-haiku-4-5".to_string(),
-            api_key: "test_key_12345".to_string(),
-            enabled: true,
-            options: HashMap::new(),
-        };
-
-        let result = AIProviderFactory::create(&config);
-        assert!(result.is_ok());
-        let provider = result.unwrap();
-        assert_eq!(provider.name(), "anthropic");
-    }
-
-    #[test]
-    fn test_ai_provider_factory_rejects_unknown_anthropic_model() {
-        let config = AIProviderConfig {
-            provider: "anthropic".to_string(),
-            model: "claude-opus-4-7".to_string(), // real model, intentionally not in our curated formatting list
-            api_key: "test_key_12345".to_string(),
-            enabled: true,
-            options: HashMap::new(),
-        };
-
-        let result = AIProviderFactory::create(&config);
-        assert!(result.is_err());
-    }
 
     #[test]
     fn test_enhancement_prompt_generation() {
@@ -171,23 +39,29 @@ mod tests {
         let default_prompt = build_enhancement_prompt(text, None, &default_options, None);
         assert!(default_prompt.contains("post-processor for voice transcripts"));
 
-        // Test Prompts preset
-        let mut prompts_options = EnhancementOptions::default();
-        prompts_options.preset = EnhancementPreset::Prompts;
-        let prompts_prompt = build_enhancement_prompt(text, None, &prompts_options, None);
-        assert!(prompts_prompt.contains("transform the cleaned text into a concise AI prompt"));
+        // Test Writing preset
+        let mut writing_options = EnhancementOptions::default();
+        writing_options.preset = EnhancementPreset::Writing;
+        let writing_prompt = build_enhancement_prompt(text, None, &writing_options, None);
+        assert!(writing_prompt.contains("refine the cleaned text for polished prose"));
 
-        // Test Email preset
-        let mut email_options = EnhancementOptions::default();
-        email_options.preset = EnhancementPreset::Email;
-        let email_prompt = build_enhancement_prompt(text, None, &email_options, None);
-        assert!(email_prompt.contains("format the cleaned text as an email"));
+        // Test Notes preset
+        let mut notes_options = EnhancementOptions::default();
+        notes_options.preset = EnhancementPreset::Notes;
+        let notes_prompt = build_enhancement_prompt(text, None, &notes_options, None);
+        assert!(notes_prompt.contains("organize the cleaned text into structured notes"));
 
-        // Test Commit preset
-        let mut commit_options = EnhancementOptions::default();
-        commit_options.preset = EnhancementPreset::Commit;
-        let commit_prompt = build_enhancement_prompt(text, None, &commit_options, None);
-        assert!(commit_prompt.contains("convert the cleaned text to a Conventional Commit"));
+        // Test Message preset
+        let mut message_options = EnhancementOptions::default();
+        message_options.preset = EnhancementPreset::Message;
+        let message_prompt = build_enhancement_prompt(text, None, &message_options, None);
+        assert!(message_prompt.contains("format the cleaned text as a concise message"));
+
+        // Test Coding preset
+        let mut coding_options = EnhancementOptions::default();
+        coding_options.preset = EnhancementPreset::Coding;
+        let coding_prompt = build_enhancement_prompt(text, None, &coding_options, None);
+        assert!(coding_prompt.contains("convert the cleaned text for a coding context"));
     }
 
     #[test]
@@ -199,9 +73,10 @@ mod tests {
         // Test that ALL presets include self-correction rules
         let presets = vec![
             EnhancementPreset::Default,
-            EnhancementPreset::Prompts,
-            EnhancementPreset::Email,
-            EnhancementPreset::Commit,
+            EnhancementPreset::Writing,
+            EnhancementPreset::Notes,
+            EnhancementPreset::Message,
+            EnhancementPreset::Coding,
         ];
 
         for preset in presets {
@@ -227,9 +102,10 @@ mod tests {
         // Test that all presets include base processing
         let presets = vec![
             EnhancementPreset::Default,
-            EnhancementPreset::Prompts,
-            EnhancementPreset::Email,
-            EnhancementPreset::Commit,
+            EnhancementPreset::Writing,
+            EnhancementPreset::Notes,
+            EnhancementPreset::Message,
+            EnhancementPreset::Coding,
         ];
 
         for preset in presets {
@@ -302,20 +178,6 @@ mod tests {
     }
 
     #[test]
-    fn test_ai_model_serialization() {
-        let model = AIModel {
-            id: "test-model".to_string(),
-            name: "Test Model".to_string(),
-            description: Some("A test model".to_string()),
-        };
-
-        let json = serde_json::to_string(&model).unwrap();
-        assert!(json.contains("test-model"));
-        assert!(json.contains("Test Model"));
-        assert!(json.contains("A test model"));
-    }
-
-    #[test]
     fn test_language_name_mapping() {
         use crate::ai::prompts::get_language_name;
 
@@ -362,5 +224,67 @@ mod tests {
         // None defaults to English
         let prompt_none = build_enhancement_prompt(text, None, &options, None);
         assert!(prompt_none.contains("written English"));
+    }
+
+    #[test]
+    fn test_legacy_preset_deserialization() {
+        use crate::ai::prompts::EnhancementPreset;
+
+        // Legacy "Prompts" deserializes to Coding
+        let preset: EnhancementPreset = serde_json::from_str("\"Prompts\"").unwrap();
+        assert!(matches!(preset, EnhancementPreset::Coding));
+
+        // Legacy "Email" deserializes to Writing
+        let preset: EnhancementPreset = serde_json::from_str("\"Email\"").unwrap();
+        assert!(matches!(preset, EnhancementPreset::Writing));
+
+        // Legacy "Commit" deserializes to Coding
+        let preset: EnhancementPreset = serde_json::from_str("\"Commit\"").unwrap();
+        assert!(matches!(preset, EnhancementPreset::Coding));
+
+        // Unknown values fall back to Default
+        let preset: EnhancementPreset = serde_json::from_str("\"Unknown\"").unwrap();
+        assert!(matches!(preset, EnhancementPreset::Default));
+
+        // New presets deserialize correctly
+        for (json, expected) in [
+            ("\"Default\"", EnhancementPreset::Default),
+            ("\"Writing\"", EnhancementPreset::Writing),
+            ("\"Notes\"", EnhancementPreset::Notes),
+            ("\"Message\"", EnhancementPreset::Message),
+            ("\"Coding\"", EnhancementPreset::Coding),
+        ] {
+            let preset: EnhancementPreset = serde_json::from_str(json).unwrap();
+            assert_eq!(preset, expected, "Failed for {}", json);
+        }
+
+        // Serialization always outputs new names (never legacy)
+        assert_eq!(
+            serde_json::to_string(&EnhancementPreset::Coding).unwrap(),
+            "\"Coding\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EnhancementPreset::Message).unwrap(),
+            "\"Message\""
+        );
+    }
+
+    #[test]
+    fn test_legacy_options_deserialization() {
+        use crate::ai::prompts::EnhancementOptions;
+
+        // Legacy JSON with "Commit" preset stored in settings should load without error
+        let json = r#"{"preset":"Commit"}"#;
+        let opts: EnhancementOptions = serde_json::from_str(json).unwrap();
+        // Commit maps to Coding, so the prompt builder should work
+        let prompt =
+            crate::ai::prompts::build_enhancement_prompt("fix login bug", None, &opts, None);
+        assert!(prompt.contains("coding context"));
+
+        // Legacy "Email" options
+        let json = r#"{"preset":"Email"}"#;
+        let opts: EnhancementOptions = serde_json::from_str(json).unwrap();
+        let prompt = crate::ai::prompts::build_enhancement_prompt("hello team", None, &opts, None);
+        assert!(prompt.contains("polished prose"));
     }
 }

@@ -1,24 +1,30 @@
 use crate::ai::openai::{is_unsupported_token_parameter_error, model_uses_max_completion_tokens};
-use crate::ai::{AIEnhancementRequest, AIProviderConfig, AIProviderFactory, EnhancementOptions};
+use crate::ai::EnhancementOptions;
 use crate::commands::audio::pill_toast;
 use crate::commands::settings::{
     normalize_final_text_language, normalize_speech_language_for_model,
     normalize_transcription_task, task_uses_translate_to_english,
     FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
 };
+use crate::formatting::messages::{FormattingCommand, FormattingResponse, PROTOCOL_VERSION};
+use crate::formatting::FormattingClient;
 use crate::secure_store;
 use crate::writing::{load_writing_settings, save_writing_settings, WritingSettings};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 
 // In-memory cache for API keys to avoid system password prompts
 // Keys are stored in Stronghold by frontend and cached here for backend use
 static API_KEY_CACHE: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+static FORMATTING_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const CUSTOM_BASE_URL_KEY: &str = "ai_custom_base_url";
@@ -55,6 +61,35 @@ pub fn warm_ai_key_cache_from_secure_store(app: &tauri::AppHandle) {
                 }
                 Err(e) => {
                     log::warn!("Failed to read '{}' from secure store: {}", key_name, e);
+                }
+            }
+        }
+
+        if let Ok(store) = app.store("settings") {
+            if let Some(provider) = store
+                .get("ai_provider")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+            {
+                let key_name = format!("ai_api_key_{}", provider);
+                if !provider.is_empty() && !cache.contains_key(&key_name) {
+                    match secure_store::secure_get(app, &key_name) {
+                        Ok(Some(value)) => {
+                            cache.insert(key_name.clone(), value);
+                            log::info!(
+                                "Warmed selected provider API key cache from secure store: {}",
+                                key_name
+                            );
+                        }
+                        Ok(None) => {
+                            log::debug!(
+                                "No selected provider key in secure store for: {}",
+                                key_name
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to read '{}' from secure store: {}", key_name, e);
+                        }
+                    }
                 }
             }
         }
@@ -265,21 +300,11 @@ lazy_static::lazy_static! {
     static ref PROVIDER_REGEX: regex::Regex = regex::Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
 }
 
-// Supported AI providers
-const ALLOWED_PROVIDERS: &[&str] = &["gemini", "openai", "anthropic", "custom"];
-
+// Pi AI supports a broad provider registry; validate only the identifier shape here.
+// Availability is checked by the sidecar-backed model list/formatting calls.
 fn validate_provider_name(provider: &str) -> Result<(), String> {
-    // First check format
     if !PROVIDER_REGEX.is_match(provider) {
         return Err("Invalid provider name format".to_string());
-    }
-
-    // Then check against allowlist
-    if !ALLOWED_PROVIDERS.contains(&provider) {
-        return Err(format!(
-            "Unsupported provider: {}. Supported providers: {:?}",
-            provider, ALLOWED_PROVIDERS
-        ));
     }
 
     Ok(())
@@ -816,105 +841,105 @@ pub async fn enhance_transcription(
     }
 
     // Determine provider-specific config
-    let (factory_provider, api_key, options) = if provider == "openai" {
-        let cache = API_KEY_CACHE.lock().map_err(|e| {
-            log::error!("Failed to access API key cache: {}", e);
-            "Failed to access cache".to_string()
-        })?;
+    let (factory_provider, api_key, options): (String, String, HashMap<String, serde_json::Value>) =
+        if provider == "openai" {
+            let cache = API_KEY_CACHE.lock().map_err(|e| {
+                log::error!("Failed to access API key cache: {}", e);
+                "Failed to access cache".to_string()
+            })?;
 
-        let openai_cached = cache.get("ai_api_key_openai").cloned();
-        let custom_cached = cache.get("ai_api_key_custom").cloned();
-        drop(cache);
+            let openai_cached = cache.get("ai_api_key_openai").cloned();
+            let custom_cached = cache.get("ai_api_key_custom").cloned();
+            drop(cache);
 
-        if let Some(cached) = openai_cached {
-            let mut opts = std::collections::HashMap::new();
-            opts.insert(
-                "base_url".into(),
-                serde_json::Value::String(DEFAULT_OPENAI_BASE_URL.to_string()),
-            );
-            opts.insert("no_auth".into(), serde_json::Value::Bool(false));
+            if let Some(cached) = openai_cached {
+                let mut opts = std::collections::HashMap::new();
+                opts.insert(
+                    "base_url".into(),
+                    serde_json::Value::String(DEFAULT_OPENAI_BASE_URL.to_string()),
+                );
+                opts.insert("no_auth".into(), serde_json::Value::Bool(false));
 
-            ("openai".to_string(), cached, opts)
-        } else if let Some(legacy_base_url) = store
-            .get(LEGACY_OPENAI_BASE_URL_KEY)
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-        {
-            log::warn!("Using legacy OpenAI-compatible configuration for openai provider");
-            let mut opts = std::collections::HashMap::new();
-            opts.insert(
-                "base_url".into(),
-                serde_json::Value::String(legacy_base_url),
-            );
-            opts.insert(
-                "no_auth".into(),
-                serde_json::Value::Bool(custom_cached.is_none()),
-            );
+                ("openai".to_string(), cached, opts)
+            } else if let Some(legacy_base_url) = store
+                .get(LEGACY_OPENAI_BASE_URL_KEY)
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+            {
+                log::warn!("Using legacy OpenAI-compatible configuration for openai provider");
+                let mut opts = std::collections::HashMap::new();
+                opts.insert(
+                    "base_url".into(),
+                    serde_json::Value::String(legacy_base_url),
+                );
+                opts.insert(
+                    "no_auth".into(),
+                    serde_json::Value::Bool(custom_cached.is_none()),
+                );
 
-            (
-                "openai".to_string(),
-                custom_cached.unwrap_or_default(),
-                opts,
-            )
-        } else {
-            log::error!(
+                (
+                    "openai".to_string(),
+                    custom_cached.unwrap_or_default(),
+                    opts,
+                )
+            } else {
+                log::error!(
                 "API key not found in cache for OpenAI provider. Cache keys unavailable for OpenAI path"
             );
-            return Err("API key not found in cache".to_string());
-        }
-    } else if provider == "custom" {
-        let base_url = store
-            .get(CUSTOM_BASE_URL_KEY)
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .or_else(|| {
-                store
-                    .get(LEGACY_OPENAI_BASE_URL_KEY)
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-            })
-            .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
+                return Err("API key not found in cache".to_string());
+            }
+        } else if provider == "custom" {
+            let base_url = store
+                .get(CUSTOM_BASE_URL_KEY)
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .or_else(|| {
+                    store
+                        .get(LEGACY_OPENAI_BASE_URL_KEY)
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                })
+                .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
 
-        let cache = API_KEY_CACHE.lock().map_err(|e| {
-            log::error!("Failed to access API key cache: {}", e);
-            "Failed to access cache".to_string()
-        })?;
+            let cache = API_KEY_CACHE.lock().map_err(|e| {
+                log::error!("Failed to access API key cache: {}", e);
+                "Failed to access cache".to_string()
+            })?;
 
-        let cached = cache.get("ai_api_key_custom").cloned();
+            let cached = cache.get("ai_api_key_custom").cloned();
 
-        if cached.is_some() {
-            log::info!("Using cached API key for custom provider");
+            if cached.is_some() {
+                log::info!("Using cached API key for custom provider");
+            } else {
+                log::warn!("No cached API key found for custom provider, using no-auth mode");
+                log::debug!(
+                    "Available cache keys: {:?}",
+                    cache.keys().collect::<Vec<_>>()
+                );
+            }
+            drop(cache);
+
+            let mut opts = std::collections::HashMap::new();
+            opts.insert("base_url".into(), serde_json::Value::String(base_url));
+            opts.insert("no_auth".into(), serde_json::Value::Bool(cached.is_none()));
+
+            ("openai".to_string(), cached.unwrap_or_default(), opts)
         } else {
-            log::warn!("No cached API key found for custom provider, using no-auth mode");
-            log::debug!(
-                "Available cache keys: {:?}",
-                cache.keys().collect::<Vec<_>>()
-            );
-        }
-        drop(cache);
+            // Pi AI registry providers other than OpenAI-compatible providers
+            // use the generic ai_api_key_{provider} cache key. We intentionally
+            // skip save-time validation here; first use surfaces auth/model errors.
+            let cache = API_KEY_CACHE
+                .lock()
+                .map_err(|_| "Failed to access cache".to_string())?;
+            let key_name = format!("ai_api_key_{}", provider);
+            let api_key = cache.get(&key_name).cloned().ok_or_else(|| {
+                log::error!(
+                    "API key not found in cache for provider: {}. Cache keys: {:?}",
+                    provider,
+                    cache.keys().collect::<Vec<_>>()
+                );
+                "API key not found in cache".to_string()
+            })?;
 
-        let mut opts = std::collections::HashMap::new();
-        opts.insert("base_url".into(), serde_json::Value::String(base_url));
-        opts.insert("no_auth".into(), serde_json::Value::Bool(cached.is_none()));
-
-        ("openai".to_string(), cached.unwrap_or_default(), opts)
-    } else if provider == "gemini" || provider == "anthropic" {
-        // Both providers read the key from the in-memory cache and skip the
-        // OpenAI-style probe at save time; first-use surfaces auth/model errors.
-        let cache = API_KEY_CACHE
-            .lock()
-            .map_err(|_| "Failed to access cache".to_string())?;
-        let key_name = format!("ai_api_key_{}", provider);
-        let api_key = cache.get(&key_name).cloned().ok_or_else(|| {
-            log::error!(
-                "API key not found in cache for provider: {}. Cache keys: {:?}",
-                provider,
-                cache.keys().collect::<Vec<_>>()
-            );
-            "API key not found in cache".to_string()
-        })?;
-
-        (provider.clone(), api_key, std::collections::HashMap::new())
-    } else {
-        return Err("Unsupported provider".to_string());
-    };
+            (provider.clone(), api_key, std::collections::HashMap::new())
+        };
 
     drop(store); // Release lock before async operation
 
@@ -987,40 +1012,68 @@ pub async fn enhance_transcription(
         language
     );
 
-    // Create provider config
-    let config = AIProviderConfig {
-        provider: factory_provider,
+    let prompt = crate::ai::prompts::build_enhancement_prompt(
+        &text,
+        context_override.as_deref(),
+        &enhancement_options.unwrap_or_default(),
+        language.as_deref(),
+    );
+
+    let custom_base_url = options
+        .get("base_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let no_auth = options
+        .get("no_auth")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let sidecar_provider = if provider == "custom"
+        || custom_base_url
+            .as_deref()
+            .is_some_and(|base| base.trim_end_matches('/') != DEFAULT_OPENAI_BASE_URL)
+    {
+        "custom".to_string()
+    } else {
+        sidecar_provider_for(&factory_provider).to_string()
+    };
+
+    let command = FormattingCommand::Format {
+        id: next_formatting_request_id("format"),
+        protocol_version: PROTOCOL_VERSION,
+        provider: sidecar_provider,
         model,
-        api_key,
-        enabled: true,
-        options,
+        prompt,
+        system_prompt: Some(
+            "You are a careful text formatter. Return only the cleaned text requested by the user instructions."
+                .to_string(),
+        ),
+        api_key: if api_key.is_empty() { None } else { Some(api_key) },
+        no_auth,
+        custom_base_url,
+        timeout_ms: 30_000,
     };
 
-    // Create provider and enhance text
-    let provider = AIProviderFactory::create(&config)
-        .map_err(|e| format!("Failed to create AI provider: {}", e))?;
-
-    let request = AIEnhancementRequest {
-        text: text.clone(),
-        context: context_override,
-        options: enhancement_options,
-        language,
-    };
-
-    match provider.enhance_text(request).await {
-        Ok(response) => {
+    match app.state::<FormattingClient>().send(&app, &command).await {
+        Ok(FormattingResponse::Formatted {
+            text: enhanced_text,
+            ..
+        }) => {
             log::info!(
                 "Text enhanced successfully (original: {}, enhanced: {})",
                 text.len(),
-                response.enhanced_text.len()
+                enhanced_text.len()
             );
-            Ok(response.enhanced_text)
+            Ok(enhanced_text)
+        }
+        Ok(other) => {
+            log::error!("Unexpected formatting sidecar response: {:?}", other);
+            pill_toast(&app, "Formatting failed", 1500);
+            Ok(text)
         }
         Err(e) => {
             log::error!("AI formatting failed: {}", e);
-            // Emit formatting error via pill toast
             pill_toast(&app, "Formatting failed", 1500);
-            Err(format!("AI formatting failed: {}", e))
+            Ok(text)
         }
     }
 }
@@ -1116,11 +1169,10 @@ const GEMINI_MODELS: &[(&str, &str, bool)] = &[
 /// Haiku 4.5 (fastest, cheapest) and Sonnet 4.6 (balanced).
 /// Opus is intentionally excluded - too slow/expensive for inline formatting.
 ///
-/// Note: this list is intentionally narrower than
-/// `ai::anthropic::SUPPORTED_MODELS`, which also accepts `claude-sonnet-4-5`
-/// for back-compat with users who selected it during the 1.12.0/1.12.1 window.
-/// We deliberately do not re-advertise deprecated IDs in the dropdown - keep
-/// new selections on the current curated set.
+///
+/// The old Rust Anthropic provider accepted `claude-sonnet-4-5` for
+/// back-compat during the 1.12.0/1.12.1 window. That provider is no longer
+/// on the formatting hot path, so we do not re-advertise deprecated IDs here.
 const ANTHROPIC_MODELS: &[(&str, &str, bool)] = &[
     ("claude-haiku-4-5", "Claude Haiku 4.5", true),
     ("claude-sonnet-4-6", "Claude Sonnet 4.6", false),
@@ -1145,30 +1197,179 @@ fn get_curated_models(provider: &str) -> Vec<ProviderModel> {
         .collect()
 }
 
-/// List available models for a provider
-/// Returns curated static list - no API call needed
+fn sidecar_provider_for(provider: &str) -> &str {
+    match provider {
+        // VoiceTypr settings have historically used `gemini`, while the
+        // Pi AI registry uses `google` for Gemini models.
+        "gemini" => "google",
+        other => other,
+    }
+}
+
+fn voice_provider_for_sidecar(provider: &str) -> &str {
+    match provider {
+        // Keep the public/settings id stable even though Pi AI calls Gemini
+        // `google` internally.
+        "google" => "gemini",
+        other => other,
+    }
+}
+
+fn provider_display_name(provider_id: &str, sidecar_name: &str) -> String {
+    match provider_id {
+        "openai" => "OpenAI".to_string(),
+        "anthropic" => "Anthropic".to_string(),
+        "gemini" => "Google Gemini".to_string(),
+        "custom" => "Custom (OpenAI-compatible)".to_string(),
+        _ if sidecar_name.trim().is_empty() => provider_id.to_string(),
+        _ => sidecar_name.to_string(),
+    }
+}
+
+fn next_formatting_request_id(prefix: &str) -> String {
+    let id = FORMATTING_REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{}", prefix, id)
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProviderInfo {
+    pub id: String,
+    pub name: String,
+}
+
+#[tauri::command]
+pub async fn list_ai_providers(app: tauri::AppHandle) -> Result<Vec<ProviderInfo>, String> {
+    let command = FormattingCommand::ListProviders {
+        id: next_formatting_request_id("providers"),
+        protocol_version: PROTOCOL_VERSION,
+    };
+
+    match app.state::<FormattingClient>().send(&app, &command).await {
+        Ok(FormattingResponse::Providers { providers, .. }) => {
+            let mut mapped = Vec::with_capacity(providers.len());
+            for provider in providers {
+                let provider_id = voice_provider_for_sidecar(&provider.id);
+                let info = ProviderInfo {
+                    id: provider_id.to_string(),
+                    name: provider_display_name(provider_id, &provider.name),
+                };
+                if !mapped
+                    .iter()
+                    .any(|existing: &ProviderInfo| existing.id == info.id)
+                {
+                    mapped.push(info);
+                }
+            }
+            Ok(mapped)
+        }
+        Ok(other) => {
+            log::warn!(
+                "Unexpected provider-list response from formatting sidecar: {:?}",
+                other
+            );
+            Ok(built_in_provider_infos())
+        }
+        Err(error) => {
+            log::warn!(
+                "Formatting sidecar provider listing failed; using built-in providers: {}",
+                error
+            );
+            Ok(built_in_provider_infos())
+        }
+    }
+}
+
+fn built_in_provider_infos() -> Vec<ProviderInfo> {
+    vec![
+        ProviderInfo {
+            id: "openai".to_string(),
+            name: "OpenAI".to_string(),
+        },
+        ProviderInfo {
+            id: "anthropic".to_string(),
+            name: "Anthropic".to_string(),
+        },
+        ProviderInfo {
+            id: "gemini".to_string(),
+            name: "Google Gemini".to_string(),
+        },
+        ProviderInfo {
+            id: "custom".to_string(),
+            name: "Custom (OpenAI-compatible)".to_string(),
+        },
+    ]
+}
+
+/// List available models for a provider.
+/// Prefer the Pi AI sidecar registry; fall back to the legacy curated list if the sidecar is unavailable.
 #[tauri::command]
 pub async fn list_provider_models(
     provider: String,
-    _app: tauri::AppHandle,
+    app: tauri::AppHandle,
 ) -> Result<Vec<ProviderModel>, String> {
-    // Drift-proof gate: a provider supports model listing iff it has a curated
-    // models entry in get_curated_models. Adding a new entry there is enough.
-    let models = get_curated_models(&provider);
-    if models.is_empty() {
-        return Err(format!(
-            "Unsupported provider for model listing: {}",
-            provider
-        ));
+    validate_provider_name(&provider)?;
+
+    if provider == "custom" {
+        return Ok(Vec::new());
     }
 
-    log::info!(
-        "Returning {} curated models for provider {}",
-        models.len(),
-        provider
-    );
+    let sidecar_provider = sidecar_provider_for(&provider);
+    let command = FormattingCommand::ListModels {
+        id: next_formatting_request_id("models"),
+        protocol_version: PROTOCOL_VERSION,
+        provider: sidecar_provider.to_string(),
+    };
 
-    Ok(models)
+    match app.state::<FormattingClient>().send(&app, &command).await {
+        Ok(FormattingResponse::Models { models, .. }) => {
+            let mapped = models
+                .into_iter()
+                .map(|model| ProviderModel {
+                    id: model.id,
+                    name: model.name,
+                    recommended: false,
+                })
+                .collect::<Vec<_>>();
+            log::info!(
+                "Returning {} Pi AI registry models for provider {} via sidecar provider {}",
+                mapped.len(),
+                provider,
+                sidecar_provider
+            );
+            Ok(mapped)
+        }
+        Ok(other) => {
+            log::warn!(
+                "Unexpected model-list response from formatting sidecar: {:?}",
+                other
+            );
+            let models = get_curated_models(&provider);
+            if models.is_empty() {
+                Err(format!(
+                    "Unsupported provider for model listing: {}",
+                    provider
+                ))
+            } else {
+                Ok(models)
+            }
+        }
+        Err(error) => {
+            log::warn!(
+                "Formatting sidecar model listing failed for provider {}; falling back to curated list: {}",
+                provider,
+                error
+            );
+            let models = get_curated_models(&provider);
+            if models.is_empty() {
+                Err(format!(
+                    "Unsupported provider for model listing: {}",
+                    provider
+                ))
+            } else {
+                Ok(models)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1183,15 +1384,42 @@ mod tests {
         assert!(validate_provider_name("anthropic").is_ok());
         assert!(validate_provider_name("custom").is_ok());
 
-        // Groq is no longer supported
-        assert!(validate_provider_name("groq").is_err());
+        // Pi AI registry providers are accepted by identifier shape.
+        assert!(validate_provider_name("groq").is_ok());
+        assert!(validate_provider_name("azure-openai-responses").is_ok());
+        assert!(validate_provider_name("openai_compatible").is_ok());
 
         // Invalid formats
-        assert!(validate_provider_name("test-provider").is_err());
-        assert!(validate_provider_name("test_provider").is_err());
         assert!(validate_provider_name("test provider").is_err());
         assert!(validate_provider_name("test@provider").is_err());
         assert!(validate_provider_name("").is_err());
+    }
+
+    #[test]
+    fn test_sidecar_provider_mapping() {
+        assert_eq!(sidecar_provider_for("gemini"), "google");
+        assert_eq!(sidecar_provider_for("openai"), "openai");
+        assert_eq!(sidecar_provider_for("anthropic"), "anthropic");
+        assert_eq!(sidecar_provider_for("groq"), "groq");
+    }
+
+    #[test]
+    fn test_voice_provider_mapping() {
+        assert_eq!(voice_provider_for_sidecar("google"), "gemini");
+        assert_eq!(voice_provider_for_sidecar("openai"), "openai");
+        assert_eq!(voice_provider_for_sidecar("anthropic"), "anthropic");
+        assert_eq!(voice_provider_for_sidecar("groq"), "groq");
+    }
+
+    #[test]
+    fn test_provider_display_names_keep_product_ids_stable() {
+        assert_eq!(provider_display_name("gemini", "google"), "Google Gemini");
+        assert_eq!(provider_display_name("openai", "openai"), "OpenAI");
+        assert_eq!(
+            provider_display_name("custom", ""),
+            "Custom (OpenAI-compatible)"
+        );
+        assert_eq!(provider_display_name("groq", "groq"), "groq");
     }
 
     #[test]

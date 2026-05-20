@@ -2,10 +2,27 @@ import { ApiKeyModal } from "@/components/ApiKeyModal";
 import { EnhancementSettings } from "@/components/EnhancementSettings";
 import { OpenAICompatConfigModal } from "@/components/OpenAICompatConfigModal";
 import { ProviderCard } from "@/components/ProviderCard";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLegend,
+  FieldSet,
+  FieldTitle,
+} from "@/components/ui/field";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
-import type { EnhancementOptions } from "@/types/ai";
+import type { EnhancementOptions, EnhancementPreset } from "@/types/ai";
 import { fromBackendOptions, toBackendOptions } from "@/types/ai";
 import type { WritingSettings } from "@/types/writing";
 import { defaultWritingSettings } from "@/types/writing";
@@ -19,7 +36,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { Info } from "lucide-react";
+import { HelpCircle } from "lucide-react";
 
 interface AISettings {
   enabled: boolean;
@@ -51,7 +68,7 @@ export function EnhancementsSection() {
   const [isLoading, setIsLoading] = useState(false);
   const [providerApiKeys, setProviderApiKeys] = useState<Record<string, boolean>>({});
   const [enhancementOptions, setEnhancementOptions] = useState<{
-    preset: "Default" | "Prompts" | "Email" | "Commit";
+    preset: EnhancementPreset;
   }>({
     preset: "Default",
   });
@@ -406,44 +423,77 @@ export function EnhancementsSection() {
     : getModels(aiSettings.provider).find((model) => model.id === aiSettings.model)?.name ||
       aiSettings.model;
 
+  const hasLoadingProviders = AI_PROVIDERS.some((provider) => isModelsLoading(provider.id));
+
   return (
     <div className="h-full min-h-0 flex flex-col">
-      <div className="shrink-0 px-6 py-4 border-b border-border/40">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Formatting</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              AI-powered text formatting and enhancement
+      <div className="shrink-0 border-b border-border/40 px-6 py-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold">Formatting</h1>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button type="button" variant="secondary" size="icon" aria-label="Formatting guide" className="rounded-full">
+                    <HelpCircle className="h-4.5 w-4.5" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Formatting guide</DialogTitle>
+                    <DialogDescription>
+                      Use presets for the shape of the final text. Deterministic replacements,
+                      dictionary words, snippets, and language rules still apply before optional AI cleanup.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                    <p><strong className="text-foreground">Setup</strong> works in order: set up one provider, save its API key, select a model, then turn on AI formatting when you want language conversion or heavier cleanup.</p>
+                    <p><strong className="text-foreground">Default</strong> fixes punctuation and grammar without changing intent.</p>
+                    <p><strong className="text-foreground">Writing</strong> polishes dictated text into clear prose.</p>
+                    <p><strong className="text-foreground">Notes</strong> organizes speech into concise structured notes.</p>
+                    <p><strong className="text-foreground">Message</strong> formats a concise message for chat or email.</p>
+                    <p><strong className="text-foreground">Coding</strong> creates conventional commits and code annotations.</p>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Premium writing cleanup with private local-first controls.
             </p>
           </div>
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-card border border-border/50">
-            <Label htmlFor="ai-formatting" className="text-sm font-medium cursor-pointer">
-              AI Formatting
-            </Label>
+          <Field orientation="horizontal" className="w-auto items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-1.5">
+            <FieldTitle className="text-sm">AI formatting</FieldTitle>
             <Switch
               id="ai-formatting"
               checked={aiSettings.enabled}
               onCheckedChange={handleToggleEnabled}
               disabled={!hasAnyValidConfig || !hasSelectedModel}
             />
-          </div>
+          </Field>
         </div>
       </div>
 
       <ScrollArea className="flex-1 min-h-0">
-        <div className="p-6 space-y-6">
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-semibold">AI Providers</h2>
-              <div className="h-px bg-border/50 flex-1" />
-              {activeModelName && aiSettings.enabled && (
-                <span className="text-sm text-muted-foreground">
-                  Active: <span className="text-amber-600 dark:text-amber-500">{activeModelName}</span>
-                </span>
-              )}
+        <div className="space-y-5 p-6">
+          <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <FieldLegend className="mb-0 text-sm">AI Providers</FieldLegend>
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                {hasLoadingProviders && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Spinner className="h-3.5 w-3.5" />
+                    Refreshing models
+                  </span>
+                )}
+                {activeModelName && aiSettings.enabled && (
+                  <span>
+                    Active model: <span className="text-foreground">{activeModelName}</span>
+                  </span>
+                )}
+              </div>
             </div>
 
-            <div className="grid gap-3">
+            <FieldGroup className="gap-3">
               {AI_PROVIDERS.map((provider) => {
                 const isCustomActive = Boolean(
                   provider.isCustom &&
@@ -481,55 +531,33 @@ export function EnhancementsSection() {
                   />
                 );
               })}
-            </div>
-          </div>
+            </FieldGroup>
+          </FieldSet>
 
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-semibold">Formatting Options</h2>
-              <div className="h-px bg-border/50 flex-1" />
-            </div>
+          <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
+            <FieldLegend className="mb-1 text-sm">Formatting Options</FieldLegend>
+            <FieldDescription className="mb-3">
+              Configure output style, language targeting, and deterministic corrections.
+            </FieldDescription>
 
-            <div className="space-y-3">
-              {!aiSettings.enabled &&
-                settings?.final_text_language &&
-                settings.final_text_language !== "same_as_transcript" && (
-                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                    Final text language changes beyond the raw transcript require AI formatting to be enabled.
-                  </div>
-                )}
-              <EnhancementSettings
-                preset={enhancementOptions.preset}
-                finalTextLanguage={settings?.final_text_language ?? "same_as_transcript"}
-                writingSettings={writingSettings}
-                onPresetChange={handlePresetChange}
-                onFinalTextLanguageChange={handleFinalTextLanguageChange}
-                onWritingSettingsChange={handleWritingSettingsChange}
-              />
-            </div>
-          </div>
-
-          {!aiSettings.enabled && (
-            <div className="rounded-lg border border-border/50 bg-card p-4">
-              <div className="flex items-start gap-3">
-                <div className="p-1.5 rounded-md bg-amber-500/10">
-                  <Info className="h-4 w-4 text-amber-500" />
+            {!aiSettings.enabled &&
+              settings?.final_text_language &&
+              settings.final_text_language !== "same_as_transcript" && (
+                <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                  Final text language changes beyond the raw transcript require AI formatting to be enabled.
                 </div>
-                <div className="space-y-2 flex-1">
-                  <h3 className="font-medium text-sm">Quick Setup</h3>
-                  <ol className="text-sm text-muted-foreground space-y-1.5 list-decimal list-inside">
-                    <li>Choose a provider above (OpenAI, Anthropic, or Google)</li>
-                    <li>Click "Add Key" and enter your API key</li>
-                    <li>Select a model from the dropdown</li>
-                    <li>Toggle "AI Formatting" on to enable</li>
-                  </ol>
-                  <p className="text-xs text-muted-foreground mt-3">
-                    AI formatting improves punctuation, grammar, style, language conversion, and context-aware cleanup. Replacements, dictionary words, and snippets still save even if AI is off.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
+              )}
+
+            <EnhancementSettings
+              preset={enhancementOptions.preset}
+              finalTextLanguage={settings?.final_text_language ?? "same_as_transcript"}
+              writingSettings={writingSettings}
+              onPresetChange={handlePresetChange}
+              onFinalTextLanguageChange={handleFinalTextLanguageChange}
+              onWritingSettingsChange={handleWritingSettingsChange}
+            />
+          </FieldSet>
+
         </div>
       </ScrollArea>
 

@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Voicetypr",
-  "version": "1.12.1",
+  "version": "1.12.3",
   "identifier": "com.ideaplexa.voicetypr.dev",
   "build": {
-    "beforeDevCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm dev",
+    "beforeDevCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm run sidecar:build-formatting && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm build",
+    "beforeBuildCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm run sidecar:build-formatting && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -14,9 +14,11 @@
       {
         "title": "Voicetypr",
         "label": "main",
-        "width": 800,
-        "height": 600,
-        "resizable": false,
+        "width": 1120,
+        "height": 760,
+        "minWidth": 1040,
+        "minHeight": 700,
+        "resizable": true,
         "center": true,
         "visible": false,
         "skipTaskbar": true,
@@ -47,7 +49,8 @@
     ],
     "externalBin": [
       "../sidecar/ffmpeg/dist/ffmpeg",
-      "../sidecar/ffmpeg/dist/ffprobe"
+      "../sidecar/ffmpeg/dist/ffprobe",
+      "../sidecar/dist/formatting-sidecar"
     ],
     "icon": [
       "icons/32x32.png",

@@ -33,9 +33,22 @@ vi.mock('sonner', () => ({
 }));
 
 import { UpdateService } from './updateService';
+import { check } from '@tauri-apps/plugin-updater';
+import { ask } from '@tauri-apps/plugin-dialog';
+import { sendNotification, isPermissionGranted } from '@tauri-apps/plugin-notification';
+import { toast } from 'sonner';
+import type { AppSettings } from '@/types';
 
 const JUST_UPDATED_KEY = 'just_updated_version';
 const storage = new Map<string, string>();
+
+const testSettings = (overrides: Partial<AppSettings> = {}): AppSettings => ({
+  hotkey: 'CmdOrCtrl+Shift+Space',
+  current_model: 'tiny.en',
+  speech_language: 'en',
+  theme: 'system',
+  ...overrides,
+});
 
 Object.defineProperty(window, 'localStorage', {
   configurable: true,
@@ -112,5 +125,63 @@ describe('UpdateService version marker', () => {
 
     const result = freshService.getJustUpdatedVersion();
     expect(result).toBe('1.12.1');
+  });
+});
+
+describe('UpdateService update checks', () => {
+  let service: UpdateService;
+
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+    // @ts-expect-error accessing private static for test isolation
+    UpdateService.instance = undefined;
+    service = UpdateService.getInstance();
+  });
+
+  it('initializes background checks by default without installing updates', async () => {
+    vi.mocked(check).mockResolvedValue(null);
+    await service.initialize(testSettings());
+
+    expect(check).toHaveBeenCalledTimes(1);
+  });
+
+  it('background checks notify without installing updates', async () => {
+    const downloadAndInstall = vi.fn();
+    vi.mocked(isPermissionGranted).mockResolvedValue(true);
+    vi.mocked(check).mockResolvedValue({
+      available: true,
+      version: '2.0.0',
+      body: 'Release notes',
+      downloadAndInstall,
+    } as never);
+
+    await service.initialize(testSettings({ check_updates_automatically: true }));
+
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(downloadAndInstall).not.toHaveBeenCalled();
+    expect(toast.info).toHaveBeenCalledWith(
+      'Update 2.0.0 is available. Open Settings to install it.',
+    );
+    expect(sendNotification).toHaveBeenCalledWith({
+      title: 'Update Available',
+      body: 'VoiceTypr 2.0.0 is ready to install from Settings.',
+    });
+  });
+
+  it('manual checks still ask before installing', async () => {
+    const downloadAndInstall = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(check).mockResolvedValue({
+      available: true,
+      version: '2.0.0',
+      body: 'Release notes',
+      downloadAndInstall,
+    } as never);
+    vi.mocked(ask).mockResolvedValue(false);
+
+    await service.checkForUpdatesManually();
+
+    expect(ask).toHaveBeenCalled();
+    expect(downloadAndInstall).not.toHaveBeenCalled();
   });
 });

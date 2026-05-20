@@ -99,12 +99,34 @@ fn build_base_prompt(language: Option<&str>) -> String {
     BASE_PROMPT_TEMPLATE.replace("{language}", lang_name)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub enum EnhancementPreset {
     Default,
-    Prompts,
-    Email,
-    Commit,
+    Writing,
+    Notes,
+    Message,
+    Coding,
+}
+
+impl<'de> Deserialize<'de> for EnhancementPreset {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "Default" => Ok(EnhancementPreset::Default),
+            "Writing" => Ok(EnhancementPreset::Writing),
+            "Notes" => Ok(EnhancementPreset::Notes),
+            "Message" => Ok(EnhancementPreset::Message),
+            "Coding" => Ok(EnhancementPreset::Coding),
+            // Legacy compatibility — old presets silently map to nearest new profile
+            "Prompts" => Ok(EnhancementPreset::Coding),
+            "Email" => Ok(EnhancementPreset::Writing),
+            "Commit" => Ok(EnhancementPreset::Coding),
+            _ => Ok(EnhancementPreset::Default),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,12 +151,12 @@ pub fn build_enhancement_prompt(
     // Base processing applies to ALL presets, with language-aware output
     let base_prompt = build_base_prompt(language);
 
-    // Add mode-specific transformation if not Default
     let mode_transform = match options.preset {
         EnhancementPreset::Default => "",
-        EnhancementPreset::Prompts => PROMPTS_TRANSFORM,
-        EnhancementPreset::Email => EMAIL_TRANSFORM,
-        EnhancementPreset::Commit => COMMIT_TRANSFORM,
+        EnhancementPreset::Writing => WRITING_TRANSFORM,
+        EnhancementPreset::Notes => NOTES_TRANSFORM,
+        EnhancementPreset::Message => MESSAGE_TRANSFORM,
+        EnhancementPreset::Coding => CODING_TRANSFORM,
     };
 
     // Build the complete prompt
@@ -159,28 +181,37 @@ pub fn build_enhancement_prompt(
     prompt
 }
 
-// Minimal transformation layer for Prompts preset
-const PROMPTS_TRANSFORM: &str = r#"Now transform the cleaned text into a concise AI prompt:
-- Classify as Request, Question, or Task.
-- Add only essential missing what/how/why.
-- Include constraints and success criteria if relevant.
-- Specify output format when helpful.
-- Preserve all technical details; do not invent any.
-Return only the enhanced prompt."#;
+// Transformation layer for Writing profile
+const WRITING_TRANSFORM: &str = r#"Now refine the cleaned text for polished prose:
+  - Improve flow and readability with smooth transitions.
+  - Vary sentence structure; avoid repetition.
+  - Strengthen word choice without changing meaning.
+  - Maintain the speaker's original voice and intent.
+  - Ensure consistent tense and point of view.
+Return only the polished text."#;
 
-// Minimal transformation layer for Email preset
-const EMAIL_TRANSFORM: &str = r#"Now format the cleaned text as an email:
-- Subject: specific and action-oriented.
-- Greeting: Hi/Dear/Hello [Name].
-- Body: short paragraphs; lead with the key info or ask.
-- If it's a request, include action items and deadlines if present.
-- Match tone (formal/casual) to the source.
-- Closing: appropriate sign-off; use [Your Name].
-Return only the formatted email."#;
+// Transformation layer for Notes profile
+const NOTES_TRANSFORM: &str = r#"Now organize the cleaned text into structured notes:
+  - Extract key points as concise bullet items.
+  - Group related ideas under clear headings.
+  - Preserve all factual details, names, dates, and numbers.
+  - Use hierarchical structure (topics → sub-points).
+  - Include action items or decisions explicitly stated.
+Return only the structured notes."#;
 
-// Minimal transformation layer for Commit preset
-const COMMIT_TRANSFORM: &str = r#"Now convert the cleaned text to a Conventional Commit:
-Format: type(scope): description
-Types: feat, fix, docs, style, refactor, perf, test, chore, build, ci
-Rules: present tense, no period, ≤72 chars; add ! for breaking changes.
-Return only the commit message."#;
+// Transformation layer for Message profile
+const MESSAGE_TRANSFORM: &str = r#"Now format the cleaned text as a concise message:
+  - Lead with the key point or ask.
+  - Keep it brief and scannable.
+  - Match tone to intent (formal, casual, urgent).
+  - Include greetings/closings only if the speaker provided them.
+  - Preserve all names, links, and specifics verbatim.
+Return only the formatted message."#;
+
+// Transformation layer for Coding profile
+const CODING_TRANSFORM: &str = r#"Now convert the cleaned text for a coding context:
+  - For commit messages: use conventional format type(scope): description, present tense, no period, ≤72 chars.
+  - For comments: be concise, use proper technical terminology.
+  - For documentation: include purpose, parameters, and return values if applicable.
+  - Preserve all code references, variable names, and technical terms verbatim.
+Return only the formatted output."#;
