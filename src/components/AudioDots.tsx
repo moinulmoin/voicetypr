@@ -29,7 +29,7 @@ export function AudioDots({ state, audioLevel = 0 }: AudioDotsProps) {
   // Smoothed height multipliers for each dot (1.0 = circle, higher = stretched capsule)
   const dotHeights = useRef<number[]>(Array(DOT_COUNT).fill(1));
   const [heights, setHeights] = useState<number[]>(Array(DOT_COUNT).fill(1));
-  const animationFrame = useRef<number>();
+  const animationFrame = useRef<number | null>(null);
   const audioLevelRef = useRef(audioLevel);
   const isAnimatingRef = useRef(false);
 

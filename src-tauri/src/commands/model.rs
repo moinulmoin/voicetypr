@@ -545,13 +545,13 @@ fn collect_cloud_models(app: &AppHandle) -> Vec<UnifiedModelInfo> {
 
     vec![UnifiedModelInfo {
         name: "soniox".to_string(),
-        display_name: "Soniox (Cloud)".to_string(),
+        display_name: "Soniox".to_string(),
         size: 0,
         url: String::new(),
         sha256: String::new(),
         downloaded: has_soniox_key,
-        speed_score: 9,
-        accuracy_score: 10,
+        speed_score: 8,
+        accuracy_score: 9,
         recommended: true,
         engine: "soniox".to_string(),
         kind: "cloud".to_string(),

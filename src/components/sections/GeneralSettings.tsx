@@ -1,55 +1,61 @@
 import { HotkeyInput } from "@/components/HotkeyInput";
-import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { Button } from "@/components/ui/button";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLegend,
+  FieldSet,
+  FieldTitle,
+} from "@/components/ui/field";
+import { Kbd } from "@/components/ui/kbd";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
+import { updateService } from "@/services/updateService";
 import { isMacOS } from "@/lib/platform";
 import { PillIndicatorMode, PillIndicatorPosition } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  AlertCircle,
-  FolderOpen,
-  Keyboard,
-  Mic,
-  Rocket,
-  ToggleLeft,
-} from "lucide-react";
+import { AlertCircle, FolderOpen, HelpCircle, Keyboard, Mic, RefreshCw, Rocket, ToggleLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { MicrophoneSelection } from "../MicrophoneSelection";
 import { NetworkSharingCard } from "./NetworkSharingCard";
 
+
 export function GeneralSettings() {
   const { settings, updateSettings } = useSettings();
   const [autostartEnabled, setAutostartEnabled] = useState(false);
   const [autostartLoading, setAutostartLoading] = useState(false);
-  const [showAccessibilityWarning, setShowAccessibilityWarning] =
-    useState(true);
+  const [showAccessibilityWarning, setShowAccessibilityWarning] = useState(true);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const canAutoInsert = useCanAutoInsert();
 
   useEffect(() => {
-    // Query autostart status from backend (OS-level truth)
     const checkAutostart = async () => {
       try {
-        const enabled = await invoke<boolean>('get_autostart_status');
+        const enabled = await invoke<boolean>("get_autostart_status");
         setAutostartEnabled(enabled);
       } catch (error) {
-        console.error('Failed to check autostart status:', error);
+        console.error("Failed to check autostart status:", error);
       }
     };
-    checkAutostart();
 
-    // Check platform for accessibility warning
+    checkAutostart();
     setShowAccessibilityWarning(isMacOS);
   }, []);
 
@@ -58,591 +64,584 @@ export function GeneralSettings() {
   const handleAutostartToggle = async (checked: boolean) => {
     setAutostartLoading(true);
     try {
-      // Backend handles OS mutation AND store persistence atomically
-      const actualState = await invoke<boolean>('set_autostart', {
+      const actualState = await invoke<boolean>("set_autostart", {
         enabled: checked,
       });
       setAutostartEnabled(actualState);
-
-      // Sync frontend settings with the actual backend state
       await updateSettings({ launch_at_startup: actualState });
 
       if (actualState !== checked) {
         toast.warning(
-          `Autostart ${checked ? 'enable' : 'disable'} failed. Current state: ${actualState ? 'enabled' : 'disabled'}.`,
+          `Autostart ${checked ? "enable" : "disable"} failed. Current state: ${actualState ? "enabled" : "disabled"}.`,
         );
       }
     } catch (error) {
-      console.error('Failed to toggle autostart:', error);
+      console.error("Failed to toggle autostart:", error);
     } finally {
       setAutostartLoading(false);
     }
   };
 
+  const handleCheckUpdate = async () => {
+    setIsCheckingUpdate(true);
+    try {
+      await updateService.checkForUpdatesManually();
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
   return (
     <div className="h-full min-h-0 flex flex-col">
-      {/* Header */}
-      <div className="shrink-0 px-6 py-4 border-b border-border/40">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Settings</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Configure your recording preferences and app behavior
-            </p>
-          </div>
+      <div className="shrink-0 border-b border-border/40 px-6 py-4">
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold">Settings</h1>
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button type="button" variant="secondary" size="icon" aria-label="Settings guide" className="rounded-full">
+                <HelpCircle className="h-4.5 w-4.5" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Settings guide</DialogTitle>
+                <DialogDescription>
+                  Settings covers recording controls, insertion behavior, transcript cleanup, and startup defaults.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                <p><strong className="text-foreground">Recording</strong> controls the global shortcut, microphone, and floating indicator.</p>
+                <p><strong className="text-foreground">Transcript handling</strong> controls paste behavior, clipboard preservation, and history cleanup.</p>
+                <p><strong className="text-foreground">Startup</strong> controls launch-at-login and background update checks.</p>
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Configure capture controls, transcript behavior, and startup defaults.
+        </p>
       </div>
 
       <ScrollArea className="flex-1 min-h-0">
-        <div className="p-6 space-y-4">
-          {/* Recording Section */}
-          <div className="rounded-lg border border-border/50 bg-card">
-            <div className="px-4 py-3 border-b border-border/50">
+        <div className="space-y-5 p-6">
+          <div className="rounded-xl border border-border/60 bg-card p-4">
+            <div className="mb-4 flex items-center gap-2">
+              <div className="rounded-md bg-primary/10 p-1.5">
+                <Rocket className="h-4 w-4 text-primary" />
+              </div>
+              <div>
+                <h3 className="font-medium">App behavior</h3>
+                <p className="text-xs text-muted-foreground">Startup and update defaults</p>
+              </div>
+            </div>
+            <FieldGroup className="gap-4">
+              <Field orientation="responsive" className="items-center gap-4">
+                <FieldContent>
+                  <FieldTitle>Launch at Startup</FieldTitle>
+                  <FieldDescription>Start VoiceTypr automatically after login.</FieldDescription>
+                </FieldContent>
+                <div className="flex items-center justify-end gap-2">
+                  {autostartLoading && <Spinner className="h-4 w-4 text-muted-foreground" />}
+                  <Switch
+                    id="autostart"
+                    checked={autostartEnabled}
+                    onCheckedChange={handleAutostartToggle}
+                    disabled={autostartLoading}
+                  />
+                </div>
+              </Field>
+
+              <Field orientation="responsive" className="items-center gap-4">
+                <FieldContent>
+                  <FieldTitle>Check for updates automatically</FieldTitle>
+                  <FieldDescription>
+                    Check daily and ask before downloading or installing anything.
+                  </FieldDescription>
+                </FieldContent>
+                <div className="flex flex-col items-end gap-2">
+                  <Switch
+                    id="check-updates-automatically"
+                    checked={settings.check_updates_automatically ?? true}
+                    onCheckedChange={async (checked) =>
+                      await updateSettings({
+                        check_updates_automatically: checked,
+                      })
+                    }
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCheckUpdate}
+                    disabled={isCheckingUpdate}
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${isCheckingUpdate ? "animate-spin" : ""}`} />
+                    {isCheckingUpdate ? "Checking" : "Check updates"}
+                  </Button>
+                </div>
+              </Field>
+            </FieldGroup>
+          </div>
+
+          <div className="rounded-xl border border-border/60 bg-card">
+            <div className="border-b border-border/60 px-4 py-3">
               <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-md bg-primary/10">
+                <div className="rounded-md bg-primary/10 p-1.5">
                   <Mic className="h-4 w-4 text-primary" />
                 </div>
                 <div>
                   <h3 className="font-medium">Recording</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Voice capture and hotkey settings
-                  </p>
+                  <p className="text-xs text-muted-foreground">Capture, hotkeys, and transcript handling</p>
                 </div>
               </div>
             </div>
 
-            <div className="p-4 space-y-4">
-              {/* Recording Mode Selector */}
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Recording Mode</Label>
-                <ToggleGroup
-                  type="single"
-                  value={settings.recording_mode || "toggle"}
-                  onValueChange={async (value) => {
-                    if (value) {
-                      await updateSettings({
-                        recording_mode: value as "toggle" | "push_to_talk",
-                      });
-                      toast.success(
-                        `Recording mode changed to ${value === "push_to_talk" ? "Push-to-Talk" : "Toggle"}`,
-                      );
-                    }
-                  }}
-                  variant="outline"
-                  className="w-full"
-                >
-                  <ToggleGroupItem value="toggle">
-                    <ToggleLeft className="h-4 w-4" />
-                    Toggle
-                  </ToggleGroupItem>
-                  <ToggleGroupItem value="push_to_talk">
-                    <Keyboard className="h-4 w-4" />
-                    Push to Talk
-                  </ToggleGroupItem>
-                </ToggleGroup>
-                <p className="text-xs text-muted-foreground">
-                  {settings.recording_mode === "push_to_talk" ? (
-                    "Hold the hotkey to record, release to stop"
-                  ) : (
-                    <>
-                      Press the hotkey to start/stop recording · Press{" "}
-                      <kbd className="px-1 py-0.5 rounded text-xs bg-background border">
-                        ESC
-                      </kbd>{" "}
-                      twice to cancel
-                    </>
-                  )}
-                </p>
-              </div>
+            <div className="p-4">
+              <FieldGroup className="gap-7">
+                <FieldSet className="gap-4 border-t border-border/60 pt-5 first:border-t-0 first:pt-0">
+                  <FieldLegend className="mb-1 text-base font-semibold">Capture controls</FieldLegend>
 
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label htmlFor="hotkey" className="text-sm font-medium">
-                    {settings.recording_mode === "push_to_talk"
-                      ? "Push-to-Talk Key"
-                      : "Toggle Hotkey"}
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    {settings.recording_mode === "push_to_talk"
-                      ? "Hold this key to record"
-                      : "Toggle this key to start/stop record"}
-                  </p>
-                </div>
-                <HotkeyInput
-                  value={settings.hotkey || ""}
-                  onChange={async (hotkey) => {
-                    try {
-                      // First update the global shortcut in the backend
-                      await invoke("set_global_shortcut", { shortcut: hotkey });
-
-                      // Then update the settings
-                      await updateSettings({ hotkey });
-
-                      toast.success("Hotkey updated successfully!");
-                    } catch (err) {
-                      console.error("Failed to update hotkey:", err);
-                      // Show the specific error message from backend
-                      const errorMessage =
-                        err instanceof Error ? err.message : String(err);
-                      toast.error(
-                        errorMessage ||
-                          "Failed to update hotkey. Please try a different combination.",
-                      );
-                    }
-                  }}
-                  placeholder="Click to set"
-                />
-              </div>
-
-              {/* Optional Different PTT Key - Commented out for simplicity */}
-              {/* {settings.recording_mode === "push_to_talk" && (
-                <>
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label
-                        htmlFor="different-ptt"
-                        className="text-sm font-medium"
-                      >
-                        Use Different PTT Key
-                      </Label>
-                      <p className="text-xs text-muted-foreground">
-                        Configure a separate key for push-to-talk
-                      </p>
-                    </div>
-                    <Switch
-                      id="different-ptt"
-                      checked={settings.use_different_ptt_key || false}
-                      onCheckedChange={async (checked) => {
+                  <Field>
+                    <FieldContent>
+                      <FieldTitle>Recording Mode</FieldTitle>
+                      <FieldDescription>
+                        {settings.recording_mode === "push_to_talk" ? (
+                          "Hold the hotkey to record, release to stop"
+                        ) : (
+                          <>
+                            Press the hotkey to start/stop recording · Press <Kbd>ESC</Kbd> twice to cancel
+                          </>
+                        )}
+                      </FieldDescription>
+                    </FieldContent>
+                    <ToggleGroup
+                      type="single"
+                      value={settings.recording_mode || "toggle"}
+                      onValueChange={async (value) => {
+                        if (!value) return;
                         await updateSettings({
-                          use_different_ptt_key: checked,
-                          // Set default PTT key if enabling for the first time
-                          ptt_hotkey:
-                            checked && !settings.ptt_hotkey
-                              ? "Alt+Space"
-                              : settings.ptt_hotkey,
+                          recording_mode: value as "toggle" | "push_to_talk",
                         });
+                        toast.success(
+                          `Recording mode changed to ${value === "push_to_talk" ? "Push-to-Talk" : "Toggle"}`,
+                        );
                       }}
-                    />
-                  </div>
+                      variant="outline"
+                      className="w-full flex-wrap md:w-fit"
+                      data-testid="toggle-group"
+                      data-value={settings.recording_mode || "toggle"}
+                    >
+                      <ToggleGroupItem value="toggle">
+                        <ToggleLeft className="h-4 w-4" />
+                        Toggle
+                      </ToggleGroupItem>
+                      <ToggleGroupItem value="push_to_talk">
+                        <Keyboard className="h-4 w-4" />
+                        Push to Talk
+                      </ToggleGroupItem>
+                    </ToggleGroup>
+                  </Field>
 
-                  {settings.use_different_ptt_key && (
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <Label
-                          htmlFor="ptt-hotkey"
-                          className="text-sm font-medium"
-                        >
-                          PTT Hotkey
-                        </Label>
-                        <p className="text-xs text-muted-foreground">
-                          Separate key for push-to-talk
-                        </p>
-                      </div>
+                  <Field orientation="responsive" className="items-center gap-3">
+                    <FieldContent>
+                      <FieldTitle>
+                        {settings.recording_mode === "push_to_talk" ? "Push-to-Talk Key" : "Toggle Hotkey"}
+                      </FieldTitle>
+                      <FieldDescription>
+                        {settings.recording_mode === "push_to_talk"
+                          ? "Hold this key to record."
+                          : "Use this key to start or stop recording from anywhere."}
+                      </FieldDescription>
+                    </FieldContent>
+                    <div className="w-full md:w-auto">
                       <HotkeyInput
-                        value={settings.ptt_hotkey || "Alt+Space"}
+                        value={settings.hotkey || ""}
                         onChange={async (hotkey) => {
                           try {
-                            // Check if it's different from main hotkey
-                            if (hotkey === settings.hotkey) {
-                              toast.error(
-                                "PTT key must be different from the main hotkey",
-                              );
-                              return;
-                            }
-
-                            // Update the settings with new PTT hotkey
-                            await updateSettings({ ptt_hotkey: hotkey });
-                            toast.success("PTT hotkey updated successfully!");
+                            await invoke("set_global_shortcut", { shortcut: hotkey });
+                            await updateSettings({ hotkey });
+                            toast.success("Hotkey updated successfully!");
                           } catch (err) {
-                            console.error("Failed to update PTT hotkey:", err);
-                            toast.error("Failed to update PTT hotkey");
+                            console.error("Failed to update hotkey:", err);
+                            const errorMessage =
+                              err instanceof Error ? err.message : String(err);
+                            toast.error(
+                              errorMessage ||
+                                "Failed to update hotkey. Please try a different combination.",
+                            );
                           }
                         }}
                         placeholder="Click to set"
                       />
                     </div>
+                  </Field>
+
+                  {!canAutoInsert && showAccessibilityWarning && (
+                    <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-500" />
+                        <div className="space-y-2">
+                          <div>
+                            <p className="text-sm font-medium text-amber-900 dark:text-amber-400">
+                              Accessibility permission required
+                            </p>
+                            <p className="text-xs text-amber-800 dark:text-amber-500">
+                              VoiceTypr needs accessibility permission for global hotkeys and auto-insert.
+                            </p>
+                          </div>
+                          <ol className="list-decimal space-y-0.5 pl-4 text-xs text-amber-800 dark:text-amber-500">
+                            <li>Open System Settings</li>
+                            <li>Go to Privacy &amp; Security → Accessibility</li>
+                            <li>Add VoiceTypr and enable it</li>
+                          </ol>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-auto px-0 text-amber-700 hover:bg-transparent hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300"
+                            onClick={async () => {
+                              try {
+                                await invoke("open_accessibility_settings");
+                              } catch (error) {
+                                console.error("Failed to open accessibility settings:", error);
+                                toast.error(
+                                  "Could not open settings. Please open System Settings manually.",
+                                );
+                              }
+                            }}
+                          >
+                            Open Accessibility Settings
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
                   )}
-                </>
-              )} */}
 
-              {!canAutoInsert && showAccessibilityWarning && (
-                <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0 text-amber-600 dark:text-amber-500 mt-0.5" />
-                  <div className="flex-1 space-y-1">
-                    <p className="text-sm font-medium text-amber-900 dark:text-amber-400">
-                      Accessibility permission required
-                    </p>
-                    <p className="text-xs text-amber-800 dark:text-amber-500 mb-1">
-                      VoiceTypr needs accessibility permission for hotkeys and auto-insert to work:
-                    </p>
-                    <ol className="text-xs text-amber-800 dark:text-amber-500 list-decimal list-inside space-y-0.5 mb-2">
-                      <li>Open <strong>System Settings</strong></li>
-                      <li>Click <strong>Privacy & Security</strong> (not the top-level Accessibility)</li>
-                      <li>Scroll down and click <strong>Accessibility</strong></li>
-                      <li>Click the <strong>+</strong> button, select <strong>VoiceTypr</strong> from Applications</li>
-                      <li>Enable the toggle next to VoiceTypr</li>
-                    </ol>
-                    <button
-                      onClick={async () => {
-                        try {
-                          await invoke("open_accessibility_settings");
-                        } catch (error) {
-                          console.error("Failed to open accessibility settings:", error);
-                          toast.error("Could not open settings. Please open System Settings manually.");
-                        }
-                      }}
-                      className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400 hover:underline"
-                    >
-                      Open Accessibility Settings
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label htmlFor="microphone" className="text-sm font-medium">
-                    Microphone
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Select your preferred audio input device
-                  </p>
-                </div>
-                <MicrophoneSelection
-                  value={settings.selected_microphone || undefined}
-                  onValueChange={async (deviceName) => {
-                    try {
-                      console.log(
-                        `Setting microphone to: ${deviceName || "Default"}`,
-                      );
-                      // Always call set_audio_device, pass null for default
-                      await invoke("set_audio_device", {
-                        deviceName: deviceName || null,
-                      });
-                      toast.success(
-                        `Microphone changed to: ${deviceName || "Default"}`,
-                      );
-                    } catch (error) {
-                      console.error("Failed to set microphone:", error);
-                      toast.error("Failed to change microphone");
-                    }
-                  }}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label
-                    htmlFor="clipboard-retain"
-                    className="text-sm font-medium"
-                  >
-                    Keep Transcript in Clipboard
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Leave transcribed text available for manual pastes
-                  </p>
-                </div>
-                <Switch
-                  id="clipboard-retain"
-                  checked={settings.keep_transcription_in_clipboard ?? false}
-                  onCheckedChange={async (checked) =>
-                    await updateSettings({
-                      keep_transcription_in_clipboard: checked,
-                    })
-                  }
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label
-                    htmlFor="auto-paste-transcription"
-                    className="text-sm font-medium"
-                  >
-                    Auto-Paste Transcript
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Insert completed text automatically; turn off to copy for manual paste
-                  </p>
-                </div>
-                <Switch
-                  id="auto-paste-transcription"
-                  checked={settings.auto_paste_transcription ?? true}
-                  onCheckedChange={async (checked) =>
-                    await updateSettings({
-                      auto_paste_transcription: checked,
-                    })
-                  }
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label
-                    htmlFor="sound-on-recording"
-                    className="text-sm font-medium"
-                  >
-                    Sound on Recording
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Play a sound when recording starts
-                  </p>
-                </div>
-                <Switch
-                  id="sound-on-recording"
-                  checked={settings.play_sound_on_recording ?? true}
-                  onCheckedChange={async (checked) =>
-                    await updateSettings({
-                      play_sound_on_recording: checked,
-                    })
-                  }
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label
-                    htmlFor="sound-on-recording-end"
-                    className="text-sm font-medium"
-                  >
-                    Sound on Recording End
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Play a sound when recording stops
-                  </p>
-                </div>
-                <Switch
-                  id="sound-on-recording-end"
-                  checked={settings.play_sound_on_recording_end ?? true}
-                  onCheckedChange={async (checked) =>
-                    await updateSettings({
-                      play_sound_on_recording_end: checked,
-                    })
-                  }
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label
-                    htmlFor="pause-media"
-                    className="text-sm font-medium"
-                  >
-                    Pause Media During Recording
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Automatically pause playing music/videos when recording
-                  </p>
-                </div>
-                <Switch
-                  id="pause-media"
-                  checked={settings.pause_media_during_recording ?? true}
-                  onCheckedChange={async (checked) =>
-                    await updateSettings({
-                      pause_media_during_recording: checked,
-                    })
-                  }
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label
-                    htmlFor="pill-indicator-mode"
-                    className="text-sm font-medium"
-                  >
-                    Recording Indicator Visibility
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Control when the recording indicator is visible
-                  </p>
-                </div>
-                <Select
-                  value={settings.pill_indicator_mode ?? "when_recording"}
-                  onValueChange={async (value: PillIndicatorMode) => {
-                    await updateSettings({
-                      pill_indicator_mode: value,
-                    });
-                  }}
-                >
-                  <SelectTrigger className="w-[160px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="never">Never</SelectItem>
-                    <SelectItem value="always">Always</SelectItem>
-                    <SelectItem value="when_recording">When Recording</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Only show position selector when indicator is visible (not "never") */}
-              {settings.pill_indicator_mode !== "never" && (
-                <>
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label
-                        htmlFor="pill-indicator-position"
-                        className="text-sm font-medium"
-                      >
-                        Indicator Position
-                      </Label>
-                      <p className="text-xs text-muted-foreground">
-                        Where to display the recording indicator on screen
-                      </p>
-                    </div>
-                    <Select
-                      value={settings.pill_indicator_position ?? "bottom-center"}
-                      onValueChange={async (value: PillIndicatorPosition) => {
-                        await updateSettings({
-                          pill_indicator_position: value,
-                        });
-                      }}
-                    >
-                      <SelectTrigger className="w-[160px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="top-left">Top Left</SelectItem>
-                        <SelectItem value="top-center">Top Center</SelectItem>
-                        <SelectItem value="top-right">Top Right</SelectItem>
-                        <SelectItem value="bottom-left">Bottom Left</SelectItem>
-                        <SelectItem value="bottom-center">Bottom Center</SelectItem>
-                        <SelectItem value="bottom-right">Bottom Right</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  
-                  {/* Indicator edge offset slider */}
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label
-                        htmlFor="pill-indicator-offset"
-                        className="text-sm font-medium"
-                      >
-                        Edge Offset
-                      </Label>
-                      <p className="text-xs text-muted-foreground">
-                        Distance from screen edge ({settings.pill_indicator_offset ?? 10}px)
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-3 w-[140px]">
-                      <Slider
-                        id="pill-indicator-offset"
-                        min={10}
-                        max={50}
-                        step={5}
-                        value={[settings.pill_indicator_offset ?? 10]}
-                        onValueChange={async ([value]) => {
-                          await updateSettings({
-                            pill_indicator_offset: value,
-                          });
+                  <Field orientation="responsive" className="items-center gap-3">
+                    <FieldContent>
+                      <FieldTitle>Microphone</FieldTitle>
+                      <FieldDescription>Select your preferred audio input device.</FieldDescription>
+                    </FieldContent>
+                    <div className="w-full md:w-auto">
+                      <MicrophoneSelection
+                        value={settings.selected_microphone || undefined}
+                        onValueChange={async (deviceName) => {
+                          try {
+                            await invoke("set_audio_device", {
+                              deviceName: deviceName || null,
+                            });
+                            toast.success(`Microphone changed to: ${deviceName || "Default"}`);
+                          } catch (error) {
+                            console.error("Failed to set microphone:", error);
+                            toast.error("Failed to change microphone");
+                          }
                         }}
                       />
                     </div>
-                  </div>
-                </>
-              )}
+                  </Field>
+                </FieldSet>
 
-              {/* Divider */}
-              <div className="border-t border-border/50 my-2" />
+                <FieldSet className="gap-4 border-t border-border/60 pt-5">
+                  <FieldLegend className="mb-1 text-base font-semibold">Transcript handling</FieldLegend>
 
-              {/* Save Recordings */}
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label
-                    htmlFor="save-recordings"
-                    className="text-sm font-medium"
-                  >
-                    Save Recordings
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Keep audio files instead of deleting after transcription
-                  </p>
-                  {settings.save_recordings && (
-                    <button
-                      type="button"
-                      className="text-xs text-primary hover:underline flex items-center gap-1 mt-1"
-                      onClick={async () => {
-                        try {
-                          await invoke('open_recordings_folder');
-                        } catch (error) {
-                          console.error('Failed to open recordings folder:', error);
-                          toast.error('Failed to open recordings folder');
-                        }
+                  <Field orientation="responsive" className="items-center gap-3">
+                    <FieldContent>
+                      <FieldTitle>Keep Transcript in Clipboard</FieldTitle>
+                      <FieldDescription>
+                        Leave transcribed text available for manual pastes
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id="clipboard-retain"
+                      checked={settings.keep_transcription_in_clipboard ?? false}
+                      onCheckedChange={async (checked) =>
+                        await updateSettings({
+                          keep_transcription_in_clipboard: checked,
+                        })
+                      }
+                    />
+                  </Field>
+
+                  <Field orientation="responsive" className="items-center gap-3">
+                    <FieldContent>
+                      <FieldTitle>Auto-paste transcript</FieldTitle>
+                      <FieldDescription>
+                        Insert completed text automatically. Turn off to copy for manual paste.
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id="auto-paste-transcription"
+                      checked={settings.auto_paste_transcription ?? true}
+                      onCheckedChange={async (checked) =>
+                        await updateSettings({
+                          auto_paste_transcription: checked,
+                        })
+                      }
+                    />
+                  </Field>
+
+
+                  <Field orientation="responsive" className="items-center gap-3">
+                    <FieldContent>
+                      <FieldTitle>Pause media during recording</FieldTitle>
+                      <FieldDescription>
+                        Automatically pause playing music or videos while recording.
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id="pause-media"
+                      checked={settings.pause_media_during_recording ?? true}
+                      onCheckedChange={async (checked) =>
+                        await updateSettings({
+                          pause_media_during_recording: checked,
+                        })
+                      }
+                    />
+                  </Field>
+
+                  <Field orientation="responsive" className="items-center gap-3">
+                    <FieldContent>
+                      <FieldTitle>Sound on Recording</FieldTitle>
+                      <FieldDescription>Play a sound when recording starts</FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id="sound-on-recording"
+                      checked={settings.play_sound_on_recording ?? true}
+                      onCheckedChange={async (checked) =>
+                        await updateSettings({
+                          play_sound_on_recording: checked,
+                        })
+                      }
+                    />
+                  </Field>
+
+                  <Field orientation="responsive" className="items-center gap-3">
+                    <FieldContent>
+                      <FieldTitle>Sound on Recording End</FieldTitle>
+                      <FieldDescription>Play a sound when recording stops</FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id="sound-on-recording-end"
+                      checked={settings.play_sound_on_recording_end ?? true}
+                      onCheckedChange={async (checked) =>
+                        await updateSettings({
+                          play_sound_on_recording_end: checked,
+                        })
+                      }
+                    />
+                  </Field>
+                </FieldSet>
+
+                <FieldSet className="gap-4 border-t border-border/60 pt-5">
+                  <FieldLegend className="mb-1 text-base font-semibold">Recording indicator</FieldLegend>
+
+                  <Field orientation="responsive" className="items-center gap-3">
+                    <FieldContent>
+                      <FieldTitle>Indicator visibility</FieldTitle>
+                      <FieldDescription>Show or hide the small recording status overlay.</FieldDescription>
+                    </FieldContent>
+                    <Select
+                      value={settings.pill_indicator_mode ?? "when_recording"}
+                      onValueChange={async (value: PillIndicatorMode) => {
+                        await updateSettings({
+                          pill_indicator_mode: value,
+                        });
                       }}
                     >
-                      <FolderOpen className="h-3 w-3" />
-                      Open Recordings Folder
-                    </button>
+                      <SelectTrigger className="w-full md:w-[190px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="never">Never</SelectItem>
+                        <SelectItem value="always">Always</SelectItem>
+                        <SelectItem value="when_recording">When Recording</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+
+                  {settings.pill_indicator_mode !== "never" && (
+                    <>
+                      <Field orientation="responsive" className="items-center gap-3">
+                        <FieldContent>
+                          <FieldTitle>Indicator Position</FieldTitle>
+                          <FieldDescription>
+                            Choose where the status overlay appears on screen.
+                          </FieldDescription>
+                        </FieldContent>
+                        <Select
+                          value={settings.pill_indicator_position ?? "bottom-center"}
+                          onValueChange={async (value: PillIndicatorPosition) => {
+                            await updateSettings({
+                              pill_indicator_position: value,
+                            });
+                          }}
+                        >
+                          <SelectTrigger className="w-full md:w-[190px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="top-left">Top Left</SelectItem>
+                            <SelectItem value="top-center">Top Center</SelectItem>
+                            <SelectItem value="top-right">Top Right</SelectItem>
+                            <SelectItem value="bottom-left">Bottom Left</SelectItem>
+                            <SelectItem value="bottom-center">Bottom Center</SelectItem>
+                            <SelectItem value="bottom-right">Bottom Right</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+
+                      <Field orientation="responsive" className="items-center gap-3">
+                        <FieldContent>
+                          <FieldTitle>Edge offset</FieldTitle>
+                          <FieldDescription>
+                            Distance from screen edge.
+                          </FieldDescription>
+                        </FieldContent>
+                        <div className="w-full min-w-0 md:w-[420px] md:max-w-[50vw]">
+                          <div className="space-y-2">
+                            <Slider
+                              aria-label="Indicator edge offset"
+                              min={10}
+                              max={50}
+                              step={5}
+                              value={[settings.pill_indicator_offset ?? 10]}
+                              onValueChange={async ([offset]) =>
+                                await updateSettings({
+                                  pill_indicator_offset: offset,
+                                })
+                              }
+                              className="w-full"
+                            />
+                            <div className="text-right text-[11px] font-medium text-foreground tabular-nums">
+                              {settings.pill_indicator_offset ?? 10}px
+                            </div>
+                          </div>
+                        </div>
+                      </Field>
+                    </>
                   )}
-                </div>
-                <Select
-                  value={
-                    !settings.save_recordings
-                      ? "off"
-                      : settings.recording_retention_count === null
-                        ? "unlimited"
-                        : String(settings.recording_retention_count ?? 50)
-                  }
-                  onValueChange={async (value) => {
-                    if (value === "off") {
-                      await updateSettings({
-                        save_recordings: false,
-                      });
-                    } else {
-                      const count = value === "unlimited" ? null : parseInt(value, 10);
-                      await updateSettings({
-                        save_recordings: true,
-                        recording_retention_count: count,
-                      });
-                      toast.success("Recordings will now be saved");
-                    }
-                  }}
-                >
-                  <SelectTrigger className="w-[160px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="off">Don't Save</SelectItem>
-                    <SelectItem value="25">Last 25</SelectItem>
-                    <SelectItem value="50">Last 50</SelectItem>
-                    <SelectItem value="100">Last 100</SelectItem>
-                    <SelectItem value="250">Last 250</SelectItem>
-                    <SelectItem value="unlimited">Unlimited</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </div>
+                </FieldSet>
 
-          {/* Network Sharing Section */}
-          <NetworkSharingCard />
+                <FieldSet className="gap-4 border-t border-border/60 pt-5">
+                  <FieldLegend className="mb-1 text-base font-semibold">Storage & cleanup</FieldLegend>
 
-          {/* Startup Section */}
-          <div className="rounded-lg border border-border/50 bg-card p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-1.5 rounded-md bg-green-500/10">
-                  <Rocket className="h-4 w-4 text-green-500" />
-                </div>
-                <div className="space-y-0.5">
-                  <Label htmlFor="autostart" className="text-sm font-medium">
-                    Launch at Startup
-                  </Label>
+                  <Field orientation="responsive" className="items-center gap-3">
+                    <FieldContent>
+                      <FieldTitle>Transcript history cleanup</FieldTitle>
+                      <FieldDescription>
+                        Automatically remove old transcript history after a set number of days.
+                      </FieldDescription>
+                    </FieldContent>
+                    <Select
+                      value={
+                        settings.transcription_cleanup_days == null
+                          ? "forever"
+                          : String(settings.transcription_cleanup_days)
+                      }
+                      onValueChange={async (value) =>
+                        await updateSettings({
+                          transcription_cleanup_days:
+                            value === "forever" ? null : parseInt(value, 10),
+                        })
+                      }
+                    >
+                      <SelectTrigger className="w-full md:w-[190px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="forever">Keep forever</SelectItem>
+                        <SelectItem value="7">7 days</SelectItem>
+                        <SelectItem value="14">14 days</SelectItem>
+                        <SelectItem value="30">30 days</SelectItem>
+                        <SelectItem value="90">90 days</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+
+                  <Field
+                    orientation="responsive"
+                    className="items-start gap-3 md:[&_[data-slot=field-content]]:pt-1"
+                  >
+                    <FieldContent>
+                      <FieldTitle>Save recording audio</FieldTitle>
+                      <FieldDescription>
+                        Keeps the original audio files for re-transcription, then automatically deletes them after your chosen period.
+                      </FieldDescription>
+                    </FieldContent>
+                    <div className="w-full md:w-auto">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                        <Select
+                          value={
+                            !settings.save_recordings
+                              ? "off"
+                              : settings.recording_retention_days === null
+                                ? "forever"
+                                : String(settings.recording_retention_days ?? 30)
+                          }
+                          onValueChange={async (value) => {
+                            if (value === "off") {
+                              await updateSettings({
+                                save_recordings: false,
+                              });
+                              return;
+                            }
+
+                            const days = value === "forever" ? null : parseInt(value, 10);
+                            await updateSettings({
+                              save_recordings: true,
+                              recording_retention_days: days,
+                            });
+                            toast.success("Recording audio will now be saved");
+                          }}
+                        >
+                          <SelectTrigger className="w-full sm:w-[190px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="off">Don&apos;t save</SelectItem>
+                            <SelectItem value="7">Keep for 7 days</SelectItem>
+                            <SelectItem value="30">Keep for 30 days</SelectItem>
+                            <SelectItem value="90">Keep for 90 days</SelectItem>
+                            <SelectItem value="forever">Keep forever</SelectItem>
+                          </SelectContent>
+                        </Select>
+
+                        {settings.save_recordings && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="justify-center"
+                            onClick={async () => {
+                              try {
+                                await invoke("open_recordings_folder");
+                              } catch (error) {
+                                console.error("Failed to open recordings folder:", error);
+                                toast.error("Failed to open recordings folder");
+                              }
+                            }}
+                          >
+                            <FolderOpen className="h-4 w-4" />
+                            Open folder
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </Field>
+                </FieldSet>
+
+                <div className="flex items-center gap-2 rounded-lg border border-primary/15 bg-primary/5 p-3">
+                  <Kbd>ESC</Kbd>
                   <p className="text-xs text-muted-foreground">
-                    Automatically start VoiceTypr when you log in
+                    Press twice while recording to cancel the current take.
                   </p>
                 </div>
-              </div>
-              <Switch
-                id="autostart"
-                checked={autostartEnabled}
-                onCheckedChange={handleAutostartToggle}
-                disabled={autostartLoading}
-              />
+              </FieldGroup>
             </div>
           </div>
+
+          <NetworkSharingCard />
+
         </div>
       </ScrollArea>
     </div>

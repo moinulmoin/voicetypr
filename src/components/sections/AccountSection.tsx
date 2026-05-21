@@ -1,5 +1,13 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useLicense } from "@/contexts/LicenseContext";
@@ -9,6 +17,7 @@ import {
   Check,
   Clock,
   Crown,
+  HelpCircle,
   Shield
 } from "lucide-react";
 import { useState } from 'react';
@@ -43,6 +52,7 @@ export function AccountSection() {
       await deactivateLicense();
     }
   };
+
 
   const openExternalLink = async (url: string) => {
     try {
@@ -95,11 +105,33 @@ export function AccountSection() {
     <div className="h-full flex flex-col">
       {/* Header */}
       <div className="px-6 py-4 border-b border-border/40">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">License</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Manage your VoiceTypr license
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold">Licensing</h1>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button type="button" variant="secondary" size="icon" aria-label="Licensing guide" className="rounded-full">
+                    <HelpCircle className="h-4.5 w-4.5" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Licensing guide</DialogTitle>
+                    <DialogDescription>
+                      Manage your trial and activate or remove a Pro license.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                    <p><strong className="text-foreground">Trial</strong> shows the remaining trial state when no Pro license is active.</p>
+                    <p><strong className="text-foreground">License activation</strong> validates the key and stores only the app needs to confirm status.</p>
+                    <p><strong className="text-foreground">Purchase</strong> opens the checkout flow when you need to upgrade from trial or free.</p>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Manage trial status and license activation.
             </p>
           </div>
           {status && status.status === 'licensed' && (
@@ -258,6 +290,7 @@ export function AccountSection() {
                 </div>
               )}
             </div>
+
           </div>
         </div>
       </ScrollArea>

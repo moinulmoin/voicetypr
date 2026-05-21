@@ -44,9 +44,6 @@ vi.mock('./AccountTab', () => ({
   AccountTab: () => <div data-testid="account-tab">Account</div>
 }));
 
-vi.mock('./AboutTab', () => ({
-  AboutTab: () => <div data-testid="about-tab">About</div>
-}));
 
 vi.mock('./HelpTab', () => ({
   HelpTab: () => <div data-testid="help-tab">Help</div>
@@ -75,15 +72,13 @@ describe('TabContainer', () => {
     rerender(<TabContainer activeSection="license" />);
     expect(screen.getByTestId('account-tab')).toBeInTheDocument();
     
-    rerender(<TabContainer activeSection="about" />);
-    expect(screen.getByTestId('about-tab')).toBeInTheDocument();
     
     rerender(<TabContainer activeSection="help" />);
     expect(screen.getByTestId('help-tab')).toBeInTheDocument();
   });
 
   it('renders overview tab for unknown sections', () => {
-    render(<TabContainer activeSection="unknown" />);
+    render(<TabContainer activeSection={"unknown" as unknown as never} />);
     expect(screen.getByTestId('overview-tab')).toBeInTheDocument();
   });
 });

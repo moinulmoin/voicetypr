@@ -1,5 +1,14 @@
 import { useState, useEffect } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import {
   Upload,
   FileAudio,
@@ -7,7 +16,8 @@ import {
   Loader2,
   Copy,
   Check,
-  AlertCircle
+  AlertCircle,
+  HelpCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
@@ -44,7 +54,7 @@ export function AudioUploadSection() {
   const resolveHistoryModelName = async (remoteServerIdOverride?: string | null) => {
     const effectiveRemoteId = remoteServerIdOverride ?? activeRemoteServer;
     if (!effectiveRemoteId) {
-      return settings?.current_model_engine === 'soniox' ? 'Soniox (Cloud)' : (settings?.current_model || '');
+      return settings?.current_model_engine === 'soniox' ? 'Soniox' : (settings?.current_model || '');
     }
 
     try {
@@ -93,6 +103,12 @@ export function AudioUploadSection() {
       unlistenSharingChanged.then((fn) => fn());
     };
   }, []);
+
+  const activeSourceLabel = activeRemoteServer
+    ? "Remote VoiceTypr"
+    : settings?.current_model_engine === 'soniox'
+      ? "Soniox cloud"
+      : settings?.current_model || "No source selected";
 
   const handleFileSelect = async () => {
     try {
@@ -240,13 +256,38 @@ export function AudioUploadSection() {
     <div className="h-full min-h-0 flex flex-col">
       {/* Header */}
       <div className="shrink-0 px-6 py-4 border-b border-border/40">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Upload files</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Transcribe audio or video files using your selected transcription source
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold">Upload files</h1>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button type="button" variant="secondary" size="icon" aria-label="Upload guide" className="rounded-full">
+                    <HelpCircle className="h-4.5 w-4.5" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Upload guide</DialogTitle>
+                    <DialogDescription>
+                      Upload uses your currently selected transcription source. Change it in Transcription if you want a different model or remote device first.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                    <p><strong className="text-foreground">Supported files</strong>: WAV, MP3, M4A, FLAC, OGG, MP4, and WebM.</p>
+                    <p><strong className="text-foreground">Video files</strong>: audio is extracted first, then transcribed.</p>
+                    <p><strong className="text-foreground">Long files</strong>: expect longer processing times and higher memory use.</p>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Transcribe audio or video files using the same source you use for live recording.
             </p>
           </div>
+          <Badge variant="secondary" className="max-w-[280px] truncate">
+            Source: {activeSourceLabel}
+          </Badge>
         </div>
       </div>
 

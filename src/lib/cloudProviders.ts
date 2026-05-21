@@ -22,8 +22,8 @@ const sonioxProvider: CloudProviderDefinition = {
   id: 'soniox',
   engine: 'soniox',
   modelName: 'soniox',
-  displayName: 'Soniox (Cloud)',
-  description: 'High-accuracy streaming transcription via Soniox cloud APIs',
+  displayName: 'Soniox',
+  description: 'High-accuracy cloud transcription via Soniox APIs',
   providerName: 'Soniox',
   addKey: async (key: string) => {
     await saveSttApiKeySoniox(key.trim());

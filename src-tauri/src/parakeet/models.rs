@@ -97,7 +97,7 @@ pub static AVAILABLE_MODELS: Lazy<Vec<ParakeetModelDefinition>> = Lazy::new(|| {
             description: "Native Swift transcription optimized for English",
             languages: &["en"],
             recommended: true,
-            speed_score: 10,
+            speed_score: 9,
             accuracy_score: 8,
             files: &[
                 ParakeetModelFile {

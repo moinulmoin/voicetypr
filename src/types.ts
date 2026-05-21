@@ -76,7 +76,7 @@ export interface AppSettings {
   sharing_password?: string;
   // Recording persistence settings
   save_recordings?: boolean;
-  recording_retention_count?: number | null; // null = unlimited
+  recording_retention_days?: number | null; // null = keep forever
 }
 
 export interface TranscriptionHistory {

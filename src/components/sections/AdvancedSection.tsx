@@ -1,5 +1,13 @@
 import { PermissionErrorBoundary } from "@/components/PermissionErrorBoundary";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Tooltip,
@@ -16,6 +24,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import {
   CheckCircle,
   Keyboard,
+  HelpCircle,
   Loader2,
   Mic,
   RefreshCw,
@@ -109,9 +118,31 @@ export function AdvancedSection() {
         {/* Header */}
         <div className="shrink-0 px-6 py-4 border-b border-border/40">
           <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-semibold">Advanced</h1>
-              <p className="text-sm text-muted-foreground mt-1">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-semibold">Advanced</h1>
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <Button type="button" variant="secondary" size="icon" aria-label="Advanced guide" className="rounded-full">
+                      <HelpCircle className="h-4.5 w-4.5" />
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="sm:max-w-lg">
+                    <DialogHeader>
+                      <DialogTitle>Advanced guide</DialogTitle>
+                      <DialogDescription>
+                        Advanced settings are for permissions, onboarding recovery, and clearing app state.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                      <p><strong className="text-foreground">Permissions</strong> refreshes microphone and accessibility access after macOS changes.</p>
+                      <p><strong className="text-foreground">Onboarding reset</strong> reruns setup without deleting your transcript history.</p>
+                      <p><strong className="text-foreground">Factory reset</strong> is destructive and should only be used when you want to clear local app data.</p>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
                 System permissions and app management
               </p>
             </div>

@@ -141,6 +141,7 @@ vi.mock('@/components/ui/sidebar', () => ({
   SidebarInset: ({ children }: any) => <div>{children}</div>,
   SidebarContent: ({ children }: any) => <div>{children}</div>,
   SidebarGroup: ({ children }: any) => <div>{children}</div>,
+  SidebarGroupLabel: ({ children }: any) => <div>{children}</div>,
   SidebarGroupContent: ({ children }: any) => <div>{children}</div>,
   SidebarHeader: ({ children }: any) => <div>{children}</div>,
   SidebarMenu: ({ children }: any) => <div>{children}</div>,

@@ -20,7 +20,9 @@ const getAccuracyScore = (model: ModelInfo) =>
   model.accuracy_score ?? (isCloudModel(model) ? CLOUD_ACCURACY_FALLBACK : 0);
 
 const getSizeValue = (model: ModelInfo) =>
-  isCloudModel(model) ? Number.POSITIVE_INFINITY : model.size ?? Number.POSITIVE_INFINITY;
+  isCloudModel(model)
+    ? Number.POSITIVE_INFINITY
+    : (model.size ?? Number.POSITIVE_INFINITY);
 
 // Helper function to calculate balanced performance score
 function calculateBalancedScore(model: ModelInfo): number {
@@ -33,7 +35,7 @@ function calculateBalancedScore(model: ModelInfo): number {
 // Helper function to sort models by various criteria
 export function sortModels(
   models: [string, ModelInfo][],
-  sortBy: "balanced" | "speed" | "accuracy" | "size" = "balanced"
+  sortBy: "balanced" | "speed" | "accuracy" | "size" = "balanced",
 ): [string, ModelInfo][] {
   return [...models].sort(([, a], [, b]) => {
     // Sort by the specified criteria
@@ -62,8 +64,12 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   const activeDownloads = useRef(new Set<string>());
 
   const [models, setModels] = useState<Record<string, ModelInfo>>({});
-  const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
-  const [verifyingModels, setVerifyingModels] = useState<Set<string>>(new Set());
+  const [downloadProgress, setDownloadProgress] = useState<
+    Record<string, number>
+  >({});
+  const [verifyingModels, setVerifyingModels] = useState<Set<string>>(
+    new Set(),
+  );
 
   // Removed selectedModel state - now using settings.current_model directly
   const [isLoading, setIsLoading] = useState(false);
@@ -73,7 +79,9 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     try {
       setIsLoading(true);
       console.log("[useModelManagement] Calling get_model_status...");
-      const response = await invoke<{ models: ModelInfo[] }>("get_model_status");
+      const response = await invoke<{ models: ModelInfo[] }>(
+        "get_model_status",
+      );
       console.log("[useModelManagement] Response:", response);
 
       if (!response || !Array.isArray(response.models)) {
@@ -81,13 +89,16 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       }
 
       const modelStatus = Object.fromEntries(
-        response.models.map((model) => [model.name, model])
+        response.models.map((model) => [model.name, model]),
       );
       setModels(modelStatus);
 
       return response.models;
     } catch (error) {
-      console.error("[useModelManagement.loadModels] Failed to load models:", error);
+      console.error(
+        "[useModelManagement.loadModels] Failed to load models:",
+        error,
+      );
       if (showToasts) {
         toast.error("Failed to load models");
       }
@@ -98,113 +109,135 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   }, [showToasts]);
 
   // Download model
-  const downloadModel = useCallback(async (modelName: string) => {
-    const target = models[modelName];
-    if (target && isCloudModel(target)) {
-      if (showToasts) {
-        toast.info(`${target.display_name} is a cloud model and does not require downloading.`);
-      }
-      return;
-    }
-
-    // Check if already downloading
-    if (activeDownloads.current.has(modelName)) {
-      if (showToasts) {
-        toast.info(`Model ${modelName} is already downloading`);
-      }
-      return;
-    }
-
-    try {
-      // Mark as downloading
-      activeDownloads.current.add(modelName);
-
-      // Set initial progress to show download started
-      setDownloadProgress((prev) => ({
-        ...prev,
-        [modelName]: 0
-      }));
-
-      // Don't await - let it run async so progress events can update UI
-      invoke("download_model", { modelName }).catch((error) => {
-        console.error("[useModelManagement.downloadModel] Failed to download model:", error);
+  const downloadModel = useCallback(
+    async (modelName: string) => {
+      const target = models[modelName];
+      if (target && isCloudModel(target)) {
         if (showToasts) {
-          toast.error(`Failed to download model: ${error}`);
+          toast.info(
+            `${target.display_name} is a cloud model and does not require downloading.`,
+          );
         }
-        // Remove from progress on error
+        return;
+      }
+
+      // Check if already downloading
+      if (activeDownloads.current.has(modelName)) {
+        if (showToasts) {
+          toast.info(`Model ${modelName} is already downloading`);
+        }
+        return;
+      }
+
+      try {
+        // Mark as downloading
+        activeDownloads.current.add(modelName);
+
+        // Set initial progress to show download started
+        setDownloadProgress((prev) => ({
+          ...prev,
+          [modelName]: 0,
+        }));
+
+        // Don't await - let it run async so progress events can update UI
+        invoke("download_model", { modelName }).catch((error) => {
+          console.error(
+            "[useModelManagement.downloadModel] Failed to download model:",
+            error,
+          );
+          if (showToasts) {
+            toast.error(`Failed to download model: ${error}`);
+          }
+          // Remove from progress on error
+          setDownloadProgress((prev) => {
+            const newProgress = { ...prev };
+            delete newProgress[modelName];
+            return newProgress;
+          });
+          // Remove from active downloads
+          activeDownloads.current.delete(modelName);
+        });
+      } catch (error) {
+        console.error(
+          "[useModelManagement.downloadModel] Failed to start download:",
+          error,
+        );
+        if (showToasts) {
+          toast.error(`Failed to start download: ${error}`);
+        }
+        // Remove from active downloads
+        activeDownloads.current.delete(modelName);
+      }
+    },
+    [models, showToasts],
+  );
+
+  // Cancel download
+  const cancelDownload = useCallback(
+    async (modelName: string) => {
+      try {
+        await invoke("cancel_download", { modelName });
+
+        // Immediately remove from active downloads to allow retry
+        activeDownloads.current.delete(modelName);
+
+        // Remove from progress tracking
         setDownloadProgress((prev) => {
           const newProgress = { ...prev };
           delete newProgress[modelName];
           return newProgress;
         });
-        // Remove from active downloads
-        activeDownloads.current.delete(modelName);
-      });
-    } catch (error) {
-      console.error("[useModelManagement.downloadModel] Failed to start download:", error);
-      if (showToasts) {
-        toast.error(`Failed to start download: ${error}`);
+      } catch (error) {
+        console.error("Failed to cancel download:", error);
+        if (showToasts) {
+          toast.error(`Failed to cancel download: ${error}`);
+        }
       }
-      // Remove from active downloads
-      activeDownloads.current.delete(modelName);
-    }
-  }, [models, showToasts]);
-
-  // Cancel download
-  const cancelDownload = useCallback(async (modelName: string) => {
-    try {
-      await invoke("cancel_download", { modelName });
-
-      // Immediately remove from active downloads to allow retry
-      activeDownloads.current.delete(modelName);
-
-      // Remove from progress tracking
-      setDownloadProgress((prev) => {
-        const newProgress = { ...prev };
-        delete newProgress[modelName];
-        return newProgress;
-      });
-    } catch (error) {
-      console.error("Failed to cancel download:", error);
-      if (showToasts) {
-        toast.error(`Failed to cancel download: ${error}`);
-      }
-    }
-  }, [showToasts]);
+    },
+    [showToasts],
+  );
 
   // Delete model
-  const deleteModel = useCallback(async (modelName: string) => {
-    const target = models[modelName];
-    if (target && isCloudModel(target)) {
-      if (showToasts) {
-        toast.info(`${target.display_name} is a cloud model and cannot be deleted locally.`);
-      }
-      return;
-    }
-
-    try {
-      const confirmed = await ask(`Are you sure you want to delete the ${modelName} model?`, {
-        title: "Delete Model",
-        kind: "warning"
-      });
-
-      if (!confirmed) {
+  const deleteModel = useCallback(
+    async (modelName: string) => {
+      const target = models[modelName];
+      if (target && isCloudModel(target)) {
+        if (showToasts) {
+          toast.info(
+            `${target.display_name} is a cloud model and cannot be deleted locally.`,
+          );
+        }
         return;
       }
 
-      await invoke("delete_model", { modelName });
+      try {
+        const confirmed = await ask(
+          `Are you sure you want to delete the ${modelName} model?`,
+          {
+            title: "Delete Model",
+            kind: "warning",
+          },
+        );
 
-      // Refresh model status
-      await loadModels();
+        if (!confirmed) {
+          return;
+        }
 
-      // Model selection clearing is handled by the component via settings
-    } catch (error) {
-      console.error("Failed to delete model:", error);
-      if (showToasts) {
-        toast.error(`Failed to delete model: ${error}`);
+        await invoke("delete_model", { modelName });
+
+        // Refresh model status
+        await loadModels();
+
+        // Model selection clearing is handled by the component via settings
+      } catch (error) {
+        console.error("Failed to delete model:", error);
+        if (showToasts) {
+          toast.error(`Failed to delete model: ${error}`);
+        }
       }
-    }
-  }, [loadModels, models, showToasts]);
+    },
+    [loadModels, models, showToasts],
+  );
 
   // Setup event listeners BEFORE any other effects
   useEffect(() => {
@@ -215,12 +248,15 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
     const setupListeners = async () => {
       // DEBUG: Add direct listener to verify events are reaching frontend
-      if (typeof window !== 'undefined') {
-        const { listen } = await import('@tauri-apps/api/event');
+      if (typeof window !== "undefined") {
+        const { listen } = await import("@tauri-apps/api/event");
 
         // Direct debug listener bypassing EventCoordinator
-        const debugUnlisten = await listen('download-progress', (event) => {
-          console.log('[DEBUG] Direct download-progress event received:', event);
+        const debugUnlisten = await listen("download-progress", (event) => {
+          console.log(
+            "[DEBUG] Direct download-progress event received:",
+            event,
+          );
         });
 
         // Clean up debug listener on unmount
@@ -232,29 +268,37 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         (window as any).__debugUnlisten = originalCleanup;
       }
       // Progress updates
-      unregisterProgress = await registerEvent<{ model: string; engine?: string; downloaded: number; total: number; progress: number }>(
-        "download-progress",
-        (payload) => {
-          const { model, progress, downloaded, total, engine } = payload;
+      unregisterProgress = await registerEvent<{
+        model: string;
+        engine?: string;
+        downloaded: number;
+        total: number;
+        progress: number;
+      }>("download-progress", (payload) => {
+        const { model, progress, downloaded, total, engine } = payload;
 
-          console.log(`[useModelManagement] Download progress for ${model} (${engine ?? 'whisper'}): ${progress.toFixed(1)}% (${downloaded}/${total} bytes)`);
+        console.log(
+          `[useModelManagement] Download progress for ${model} (${engine ?? "whisper"}): ${progress.toFixed(1)}% (${downloaded}/${total} bytes)`,
+        );
 
-          // Keep updating progress until we receive the verifying event
-          setDownloadProgress((prev) => ({
-            ...prev,
-            [model]: Math.min(progress, 100) // Ensure progress doesn't exceed 100%
-          }));
-        }
-      );
+        // Keep updating progress until we receive the verifying event
+        setDownloadProgress((prev) => ({
+          ...prev,
+          [model]: Math.min(progress, 100), // Ensure progress doesn't exceed 100%
+        }));
+      });
 
       // Model verifying (after download, before verification)
-      unregisterVerifying = await registerEvent<{ model: string; engine?: string }>("model-verifying", (event) => {
+      unregisterVerifying = await registerEvent<{
+        model: string;
+        engine?: string;
+      }>("model-verifying", (event) => {
         const modelName = event.model;
 
         // First ensure the progress shows 100% before transitioning to verification
         setDownloadProgress((prev) => ({
           ...prev,
-          [modelName]: 100
+          [modelName]: 100,
         }));
 
         // Add to verifying set
@@ -271,11 +315,30 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       });
 
       // Download complete
-      unregisterComplete = await registerEvent<{ model: string; engine?: string }>("model-downloaded", async (event) => {
+      unregisterComplete = await registerEvent<{
+        model: string;
+        engine?: string;
+      }>("model-downloaded", async (event) => {
         const modelName = event.model;
 
         // Remove from active downloads
         activeDownloads.current.delete(modelName);
+
+        setModels((prev) => {
+          const existing = prev[modelName];
+          if (!existing) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            [modelName]: {
+              ...existing,
+              downloaded: true,
+              requires_setup: false,
+            },
+          };
+        });
 
         // Remove from progress tracking and verifying
         setDownloadProgress((prev) => {
@@ -283,7 +346,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           delete newProgress[modelName];
           return newProgress;
         });
-        
+
         // Remove from verifying set
         setVerifyingModels((prev) => {
           const newSet = new Set(prev);
@@ -300,8 +363,11 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       });
 
       // Download cancelled
-      unregisterCancelled = await registerEvent<{ model: string; engine?: string }>("download-cancelled", (payload) => {
-        const modelName = typeof payload === 'string' ? payload : payload.model;
+      unregisterCancelled = await registerEvent<{
+        model: string;
+        engine?: string;
+      }>("download-cancelled", (payload) => {
+        const modelName = typeof payload === "string" ? payload : payload.model;
         // Remove from active downloads
         activeDownloads.current.delete(modelName);
 
@@ -358,6 +424,6 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     deleteModel,
 
     // Utils
-    sortedModels: sortedModelsArray
+    sortedModels: sortedModelsArray,
   };
 }

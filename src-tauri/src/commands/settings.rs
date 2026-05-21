@@ -68,7 +68,7 @@ pub struct Settings {
     pub sharing_password: Option<String>,
     // Recording persistence settings
     pub save_recordings: bool,
-    pub recording_retention_count: Option<u32>, // None = unlimited
+    pub recording_retention_days: Option<u32>, // None = keep forever
 }
 
 impl Default for Settings {
@@ -85,8 +85,8 @@ impl Default for Settings {
             pill_position: None,              // No saved position initially
             launch_at_startup: false,         // Default to not launching at startup
             onboarding_completed: false,      // Default to not completed
-            check_updates_automatically: true, // Default to automatic updates enabled
-            selected_microphone: None,        // Default to system default microphone
+            check_updates_automatically: true, // Default to automatic update checks; installs still require confirmation
+            selected_microphone: None,         // Default to system default microphone
             recording_mode: "toggle".to_string(), // Default to toggle mode for backward compatibility
             use_different_ptt_key: false,         // Default to using same key
             ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
@@ -101,7 +101,7 @@ impl Default for Settings {
             sharing_port: Some(47842),      // Default network sharing port
             sharing_password: None,         // No password by default
             save_recordings: false,         // Default to not saving recordings
-            recording_retention_count: Some(50), // Default retention when saving is enabled
+            recording_retention_days: Some(30), // Default cleanup period when saving is enabled
         }
     }
 }
@@ -207,19 +207,49 @@ pub(crate) fn resolve_pill_indicator_mode(
     default_mode
 }
 
-pub(crate) fn recording_retention_count_from_store(
-    value: Option<serde_json::Value>,
-) -> Option<u32> {
-    match value {
-        None => Some(50),
-        Some(v) if v.is_null() => None,
-        Some(v) => v.as_u64().map(|n| n as u32).or(Some(50)),
+fn recording_retention_days_from_legacy_count(count: u64) -> Option<u32> {
+    match count {
+        0 | 250 => None,
+        25 => Some(7),
+        50 => Some(30),
+        100 => Some(90),
+        _ => None,
     }
 }
 
-pub(crate) fn recording_retention_count_to_value(count: Option<u32>) -> serde_json::Value {
-    match count {
-        Some(count) => json!(count),
+pub(crate) fn recording_retention_days_from_store(
+    store: &tauri_plugin_store::Store<tauri::Wry>,
+) -> Option<u32> {
+    if let Some(value) = store.get("recording_retention_days") {
+        if value.is_null() {
+            return None;
+        }
+        return value.as_u64().map(|n| n as u32).or(Some(30));
+    }
+
+    // Migrate old count-based retention to the new day-based policy conservatively.
+    match store
+        .get("recording_retention_count")
+        .and_then(|value| value.as_u64())
+    {
+        Some(count) => recording_retention_days_from_legacy_count(count),
+        None => {
+            if store
+                .get("recording_retention_count")
+                .map(|value| value.is_null())
+                .unwrap_or(false)
+            {
+                None
+            } else {
+                Some(30)
+            }
+        }
+    }
+}
+
+pub(crate) fn recording_retention_days_to_value(days: Option<u32>) -> serde_json::Value {
+    match days {
+        Some(days) => json!(days),
         None => serde_json::Value::Null,
     }
 }
@@ -411,9 +441,7 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("save_recordings")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().save_recordings),
-        recording_retention_count: recording_retention_count_from_store(
-            store.get("recording_retention_count"),
-        ),
+        recording_retention_days: recording_retention_days_from_store(&store),
     };
     let normalized_speech_language = normalize_speech_language_for_model(
         &settings.current_model_engine,
@@ -597,8 +625,8 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     // Recording persistence settings
     store.set("save_recordings", json!(settings.save_recordings));
     store.set(
-        "recording_retention_count",
-        recording_retention_count_to_value(settings.recording_retention_count),
+        "recording_retention_days",
+        recording_retention_days_to_value(settings.recording_retention_days),
     );
 
     // Save pill position if provided
@@ -1381,8 +1409,8 @@ pub async fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String
 #[cfg(test)]
 mod tests {
     use super::{
-        get_autostart_status, recording_retention_count_from_store,
-        recording_retention_count_to_value, resolve_pill_indicator_mode, set_autostart,
+        get_autostart_status, recording_retention_days_from_legacy_count,
+        recording_retention_days_to_value, resolve_pill_indicator_mode, set_autostart,
     };
     use serde_json::json;
 
@@ -1431,31 +1459,29 @@ mod tests {
     }
 
     #[test]
-    fn recording_retention_count_missing_key_uses_default() {
-        assert_eq!(recording_retention_count_from_store(None), Some(50));
-    }
-
-    #[test]
-    fn recording_retention_count_null_loads_as_none() {
+    fn recording_retention_days_none_saves_as_null() {
         assert_eq!(
-            recording_retention_count_from_store(Some(serde_json::Value::Null)),
-            None
-        );
-    }
-
-    #[test]
-    fn recording_retention_count_numeric_loads_as_some() {
-        assert_eq!(
-            recording_retention_count_from_store(Some(json!(12))),
-            Some(12)
-        );
-    }
-
-    #[test]
-    fn recording_retention_count_none_saves_as_null() {
-        assert_eq!(
-            recording_retention_count_to_value(None),
+            recording_retention_days_to_value(None),
             serde_json::Value::Null
         );
+    }
+
+    #[test]
+    fn recording_retention_days_some_saves_as_number() {
+        assert_eq!(recording_retention_days_to_value(Some(30)), json!(30));
+    }
+
+    #[test]
+    fn recording_retention_days_migrates_legacy_counts_conservatively() {
+        assert_eq!(recording_retention_days_from_legacy_count(25), Some(7));
+        assert_eq!(recording_retention_days_from_legacy_count(50), Some(30));
+        assert_eq!(recording_retention_days_from_legacy_count(100), Some(90));
+    }
+
+    #[test]
+    fn recording_retention_days_legacy_unlimited_counts_keep_forever() {
+        assert_eq!(recording_retention_days_from_legacy_count(0), None);
+        assert_eq!(recording_retention_days_from_legacy_count(250), None);
+        assert_eq!(recording_retention_days_from_legacy_count(1), None);
     }
 }

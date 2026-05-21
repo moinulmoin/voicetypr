@@ -11,6 +11,35 @@ use tauri_plugin_shell::{
 };
 use tokio::sync::RwLockWriteGuard;
 
+fn extract_json_payload(raw: &str) -> Option<&str> {
+    let start = raw.find('{')?;
+    let end = raw.rfind('}')?;
+    (start < end).then_some(&raw[start..=end])
+}
+
+fn parse_response_line(raw: &str) -> Result<ParakeetResponse, ParakeetError> {
+    match serde_json::from_str::<ParakeetResponse>(raw) {
+        Ok(response) => Ok(response),
+        Err(primary_error) => {
+            let Some(payload) = extract_json_payload(raw) else {
+                error!("Failed to parse sidecar response: {primary_error}. raw={raw}");
+                return Err(ParakeetError::InvalidResponse);
+            };
+            match serde_json::from_str::<ParakeetResponse>(payload) {
+                Ok(response) => {
+                    warn!("Recovered Parakeet response from noisy stdout: {raw}");
+                    Ok(response)
+                }
+                Err(recovery_error) => {
+                    error!(
+                        "Failed to parse sidecar response: {primary_error}; recovery failed: {recovery_error}. raw={raw}"
+                    );
+                    Err(ParakeetError::InvalidResponse)
+                }
+            }
+        }
+    }
+}
 pub struct ParakeetSidecar {
     rx: Receiver<CommandEvent>,
     child: CommandChild,
@@ -53,7 +82,7 @@ impl ParakeetSidecar {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    match serde_json::from_str::<ParakeetResponse>(trimmed) {
+                    match parse_response_line(trimmed) {
                         Ok(response) => {
                             if let ParakeetResponse::Error { code, message, .. } = &response {
                                 return Err(ParakeetError::SidecarError {
@@ -64,8 +93,7 @@ impl ParakeetSidecar {
                             return Ok(response);
                         }
                         Err(err) => {
-                            error!("Failed to parse sidecar response: {err}. raw={trimmed}");
-                            return Err(ParakeetError::InvalidResponse);
+                            return Err(err);
                         }
                     }
                 }
@@ -158,5 +186,63 @@ impl ParakeetClient {
         if let Some(sidecar) = self.inner.write().await.take() {
             sidecar.kill();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_json_payload, parse_response_line};
+    use crate::parakeet::error::ParakeetError;
+    use crate::parakeet::messages::ParakeetResponse;
+
+    #[test]
+    fn extract_json_payload_returns_object_slice() {
+        let raw = r#"noise before {"type":"status","loadedModel":"parakeet-tdt-0.6b-v2","modelVersion":"v2"}"#;
+        assert_eq!(
+            extract_json_payload(raw),
+            Some(r#"{"type":"status","loadedModel":"parakeet-tdt-0.6b-v2","modelVersion":"v2"}"#)
+        );
+    }
+
+    #[test]
+    fn parse_response_line_accepts_clean_json() {
+        let raw = r#"{"type":"status","loadedModel":"parakeet-tdt-0.6b-v2","modelVersion":"v2"}"#;
+        let response = parse_response_line(raw).expect("expected valid response");
+
+        match response {
+            ParakeetResponse::Status {
+                loaded_model,
+                model_version,
+                ..
+            } => {
+                assert_eq!(loaded_model.as_deref(), Some("parakeet-tdt-0.6b-v2"));
+                assert_eq!(model_version.as_deref(), Some("v2"));
+            }
+            other => panic!("unexpected response: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_response_line_recovers_json_after_noisy_prefix() {
+        let raw = r#"E5RT encountered an STL exception. {"type":"status","loadedModel":"parakeet-tdt-0.6b-v2","modelVersion":"v2"}"#;
+        let response = parse_response_line(raw).expect("expected recovered response");
+
+        match response {
+            ParakeetResponse::Status {
+                loaded_model,
+                model_version,
+                ..
+            } => {
+                assert_eq!(loaded_model.as_deref(), Some("parakeet-tdt-0.6b-v2"));
+                assert_eq!(model_version.as_deref(), Some("v2"));
+            }
+            other => panic!("unexpected response: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_response_line_rejects_non_json_output() {
+        let err = parse_response_line("definitely not json").expect_err("expected parse failure");
+        assert!(matches!(err, ParakeetError::InvalidResponse));
     }
 }

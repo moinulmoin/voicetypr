@@ -1,6 +1,14 @@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
@@ -15,7 +23,7 @@ import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, AlertTriangle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, FolderOpen, Server, Cpu, Cloud } from "lucide-react";
+import { AlertCircle, AlertTriangle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, FolderOpen, Server, Cpu, Cloud, HelpCircle } from "lucide-react";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -66,8 +74,7 @@ interface RecentRecordingsProps {
 }
 
 export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistoryUpdate }: RecentRecordingsProps) {
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [dropdownOpenId, setDropdownOpenId] = useState<string | null>(null);
+  const [, setDropdownOpenId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [transcriptionSources, setTranscriptionSources] = useState<TranscriptionSource[]>([]);
   const [loadingSources, setLoadingSources] = useState(false);
@@ -469,11 +476,34 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     <div className="h-full flex flex-col">
       {/* Header */}
       <div className="px-6 py-4 border-b border-border/40">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">History</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              {history.length} total transcription{history.length !== 1 ? 's' : ''}
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold">History</h1>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button type="button" variant="secondary" size="icon" aria-label="History guide" className="rounded-full">
+                    <HelpCircle className="h-4.5 w-4.5" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>History guide</DialogTitle>
+                    <DialogDescription>
+                      History stores completed transcripts so you can reuse, export, delete, or re-transcribe them.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                    <p><strong className="text-foreground">Search</strong> filters saved transcripts by text and source metadata.</p>
+                    <p><strong className="text-foreground">Re-transcribe</strong> reruns a saved audio take with the selected local, cloud, or remote source when the audio file is still available.</p>
+                    <p><strong className="text-foreground">Export</strong> saves transcript history as JSON for backup or review.</p>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Search, copy, export, delete, and re-transcribe saved audio takes.
+              {history.length > 0 ? ` ${history.length} total.` : ""}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -563,8 +593,6 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                           "transition-all duration-200"
                         )}
                         onClick={() => !isFailed && !isInProgress && handleCopy(item.text)}
-                        onMouseEnter={() => setHoveredId(item.id)}
-                        onMouseLeave={() => setHoveredId(null)}
                       >
                         {/* Re-transcribing status bar */}
                         {isInProgress && (
@@ -728,10 +756,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                                 {new Date(item.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
                               </span>
                             </div>
-                            <div className={cn(
-                              "flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity",
-                              (hoveredId === item.id || dropdownOpenId === item.id) && "opacity-100"
-                            )}>
+                            <div className="flex items-center gap-1 transition-opacity">
                               {!isInProgress && (
                                 <>
                                   <button
@@ -920,7 +945,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                 <p className="text-sm text-muted-foreground">No recordings yet</p>
                 {canAutoInsert ? (
                   <p className="text-xs text-muted-foreground/70 mt-2">
-                    Press {formatHotkey(hotkey)} to start recording
+                    Press {formatHotkey(hotkey)} to record. Save recordings in Settings to enable re-transcription.
                   </p>
                 ) : (
                   <p className="text-xs text-amber-600 mt-2">

@@ -1,64 +1,87 @@
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { useCanAutoInsert, useCanRecord } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
-import { formatHotkey } from "@/lib/hotkey-utils";
 import { cn } from "@/lib/utils";
-import { TranscriptionHistory } from "@/types";
-import { BarChart3, Clock, FileText, Flame, Share2, TrendingUp, Zap, Info, Loader2 } from "lucide-react";
+import { useTranscriptionHistory } from "@/hooks/useTranscriptionHistory";
+import {
+  BarChart3,
+  CheckCircle2,
+  Clock3,
+  FileText,
+  Flame,
+  Loader2,
+  Mic,
+  Share2,
+  Sparkles,
+  TrendingUp,
+  Zap,
+} from "lucide-react";
 import { lazy, Suspense, useMemo, useState } from "react";
 
-// Lazy load ShareStatsModal for better performance
 const ShareStatsModal = lazy(() =>
-  import("@/components/ShareStatsModal").then(module => ({
-    default: module.ShareStatsModal
-  }))
+  import("@/components/ShareStatsModal").then((module) => ({
+    default: module.ShareStatsModal,
+  })),
 );
 
-interface OverviewTabProps {
-  history: TranscriptionHistory[];
-  totalCount: number;
-}
-
-export function OverviewTab({ history, totalCount }: OverviewTabProps) {
+export function OverviewTab() {
   const canRecord = useCanRecord();
   const canAutoInsert = useCanAutoInsert();
   const { settings } = useSettings();
   const hotkey = settings?.hotkey || "Cmd+Shift+Space";
-  const [selectedPeriod, setSelectedPeriod] = useState<"today" | "week" | "month" | "all">("all");
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const { history, totalCount } = useTranscriptionHistory({
+    limit: 500,
+    includeTotalCount: true,
+  });
 
-  // Calculate stats
   const stats = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const thisWeek = new Date();
-    thisWeek.setDate(thisWeek.getDate() - 7);
-    const thisMonth = new Date();
-    thisMonth.setDate(thisMonth.getDate() - 30);
+    const now = new Date();
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
 
-    const todayCount = history.filter((item) => new Date(item.timestamp) >= today).length;
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(startOfWeek.getDate() - 7);
 
-    const weekCount = history.filter((item) => new Date(item.timestamp) >= thisWeek).length;
+    const startOfMonth = new Date(now);
+    startOfMonth.setDate(startOfMonth.getDate() - 30);
 
-    const monthCount = history.filter((item) => new Date(item.timestamp) >= thisMonth).length;
+    const todayCount = history.filter(
+      (item) => new Date(item.timestamp) >= startOfToday,
+    ).length;
+    const weekCount = history.filter(
+      (item) => new Date(item.timestamp) >= startOfWeek,
+    ).length;
+    const monthCount = history.filter(
+      (item) => new Date(item.timestamp) >= startOfMonth,
+    ).length;
 
-    const totalWords = history.reduce((acc, item) => acc + item.text.split(" ").length, 0);
-
+    const totalWords = history.reduce(
+      (acc, item) => acc + item.text.split(/\s+/).filter(Boolean).length,
+      0,
+    );
     const avgLength = history.length > 0 ? Math.round(totalWords / history.length) : 0;
 
-    // Calculate time saved (assuming 40 WPM typing speed)
-    const avgTypingSpeed = 40; // words per minute
+    const avgTypingSpeed = 40;
     const timeSavedMinutes = Math.round(totalWords / avgTypingSpeed);
     const timeSavedHours = Math.floor(timeSavedMinutes / 60);
     const timeSavedDisplay =
-      timeSavedHours > 0 ? `${timeSavedHours}h ${timeSavedMinutes % 60}m` : `${timeSavedMinutes}m`;
+      timeSavedHours > 0
+        ? `${timeSavedHours}h ${timeSavedMinutes % 60}m`
+        : `${timeSavedMinutes}m`;
 
-    // Calculate current streak and longest streak
     let currentStreak = 0;
     let longestStreak = 0;
 
     if (history.length > 0) {
-      // Create a set of unique days with activity (normalized to midnight)
       const activeDays = new Set<number>();
       history.forEach((item) => {
         const date = new Date(item.timestamp);
@@ -66,56 +89,46 @@ export function OverviewTab({ history, totalCount }: OverviewTabProps) {
         activeDays.add(date.getTime());
       });
 
-      // Convert to sorted array of dates
       const sortedDays = Array.from(activeDays).sort((a, b) => b - a);
 
       if (sortedDays.length > 0) {
-        // Check current streak (must include today or yesterday)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const yesterday = new Date(today);
         yesterday.setDate(yesterday.getDate() - 1);
 
         const mostRecentDay = sortedDays[0];
-        const isToday = mostRecentDay === today.getTime();
-        const isYesterday = mostRecentDay === yesterday.getTime();
-
-        // Only count current streak if last activity was today or yesterday
-        if (isToday || isYesterday) {
+        if (
+          mostRecentDay === today.getTime() ||
+          mostRecentDay === yesterday.getTime()
+        ) {
           currentStreak = 1;
-
-          // Count consecutive days backwards
-          for (let i = 1; i < sortedDays.length; i++) {
-            const expectedDate = new Date(sortedDays[i - 1]);
+          for (let index = 1; index < sortedDays.length; index += 1) {
+            const expectedDate = new Date(sortedDays[index - 1]);
             expectedDate.setDate(expectedDate.getDate() - 1);
-
-            if (sortedDays[i] === expectedDate.getTime()) {
-              currentStreak++;
+            if (sortedDays[index] === expectedDate.getTime()) {
+              currentStreak += 1;
             } else {
-              break; // Gap found, streak is broken
+              break;
             }
           }
         }
 
-        // Calculate longest streak ever
         let tempStreak = 1;
         longestStreak = 1;
-
-        for (let i = 1; i < sortedDays.length; i++) {
-          const expectedDate = new Date(sortedDays[i - 1]);
+        for (let index = 1; index < sortedDays.length; index += 1) {
+          const expectedDate = new Date(sortedDays[index - 1]);
           expectedDate.setDate(expectedDate.getDate() - 1);
-
-          if (sortedDays[i] === expectedDate.getTime()) {
-            tempStreak++;
+          if (sortedDays[index] === expectedDate.getTime()) {
+            tempStreak += 1;
             longestStreak = Math.max(longestStreak, tempStreak);
           } else {
-            tempStreak = 1; // Reset temp streak
+            tempStreak = 1;
           }
         }
       }
     }
 
-    // Productivity score (0-100 based on usage)
     const productivityScore = Math.min(100, Math.round((weekCount / 7) * 20));
 
     return {
@@ -126,183 +139,273 @@ export function OverviewTab({ history, totalCount }: OverviewTabProps) {
       avgLength,
       timeSavedDisplay,
       productivityScore,
-      totalTranscriptions: totalCount,  // Use true total count instead of limited history length
+      totalTranscriptions: totalCount,
       currentStreak,
-      longestStreak
+      longestStreak,
     };
   }, [history, totalCount]);
 
+  const kpis = [
+    {
+      label: "Transcriptions",
+      value: stats.totalTranscriptions.toLocaleString(),
+      caption: `${stats.todayCount} today`,
+      icon: FileText,
+    },
+    {
+      label: "Words captured",
+      value: stats.totalWords.toLocaleString(),
+      caption: `${stats.avgLength} average words`,
+      icon: BarChart3,
+    },
+    {
+      label: "Time saved",
+      value: stats.timeSavedDisplay,
+      caption: "vs. manual typing",
+      icon: Clock3,
+    },
+    {
+      label: "Weekly rhythm",
+      value: `${stats.productivityScore}%`,
+      caption: `${stats.weekCount} in the last 7 days`,
+      icon: Zap,
+    },
+  ] as const;
+
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="px-6 py-4 border-b border-border/40">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              {stats.currentStreak > 0 ? (
-                <div className="flex items-center gap-2">
-                  <Flame
-                    className={cn(
-                      "h-6 w-6",
-                      stats.currentStreak >= 7
-                        ? "text-orange-500"
-                        : stats.currentStreak >= 3
-                        ? "text-orange-400"
-                        : "text-orange-300"
-                    )}
-                  />
-                  <h1 className="text-2xl font-semibold">{stats.currentStreak} day streak</h1>
+    <div className="h-full min-h-0 overflow-auto">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-6">
+        <Card className="overflow-hidden border-border/70 bg-card/95 shadow-sm">
+          <CardHeader className="gap-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="space-y-3">
+                <Badge variant="secondary" className="rounded-md uppercase tracking-[0.16em]">
+                  Overview
+                </Badge>
+                <div className="space-y-2">
+                  <CardTitle className="text-3xl tracking-[-0.04em] sm:text-4xl">
+                    {stats.currentStreak > 0
+                      ? `${stats.currentStreak}-day dictation streak`
+                      : "Ready for the next recording"}
+                  </CardTitle>
+                  <CardDescription className="max-w-2xl text-sm leading-6">
+                    {canRecord
+                      ? "Voice notes in, clean text out. Check readiness, recent output, and what to do next."
+                      : "VoiceTypr is installed, but it still needs one more setup step before recording will work cleanly."}
+                  </CardDescription>
                 </div>
-              ) : (
-                <h1 className="text-2xl font-semibold">Start your streak today</h1>
-              )}
+              </div>
+              <Button size="sm" onClick={() => setShareModalOpen(true)} className="gap-2 self-start">
+                <Share2 className="h-4 w-4" />
+                Share stats
+              </Button>
             </div>
-            <p className="text-sm text-muted-foreground mt-1">
-              {new Date().toLocaleDateString("en-US", {
-                weekday: "long",
-                month: "long",
-                day: "numeric"
+          </CardHeader>
+          <CardContent className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {kpis.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <Card key={item.label} size="sm" className="border-border/70 bg-background/75 shadow-sm">
+                    <CardHeader className="gap-3">
+                      <div className="flex size-10 items-center justify-center rounded-xl bg-muted text-primary">
+                        <Icon className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <CardDescription className="text-[11px] uppercase tracking-[0.16em]">
+                          {item.label}
+                        </CardDescription>
+                        <CardTitle className="mt-2 text-2xl tracking-[-0.03em]">
+                          {item.value}
+                        </CardTitle>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      <p className="text-xs text-muted-foreground">{item.caption}</p>
+                    </CardContent>
+                  </Card>
+                );
               })}
-              {stats.longestStreak > stats.currentStreak && (
-                <span className="ml-2 text-xs">• Best streak: {stats.longestStreak} days</span>
-              )}
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            {
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium">
-                {stats.todayCount > 0 && <TrendingUp className="h-3.5 w-3.5 text-green-500" />}
-                {stats.todayCount} today
-              </div>
-            }
-            {/* <span className="text-sm text-muted-foreground">
-              {canRecord ? '✓ Ready' : '⚠️ Setup required'}
-            </span> */}
-            <Button size="sm" onClick={() => setShareModalOpen(true)} className="gap-2">
-              <Share2 className="h-3.5 w-3.5" />
-              Share
-            </Button>
-          </div>
+            </div>
+
+            <Card size="sm" className="border-border/70 bg-background/75 shadow-sm">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <TrendingUp className="h-5 w-5 text-primary" />
+                  At a glance
+                </CardTitle>
+                <CardDescription>
+                  A simple read on current usage without pretending to be more precise than the actual data.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <MetricRow label="Today" value={`${stats.todayCount} transcriptions`} />
+                <MetricRow label="Last 7 days" value={`${stats.weekCount} transcriptions`} />
+                <MetricRow label="Last 30 days" value={`${stats.monthCount} transcriptions`} />
+                <MetricRow
+                  label="Best streak"
+                  value={
+                    stats.longestStreak > 0 ? `${stats.longestStreak} days` : "No streak yet"
+                  }
+                />
+              </CardContent>
+            </Card>
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+          <Card className="border-border/70 bg-card/90 shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Sparkles className="h-5 w-5 text-primary" />
+                How it works
+              </CardTitle>
+              <CardDescription>
+                Keep the loop obvious: trigger, speak, release, keep moving.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <WorkflowStep
+                title="Start recording"
+                body={`Press ${hotkey} anywhere.`}
+                ready={canRecord}
+              />
+              <WorkflowStep
+                title="Speak naturally"
+                body="VoiceTypr transcribes first, then applies deterministic cleanup and optional AI formatting."
+                ready={canRecord}
+              />
+              <WorkflowStep
+                title="Keep the transcript flowing"
+                body={
+                  canAutoInsert
+                    ? "Transcribed text can auto-insert at your cursor as soon as processing finishes."
+                    : "Grant Accessibility to enable auto-insert across apps. Manual copy still works without it."
+                }
+                ready={canAutoInsert}
+              />
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/70 bg-card/90 shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Flame className="h-5 w-5 text-primary" />
+                Ready right now
+              </CardTitle>
+              <CardDescription>
+                The app should tell you plainly whether the next recording will work.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <StatusRow
+                label="Recording"
+                value={canRecord ? "Ready to record" : "Needs setup"}
+                tone={canRecord ? "ready" : "warning"}
+              />
+              <StatusRow
+                label="Auto-insert"
+                value={canAutoInsert ? "Enabled" : "Accessibility permission missing"}
+                tone={canAutoInsert ? "ready" : "warning"}
+              />
+              <StatusRow
+                label="Selected model"
+                value={settings?.current_model || "No model selected"}
+                tone={settings?.current_model ? "neutral" : "warning"}
+              />
+            </CardContent>
+          </Card>
         </div>
-      </div>
 
-      <div className="flex-1 overflow-hidden">
-        <div className="h-full p-6">
-          {/* Quick Stats */}
-          <div className="grid grid-cols-4 gap-4 mb-6">
-            <div
-              className={cn(
-                "p-4 rounded-lg bg-card border border-border/50 hover:border-border transition-all cursor-pointer",
-                selectedPeriod === "all" && "bg-primary/5"
-              )}
-              onClick={() => setSelectedPeriod("all")}
-              title="Click to filter all time"
-            >
-              <FileText className="h-5 w-5 text-blue-500 mb-3" />
-              <p className="text-xs text-muted-foreground font-medium">Transcriptions</p>
-              <p className="text-2xl font-bold mt-1">{stats.totalTranscriptions}</p>
-              <p className="text-xs text-muted-foreground mt-1">{stats.todayCount} today</p>
-            </div>
-
-            <div
-              className={cn(
-                "p-4 rounded-lg bg-card border border-border/50 hover:border-border transition-all cursor-pointer",
-                selectedPeriod === "month" && "bg-primary/5"
-              )}
-              onClick={() => setSelectedPeriod("month")}
-              title="Click to filter last 30 days"
-            >
-              <BarChart3 className="h-5 w-5 text-purple-500 mb-3" />
-              <p className="text-xs text-muted-foreground font-medium">Words Captured</p>
-              <p className="text-2xl font-bold mt-1">{stats.totalWords.toLocaleString()}</p>
-              <p className="text-xs text-muted-foreground mt-1">{stats.avgLength} avg</p>
-            </div>
-
-            <div
-              className={cn(
-                "p-4 rounded-lg bg-card border border-border/50 hover:border-border transition-all cursor-pointer",
-                selectedPeriod === "today" && "bg-primary/5"
-              )}
-              onClick={() => setSelectedPeriod("today")}
-              title="Based on 40 WPM typing speed"
-            >
-              <Clock className="h-5 w-5 text-green-500 mb-3" />
-              <p className="text-xs text-muted-foreground font-medium">Time Saved</p>
-              <p className="text-2xl font-bold mt-1">{stats.timeSavedDisplay}</p>
-              <p className="text-xs text-muted-foreground mt-1">voice typing</p>
-            </div>
-
-            <div
-              className={cn(
-                "p-4 rounded-lg bg-card border border-border/50 hover:border-border transition-all cursor-pointer",
-                selectedPeriod === "week" && "bg-primary/5"
-              )}
-              onClick={() => setSelectedPeriod("week")}
-              title="Click to filter last 7 days"
-            >
-              <Zap className="h-5 w-5 text-yellow-500 mb-3" />
-              <p className="text-xs text-muted-foreground font-medium">Productivity</p>
-              <p className="text-2xl font-bold mt-1">{stats.productivityScore}%</p>
-              <p className="text-xs text-muted-foreground mt-1">{stats.weekCount} this week</p>
-            </div>
-          </div>
-
-          {/* Quick Tips Section */}
-          {canRecord && (
-            <div className="rounded-lg border border-border/50 bg-card overflow-hidden">
-              <div className="p-4">
-                <div className="flex items-start gap-3">
-                  <div className="p-1.5 rounded-md bg-amber-500/10">
-                    <Info className="h-4 w-4 text-amber-500" />
-                  </div>
-                  <div className="space-y-2 flex-1">
-                    <h3 className="font-medium text-sm">Quick Tips</h3>
-                    <ol className="text-sm text-muted-foreground space-y-1.5 list-decimal list-inside">
-                      <li>Hold {formatHotkey(hotkey)} while speaking</li>
-                      <li>Release the key to stop and transcribe</li>
-                      <li>Text appears at your cursor automatically</li>
-                      <li>Works in any text field across all apps</li>
-                      <li>Double tap ESC to cancel recording</li>
-                    </ol>
-                    <p className="text-xs text-muted-foreground mt-3">
-                      {canAutoInsert 
-                        ? "Voice typing saves an average of 3x time compared to manual typing."
-                        : "Note: Accessibility permission needed for automatic text insertion."}
-                    </p>
-                  </div>
-                </div>
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+              <div className="flex items-center gap-2 rounded-2xl border border-border bg-background px-4 py-3 shadow-lg">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                <span className="text-sm">Loading share modal…</span>
               </div>
             </div>
-          )}
-        </div>
+          }
+        >
+          <ShareStatsModal
+            open={shareModalOpen}
+            onOpenChange={setShareModalOpen}
+            stats={{
+              totalTranscriptions: stats.totalTranscriptions,
+              todayCount: stats.todayCount,
+              totalWords: stats.totalWords,
+              avgLength: stats.avgLength,
+              timeSavedDisplay: stats.timeSavedDisplay,
+              productivityScore: stats.productivityScore,
+              currentStreak: stats.currentStreak,
+              longestStreak: stats.longestStreak,
+            }}
+          />
+        </Suspense>
       </div>
+    </div>
+  );
+}
 
-      {/* Share Stats Modal - Lazy loaded with Suspense */}
-      <Suspense
-        fallback={
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="flex items-center gap-2 rounded-lg bg-background p-4">
-              <Loader2 className="h-5 w-5 animate-spin" />
-              <span>Loading share modal...</span>
-            </div>
-          </div>
-        }
+function MetricRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-xl bg-muted/45 px-3 py-2">
+      <span className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
+        {label}
+      </span>
+      <span className="text-sm font-medium text-foreground">{value}</span>
+    </div>
+  );
+}
+
+function WorkflowStep({
+  title,
+  body,
+  ready,
+}: {
+  title: string;
+  body: string;
+  ready: boolean;
+}) {
+  return (
+    <div className="flex gap-3 rounded-2xl border border-border/60 bg-background/75 p-4 shadow-xs">
+      <div
+        className={cn(
+          "mt-0.5 flex size-8 items-center justify-center rounded-lg",
+          ready ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground",
+        )}
       >
-        <ShareStatsModal
-          open={shareModalOpen}
-          onOpenChange={setShareModalOpen}
-          stats={{
-            totalTranscriptions: stats.totalTranscriptions,
-            todayCount: stats.todayCount,
-            totalWords: stats.totalWords,
-            avgLength: stats.avgLength,
-            timeSavedDisplay: stats.timeSavedDisplay,
-            productivityScore: stats.productivityScore,
-            currentStreak: stats.currentStreak,
-            longestStreak: stats.longestStreak
-          }}
-        />
-      </Suspense>
+        {ready ? <CheckCircle2 className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+      </div>
+      <div className="space-y-1">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="text-sm leading-6 text-muted-foreground">{body}</p>
+      </div>
+    </div>
+  );
+}
+
+function StatusRow({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "ready" | "warning" | "neutral";
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-xl bg-muted/45 px-3 py-2">
+      <span className="text-sm text-muted-foreground">{label}</span>
+      <Badge
+        variant="secondary"
+        className={cn(
+          tone === "ready" && "text-primary",
+          tone === "warning" && "text-amber-700 dark:text-amber-400",
+        )}
+      >
+        {value}
+      </Badge>
     </div>
   );
 }

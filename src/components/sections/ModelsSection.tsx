@@ -5,18 +5,45 @@ import {
   RemoteServerCard,
   SavedConnection,
 } from "@/components/RemoteServerCard";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+} from "@/components/ui/field";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import { useSettings } from "@/contexts/SettingsContext";
 import { getCloudProviderByModel } from "@/lib/cloudProviders";
 import { cn } from "@/lib/utils";
 import { ModelInfo, isCloudModel, isLocalModel } from "@/types";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   Bot,
   CheckCircle,
+  Cloud,
   Download,
   HardDrive,
+  HelpCircle,
   Plus,
   Server,
   Star,
@@ -24,9 +51,6 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Label } from "../ui/label";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { AddServerModal } from "./AddServerModal";
 
 interface ModelsSectionProps {
@@ -94,6 +118,11 @@ export function ModelsSection({
 
     return { availableToUse: useList, availableToSetup: setupList };
   }, [models]);
+
+  const readyLocalModels = availableToUse.filter(([, model]) => isLocalModel(model));
+  const readyCloudModels = availableToUse.filter(([, model]) => isCloudModel(model));
+  const setupLocalModels = availableToSetup.filter(([, model]) => isLocalModel(model));
+  const setupCloudModels = availableToSetup.filter(([, model]) => isCloudModel(model));
 
   // No header summary line — section titles include counts
 
@@ -238,28 +267,20 @@ export function ModelsSection({
 
   const handleSelectRemoteServer = useCallback(
     async (serverId: string) => {
-      const startTime = performance.now();
-      console.log(`⏱️ [UI TIMING] handleSelectRemoteServer START - serverId=${serverId}`);
       try {
-        const invokeStart = performance.now();
-        console.log(`⏱️ [UI TIMING] Calling set_active_remote_server... (+${(invokeStart - startTime).toFixed(0)}ms)`);
         await invoke("set_active_remote_server", {
           serverId: serverId === activeRemoteServer ? null : serverId,
         });
-        console.log(`⏱️ [UI TIMING] set_active_remote_server returned (+${(performance.now() - startTime).toFixed(0)}ms)`);
         setActiveRemoteServer(
           serverId === activeRemoteServer ? null : serverId
         );
-        console.log(`⏱️ [UI TIMING] State updated (+${(performance.now() - startTime).toFixed(0)}ms)`);
         toast.success(
           serverId === activeRemoteServer
             ? "Remote VoiceTypr deselected"
             : "Remote VoiceTypr selected"
         );
-        console.log(`⏱️ [UI TIMING] handleSelectRemoteServer COMPLETE - total: ${(performance.now() - startTime).toFixed(0)}ms`);
       } catch (error) {
         console.error("Failed to set active remote server:", error);
-        console.log(`⏱️ [UI TIMING] handleSelectRemoteServer ERROR after ${(performance.now() - startTime).toFixed(0)}ms`);
         toast.error("Failed to select remote VoiceTypr");
       }
     },
@@ -451,9 +472,9 @@ export function ModelsSection({
         <Card
           key={name}
           className={cn(
-            "px-4 py-3 border-border/50 transition",
-            requiresSetup ? "opacity-90" : "cursor-pointer hover:border-border",
-            isActive && "bg-primary/5",
+            "px-4 py-3 border transition-all hover:shadow-sm",
+            requiresSetup ? "bg-card/70 opacity-90" : "cursor-pointer bg-card/90 hover:border-border",
+            isActive && "border-primary/45 bg-primary/5 shadow-sm ring-2 ring-primary/15",
           )}
           onClick={async () => {
             if (requiresSetup) {
@@ -464,37 +485,48 @@ export function ModelsSection({
             void onSelect(name);
           }}
         >
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
-              <h3 className="font-medium text-sm">
-                {model.display_name || provider?.displayName || name}
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className={cn("truncate text-sm font-semibold tracking-tight", isActive && "text-primary")}>
+                  {model.display_name || provider?.displayName || name}
+                </h3>
+                {isActive && (
+                  <Badge className="gap-1">
+                    <CheckCircle className="size-3" />
+                    Active
+                  </Badge>
+                )}
+              </div>
+              <p className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                <span>{provider?.providerName ?? "Cloud transcription"}</span>
+                <span>Speed <span className="font-medium text-foreground">{model.speed_score ?? "—"}</span></span>
+                <span>Accuracy <span className="font-medium text-foreground">{model.accuracy_score ?? "—"}</span></span>
+              </p>
             </div>
-            <div className="flex items-center gap-2">
-              {requiresSetup ? (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    openCloudModal(name, "connect");
-                  }}
-                >
-                  {provider?.setupCta ?? "Add API Key"}
-                </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    handleCloudDisconnect(name);
-                  }}
-                >
-                  Remove API Key
-                </Button>
-              )}
-            </div>
+            {requiresSetup ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openCloudModal(name, "connect");
+                }}
+              >
+                {provider?.setupCta ?? "Add API Key"}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleCloudDisconnect(name);
+                }}
+              >
+                Remove API Key
+              </Button>
+            )}
           </div>
         </Card>
       );
@@ -503,91 +535,171 @@ export function ModelsSection({
   );
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="px-6 py-4 border-b border-border/40">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Models</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Download/Setup and select the model to use
+    <div className="flex h-full flex-col bg-background">
+      <div className="border-b border-border/40 px-6 py-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight">
+                Transcription sources
+              </h1>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button type="button" variant="secondary" size="icon" aria-label="Transcription sources guide" className="rounded-full">
+                    <HelpCircle className="h-4.5 w-4.5" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Transcription sources guide</DialogTitle>
+                    <DialogDescription>
+                      Pick where speech recognition runs before recording or uploading files.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                    <p><strong className="text-foreground">Local</strong> models run on this machine and keep raw audio local.</p>
+                    <p><strong className="text-foreground">Cloud</strong> sources use a connected provider when you choose one.</p>
+                    <p><strong className="text-foreground">Remote VoiceTypr</strong> uses another device on your network when that server is online.</p>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">
+              Choose local models now, cloud transcription when connected, or another VoiceTypr device on your network.
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            {(hasDownloading || hasVerifying) && (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-500/10 text-sm font-medium">
-                <Download className="h-3.5 w-3.5 text-blue-500" />
-                {hasDownloading ? "Downloading..." : "Verifying..."}
-              </div>
-            )}
-            {activeModelLabel ? (
-              <span className="text-sm text-muted-foreground">
-                Active:{" "}
-                <span className="text-amber-600 dark:text-amber-500">
-                  {activeModelLabel}
-                </span>
-              </span>
-            ) : (
-              availableToUse.length > 0 && (
-                <span className="text-sm text-amber-600 dark:text-amber-500">
-                  No model selected
-                </span>
-              )
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Legend + Spoken Language (same row, like Settings style) */}
-      <div className="px-6 py-3 border-b border-border/20 space-y-6">
-        <div className="flex items-center justify-between gap-2">
-          <div className="space-y-0.5">
-            <Label htmlFor="language" className="text-sm font-medium">
-              Spoken Language
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              The language you'll be speaking in
-            </p>
-          </div>
-          <LanguageSelection
-            value={languageValue}
-            engine={currentEngine}
-            englishOnly={isEnglishOnlyModel}
-            onValueChange={(value) => {
-              void handleLanguageChange(value);
-            }}
-          />
-        </div>
-        <div className="flex items-center gap-6 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1.5">
-            <Zap className="w-3.5 h-3.5 text-green-500" />
-            Speed
-          </span>
-          <span className="flex items-center gap-1.5">
-            <CheckCircle className="w-3.5 h-3.5 text-blue-500" />
-            Accuracy
-          </span>
-          <span className="flex items-center gap-1.5">
-            <HardDrive className="w-3.5 h-3.5 text-purple-500" />
-            Size
-          </span>
-          <span className="flex items-center gap-1.5">
-            <Star className="w-3.5 h-3.5 fill-yellow-500 text-yellow-500" />
-            Recommended
-          </span>
         </div>
       </div>
 
       <div className="flex-1 min-h-0 overflow-hidden">
         <ScrollArea className="h-full">
-          <div className="px-6 py-2 space-y-6">
-            {availableToUse.length > 0 && (
-              <div className="space-y-4">
-                <h2 className="text-base font-semibold text-foreground">
-                  Available to Use ({availableToUse.length})
-                </h2>
+          <div className="space-y-6 px-6 py-5">
+            <Card className="space-y-4 border-border/60 bg-card p-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  {(hasDownloading || hasVerifying) && (
+                    <Badge variant="outline" className="gap-1.5 bg-primary/10 text-primary">
+                      {hasDownloading ? (
+                        <Download className="size-3.5" />
+                      ) : (
+                        <Spinner className="size-3.5" />
+                      )}
+                      {hasDownloading ? "Downloading..." : "Verifying..."}
+                    </Badge>
+                  )}
+                  {activeModelLabel ? (
+                    <Badge variant="secondary" className="max-w-[320px] justify-start truncate">
+                      Active: {activeModelLabel}
+                    </Badge>
+                  ) : (
+                    availableToUse.length > 0 && (
+                      <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-700">
+                        No model selected
+                      </Badge>
+                    )
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1.5">
+                    <Zap className="size-3.5 text-emerald-600" />
+                    Speed
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle className="size-3.5 text-blue-600" />
+                    Accuracy
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <HardDrive className="size-3.5" />
+                    Size
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <Star className="size-3.5 fill-amber-500 text-amber-500" />
+                    Recommended
+                  </span>
+                </div>
+              </div>
+
+              <Field orientation="responsive" className="rounded-xl border bg-muted/30 p-4">
+                <FieldContent>
+                  <FieldLabel htmlFor="language">Spoken Language</FieldLabel>
+                  <FieldDescription>
+                    The language you speak into VoiceTypr. English-only models lock this to English.
+                  </FieldDescription>
+                </FieldContent>
+                <LanguageSelection
+                  value={languageValue}
+                  engine={currentEngine}
+                  englishOnly={isEnglishOnlyModel}
+                  onValueChange={(value) => {
+                    void handleLanguageChange(value);
+                  }}
+                />
+              </Field>
+            </Card>
+            {readyLocalModels.length > 0 && (
+              <section className="space-y-3">
+                <div>
+                  <h2 className="flex items-center gap-2 text-base font-semibold tracking-tight text-foreground">
+                    <HardDrive className="size-4" />
+                    Local models ({readyLocalModels.length})
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    Offline transcription models stored on this machine.
+                  </p>
+                </div>
                 <div className="grid gap-3">
-                  {availableToUse.map(([name, model]) =>
-                    isLocalModel(model) ? (
+                  {readyLocalModels.map(([name, model]) => (
+                    <ModelCard
+                      key={name}
+                      name={name}
+                      model={model}
+                      downloadProgress={downloadProgress[name]}
+                      isVerifying={verifyingModels.has(name)}
+                      onDownload={onDownload}
+                      onDelete={onDelete}
+                      onCancelDownload={onCancelDownload}
+                      onSelect={async (modelName) => {
+                        await clearActiveRemote();
+                        void onSelect(modelName);
+                      }}
+                      showSelectButton={model.downloaded}
+                      isSelected={!activeRemoteServer && currentModel === name}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {readyCloudModels.length > 0 && (
+              <section className="space-y-3">
+                <div>
+                  <h2 className="flex items-center gap-2 text-base font-semibold tracking-tight text-foreground">
+                    <Cloud className="size-4" />
+                    Cloud transcription ({readyCloudModels.length})
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    Connected providers that can transcribe without a local model.
+                  </p>
+                </div>
+                <div className="grid gap-3">
+                  {readyCloudModels.map(([name, model]) => renderCloudCard([name, model]))}
+                </div>
+              </section>
+            )}
+
+            {(setupLocalModels.length > 0 || setupCloudModels.length > 0) && (
+              <section className="space-y-3">
+                <div>
+                  <h2 className="text-base font-semibold tracking-tight text-foreground">
+                    Set up sources
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    Download local models or connect cloud providers before selecting them.
+                  </p>
+                </div>
+                {setupLocalModels.length > 0 && (
+                  <div className="grid gap-3">
+                    {setupLocalModels.map(([name, model]) => (
                       <ModelCard
                         key={name}
                         name={name}
@@ -598,73 +710,40 @@ export function ModelsSection({
                         onDelete={onDelete}
                         onCancelDownload={onCancelDownload}
                         onSelect={async (modelName) => {
-                          const startTime = performance.now();
-                          console.log(`⏱️ [UI TIMING] Local model onSelect START - model=${modelName}`);
                           await clearActiveRemote();
-                          console.log(`⏱️ [UI TIMING] Calling onSelect... (+${(performance.now() - startTime).toFixed(0)}ms)`);
                           void onSelect(modelName);
-                          console.log(`⏱️ [UI TIMING] Local model onSelect COMPLETE - total: ${(performance.now() - startTime).toFixed(0)}ms`);
                         }}
                         showSelectButton={model.downloaded}
                         isSelected={!activeRemoteServer && currentModel === name}
                       />
-                    ) : (
-                      renderCloudCard([name, model])
-                    ),
-                  )}
-                </div>
-              </div>
+                    ))}
+                  </div>
+                )}
+                {setupCloudModels.length > 0 && (
+                  <div className="grid gap-3">
+                    {setupCloudModels.map(([name, model]) => renderCloudCard([name, model]))}
+                  </div>
+                )}
+              </section>
             )}
 
-            {availableToSetup.length > 0 && (
-              <div className="space-y-4">
-                <h2 className="text-base font-semibold text-foreground">
-                  Available to Set Up ({availableToSetup.length})
-                </h2>
-                <div className="grid gap-3">
-                  {availableToSetup.map(([name, model]) =>
-                    isLocalModel(model) ? (
-                      <ModelCard
-                        key={name}
-                        name={name}
-                        model={model}
-                        downloadProgress={downloadProgress[name]}
-                        isVerifying={verifyingModels.has(name)}
-                        onDownload={onDownload}
-                        onDelete={onDelete}
-                        onCancelDownload={onCancelDownload}
-                        onSelect={async (modelName) => {
-                          const startTime = performance.now();
-                          console.log(`⏱️ [UI TIMING] Local model onSelect START - model=${modelName}`);
-                          await clearActiveRemote();
-                          console.log(`⏱️ [UI TIMING] Calling onSelect... (+${(performance.now() - startTime).toFixed(0)}ms)`);
-                          void onSelect(modelName);
-                          console.log(`⏱️ [UI TIMING] Local model onSelect COMPLETE - total: ${(performance.now() - startTime).toFixed(0)}ms`);
-                        }}
-                        showSelectButton={model.downloaded}
-                        isSelected={!activeRemoteServer && currentModel === name}
-                      />
-                    ) : (
-                      renderCloudCard([name, model])
-                    ),
-                  )}
+            <section className="space-y-3">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="flex items-center gap-2 text-base font-semibold tracking-tight text-foreground">
+                    <Server className="size-4" />
+                    Remote VoiceTypr ({remoteServers.length})
+                  </h2>
+                  <p className="text-xs text-muted-foreground">
+                    Use a stronger Mac on your network without copying audio to the cloud.
+                  </p>
                 </div>
-              </div>
-            )}
-
-            {/* Remote VoiceTypr Models Section */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
-                  <Server className="h-4 w-4" />
-                  Remote VoiceTypr Models ({remoteServers.length})
-                </h2>
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => setAddServerModalOpen(true)}
                 >
-                  <Plus className="h-4 w-4 mr-1" />
+                  <Plus className="size-4" />
                   Add Remote
                 </Button>
               </div>
@@ -683,32 +762,34 @@ export function ModelsSection({
                   ))}
                 </div>
               ) : (
-                <Card className="px-4 py-6 border-border/50 border-dashed">
-                  <div className="text-center text-muted-foreground">
-                    <Server className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                    <p className="text-sm">No remote VoiceTyprs configured</p>
-                    <p className="text-xs mt-1 opacity-75">
-                      Connect to another VoiceTypr to use its transcription
-                    </p>
-                  </div>
-                </Card>
+                <Empty className="border border-border/60 bg-card/70 py-8">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <Server className="size-5" />
+                    </EmptyMedia>
+                    <EmptyTitle>No remote VoiceTyprs configured</EmptyTitle>
+                    <EmptyDescription>
+                      Connect another VoiceTypr device to use its local model from this machine.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
               )}
-            </div>
+            </section>
 
             {availableToUse.length === 0 &&
               availableToSetup.length === 0 &&
               remoteServers.length === 0 && (
-                <div className="flex-1 flex items-center justify-center py-12">
-                  <div className="text-center">
-                    <Bot className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
-                    <p className="text-sm text-muted-foreground">
-                      No models available
-                    </p>
-                    <p className="text-xs text-muted-foreground/70 mt-2">
+                <Empty className="border border-border/60 bg-card/70 py-12">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <Bot className="size-5" />
+                    </EmptyMedia>
+                    <EmptyTitle>No models available</EmptyTitle>
+                    <EmptyDescription>
                       Models will appear here when they become available.
-                    </p>
-                  </div>
-                </div>
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
               )}
           </div>
         </ScrollArea>

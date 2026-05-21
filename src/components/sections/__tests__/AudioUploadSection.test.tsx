@@ -345,7 +345,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
             models: [
               {
                 name: 'soniox',
-                display_name: 'Soniox (Cloud)',
+                display_name: 'Soniox',
                 size: 0,
                 url: '',
                 sha256: '',
@@ -394,7 +394,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
 
       expect(invoke).toHaveBeenCalledWith('save_transcription', {
         text: 'Soniox transcript',
-        model: 'Soniox (Cloud)'
+        model: 'Soniox'
       });
     });
 

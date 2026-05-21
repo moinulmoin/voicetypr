@@ -2,21 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { invoke } from "@tauri-apps/api/core";
-import { Sparkles } from "lucide-react";
 import { AppErrorBoundary } from "./ErrorBoundary";
-import { Sidebar } from "./Sidebar";
+import { AppShell } from "./AppShell";
+import type { ScreenId } from "./navigation";
 import { OnboardingDesktop } from "./onboarding/OnboardingDesktop";
-import { SidebarInset, SidebarProvider } from "./ui/sidebar";
-import { TabContainer } from "./tabs/TabContainer";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
+import { UpdateAnnouncementDialog } from "./UpdateAnnouncementDialog";
 import { useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
@@ -39,7 +29,7 @@ interface ErrorEventPayload {
 
 export function AppContainer() {
   const { registerEvent } = useEventCoordinator("main");
-  const [activeSection, setActiveSection] = useState<string>("overview");
+  const [activeSection, setActiveSection] = useState<ScreenId>("overview");
   const [forceShowOnboarding, setForceShowOnboarding] = useState(false);
   const [justUpdatedVersion, setJustUpdatedVersion] = useState<string | null>(null);
   const { settings, refreshSettings } = useSettings();
@@ -121,9 +111,8 @@ export function AppContainer() {
 
     const setup = async () => {
       try {
-        await register("navigate-to-settings", () => {
-          console.log("Navigate to settings requested from tray menu");
-          setActiveSection("general");
+        await register("navigate-to-overview", () => {
+          setActiveSection("overview");
         });
 
         await register("tray-check-updates", async () => {
@@ -300,6 +289,7 @@ export function AppContainer() {
             hasCompletedOnboarding.current = true;
             setForceShowOnboarding(false);
             refreshSettings();
+            void modelAvailability.checkModels();
           }}
           modelManagement={modelManagement}
         />
@@ -309,37 +299,15 @@ export function AppContainer() {
 
   // Main App Layout
   return (
-    <SidebarProvider>
-      <Sidebar
+    <>
+      <AppShell
         activeSection={activeSection}
         onSectionChange={setActiveSection}
       />
-      <SidebarInset>
-        <TabContainer activeSection={activeSection} />
-      </SidebarInset>
-
-      {/* Post-update notification dialog */}
-      <Dialog
-        open={!!justUpdatedVersion}
-        onOpenChange={(open) => { if (!open) setJustUpdatedVersion(null); }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-              VoiceTypr Updated
-            </DialogTitle>
-            <DialogDescription>
-              Successfully updated to version {justUpdatedVersion}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button onClick={() => setJustUpdatedVersion(null)}>
-              Dismiss
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </SidebarProvider>
+      <UpdateAnnouncementDialog
+        version={justUpdatedVersion}
+        onClose={() => setJustUpdatedVersion(null)}
+      />
+    </>
   );
 }

@@ -1,11 +1,13 @@
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { ButtonGroup } from "@/components/ui/button-group";
 import { Card } from "@/components/ui/card";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import {
   AlertTriangle,
   CheckCircle2,
   KeyRound,
-  Loader2,
   Pencil,
   Server,
   Trash2,
@@ -95,80 +97,64 @@ export function RemoteServerCard({
   return (
     <Card
       className={cn(
-        "px-4 py-3 border transition",
+        "px-4 py-3 border transition-all hover:shadow-sm",
         isSelectable ? "cursor-pointer" : "cursor-default",
         status === "self_connection"
-          ? "bg-amber-500/5 border-amber-500/30"
+          ? "border-amber-500/30 bg-amber-500/10"
           : isActive
-            ? "bg-primary/8 border-primary/50 ring-2 ring-primary/20"
+            ? "border-primary/45 bg-primary/5 shadow-sm ring-2 ring-primary/15"
             : isSelectable
-              ? "border-border/50 hover:border-border"
-              : "border-border/50"
+              ? "border-border/60 bg-card/90 hover:border-border"
+              : "border-border/60 bg-card/90"
       )}
       onClick={() => isSelectable && onSelect(server.id)}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-3">
           <div
             className={cn(
-              "p-2 rounded-md",
+              "flex size-9 shrink-0 items-center justify-center rounded-lg border",
               isActive
-                ? "bg-primary/20"
+                ? "border-primary/25 bg-primary/10 text-primary"
                 : status === "online"
-                  ? "bg-green-500/10"
-                  : status === "unknown"
-                    ? "bg-muted"
-                    : status === "auth_failed" || status === "self_connection"
-                      ? "bg-amber-500/10"
-                      : "bg-muted"
+                  ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700"
+                  : status === "auth_failed" || status === "self_connection"
+                    ? "border-amber-500/20 bg-amber-500/10 text-amber-700"
+                    : "border-border bg-muted/60 text-muted-foreground"
             )}
           >
-            <Server
-              className={cn(
-                "h-4 w-4",
-                isActive
-                  ? "text-primary"
-                  : status === "online"
-                    ? "text-green-500"
-                    : status === "unknown"
-                      ? "text-muted-foreground"
-                      : status === "auth_failed" || status === "self_connection"
-                        ? "text-amber-500"
-                        : "text-muted-foreground"
-              )}
-            />
+            <Server className="size-4" />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h3
                 className={cn(
-                  "font-medium text-sm truncate",
+                  "truncate text-sm font-semibold tracking-tight",
                   isActive && "text-primary"
                 )}
               >
                 {displayName}
               </h3>
               {isActive && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/20 text-primary text-xs font-medium flex-shrink-0">
-                  <CheckCircle2 className="h-3 w-3" />
+                <Badge className="gap-1">
+                  <CheckCircle2 className="size-3" />
                   Active
-                </span>
+                </Badge>
               )}
             </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               {status === "unknown" ? (
-                // Show last known model if available, otherwise show checking indicator
                 server.model ? (
                   <>
-                    <Wifi className="h-3 w-3 text-muted-foreground" />
-                    <span className="text-muted-foreground">{server.model}</span>
-                    {isRefreshing && <Loader2 className="h-3 w-3 animate-spin ml-1" />}
+                    <Wifi className="size-3 text-muted-foreground" />
+                    <span>{server.model}</span>
+                    {isRefreshing && <Spinner className="size-3" />}
                   </>
                 ) : (
-                  <span className="flex items-center gap-1 text-muted-foreground">
+                  <span className="inline-flex items-center gap-1">
                     {isRefreshing ? (
                       <>
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <Spinner className="size-3" />
                         Checking...
                       </>
                     ) : (
@@ -178,73 +164,73 @@ export function RemoteServerCard({
                 )
               ) : status === "online" ? (
                 <>
-                  <Wifi className="h-3 w-3 text-green-500" />
-                  <span className="text-green-600 dark:text-green-400">
+                  <Wifi className="size-3 text-emerald-600" />
+                  <span className="text-emerald-700 dark:text-emerald-400">
                     Online
                   </span>
                   {server.model && (
-                    <span className="text-muted-foreground">
+                    <span>
                       • {server.model}
                     </span>
                   )}
-                  {isRefreshing && <Loader2 className="h-3 w-3 animate-spin ml-1" />}
+                  {isRefreshing && <Spinner className="size-3" />}
                 </>
               ) : status === "auth_failed" ? (
                 <>
-                  <KeyRound className="h-3 w-3 text-amber-500" />
-                  <span className="text-amber-600 dark:text-amber-400">
+                  <KeyRound className="size-3 text-amber-600" />
+                  <span className="text-amber-700 dark:text-amber-400">
                     Auth Failed
                   </span>
-                  {isRefreshing && <Loader2 className="h-3 w-3 animate-spin ml-1" />}
+                  {isRefreshing && <Spinner className="size-3" />}
                 </>
               ) : status === "self_connection" ? (
                 <>
-                  <AlertTriangle className="h-3 w-3 text-amber-500" />
-                  <span className="text-amber-600 dark:text-amber-400">
+                  <AlertTriangle className="size-3 text-amber-600" />
+                  <span className="text-amber-700 dark:text-amber-400">
                     This Machine
                   </span>
-                  <span className="text-muted-foreground">
+                  <span>
                     • Cannot use self
                   </span>
                 </>
               ) : (
                 <>
-                  <WifiOff className="h-3 w-3 text-red-500" />
-                  <span className="text-red-600 dark:text-red-400">
+                  <WifiOff className="size-3 text-destructive" />
+                  <span className="text-destructive">
                     Offline
                   </span>
-                  {isRefreshing && <Loader2 className="h-3 w-3 animate-spin ml-1" />}
+                  {isRefreshing && <Spinner className="size-3" />}
                 </>
               )}
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-1 flex-shrink-0">
+        <ButtonGroup className="shrink-0">
           <Button
             size="sm"
             variant="ghost"
-            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+            className="size-8 p-0 text-muted-foreground hover:text-foreground"
             onClick={handleEdit}
             title="Edit server"
           >
-            <Pencil className="h-4 w-4" />
+            <Pencil className="size-4" />
           </Button>
           <Button
             size="sm"
             variant="ghost"
-            className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+            className="size-8 p-0 text-muted-foreground hover:text-destructive"
             onClick={handleRemove}
             disabled={removing}
             title="Remove server"
           >
             {removing ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Spinner className="size-4" />
             ) : (
-              <Trash2 className="h-4 w-4" />
+              <Trash2 className="size-4" />
             )}
           </Button>
-        </div>
+        </ButtonGroup>
       </div>
     </Card>
   );

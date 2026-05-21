@@ -464,7 +464,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
     };
 
     let separator1 = PredefinedMenuItem::separator(app)?;
-    let settings_i = MenuItem::with_id(app, "settings", "Dashboard", true, None::<&str>)?;
+    let settings_i = MenuItem::with_id(app, "dashboard", "Dashboard", true, None::<&str>)?;
     let check_updates_i = MenuItem::with_id(
         app,
         "check_updates",

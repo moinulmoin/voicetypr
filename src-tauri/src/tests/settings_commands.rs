@@ -24,10 +24,10 @@ mod tests {
         assert_eq!(settings.transcription_cleanup_days, None);
         assert_eq!(settings.launch_at_startup, false);
         assert_eq!(settings.onboarding_completed, false);
-        assert_eq!(settings.check_updates_automatically, true); // Default to true
+        assert_eq!(settings.check_updates_automatically, true); // Default to automatic checks only
         assert_eq!(settings.auto_paste_transcription, true); // Default to true
         assert!(!settings.save_recordings);
-        assert_eq!(settings.recording_retention_count, Some(50));
+        assert_eq!(settings.recording_retention_days, Some(30));
     }
 
     #[test]
@@ -60,7 +60,7 @@ mod tests {
             sharing_port: Some(47842),
             sharing_password: None,
             save_recordings: true,
-            recording_retention_count: Some(25),
+            recording_retention_days: Some(7),
         };
 
         // Test serialization
@@ -141,7 +141,7 @@ mod tests {
             sharing_port: None,
             sharing_password: Some("test123".to_string()),
             save_recordings: true,
-            recording_retention_count: None,
+            recording_retention_days: None,
         };
 
         let cloned = settings.clone();
@@ -759,7 +759,7 @@ mod tests {
             sharing_port: Some(5555),
             sharing_password: Some("pw".to_string()),
             save_recordings: true,
-            recording_retention_count: None,
+            recording_retention_days: None,
         };
 
         let json = serde_json::to_string(&original).unwrap();
@@ -819,8 +819,8 @@ mod tests {
         assert_eq!(restored.sharing_password, original.sharing_password);
         assert_eq!(restored.save_recordings, original.save_recordings);
         assert_eq!(
-            restored.recording_retention_count,
-            original.recording_retention_count
+            restored.recording_retention_days,
+            original.recording_retention_days
         );
     }
 
@@ -856,7 +856,7 @@ mod tests {
         assert!(json_value.get("sharing_port").is_some());
         assert!(json_value.get("sharing_password").is_some());
         assert!(json_value.get("save_recordings").is_some());
-        assert!(json_value.get("recording_retention_count").is_some());
+        assert!(json_value.get("recording_retention_days").is_some());
     }
 
     // ==================== Edge Case Tests ====================

@@ -163,7 +163,7 @@ describe('GeneralSettings recording indicator', () => {
   it('displays Recording Indicator Visibility label', async () => {
     render(<GeneralSettings />);
     await waitFor(() => {
-      expect(screen.getByText('Recording Indicator Visibility')).toBeInTheDocument();
+      expect(screen.getByText('Recording indicator')).toBeInTheDocument();
     });
   });
 

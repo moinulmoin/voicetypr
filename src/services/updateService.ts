@@ -95,18 +95,17 @@ export class UpdateService {
    * - Sets up daily update checks
    */
   async initialize(settings: AppSettings): Promise<void> {
-    // Check if automatic updates are enabled (default to true if not set)
+    // Check if automatic update checks are enabled (default to true if not set)
     const autoUpdateEnabled = settings.check_updates_automatically ?? true;
     
     if (!autoUpdateEnabled) {
-      console.log('Automatic updates are disabled');
+      console.log('Automatic update checks are disabled');
       return;
     }
 
-    // Check on startup
+    // Check on startup and then daily. Background checks notify; they do not install.
     await this.checkForUpdatesInBackground();
 
-    // Set up daily checks
     this.setupDailyUpdateCheck();
   }
 
@@ -153,9 +152,9 @@ export class UpdateService {
   }
 
   /**
-   * Check for updates in the background and auto-install if available.
-   * Shows progress toasts during download/install, then relaunches the app.
-   * Runs on startup and daily when automatic updates are enabled.
+   * Check for updates in the background.
+   * Background checks notify the user; they never download or install automatically.
+   * Runs on startup and daily when automatic update checks are enabled.
    */
   async checkForUpdatesInBackground(): Promise<void> {
     if (this.checkInProgress) {
@@ -230,70 +229,17 @@ export class UpdateService {
    */
   private async handleUpdateAvailable(update: Update, isBackgroundCheck: boolean): Promise<void> {
     if (isBackgroundCheck) {
-      // For background checks, auto-install silently
-      await this.autoInstallUpdate(update);
-    } else {
-      // For manual checks, show dialog to let user decide
-      await this.showUpdateDialog(update);
+      toast.info(`Update ${update.version} is available. Open Settings to install it.`);
+      await this.sendSystemNotification(
+        'Update Available',
+        `VoiceTypr ${update.version} is ready to install from Settings.`
+      );
+      return;
     }
+
+    await this.showUpdateDialog(update);
   }
 
-  /**
-   * Auto-install update silently with progress feedback
-   */
-  private async autoInstallUpdate(update: Update, retryCount = 0): Promise<void> {
-    const MAX_RETRIES = 3;
-    const RETRY_DELAY = 30000; // 30 seconds
-
-    // Defer auto-update if user is in active session (recording/transcribing)
-    if (this.isSessionActive) {
-      if (retryCount < MAX_RETRIES) {
-        console.log(`Deferring auto-update - session active (retry ${retryCount + 1}/${MAX_RETRIES} in 30s)`);
-        setTimeout(() => this.autoInstallUpdate(update, retryCount + 1), RETRY_DELAY);
-        return;
-      }
-      console.log('Skipping auto-update - session still active after max retries');
-      return;
-    }
-
-    const toastId = 'update-progress';
-    
-    try {
-      await update.downloadAndInstall((event) => {
-        if (event.event === 'Started') {
-          toast.info(`Downloading update ${update.version}...`, { 
-            id: toastId,
-            duration: Infinity 
-          });
-        } else if (event.event === 'Finished') {
-          toast.success('Update ready, restarting...', { 
-            id: toastId,
-            duration: Infinity 
-          });
-        }
-      });
-    } catch (error) {
-      console.error('Auto-update failed:', error);
-      toast.error('Update failed. You can try again from Settings > About.', { 
-        id: toastId,
-        duration: 5000 
-      });
-      return;
-    }
-
-    // Re-check session state before relaunch (user may have started recording during download)
-    if (this.isSessionActive) {
-      console.log('Update downloaded but session active - will relaunch when session ends');
-      this.pendingRelaunch = true;
-      this.pendingUpdateVersion = update.version;
-      toast.dismiss(toastId);
-      await this.sendSystemNotification('Update Ready', 'VoiceTypr will restart when recording ends');
-      return;
-    }
-
-    this.pendingUpdateVersion = update.version;
-    await this.performRelaunch();
-  }
 
   /**
    * Show update dialog and handle user response

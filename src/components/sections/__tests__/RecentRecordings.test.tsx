@@ -284,7 +284,7 @@ it('shows Soniox as a cloud retranscription source when configured', async () =>
         return {
           models: [
             { name: 'small.en', downloaded: true, engine: 'whisper', kind: 'local', requires_setup: false },
-            { name: 'soniox', display_name: 'Soniox (Cloud)', downloaded: true, engine: 'soniox', kind: 'cloud', requires_setup: false },
+            { name: 'soniox', display_name: 'Soniox', downloaded: true, engine: 'soniox', kind: 'cloud', requires_setup: false },
           ],
         };
       case 'list_remote_servers':
@@ -299,5 +299,5 @@ it('shows Soniox as a cloud retranscription source when configured', async () =>
   const retranscribeButton = await screen.findByTitle('Re-transcribe');
   await user.click(retranscribeButton);
 
-  expect(await screen.findByRole('menuitem', { name: 'Soniox (Cloud)' })).toBeInTheDocument();
+  expect(await screen.findByRole('menuitem', { name: 'Soniox' })).toBeInTheDocument();
 });

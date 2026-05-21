@@ -7,10 +7,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import { Spinner } from "@/components/ui/spinner";
 import { invoke } from "@tauri-apps/api/core";
-import { CheckCircle2, Eye, EyeOff, Loader2, Server, XCircle } from "lucide-react";
+import { CheckCircle2, Eye, EyeOff, Server, XCircle } from "lucide-react";
 import React, { useState } from "react";
 import { toast } from "sonner";
 
@@ -231,10 +243,9 @@ export function AddServerModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-4">
-          {/* Host Input */}
-          <div className="space-y-2">
-            <Label htmlFor="server-host">Host Address</Label>
+        <FieldGroup className="py-4">
+          <Field>
+            <FieldLabel htmlFor="server-host">Host Address</FieldLabel>
             <Input
               id="server-host"
               placeholder="192.168.1.100 or hostname"
@@ -242,11 +253,13 @@ export function AddServerModal({
               onChange={(e) => setHost(e.target.value)}
               disabled={saving}
             />
-          </div>
+            <FieldDescription>
+              Use the host shown on the sharing Mac, or a stable LAN hostname.
+            </FieldDescription>
+          </Field>
 
-          {/* Port Input */}
-          <div className="space-y-2">
-            <Label htmlFor="server-port">Port</Label>
+          <Field>
+            <FieldLabel htmlFor="server-port">Port</FieldLabel>
             <Input
               id="server-port"
               type="number"
@@ -256,50 +269,53 @@ export function AddServerModal({
               disabled={saving}
               className="font-mono"
             />
-          </div>
+          </Field>
 
-          {/* Password Input */}
-          <div className="space-y-2">
-            <Label htmlFor="server-password">Password (if required)</Label>
-            <div className="relative">
-              <Input
+          <Field>
+            <FieldLabel htmlFor="server-password">Password (if required)</FieldLabel>
+            <InputGroup>
+              <InputGroupInput
                 id="server-password"
                 type={showPassword ? "text" : "password"}
                 placeholder={isEditMode && editServer?.has_password ? "Leave empty to keep saved password" : "Leave empty if no password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={saving}
-                className="pr-10 [&::-ms-reveal]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
+                className="[&::-ms-reveal]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
-                tabIndex={-1}
-              >
-                {showPassword ? (
-                  <EyeOff className="h-4 w-4" />
-                ) : (
-                  <Eye className="h-4 w-4" />
-                )}
-              </button>
-            </div>
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  type="button"
+                  size="icon-xs"
+                  onClick={() => setShowPassword(!showPassword)}
+                  tabIndex={-1}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? (
+                    <EyeOff className="size-4" />
+                  ) : (
+                    <Eye className="size-4" />
+                  )}
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
             {isEditMode && editServer?.has_password && !password && (
-              <Button
-                type="button"
-                variant={clearSavedPassword ? "destructive" : "outline"}
-                size="sm"
-                onClick={() => setClearSavedPassword((value) => !value)}
-                disabled={saving}
-              >
-                {clearSavedPassword ? "Password will be removed" : "Keep saved password"}
-              </Button>
+              <div>
+                <Button
+                  type="button"
+                  variant={clearSavedPassword ? "destructive" : "outline"}
+                  size="sm"
+                  onClick={() => setClearSavedPassword((value) => !value)}
+                  disabled={saving}
+                >
+                  {clearSavedPassword ? "Password will be removed" : "Keep saved password"}
+                </Button>
+              </div>
             )}
-          </div>
+          </Field>
 
-          {/* Name Input */}
-          <div className="space-y-2">
-            <Label htmlFor="server-name">Display Name (optional)</Label>
+          <Field>
+            <FieldLabel htmlFor="server-name">Display Name (optional)</FieldLabel>
             <Input
               id="server-name"
               placeholder="e.g., Office Desktop"
@@ -307,9 +323,8 @@ export function AddServerModal({
               onChange={(e) => setName(e.target.value)}
               disabled={saving}
             />
-          </div>
+          </Field>
 
-          {/* Test Connection Button */}
           <Button
             variant="outline"
             className="w-full"
@@ -318,7 +333,7 @@ export function AddServerModal({
           >
             {testStatus === "testing" ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Spinner className="size-4" />
                 Testing...
               </>
             ) : (
@@ -331,12 +346,11 @@ export function AddServerModal({
             </p>
           )}
 
-          {/* Test Result - compact */}
           {testStatus === "success" && testResult && (
-            <div className="rounded-md border border-green-500/30 bg-green-500/10 px-3 py-2">
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
               <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 text-green-700 dark:text-green-400">
-                  <CheckCircle2 className="h-3.5 w-3.5" />
+                <div className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
+                  <CheckCircle2 className="size-3.5" />
                   <span className="text-xs font-medium">Connected</span>
                 </div>
                 <span className="text-xs text-muted-foreground">
@@ -347,17 +361,17 @@ export function AddServerModal({
           )}
 
           {testStatus === "error" && testError && (
-            <div className={`rounded-md border px-3 py-2 ${
+            <div className={`rounded-lg border px-3 py-2 ${
               isSelfConnection
                 ? "border-amber-500/30 bg-amber-500/10"
-                : "border-red-500/30 bg-red-500/10"
+                : "border-destructive/30 bg-destructive/10"
             }`}>
               <div className={`flex items-center gap-1.5 ${
                 isSelfConnection
                   ? "text-amber-700 dark:text-amber-400"
-                  : "text-red-700 dark:text-red-400"
+                  : "text-destructive"
               }`}>
-                <XCircle className="h-3.5 w-3.5" />
+                <XCircle className="size-3.5" />
                 <span className="text-xs font-medium">
                   {isSelfConnection ? "Self-connection detected" : "Connection failed"}
                 </span>
@@ -365,7 +379,7 @@ export function AddServerModal({
               </div>
             </div>
           )}
-        </div>
+        </FieldGroup>
 
         <DialogFooter>
           <Button variant="outline" onClick={handleClose} disabled={saving}>
@@ -377,7 +391,7 @@ export function AddServerModal({
           >
             {saving ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Spinner className="size-4" />
                 {isEditMode ? "Saving..." : "Adding..."}
               </>
             ) : isEditMode ? (

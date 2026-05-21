@@ -4,8 +4,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::audio::recorder::AudioRecorder;
 use crate::commands::settings::{
     get_settings, normalize_final_text_language, normalize_speech_language_for_model,
-    normalize_transcription_task, resolve_pill_indicator_mode, task_uses_translate_to_english,
-    Settings,
+    normalize_transcription_task, recording_retention_days_from_store, resolve_pill_indicator_mode,
+    task_uses_translate_to_english, Settings,
 };
 use crate::license::LicenseState;
 use crate::media::MediaPauseController;
@@ -1082,7 +1082,7 @@ async fn save_recording_internal(
     audio_path: &Path,
     check_settings: bool,
 ) -> Option<String> {
-    // Get settings store for retention count (always needed) and save_recordings check
+    // Get settings store for retention policy and save_recordings check.
     let store = match app.store("settings") {
         Ok(s) => s,
         Err(e) => {
@@ -1135,14 +1135,11 @@ async fn save_recording_internal(
         Ok(_) => {
             log::info!("Saved recording to: {:?}", dest_path);
 
-            // Cleanup old recordings
-            let retention_count = store
-                .get("recording_retention_count")
-                .and_then(|v| v.as_u64())
-                .map(|n| n as usize);
+            // Cleanup old recordings by retention period.
+            let retention_days = recording_retention_days_from_store(&store);
 
-            if let Some(max_count) = retention_count {
-                cleanup_old_recordings(&recordings_dir, max_count);
+            if let Some(days) = retention_days {
+                cleanup_old_recordings(&recordings_dir, days);
             }
 
             Some(filename)
@@ -1186,49 +1183,47 @@ async fn save_recording_without_cleanup(app: &AppHandle, audio_path: &Path) -> O
     }
 }
 
-/// Clean up old recordings when count exceeds retention limit
-fn cleanup_old_recordings(recordings_dir: &Path, max_count: usize) {
-    if max_count == 0 {
-        // Unlimited retention
-        return;
-    }
+/// Clean up recordings older than the retention period.
+fn cleanup_old_recordings(recordings_dir: &Path, retention_days: u32) {
+    let cutoff = match std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(
+        u64::from(retention_days) * 24 * 60 * 60,
+    )) {
+        Some(cutoff) => cutoff,
+        None => return,
+    };
 
-    // Get all .wav files in the recordings directory
-    let mut recordings: Vec<_> = match std::fs::read_dir(recordings_dir) {
-        Ok(entries) => entries
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|ext| ext == "wav")
-                    .unwrap_or(false)
-            })
-            .collect(),
+    let recordings = match std::fs::read_dir(recordings_dir) {
+        Ok(entries) => entries,
         Err(e) => {
             log::warn!("Failed to read recordings directory for cleanup: {}", e);
             return;
         }
     };
 
-    // Sort by creation time (oldest first)
-    recordings.sort_by(|a, b| {
-        let time_a = a.metadata().and_then(|m| m.created()).ok();
-        let time_b = b.metadata().and_then(|m| m.created()).ok();
-        time_a.cmp(&time_b)
-    });
+    for entry in recordings.filter_map(|entry| entry.ok()) {
+        let path = entry.path();
+        let is_wav = path.extension().map(|ext| ext == "wav").unwrap_or(false);
 
-    // Delete oldest files until we're at or below the limit
-    while recordings.len() > max_count {
-        if let Some(oldest) = recordings.first() {
-            let path = oldest.path();
-            if let Err(e) = std::fs::remove_file(&path) {
-                log::warn!("Failed to remove old recording {:?}: {}", path, e);
-            } else {
-                log::info!("Cleaned up old recording: {:?}", path);
-            }
-            recordings.remove(0);
+        if !is_wav {
+            continue;
+        }
+
+        let modified = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified().or_else(|_| metadata.created()));
+
+        let Ok(modified) = modified else {
+            continue;
+        };
+
+        if modified >= cutoff {
+            continue;
+        }
+
+        if let Err(e) = std::fs::remove_file(&path) {
+            log::warn!("Failed to remove old recording {:?}: {}", path, e);
         } else {
-            break;
+            log::info!("Cleaned up old recording: {:?}", path);
         }
     }
 }

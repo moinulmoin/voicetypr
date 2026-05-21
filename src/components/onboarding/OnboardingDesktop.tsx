@@ -1,18 +1,56 @@
 import { HotkeyInput } from "@/components/HotkeyInput";
 import { ModelCard } from "@/components/ModelCard";
+import type { SavedConnection } from "@/components/RemoteServerCard";
+import { AddServerModal } from "@/components/sections/AddServerModal";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { Spinner } from "@/components/ui/spinner";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useAccessibilityPermission } from "@/hooks/useAccessibilityPermission";
 import { useMicrophonePermission } from "@/hooks/useMicrophonePermission";
 import type { useModelManagement } from "@/hooks/useModelManagement";
+import { useRecording } from "@/hooks/useRecording";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { isMacOS } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
-import { CheckCircle, ChevronLeft, ChevronRight, Info, Keyboard, Loader2, Mic, Zap, HardDrive, Star } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  HardDrive,
+  Info,
+  Keyboard,
+  Laptop,
+  Mic,
+  Network,
+  Radio,
+  Server,
+  ShieldCheck,
+  Sparkles,
+  Star,
+  Wifi,
+  WifiOff,
+  Zap,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 interface OnboardingDesktopProps {
@@ -20,8 +58,16 @@ interface OnboardingDesktopProps {
   modelManagement: ReturnType<typeof useModelManagement>;
 }
 
-type Step = "welcome" | "permissions" | "models" | "setup" | "success";
+type Step =
+  | "welcome"
+  | "source"
+  | "permissions"
+  | "readiness"
+  | "hotkey"
+  | "first_transcription"
+  | "success";
 
+type SourceType = "local" | "remote";
 type PermissionStatus = "checking" | "granted" | "denied" | "error";
 
 interface PermissionState {
@@ -29,81 +75,194 @@ interface PermissionState {
   error?: string;
 }
 
+interface TranscriptionAddedPayload {
+  text?: string;
+  model?: string;
+  timestamp?: string;
+}
+
+const SOURCE_OPTIONS: Array<{
+  id: SourceType;
+  title: string;
+  eyebrow: string;
+  description: string;
+  icon: typeof Laptop;
+  bullets: string[];
+}> = [
+  {
+    id: "local",
+    title: "Use this Mac",
+    eyebrow: "Private by default",
+    description: "Download a local model and transcribe without depending on another machine.",
+    icon: Laptop,
+    bullets: ["Raw audio stays here", "Works offline after setup", "Best default for one Mac"],
+  },
+  {
+    id: "remote",
+    title: "Use another VoiceTypr",
+    eyebrow: "Network source",
+    description: "Connect to a stronger device or workstation running VoiceTypr on your network.",
+    icon: Network,
+    bullets: ["Skip local model download", "Use a faster machine", "Great for weak laptops"],
+  },
+];
+
+const isRemoteServerOnline = (server?: SavedConnection | null) =>
+  server?.status === "Online";
+
+const sourceLabel = (sourceType: SourceType) =>
+  sourceType === "local" ? "This Mac" : "Remote VoiceTypr";
+
 export const OnboardingDesktop = function OnboardingDesktop({
   onComplete,
-  modelManagement
+  modelManagement,
 }: OnboardingDesktopProps) {
   const { settings, updateSettings } = useSettings();
+  const recording = useRecording();
   const {
     hasPermission: hasMicPermission,
     checkPermission: checkMicPermission,
-    requestPermission: requestMicPermission
+    requestPermission: requestMicPermission,
   } = useMicrophonePermission({ checkOnMount: false });
   const {
     hasPermission: hasAccessPermission,
     checkPermission: checkAccessPermission,
-    requestPermission: requestAccessPermission
+    requestPermission: requestAccessPermission,
   } = useAccessibilityPermission({ checkOnMount: false });
 
-  const [currentStep, setCurrentStep] = useState<Step>("welcome");
-  const [hotkey, setHotkey] = useState(settings?.hotkey || "CommandOrControl+Shift+Space");
-  const [isRequesting, setIsRequesting] = useState<string | null>(null);
-  const [checkingPermissions, setCheckingPermissions] = useState<Set<string>>(new Set());
-  const [isEditingHotkey, setIsEditingHotkey] = useState(false);
-
-  // Convert hook states to onboarding format
-  const permissions = {
-    microphone: {
-      status: hasMicPermission === null ? "checking" : hasMicPermission ? "granted" : "denied"
-    } as PermissionState,
-    accessibility: {
-      status: hasAccessPermission === null ? "checking" : hasAccessPermission ? "granted" : "denied"
-    } as PermissionState
-  };
-
-  // Get model management from props
   const {
     models,
     modelOrder,
     downloadProgress,
     verifyingModels,
-    loadModels,
     downloadModel,
     cancelDownload,
-    isLoading
+    isLoading,
   } = modelManagement;
 
-  // Define steps based on platform
-  // Default to showing permissions until platform is detected
-  const steps = isMacOS
-    ? [
-        { id: "welcome" as const },
-        { id: "permissions" as const },
-        { id: "models" as const },
-        { id: "setup" as const },
-        { id: "success" as const }
-      ]
-    : [
-        { id: "welcome" as const },
-        { id: "models" as const },
-        { id: "setup" as const },
-        { id: "success" as const }
-      ];
+  const [currentStep, setCurrentStep] = useState<Step>("welcome");
+  const [sourceType, setSourceType] = useState<SourceType>("local");
+  const [hotkey, setHotkey] = useState(
+    settings?.hotkey || "CommandOrControl+Shift+Space",
+  );
+  const [isEditingHotkey, setIsEditingHotkey] = useState(false);
+  const [isRequestingPermission, setIsRequestingPermission] = useState<
+    string | null
+  >(null);
+  const [checkingPermissions, setCheckingPermissions] = useState<Set<string>>(
+    new Set(),
+  );
+  const [remoteServers, setRemoteServers] = useState<SavedConnection[]>([]);
+  const [activeRemoteServerId, setActiveRemoteServerId] = useState<
+    string | null
+  >(null);
+  const [isLoadingRemoteServers, setIsLoadingRemoteServers] = useState(false);
+  const [showAddRemoteModal, setShowAddRemoteModal] = useState(false);
+  const [sampleTranscript, setSampleTranscript] = useState<string | null>(null);
+  const [sampleError, setSampleError] = useState<string | null>(null);
+  const [isSavingCompletion, setIsSavingCompletion] = useState(false);
 
-  const currentIndex = steps.findIndex((s) => s.id === currentStep);
-  // const progress = ((currentIndex + 1) / steps.length) * 100;
+  const permissions = {
+    microphone: {
+      status:
+        hasMicPermission === null
+          ? "checking"
+          : hasMicPermission
+            ? "granted"
+            : "denied",
+    } as PermissionState,
+    accessibility: {
+      status:
+        hasAccessPermission === null
+          ? "checking"
+          : hasAccessPermission
+            ? "granted"
+            : "denied",
+    } as PermissionState,
+  };
+
+  const steps = useMemo(
+    () =>
+      isMacOS
+        ? [
+            "welcome",
+            "source",
+            "permissions",
+            "readiness",
+            "hotkey",
+            "first_transcription",
+            "success",
+          ] satisfies Step[]
+        : [
+            "welcome",
+            "source",
+            "readiness",
+            "hotkey",
+            "first_transcription",
+            "success",
+          ] satisfies Step[],
+    [],
+  );
+
+  const currentIndex = steps.indexOf(currentStep);
+  const progress = ((currentIndex + 1) / steps.length) * 100;
+  const selectedModelName = settings?.current_model || null;
+  const selectedModel = selectedModelName ? models[selectedModelName] : null;
+  const activeRemoteServer = useMemo(
+    () => remoteServers.find((server) => server.id === activeRemoteServerId) ?? null,
+    [activeRemoteServerId, remoteServers],
+  );
+  const localReady = Boolean(selectedModelName && selectedModel?.downloaded);
+  const remoteReady = isRemoteServerOnline(activeRemoteServer);
+  const sourceReady = sourceType === "local" ? localReady : remoteReady;
+
+  const loadRemoteServers = useCallback(async () => {
+    setIsLoadingRemoteServers(true);
+    try {
+      const [savedServers, activeServer] = await Promise.all([
+        invoke<SavedConnection[]>("list_remote_servers"),
+        invoke<string | null>("get_active_remote_server"),
+      ]);
+
+      setActiveRemoteServerId(activeServer);
+      setRemoteServers(savedServers);
+
+      const refreshedServers = await Promise.all(
+        savedServers.map(async (server) => {
+          try {
+            return await invoke<SavedConnection>("check_remote_server_status", {
+              serverId: server.id,
+            });
+          } catch (error) {
+            console.error(
+              `[OnboardingDesktop] Failed to refresh remote server ${server.id}:`,
+              error,
+            );
+            return server;
+          }
+        }),
+      );
+
+      setRemoteServers(refreshedServers);
+      if (activeServer && refreshedServers.some((server) => server.id === activeServer)) {
+        setSourceType("remote");
+      }
+    } catch (error) {
+      console.error("[OnboardingDesktop] Failed to load remote servers:", error);
+    } finally {
+      setIsLoadingRemoteServers(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (currentStep !== "permissions") return;
-    checkPermissions();
-    // No auto-retry - user manually retries via buttons
+    void checkPermissions();
   }, [currentStep]);
 
-  // Add manual recheck when user returns from settings
   useEffect(() => {
     if (currentStep !== "permissions") return;
     const handleFocus = () => {
-      checkPermissions();
+      void checkPermissions();
     };
 
     window.addEventListener("focus", handleFocus);
@@ -111,34 +270,73 @@ export const OnboardingDesktop = function OnboardingDesktop({
   }, [currentStep]);
 
   useEffect(() => {
-    // Only auto-select if no model is selected yet
-    if (!settings?.current_model) {
-      const downloadedModelEntry = Object.entries(models).find(([_, m]) => m.downloaded);
-      if (downloadedModelEntry) {
-        const [modelName, info] = downloadedModelEntry;
-        updateSettings({
-          current_model: modelName,
-          current_model_engine: info.engine ?? 'whisper',
-          speech_language: 'en'
-        }).catch((error) => {
-          console.error('[OnboardingDesktop] Failed to auto-select model:', error);
-        });
-      }
+    if (currentStep !== "source" && currentStep !== "readiness") return;
+    void loadRemoteServers();
+  }, [currentStep, loadRemoteServers]);
+
+  useEffect(() => {
+    if (settings?.current_model || sourceType !== "local") {
+      return;
     }
-  }, [models, settings?.current_model, updateSettings]); // Depend on both to react to changes
+
+    const downloadedModelEntry = Object.entries(models).find(
+      ([, model]) => model.downloaded,
+    );
+    if (!downloadedModelEntry) {
+      return;
+    }
+
+    const [modelName, info] = downloadedModelEntry;
+    updateSettings({
+      current_model: modelName,
+      current_model_engine: info.engine ?? "whisper",
+      speech_language: "en",
+    }).catch((error) => {
+      console.error("[OnboardingDesktop] Failed to auto-select model:", error);
+    });
+  }, [models, settings?.current_model, sourceType, updateSettings]);
+
+  useEffect(() => {
+    const setup = async () => {
+      const unlisten = await listen<TranscriptionAddedPayload>(
+        "transcription-added",
+        (event) => {
+          const text = event.payload?.text?.trim();
+          if (!text || currentStep !== "first_transcription") {
+            return;
+          }
+          setSampleTranscript(text);
+          setSampleError(null);
+        },
+      );
+      return unlisten;
+    };
+
+    let cleanup: (() => void) | undefined;
+    void setup().then((unlisten) => {
+      cleanup = unlisten;
+    });
+
+    return () => cleanup?.();
+  }, [currentStep]);
+
+  useEffect(() => {
+    if (recording.state === "error") {
+      setSampleError(recording.error || "Recording failed. Try again.");
+    }
+  }, [recording.error, recording.state]);
 
   const checkPermissions = async () => {
-    // Use the hook methods to check permissions
     await Promise.all([checkMicPermission(), checkAccessPermission()]);
   };
 
-  const checkSinglePermission = async (type: string) => {
+  const checkSinglePermission = async (type: "microphone" | "accessibility") => {
     setCheckingPermissions((prev) => new Set(prev).add(type));
 
     try {
       if (type === "microphone") {
         await checkMicPermission();
-      } else if (type === "accessibility") {
+      } else {
         await checkAccessPermission();
       }
     } catch (error) {
@@ -152,458 +350,786 @@ export const OnboardingDesktop = function OnboardingDesktop({
     }
   };
 
-  const requestPermission = async (type: "microphone" | "accessibility" | "automation") => {
-    setIsRequesting(type);
+  const requestPermission = async (type: "microphone" | "accessibility") => {
+    setIsRequestingPermission(type);
     try {
       if (type === "microphone") {
         const granted = await requestMicPermission();
         if (!granted) {
-          await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+          await open(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+          );
         }
-      } else if (type === "accessibility") {
+      } else {
         const granted = await requestAccessPermission();
         if (!granted) {
           await open(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
           );
-        }
-      } else if (type === "automation") {
-        // This will trigger the system dialog for automation permission
-        const granted = await invoke<boolean>("test_automation_permission");
-        if (!granted) {
-          // Open automation settings if permission denied
-          await open("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation");
         }
       }
     } catch (error) {
       console.error(`Failed to request ${type} permission:`, error);
     } finally {
-      setIsRequesting(null);
+      setIsRequestingPermission(null);
     }
   };
 
-  const saveSettings = async () => {
+  const selectLocalModel = async (modelName: string) => {
+    const info = models[modelName];
+    await invoke("set_active_remote_server", { serverId: null });
+    setActiveRemoteServerId(null);
+    setSourceType("local");
+    await updateSettings({
+      current_model: modelName,
+      current_model_engine: info?.engine ?? "whisper",
+      speech_language: "en",
+    });
+  };
+
+  const selectRemoteServer = async (serverId: string) => {
+    const server = remoteServers.find((candidate) => candidate.id === serverId);
+    if (!isRemoteServerOnline(server)) {
+      toast.error("Remote VoiceTypr is not online yet");
+      return;
+    }
+
+    await invoke("set_active_remote_server", { serverId });
+    setActiveRemoteServerId(serverId);
+    setSourceType("remote");
+    toast.success("Remote VoiceTypr selected");
+  };
+
+  const handleRemoteServerAdded = (server: SavedConnection) => {
+    setRemoteServers((prev) => {
+      const existingIndex = prev.findIndex((candidate) => candidate.id === server.id);
+      if (existingIndex >= 0) {
+        const updated = [...prev];
+        updated[existingIndex] = server;
+        return updated;
+      }
+      return [...prev, server];
+    });
+    setSourceType("remote");
+    void loadRemoteServers();
+  };
+
+  const saveHotkeySettings = async () => {
+    await invoke("set_global_shortcut", { shortcut: hotkey });
+    await updateSettings({
+      hotkey,
+      current_model: selectedModelName || "",
+      current_model_engine: selectedModel?.engine ?? "whisper",
+      speech_language: "en",
+      onboarding_completed: false,
+    });
+  };
+
+  const completeOnboarding = async () => {
+    setIsSavingCompletion(true);
     try {
-      await invoke("set_global_shortcut", { shortcut: hotkey });
-
-      // Dynamically detect engine from selected model
-      const selectedModelName = settings?.current_model || "";
-      const selectedModel = selectedModelName ? models[selectedModelName] : null;
-      const engine = selectedModel?.engine || 'whisper';
-
-      await updateSettings({
-        hotkey: hotkey,
-        current_model: selectedModelName,
-        current_model_engine: engine,
-        speech_language: 'en',
-        onboarding_completed: true
-      });
+      await updateSettings({ onboarding_completed: true });
+      onComplete();
     } catch (error) {
-      console.error("Failed to save settings:", error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      toast.error(errorMessage || "Failed to save settings. Please try again.");
-      throw error; // Re-throw to prevent navigation
+      console.error("Failed to complete onboarding:", error);
+      toast.error("Failed to finish onboarding. Please try again.");
+    } finally {
+      setIsSavingCompletion(false);
     }
   };
 
   const handleNext = async () => {
     try {
-      if (currentStep === "setup") {
-        await saveSettings();
+      if (currentStep === "welcome") {
+        setCurrentStep("source");
+        return;
       }
 
-      const nextIndex = currentIndex + 1;
-      if (nextIndex < steps.length) {
-        const nextStep = steps[nextIndex].id;
-        setCurrentStep(nextStep);
+      if (currentStep === "source") {
+        setCurrentStep(isMacOS ? "permissions" : "readiness");
+        return;
+      }
 
-        if (nextStep === "models") {
-          console.log("[OnboardingDesktop] Navigating to models step, calling loadModels...");
-          await loadModels();
-          console.log("[OnboardingDesktop] loadModels completed");
+      if (currentStep === "permissions") {
+        setCurrentStep("readiness");
+        return;
+      }
+
+      if (currentStep === "readiness") {
+        if (sourceType === "local") {
+          await invoke("set_active_remote_server", { serverId: null });
+          setActiveRemoteServerId(null);
         }
+        setCurrentStep("hotkey");
+        return;
+      }
+
+      if (currentStep === "hotkey") {
+        await saveHotkeySettings();
+        setCurrentStep("first_transcription");
+        return;
+      }
+
+      if (currentStep === "first_transcription" && sampleTranscript) {
+        setCurrentStep("success");
       }
     } catch (error) {
-      // Error already handled in saveSettings
+      console.error("Failed to advance onboarding:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to continue onboarding");
     }
   };
 
   const handleBack = () => {
-    const prevIndex = currentIndex - 1;
-    if (prevIndex >= 0) {
-      const prevStep = steps[prevIndex].id;
-      setCurrentStep(prevStep);
+    const previousIndex = currentIndex - 1;
+    if (previousIndex >= 0) {
+      setCurrentStep(steps[previousIndex]);
     }
   };
 
-  const handleComplete = () => {
-    onComplete();
+  const startSampleRecording = async () => {
+    setSampleError(null);
+    setSampleTranscript(null);
+    await recording.startRecording();
+  };
+
+  const stopSampleRecording = async () => {
+    setSampleError(null);
+    await recording.stopRecording();
   };
 
   const canProceed = () => {
     switch (currentStep) {
       case "permissions":
-        // On Windows, permissions are always granted
         if (!isMacOS) return true;
         return (
           permissions.microphone.status === "granted" &&
           permissions.accessibility.status === "granted"
         );
-      // automation check removed for now
-      case "models":
-        // User can proceed if they have selected a model that is downloaded
-        {
-          const currentModel = settings?.current_model;
-          if (!currentModel) {
-            return false;
-          }
-          return models[currentModel]?.downloaded === true;
-        }
+      case "readiness":
+        return sourceReady;
+      case "hotkey":
+        return !isEditingHotkey;
+      case "first_transcription":
+        return Boolean(sampleTranscript);
       default:
         return true;
     }
   };
 
   return (
-    <div className="h-screen flex flex-col bg-background overflow-hidden">
-      {/* Compact step indicators */}
+    <div className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,var(--color-voice-wash),transparent_34%),linear-gradient(180deg,var(--color-background),var(--color-muted))] text-foreground">
       {currentStep !== "success" && (
-        <div className="flex items-center justify-center gap-2 py-3 bg-muted/30">
-          {steps.map((step, index) => (
-            <div key={step.id} className="flex items-center">
-              <div
-                className={cn(
-                  "w-2 h-2 rounded-full transition-all duration-300",
-                  index < currentIndex
-                    ? "bg-primary"
-                    : index === currentIndex
-                    ? "bg-primary scale-125"
-                    : "bg-muted-foreground opacity-50"
-                )}
-              />
-              {index < steps.length - 1 && (
-                <div
-                  className={cn(
-                    "w-12 h-[1px] mx-1",
-                    index < currentIndex ? "bg-primary" : "bg-muted-foreground/30"
-                  )}
-                />
-              )}
+        <div className="mx-auto flex w-full max-w-5xl items-center gap-4 px-8 py-5">
+          <div className="flex items-center gap-3">
+            <div className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+              <Radio className="size-4" />
             </div>
-          ))}
+            <div>
+              <p className="text-sm font-medium tracking-tight">VoiceTypr setup</p>
+              <p className="text-xs text-muted-foreground">{sourceLabel(sourceType)}</p>
+            </div>
+          </div>
+          <Progress value={progress} className="h-2 flex-1" />
+          <p className="text-xs tabular-nums text-muted-foreground">
+            {currentIndex + 1}/{steps.length}
+          </p>
         </div>
       )}
 
-      {/* Content - constrained height */}
-      <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
-        <div className="w-full transition-opacity duration-300">
-          {/* Welcome - Compact */}
-          {currentStep === "welcome" && (
-            <div className="w-full max-w-2xl mx-auto animate-fade-in">
-              <div className="text-center space-y-6">
-                <div className="space-y-2">
-                  <h1 className="text-4xl font-bold">Welcome to VoiceTypr</h1>
-                  <p className="text-lg text-muted-foreground max-w-lg mx-auto">
-                    Write 5x faster with your voice
-                  </p>
-                </div>
-
-                <Button onClick={handleNext} size="lg">
-                  Get Started
-                  <ChevronRight className="ml-2 h-4 w-4" />
+      <main className="mx-auto flex min-h-[calc(100vh-76px)] w-full max-w-5xl items-center justify-center px-8 pb-10">
+        {currentStep === "welcome" && (
+          <section className="grid w-full gap-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+            <div className="flex flex-col gap-6">
+              <Badge variant="secondary" className="w-fit rounded-md uppercase tracking-[0.16em]">
+                Local transcription by default
+              </Badge>
+              <div className="flex flex-col gap-4">
+                <h1 className="max-w-3xl text-5xl font-semibold tracking-[-0.045em] text-balance sm:text-6xl">
+                  Type by talking. Prove it once before we finish setup.
+                </h1>
+                <p className="max-w-2xl text-base leading-7 text-muted-foreground">
+                  Choose where transcription runs, grant only the permissions needed,
+                  then complete onboarding with a real first transcription.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <Button size="lg" onClick={handleNext}>
+                  Start setup
+                  <ChevronRight />
+                </Button>
+                <Button variant="outline" size="lg" onClick={() => void open("https://voicetypr.com/privacy") }>
+                  Privacy promise
                 </Button>
               </div>
             </div>
-          )}
 
-          {/* Permissions - Side by side */}
-          {currentStep === "permissions" && (
-            <div className="w-full max-w-3xl mx-auto animate-fade-in">
-              <div className="space-y-6">
-                <div className="text-center space-y-1">
-                  <h2 className="text-2xl font-bold">System Permissions</h2>
-                  <p className="text-muted-foreground">Grant required permissions to continue</p>
-                </div>
+            <Card className="border-border/70 bg-card/80 shadow-xl shadow-foreground/10 backdrop-blur">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-xl">
+                  <Sparkles className="size-5 text-primary" />
+                  Setup completes when this works
+                </CardTitle>
+                <CardDescription>
+                  No fake green check. VoiceTypr is ready only after the first recording succeeds.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                {[
+                  ["1", "Pick local or remote transcription"],
+                  ["2", "Prepare the selected source"],
+                  ["3", "Record one sample and see the transcript"],
+                ].map(([number, text]) => (
+                  <div key={number} className="flex items-center gap-3 rounded-xl bg-muted/70 px-3 py-2">
+                    <span className="flex size-7 items-center justify-center rounded-md bg-background text-sm font-medium ring-1 ring-border">
+                      {number}
+                    </span>
+                    <span className="text-sm text-muted-foreground">{text}</span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </section>
+        )}
 
-                <div className="flex flex-col justify-center items-center gap-4">
-                  {[
-                    {
-                      type: "microphone" as const,
-                      icon: Mic,
-                      title: "Microphone",
-                      desc: "Record your voice",
-                      ...permissions.microphone
-                    },
-                    {
-                      type: "accessibility" as const,
-                      icon: Keyboard,
-                      title: "Accessibility",
-                      desc: "Global hotkeys",
-                      ...permissions.accessibility
-                    }
-                    // Automation permission removed for now
-                    // Can be re-enabled later if needed
-                  ].map((perm) => (
-                    <Card
-                      key={perm.type}
-                      className={cn(
-                        "p-2.5 transition-colors max-w-fit",
-                        perm.status === "granted" && "bg-green-500/5 "
-                      )}
-                    >
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-3">
-                          <div
-                            className={cn(
-                              "p-2.5 rounded-lg",
-                              perm.status === "granted"
-                                ? "bg-green-500/10 text-green-500"
-                                : perm.status === "error"
-                                ? "bg-red-500/10 text-red-500"
-                                : "bg-primary/10 text-primary"
-                            )}
-                          >
-                            <perm.icon className="h-5 w-5" />
+        {currentStep === "source" && (
+          <OnboardingPanel
+            eyebrow="Step 1"
+            title="Where should transcription run?"
+            description="This choice controls the rest of setup. Local is simplest. Remote is for using a stronger VoiceTypr machine on your network."
+            footer={
+              <StepFooter
+                onBack={handleBack}
+                onNext={handleNext}
+                nextDisabled={!canProceed()}
+                nextLabel="Continue"
+              />
+            }
+          >
+            <div role="radiogroup" aria-label="Transcription source" className="grid gap-4 md:grid-cols-2">
+              {SOURCE_OPTIONS.map((option) => {
+                const Icon = option.icon;
+                const selected = sourceType === option.id;
+                return (
+                  <Card
+                    key={option.id}
+                    role="radio"
+                    aria-checked={selected}
+                    tabIndex={0}
+                    className={cn(
+                      "cursor-pointer border-border/70 bg-card/80 transition hover:-translate-y-0.5 hover:shadow-lg",
+                      selected && "border-primary/60 bg-primary/5 ring-2 ring-primary/20",
+                    )}
+                    onClick={() => setSourceType(option.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSourceType(option.id);
+                      }
+                    }}
+                  >
+                    <CardHeader>
+                      <CardAction>
+                        {selected ? (
+                          <CircleCheck className="size-5 text-primary" />
+                        ) : null}
+                      </CardAction>
+                      <div className="mb-2 flex size-11 items-center justify-center rounded-xl bg-muted text-primary">
+                        <Icon className="size-5" />
+                      </div>
+                      <CardTitle className="text-xl">{option.title}</CardTitle>
+                      <CardDescription>{option.description}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Badge variant="secondary" className="mb-4 rounded-md">
+                        {option.eyebrow}
+                      </Badge>
+                      <div className="flex flex-col gap-2">
+                        {option.bullets.map((bullet) => (
+                          <div key={bullet} className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <CheckCircle2 className="size-4 text-primary" />
+                            {bullet}
                           </div>
-                          <div>
-                            <h3 className="font-medium w-30">{perm.title}</h3>
-                            <p className="text-sm text-muted-foreground">{perm.desc}</p>
-                            {perm.status === "error" && perm.error && (
-                              <p className="text-xs text-red-500 mt-1">{perm.error}</p>
-                            )}
-                          </div>
-                        </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          </OnboardingPanel>
+        )}
 
-                        <div className="flex items-center">
-                          {checkingPermissions.has(perm.type) ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : perm.status === "granted" ? (
-                            <div className="flex items-center gap-2 text-green-500">
-                              <CheckCircle className="h-4 w-4" />
-                              <span className="text-sm">Granted</span>
-                            </div>
-                          ) : perm.status === "error" ? (
-                            <div className="flex items-center gap-2">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => checkSinglePermission(perm.type)}
-                                disabled={checkingPermissions.has(perm.type)}
-                              >
-                                Retry
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => requestPermission(perm.type)}
-                                disabled={isRequesting === perm.type}
-                              >
-                                {isRequesting === perm.type ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  "Grant"
-                                )}
-                              </Button>
-                            </div>
-                          ) : (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => requestPermission(perm.type)}
-                              disabled={isRequesting === perm.type}
-                            >
-                              {isRequesting === perm.type ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                "Grant Access"
-                              )}
-                            </Button>
+        {currentStep === "permissions" && (
+          <OnboardingPanel
+            eyebrow="Step 2"
+            title="Grant the permissions VoiceTypr actually needs"
+            description="Microphone starts recording. Accessibility lets the global hotkey work while you are in other apps."
+            footer={
+              <StepFooter
+                onBack={handleBack}
+                onNext={handleNext}
+                nextDisabled={!canProceed()}
+                nextLabel="Continue"
+              />
+            }
+          >
+            <div className="grid gap-4 md:grid-cols-2">
+              {[
+                {
+                  type: "microphone" as const,
+                  icon: Mic,
+                  title: "Microphone",
+                  desc: "Record your voice for the first transcription.",
+                  ...permissions.microphone,
+                },
+                {
+                  type: "accessibility" as const,
+                  icon: Keyboard,
+                  title: "Accessibility",
+                  desc: "Use the recording hotkey system-wide.",
+                  ...permissions.accessibility,
+                },
+              ].map((perm) => (
+                <Card key={perm.type} className="border-border/70 bg-card/80">
+                  <CardHeader>
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex gap-3">
+                        <div
+                          className={cn(
+                            "flex size-10 items-center justify-center rounded-xl bg-muted text-primary",
+                            perm.status === "granted" && "bg-primary/10",
+                            perm.status === "error" && "bg-destructive/10 text-destructive",
                           )}
+                        >
+                          <perm.icon className="size-5" />
+                        </div>
+                        <div>
+                          <CardTitle>{perm.title}</CardTitle>
+                          <CardDescription>{perm.desc}</CardDescription>
                         </div>
                       </div>
-                    </Card>
-                  ))}
-                </div>
-
-                <div className="flex gap-3 justify-center">
-                  <Button variant="outline" onClick={handleBack} size="sm">
-                    <ChevronLeft className="mr-1 h-4 w-4" />
-                    Back
-                  </Button>
-                  <Button onClick={handleNext} disabled={!canProceed()} size="sm">
-                    Continue
-                    <ChevronRight className="ml-1 h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
+                      {perm.status === "granted" ? (
+                        <Badge variant="secondary" className="text-primary">
+                          Granted
+                        </Badge>
+                      ) : null}
+                    </div>
+                  </CardHeader>
+                  <CardFooter className="justify-between gap-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void checkSinglePermission(perm.type)}
+                      disabled={checkingPermissions.has(perm.type)}
+                    >
+                      {checkingPermissions.has(perm.type) ? <Spinner /> : null}
+                      Recheck
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => void requestPermission(perm.type)}
+                      disabled={isRequestingPermission === perm.type || perm.status === "granted"}
+                    >
+                      {isRequestingPermission === perm.type ? <Spinner /> : null}
+                      Grant access
+                    </Button>
+                  </CardFooter>
+                </Card>
+              ))}
             </div>
-          )}
+          </OnboardingPanel>
+        )}
 
-          {/* Models - List view */}
-          {currentStep === "models" && (
-            <div className="w-full max-w-3xl mx-auto animate-fade-in">
-              <div className="space-y-6">
-                <div className="text-center space-y-1">
-                  <h2 className="text-2xl font-bold">Choose AI Model</h2>
-                  <p className="text-muted-foreground">
-                    Download and select a model for transcription
-                  </p>
-                </div>
-
-                {/* Legend (centered, same as Models section) */}
-                <div className="flex items-center justify-center gap-6 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1.5">
-                    <Zap className="w-3.5 h-3.5 text-green-500" />
-                    Speed
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <CheckCircle className="w-3.5 h-3.5 text-blue-500" />
-                    Accuracy
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <HardDrive className="w-3.5 h-3.5 text-purple-500" />
-                    Size
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <Star className="w-3.5 h-3.5 fill-yellow-500 text-yellow-500" />
-                    Recommended
-                  </span>
-                </div>
-
-                <div className="bg-card rounded-lg border">
-                  <div className="max-h-[220px] overflow-y-auto">
-                    <div className="space-y-3 p-4">
+        {currentStep === "readiness" && (
+          <OnboardingPanel
+            eyebrow="Step 3"
+            title={sourceType === "local" ? "Prepare this Mac" : "Connect a remote VoiceTypr"}
+            description={
+              sourceType === "local"
+                ? "Pick a downloaded local model, or download one now. The button unlocks as soon as the model is usable."
+                : "Choose an online VoiceTypr server. Password-protected servers must pass the connection test before onboarding continues."
+            }
+            footer={
+              <StepFooter
+                onBack={handleBack}
+                onNext={handleNext}
+                nextDisabled={!canProceed()}
+                nextLabel="Continue"
+              />
+            }
+          >
+            {sourceType === "local" ? (
+              <div className="flex flex-col gap-4">
+                <ModelLegend />
+                <Card className="border-border/70 bg-card/80 py-0">
+                  <ScrollArea className="h-[320px]">
+                    <div className="flex flex-col gap-3 p-4">
                       {modelOrder.map((name: string) => {
                         const model = models[name];
                         if (!model) return null;
-                        const progress = downloadProgress[name];
+                        const progressValue = downloadProgress[name];
                         return (
-                          <div key={name} className="relative">
-                            <ModelCard
-                              name={name}
-                              model={model}
-                              downloadProgress={progress}
-                              isVerifying={verifyingModels.has(name)}
-                              isSelected={settings?.current_model === name}
-                              onDownload={downloadModel}
-                              onSelect={async (modelName) => {
-                                const info = models[modelName];
-                                await updateSettings({
-                                  current_model: modelName,
-                                  current_model_engine: info?.engine ?? 'whisper',
-                                  speech_language: 'en'
-                                });
-                              }}
-                              onCancelDownload={cancelDownload}
-                              showSelectButton={model.downloaded}
-                            />
-                          </div>
+                          <ModelCard
+                            key={name}
+                            name={name}
+                            model={model}
+                            downloadProgress={progressValue}
+                            isVerifying={verifyingModels.has(name)}
+                            isSelected={settings?.current_model === name}
+                            onDownload={downloadModel}
+                            onSelect={(modelName) => void selectLocalModel(modelName)}
+                            onCancelDownload={cancelDownload}
+                            showSelectButton={model.downloaded}
+                          />
                         );
                       })}
-                      {isLoading && modelOrder.length === 0 && (
-                        <div className="text-center py-8 text-muted-foreground">
-                          <div className="flex items-center justify-center">
-                            <Loader2 className="h-6 w-6 animate-spin mr-2" />
-                            <span>Loading models...</span>
-                          </div>
-                        </div>
-                      )}
-                      {!isLoading && modelOrder.length === 0 && (
-                        <div className="text-center py-8 text-muted-foreground">
-                          <p>No models available</p>
-                        </div>
-                      )}
+                      {isLoading && modelOrder.length === 0 ? (
+                        <LoadingState label="Loading local models" />
+                      ) : null}
+                      {!isLoading && modelOrder.length === 0 ? (
+                        <EmptyState title="No local models available" description="Remote VoiceTypr is still available if you have another machine ready." />
+                      ) : null}
                     </div>
-                  </div>
-                </div>
-
-                <div className="flex gap-3 justify-center">
-                  <Button variant="outline" onClick={handleBack} size="sm">
-                    <ChevronLeft className="mr-1 h-4 w-4" />
-                    Back
-                  </Button>
-                  <Button onClick={handleNext} disabled={!canProceed()} size="sm">
-                    Continue
-                    <ChevronRight className="ml-1 h-4 w-4" />
-                  </Button>
-                </div>
+                  </ScrollArea>
+                </Card>
               </div>
-            </div>
-          )}
-
-          {/* Setup - Compact */}
-          {currentStep === "setup" && (
-            <div className="w-full max-w-2xl mx-auto animate-fade-in">
-              <div className="space-y-6">
-                <div className="text-center space-y-1">
-                  <h2 className="text-2xl font-bold">Quick Setup</h2>
-                  <p className="text-muted-foreground">Configure your hotkey</p>
-                </div>
-
-                <div className="max-w-md mx-auto space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium flex items-center gap-2">
-                      <Keyboard className="h-4 w-4 text-primary" />
-                      Recording Hotkey
-                    </label>
-                    <HotkeyInput 
-                      value={hotkey} 
-                      onChange={setHotkey} 
-                      onEditingChange={setIsEditingHotkey}
-                    />
-                  </div>
-
-                  {/* <Card className="p-4 bg-border-primary/20"> */}
-                  <div className="flex items-start gap-3 p-2">
-                    <Info className="h-4 w-4 text-primary mt-0.5" />
+            ) : (
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium">Saved remote servers</p>
                     <p className="text-sm text-muted-foreground">
-                      Double tap ESC to cancel recording
+                      Online servers can be selected for the first transcription.
                     </p>
                   </div>
-                  {/* </Card> */}
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => void loadRemoteServers()} disabled={isLoadingRemoteServers}>
+                      {isLoadingRemoteServers ? <Spinner /> : null}
+                      Refresh
+                    </Button>
+                    <Button onClick={() => setShowAddRemoteModal(true)}>
+                      Add server
+                    </Button>
+                  </div>
                 </div>
 
-                <div className="flex gap-3 justify-center">
-                  <Button variant="outline" onClick={handleBack} size="sm">
-                    <ChevronLeft className="mr-1 h-4 w-4" />
-                    Back
-                  </Button>
-                  <Button 
-                    onClick={handleNext} 
-                    size="sm" 
-                    disabled={isEditingHotkey}
+                <Card className="border-border/70 bg-card/80 py-0">
+                  <ScrollArea className="h-[320px]">
+                    <div className="flex flex-col gap-3 p-4">
+                      {isLoadingRemoteServers && remoteServers.length === 0 ? (
+                        <LoadingState label="Checking remote servers" />
+                      ) : null}
+                      {!isLoadingRemoteServers && remoteServers.length === 0 ? (
+                        <EmptyState
+                          title="No remote servers saved"
+                          description="Add the host and password from a VoiceTypr machine with sharing enabled."
+                        />
+                      ) : null}
+                      {remoteServers.map((server) => {
+                        const selected = server.id === activeRemoteServerId;
+                        const online = isRemoteServerOnline(server);
+                        return (
+                          <Card
+                            key={server.id}
+                            size="sm"
+                            className={cn(
+                              "border-border/70 bg-background/60",
+                              selected && "border-primary/60 bg-primary/5 ring-2 ring-primary/20",
+                            )}
+                          >
+                            <CardHeader>
+                              <CardAction>
+                                <Badge variant={online ? "secondary" : "outline"}>
+                                  {online ? "Online" : server.status || "Unknown"}
+                                </Badge>
+                              </CardAction>
+                              <div className="flex items-start gap-3">
+                                <div className="flex size-10 items-center justify-center rounded-xl bg-muted text-primary">
+                                  {online ? <Wifi className="size-5" /> : <WifiOff className="size-5" />}
+                                </div>
+                                <div>
+                                  <CardTitle>{server.name || `${server.host}:${server.port}`}</CardTitle>
+                                  <CardDescription>
+                                    {server.host}:{server.port}{server.model ? ` · ${server.model}` : ""}
+                                  </CardDescription>
+                                </div>
+                              </div>
+                            </CardHeader>
+                            <CardFooter className="justify-end">
+                              <Button
+                                size="sm"
+                                variant={selected ? "default" : "outline"}
+                                disabled={!online}
+                                onClick={() => void selectRemoteServer(server.id)}
+                              >
+                                {selected ? "Selected" : "Use this server"}
+                              </Button>
+                            </CardFooter>
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  </ScrollArea>
+                </Card>
+
+                <AddServerModal
+                  open={showAddRemoteModal}
+                  onOpenChange={setShowAddRemoteModal}
+                  onServerAdded={handleRemoteServerAdded}
+                />
+              </div>
+            )}
+          </OnboardingPanel>
+        )}
+
+        {currentStep === "hotkey" && (
+          <OnboardingPanel
+            eyebrow="Step 4"
+            title="Pick the hotkey you will remember"
+            description="This is the system-wide shortcut for starting and stopping recording. You can change it later."
+            footer={
+              <StepFooter
+                onBack={handleBack}
+                onNext={handleNext}
+                nextDisabled={!canProceed()}
+                nextLabel="Save hotkey"
+              />
+            }
+          >
+            <Card className="mx-auto w-full max-w-xl border-border/70 bg-card/80">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Keyboard className="size-5 text-primary" />
+                  Recording hotkey
+                </CardTitle>
+                <CardDescription>
+                  Double tap Esc cancels an active recording.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                <HotkeyInput
+                  value={hotkey}
+                  onChange={setHotkey}
+                  onEditingChange={setIsEditingHotkey}
+                />
+                <Alert>
+                  <Info className="size-4" />
+                  <AlertTitle>Tip</AlertTitle>
+                  <AlertDescription>
+                    Use a shortcut you can hit without looking down. VoiceTypr works best when recording feels invisible.
+                  </AlertDescription>
+                </Alert>
+              </CardContent>
+            </Card>
+          </OnboardingPanel>
+        )}
+
+        {currentStep === "first_transcription" && (
+          <OnboardingPanel
+            eyebrow="Final check"
+            title="Do your first transcription"
+            description="Say one short sentence. Onboarding only finishes after VoiceTypr returns real text."
+            footer={
+              <StepFooter
+                onBack={handleBack}
+                onNext={handleNext}
+                nextDisabled={!canProceed()}
+                nextLabel="Review result"
+              />
+            }
+          >
+            <Card className="mx-auto w-full max-w-2xl border-border/70 bg-card/80">
+              <CardHeader>
+                <CardAction>
+                  <Badge variant="outline">{sourceLabel(sourceType)}</Badge>
+                </CardAction>
+                <CardTitle className="flex items-center gap-2 text-xl">
+                  <Mic className="size-5 text-primary" />
+                  Sample recording
+                </CardTitle>
+                <CardDescription>
+                  Current state: {recording.state}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                <div className="flex flex-wrap gap-3">
+                  <Button
+                    onClick={() => void startSampleRecording()}
+                    disabled={recording.isActive}
                   >
-                    Continue
-                    <ChevronRight className="ml-1 h-4 w-4" />
+                    {recording.state === "starting" ? <Spinner /> : null}
+                    Start sample
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => void stopSampleRecording()}
+                    disabled={!recording.isActive || recording.state === "transcribing"}
+                  >
+                    {recording.state === "stopping" || recording.state === "transcribing" ? <Spinner /> : null}
+                    Stop and transcribe
                   </Button>
                 </div>
-              </div>
+
+                {recording.state === "transcribing" ? (
+                  <Alert>
+                    <Spinner />
+                    <AlertTitle>Transcribing</AlertTitle>
+                    <AlertDescription>
+                      Waiting for the selected {sourceLabel(sourceType).toLowerCase()} source to return text.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+
+                {sampleError ? (
+                  <Alert variant="destructive">
+                    <CircleAlert className="size-4" />
+                    <AlertTitle>Sample failed</AlertTitle>
+                    <AlertDescription>{sampleError}</AlertDescription>
+                  </Alert>
+                ) : null}
+
+                {sampleTranscript ? (
+                  <div className="rounded-2xl border bg-background/70 p-4">
+                    <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                      Transcript
+                    </p>
+                    <p className="text-base leading-7">{sampleTranscript}</p>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed bg-muted/40 p-6 text-center text-sm text-muted-foreground">
+                    Your first transcript will appear here.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </OnboardingPanel>
+        )}
+
+        {currentStep === "success" && (
+          <section className="mx-auto flex w-full max-w-xl flex-col items-center gap-6 text-center">
+            <div className="flex size-16 items-center justify-center rounded-3xl bg-primary text-primary-foreground shadow-xl shadow-primary/20">
+              <ShieldCheck className="size-8" />
             </div>
-          )}
-
-          {/* Success - Simple */}
-          {currentStep === "success" && (
-            <div className="w-full max-w-md mx-auto animate-fade-in">
-              <div className="text-center space-y-6">
-                <div className="inline-flex p-4 bg-green-500/10 rounded-2xl animate-pulse-once">
-                  <CheckCircle className="h-12 w-12 text-green-500" />
-                </div>
-
-                <div className="space-y-2">
-                  <h1 className="text-3xl font-bold">You're all set!</h1>
-                  <p className="text-muted-foreground">
-                    Press {formatHotkey(hotkey)} to start recording
-                  </p>
-                </div>
-
-                <Button onClick={handleComplete} size="lg" className="min-w-[200px]">
-                  Go to dashboard
-                </Button>
-              </div>
+            <div className="flex flex-col gap-3">
+              <Badge variant="secondary" className="mx-auto rounded-md uppercase tracking-[0.16em]">
+                Ready
+              </Badge>
+              <h1 className="text-4xl font-semibold tracking-[-0.04em]">
+                VoiceTypr is ready on {sourceLabel(sourceType).toLowerCase()}.
+              </h1>
+              <p className="text-muted-foreground">
+                Press {formatHotkey(hotkey)} anywhere to start recording.
+              </p>
             </div>
-          )}
-        </div>
-      </div>
+            <Button size="lg" onClick={() => void completeOnboarding()} disabled={isSavingCompletion}>
+              {isSavingCompletion ? <Spinner /> : null}
+              Go to dashboard
+            </Button>
+          </section>
+        )}
+      </main>
     </div>
   );
 };
+
+function OnboardingPanel({
+  eyebrow,
+  title,
+  description,
+  children,
+  footer,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+  footer: React.ReactNode;
+}) {
+  return (
+    <section className="flex w-full flex-col gap-6 animate-fade-in">
+      <div className="mx-auto flex max-w-3xl flex-col items-center gap-3 text-center">
+        <Badge variant="secondary" className="rounded-md uppercase tracking-[0.16em]">
+          {eyebrow}
+        </Badge>
+        <h2 className="text-4xl font-semibold tracking-[-0.04em] text-balance">
+          {title}
+        </h2>
+        <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
+          {description}
+        </p>
+      </div>
+      <div>{children}</div>
+      <Separator />
+      {footer}
+    </section>
+  );
+}
+
+function StepFooter({
+  onBack,
+  onNext,
+  nextDisabled,
+  nextLabel,
+}: {
+  onBack: () => void;
+  onNext: () => void | Promise<void>;
+  nextDisabled?: boolean;
+  nextLabel: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <Button variant="outline" onClick={onBack}>
+        <ChevronLeft />
+        Back
+      </Button>
+      <Button onClick={() => void onNext()} disabled={nextDisabled}>
+        {nextLabel}
+        <ChevronRight />
+      </Button>
+    </div>
+  );
+}
+
+function ModelLegend() {
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-4 text-xs text-muted-foreground">
+      <span className="flex items-center gap-1.5">
+        <Zap className="size-3.5 text-primary" />
+        Speed
+      </span>
+      <span className="flex items-center gap-1.5">
+        <CheckCircle2 className="size-3.5 text-primary" />
+        Accuracy
+      </span>
+      <span className="flex items-center gap-1.5">
+        <HardDrive className="size-3.5 text-primary" />
+        Size
+      </span>
+      <span className="flex items-center gap-1.5">
+        <Star className="size-3.5 fill-primary text-primary" />
+        Recommended
+      </span>
+    </div>
+  );
+}
+
+function LoadingState({ label }: { label: string }) {
+  return (
+    <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+      <Spinner />
+      {label}
+    </div>
+  );
+}
+
+function EmptyState({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="flex flex-col items-center gap-2 py-10 text-center">
+      <div className="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+        <Server className="size-5" />
+      </div>
+      <p className="font-medium">{title}</p>
+      <p className="max-w-sm text-sm text-muted-foreground">{description}</p>
+    </div>
+  );
+}
