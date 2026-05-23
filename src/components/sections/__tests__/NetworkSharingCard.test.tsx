@@ -162,7 +162,7 @@ describe("NetworkSharingCard", () => {
       });
 
       expect(
-        screen.getByText(/other VoiceTypr instances on your network can use your/)
+        screen.getByText(/another VoiceTypr app can use this device's/)
       ).toBeInTheDocument();
     });
 
@@ -220,11 +220,11 @@ describe("NetworkSharingCard", () => {
       });
     });
 
-    it("shows Sharing Active status", async () => {
+    it("shows ready remote transcription status", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByText("Sharing Active")).toBeInTheDocument();
+        expect(screen.getByText("Ready for remote transcription")).toBeInTheDocument();
       });
     });
 
@@ -281,12 +281,12 @@ describe("NetworkSharingCard", () => {
       });
     });
 
-    it("shows clear description about sharing the model", async () => {
+    it("shows clear description about remote transcription", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
         expect(
-          screen.getByText("Share your transcription model with other devices")
+          screen.getByText("Use this device's transcription from another VoiceTypr app")
         ).toBeInTheDocument();
       });
     });
@@ -350,7 +350,7 @@ describe("NetworkSharingCard", () => {
 
       // Wait for component to render
       await waitFor(() => {
-        expect(screen.getByText("Sharing Active")).toBeInTheDocument();
+        expect(screen.getByText("Ready for remote transcription")).toBeInTheDocument();
       });
 
       // Should NOT show Update button - restart is automatic
@@ -402,7 +402,7 @@ describe("NetworkSharingCard", () => {
       });
 
       expect(
-        screen.getByText(/Network sharing is unavailable while using a remote VoiceTypr/)
+        screen.getByText(/Remote transcription is unavailable while using another VoiceTypr/)
       ).toBeInTheDocument();
     });
 
@@ -616,7 +616,7 @@ describe("NetworkSharingCard", () => {
       await user.click(screen.getByRole("switch"));
 
       await waitFor(() => {
-        expect(toast.success).toHaveBeenCalledWith("Network sharing enabled");
+        expect(toast.success).toHaveBeenCalledWith("Remote transcription enabled");
       });
     });
 
@@ -717,7 +717,7 @@ describe("NetworkSharingCard", () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByText("Sharing Active")).toBeInTheDocument();
+        expect(screen.getByText("Ready for remote transcription")).toBeInTheDocument();
       });
 
       // Find and click the copy button
@@ -734,7 +734,7 @@ describe("NetworkSharingCard", () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByText("Sharing Active")).toBeInTheDocument();
+        expect(screen.getByText("Ready for remote transcription")).toBeInTheDocument();
       });
 
       // Should have at least one copy button
@@ -1028,19 +1028,19 @@ describe("NetworkSharingCard", () => {
       });
     });
 
-    it("shows Connect Using label", async () => {
+    it("shows connect from another device label", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByText("Connect Using")).toBeInTheDocument();
+        expect(screen.getByText("Connect from another device")).toBeInTheDocument();
       });
     });
 
-    it("shows Server Configuration section", async () => {
+    it("shows Connection Settings section", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByText("Server Configuration")).toBeInTheDocument();
+        expect(screen.getByText("Connection Settings")).toBeInTheDocument();
       });
     });
   });

@@ -4,6 +4,7 @@ import { ButtonGroup } from "@/components/ui/button-group";
 import { Card } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
+import { getModelDisplayName } from "@/lib/model-display";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -89,6 +90,7 @@ export function RemoteServerCard({
   };
 
   const displayName = server.name || `${server.host}:${server.port}`;
+  const modelDisplayName = getModelDisplayName(server.model) ?? server.model;
 
   // All servers are selectable - status is informational only
   // (Per user request: don't block selection based on status)
@@ -144,10 +146,10 @@ export function RemoteServerCard({
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               {status === "unknown" ? (
-                server.model ? (
+                modelDisplayName ? (
                   <>
                     <Wifi className="size-3 text-muted-foreground" />
-                    <span>{server.model}</span>
+                    <span>{modelDisplayName}</span>
                     {isRefreshing && <Spinner className="size-3" />}
                   </>
                 ) : (
@@ -168,9 +170,9 @@ export function RemoteServerCard({
                   <span className="text-emerald-700 dark:text-emerald-400">
                     Online
                   </span>
-                  {server.model && (
+                  {modelDisplayName && (
                     <span>
-                      • {server.model}
+                      • {modelDisplayName}
                     </span>
                   )}
                   {isRefreshing && <Spinner className="size-3" />}

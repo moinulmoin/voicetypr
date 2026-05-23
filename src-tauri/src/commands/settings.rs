@@ -57,7 +57,7 @@ pub struct Settings {
     pub pill_indicator_mode: String,
     // Pill indicator screen position
     pub pill_indicator_position: String,
-    // Pill indicator offset from screen edge in pixels (10-100)
+    // Pill indicator offset from screen edge in pixels (10-50)
     pub pill_indicator_offset: u32,
     // Pause system media during recording
     pub pause_media_during_recording: bool,

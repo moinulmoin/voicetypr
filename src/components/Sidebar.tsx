@@ -22,6 +22,7 @@ import {
   Sidebar as SidebarPrimitive,
 } from "@/components/ui/sidebar";
 import { useLicense } from "@/contexts/LicenseContext";
+import type { LicenseStatus } from "@/types";
 import { cn } from "@/lib/utils";
 import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -32,10 +33,61 @@ interface SidebarProps {
   onSectionChange: (section: ScreenId) => void;
 }
 
+
+function getLicenseBadge(status: LicenseStatus | null, daysLeft: number) {
+  if (!status || status.status === "none") {
+    return {
+      label: "No License",
+      className: "border-border bg-muted text-muted-foreground",
+    };
+  }
+
+  if (status.status === "licensed") {
+    return {
+      label: "Pro",
+      className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700",
+    };
+  }
+
+  if (status.status === "trial") {
+    if (daysLeft > 1) {
+      return {
+        label: `Trial · ${daysLeft} days left`,
+        className: "border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-400",
+      };
+    }
+
+    if (daysLeft === 1) {
+      return {
+        label: "Trial · 1 day left",
+        className: "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+      };
+    }
+
+    if (daysLeft === 0) {
+      return {
+        label: "Trial expires today",
+        className: "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+      };
+    }
+
+    return {
+      label: "Trial",
+      className: "border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-400",
+    };
+  }
+
+  return {
+    label: "Trial expired",
+    className: "border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-400",
+  };
+}
 export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
   const { status, isLoading } = useLicense();
   const [appVersion, setAppVersion] = useState("—");
   const [showReportBugDialog, setShowReportBugDialog] = useState(false);
+  const licenseBadge = getLicenseBadge(status, status?.trial_days_left ?? -1);
+
   useEffect(() => {
     const loadVersion = async () => {
       try {
@@ -63,19 +115,11 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
             {!isLoading && status ? (
               <span
                 className={cn(
-                  "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em]",
-                  status.status === "licensed"
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700"
-                    : status.status === "trial"
-                      ? "border-amber-500/30 bg-amber-500/10 text-amber-700"
-                      : "border-border/70 bg-muted text-muted-foreground",
+                  "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]",
+                  licenseBadge.className,
                 )}
               >
-                {status.status === "licensed"
-                  ? "Pro"
-                  : status.status === "trial"
-                    ? "Trial"
-                    : "Free"}
+                {licenseBadge.label}
               </span>
             ) : null}
           </button>

@@ -8,6 +8,9 @@ use std::sync::Arc;
 use tauri::AppHandle;
 use tokio::sync::{oneshot, RwLock};
 
+use super::discovery::{
+    start_discovery_responder, DiscoveryResponderConfig, DiscoveryResponderHandle,
+};
 use super::http::create_routes;
 use super::transcription::{
     RealTranscriptionContext, SharedServerState, TranscriptionServerConfig,
@@ -34,11 +37,16 @@ pub struct ServerHandle {
     pub port: u16,
     /// Results of binding attempts (for UI display)
     pub binding_results: Vec<BindingResult>,
+    /// UDP discovery responder advertised while the server is running.
+    discovery_handle: Option<DiscoveryResponderHandle>,
 }
 
 impl ServerHandle {
     /// Stop the server gracefully
     pub async fn stop(&mut self) {
+        if let Some(handle) = self.discovery_handle.take() {
+            handle.stop().await;
+        }
         for tx in self.shutdown_txs.drain(..) {
             let _ = tx.send(());
         }
@@ -63,6 +71,10 @@ impl ServerHandle {
 
 impl Drop for ServerHandle {
     fn drop(&mut self) {
+        if let Some(handle) = self.discovery_handle.take() {
+            drop(handle);
+        }
+
         for tx in self.shutdown_txs.drain(..) {
             let _ = tx.send(());
         }
@@ -166,8 +178,8 @@ impl RemoteServerManager {
             RealTranscriptionContext::new_with_shared_state(
                 server_name.clone(),
                 password,
-                shared_state,
-                app_handle,
+                shared_state.clone(),
+                app_handle.clone(),
             ),
         ));
         log::info!(
@@ -289,12 +301,38 @@ impl RemoteServerManager {
             return Err("Failed to bind to any IP address".to_string());
         }
 
-        // Store the handle
+        let discovery_handle = match app_handle.as_ref() {
+            Some(_) => {
+                let machine_id = crate::license::device::get_device_hash()
+                    .unwrap_or_else(|_| "unknown".to_string());
+                match start_discovery_responder(DiscoveryResponderConfig {
+                    server_name: server_name.clone(),
+                    model_name: shared_state.model_name.clone(),
+                    port,
+                    auth_required: self
+                        .config
+                        .as_ref()
+                        .is_some_and(|config| config.password.is_some()),
+                    machine_id,
+                })
+                .await
+                {
+                    Ok(handle) => Some(handle),
+                    Err(error) => {
+                        log::warn!("[Remote Discovery] disabled: {}", error);
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+
         self.handle = Some(ServerHandle {
             shutdown_txs,
             task_handles,
             port,
             binding_results,
+            discovery_handle,
         });
 
         log::info!(

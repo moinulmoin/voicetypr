@@ -33,6 +33,8 @@ import { platform, version as osVersion } from '@tauri-apps/plugin-os';
 import { open } from '@tauri-apps/plugin-shell';
 import { useSettings } from '@/contexts/SettingsContext';
 import { useCanRecord, useCanAutoInsert } from '@/contexts/ReadinessContext';
+import { useModelManagementContext } from '@/contexts/ModelManagementContext';
+import { getModelDisplayName } from '@/lib/model-display';
 
 interface QuickFix {
   id: string;
@@ -54,6 +56,8 @@ export function HelpSection() {
   const { settings } = useSettings();
   const canRecord = useCanRecord();
   const canAutoInsert = useCanAutoInsert();
+  const { models } = useModelManagementContext();
+  const currentModelLabel = getModelDisplayName(settings?.current_model, models) ?? 'None selected';
 
   useEffect(() => {
     const fetchSystemInfo = async () => {
@@ -73,7 +77,7 @@ export function HelpSection() {
           `App Version: ${appVer}`,
           `OS: ${os} ${osVer}`,
           `Device ID: ${deviceId}`,
-          `Model: ${settings?.current_model || 'None selected'}`,
+          `Model: ${currentModelLabel}`,
         ];
 
         // Hide permission lines on Windows (not required there)
@@ -92,7 +96,7 @@ export function HelpSection() {
     };
 
     fetchSystemInfo();
-  }, [settings, canRecord, canAutoInsert]);
+  }, [settings, currentModelLabel, canRecord, canAutoInsert]);
 
   const quickFixes: QuickFix[] = [
     {

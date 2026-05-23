@@ -7,10 +7,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { useCanAutoInsert, useCanRecord } from "@/contexts/ReadinessContext";
+import { useCanAutoInsert, useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { cn } from "@/lib/utils";
 import { useTranscriptionHistory } from "@/hooks/useTranscriptionHistory";
+import { isMacOS } from "@/lib/platform";
+import { getModelDisplayName } from "@/lib/model-display";
+import { invoke } from "@tauri-apps/api/core";
 import {
   BarChart3,
   CheckCircle2,
@@ -24,7 +27,7 @@ import {
   TrendingUp,
   Zap,
 } from "lucide-react";
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 
 const ShareStatsModal = lazy(() =>
   import("@/components/ShareStatsModal").then((module) => ({
@@ -32,12 +35,66 @@ const ShareStatsModal = lazy(() =>
   })),
 );
 
+interface SavedConnection {
+  id: string;
+  host: string;
+  port: number;
+  name: string | null;
+}
+
 export function OverviewTab() {
-  const canRecord = useCanRecord();
+  const readiness = useReadiness();
+  const canRecord = readiness.canRecord;
   const canAutoInsert = useCanAutoInsert();
   const { settings } = useSettings();
   const hotkey = settings?.hotkey || "Cmd+Shift+Space";
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(null);
+  const selectedSourceLabel = readiness.remoteSelected
+    ? activeRemoteLabel ?? "Remote VoiceTypr"
+    : getModelDisplayName(settings?.current_model) ?? "No source selected";
+  const setupMessage =
+    readiness.licenseStatus === "expired" || readiness.licenseStatus === "none"
+      ? "Activate a license to keep recording with VoiceTypr."
+      : readiness.hasModels === false || readiness.selectedModelAvailable === false
+        ? "Choose a ready local model, cloud provider, or remote VoiceTypr source before recording."
+        : isMacOS && readiness.hasMicrophonePermission === false
+          ? "Allow microphone access in macOS Settings before recording."
+          : "Finish setup before recording will work cleanly.";
+
+  useEffect(() => {
+    if (!readiness.remoteSelected) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadActiveRemoteLabel = async () => {
+      try {
+        const [activeServerId, servers] = await Promise.all([
+          invoke<string | null>("get_active_remote_server"),
+          invoke<SavedConnection[]>("list_remote_servers"),
+        ]);
+        if (cancelled) return;
+
+        const activeServer = servers.find((server) => server.id === activeServerId);
+        setActiveRemoteLabel(
+          activeServer?.name || (activeServer ? `${activeServer.host}:${activeServer.port}` : "Remote VoiceTypr"),
+        );
+      } catch (error) {
+        console.error("[OverviewTab] Failed to load active remote VoiceTypr:", error);
+        if (!cancelled) {
+          setActiveRemoteLabel("Remote VoiceTypr");
+        }
+      }
+    };
+
+    void loadActiveRemoteLabel();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [readiness.remoteSelected]);
   const { history, totalCount } = useTranscriptionHistory({
     limit: 500,
     includeTotalCount: true,
@@ -179,9 +236,6 @@ export function OverviewTab() {
           <CardHeader className="gap-4">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="space-y-3">
-                <Badge variant="secondary" className="rounded-md uppercase tracking-[0.16em]">
-                  Overview
-                </Badge>
                 <div className="space-y-2">
                   <CardTitle className="text-3xl tracking-[-0.04em] sm:text-4xl">
                     {stats.currentStreak > 0
@@ -191,7 +245,7 @@ export function OverviewTab() {
                   <CardDescription className="max-w-2xl text-sm leading-6">
                     {canRecord
                       ? "Voice notes in, clean text out. Check readiness, recent output, and what to do next."
-                      : "VoiceTypr is installed, but it still needs one more setup step before recording will work cleanly."}
+                      : setupMessage}
                   </CardDescription>
                 </div>
               </div>
@@ -309,9 +363,9 @@ export function OverviewTab() {
                 tone={canAutoInsert ? "ready" : "warning"}
               />
               <StatusRow
-                label="Selected model"
-                value={settings?.current_model || "No model selected"}
-                tone={settings?.current_model ? "neutral" : "warning"}
+                label="Transcription source"
+                value={selectedSourceLabel}
+                tone={readiness.remoteSelected || settings?.current_model ? "neutral" : "warning"}
               />
             </CardContent>
           </Card>

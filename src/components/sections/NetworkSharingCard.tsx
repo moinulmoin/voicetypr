@@ -3,6 +3,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useSettings } from "@/contexts/SettingsContext";
 import { isMacOS, isWindows } from "@/lib/platform";
+import { getModelDisplayName } from "@/lib/model-display";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AlertTriangle, Check, CheckCircle, Copy, Eye, EyeOff, ExternalLink, Network, Server, Shield, XCircle } from "lucide-react";
@@ -143,7 +144,7 @@ export function NetworkSharingCard() {
       // Find display name for the currently selected model
       if (currentModel && downloaded.length > 0) {
         const selected = downloaded.find((m) => m.name === currentModel);
-        setModelDisplayName(selected?.display_name || currentModel);
+        setModelDisplayName(selected?.display_name || getModelDisplayName(currentModel) || currentModel);
       } else if (downloaded.length > 0) {
         // Fallback to first downloaded model
         setModelDisplayName(downloaded[0].display_name);
@@ -205,7 +206,7 @@ export function NetworkSharingCard() {
       if (!status.enabled || !status.model_name || !currentModel) return;
       if (status.model_name === currentModel) return;
 
-      console.log(`[Network Sharing] Model changed from ${status.model_name} to ${currentModel}, restarting...`);
+      console.log(`[Remote Transcription] Model changed from ${status.model_name} to ${currentModel}, restarting...`);
 
       try {
         await invoke("stop_sharing");
@@ -216,15 +217,15 @@ export function NetworkSharingCard() {
           serverName: null,
         });
         await fetchStatus();
-        toast.success(`Now sharing ${currentModel}`);
+        toast.success(`Remote transcription now uses ${modelDisplayName ?? getModelDisplayName(currentModel) ?? currentModel}`);
       } catch (error) {
-        console.error("Failed to restart sharing with new model:", error);
-        toast.error("Failed to switch sharing model");
+        console.error("Failed to restart remote transcription with new model:", error);
+        toast.error("Failed to switch remote transcription model");
       }
     };
 
     autoRestartSharing();
-  }, [currentModel, status.enabled, status.model_name, port, password, fetchStatus]);
+  }, [currentModel, status.enabled, status.model_name, port, password, fetchStatus, modelDisplayName]);
 
   const handleToggleSharing = async (checked: boolean) => {
     setLoading(true);
@@ -236,19 +237,19 @@ export function NetworkSharingCard() {
           preservePassword: !password,
           serverName: null, // Use hostname
         });
-        toast.success("Network sharing enabled");
+        toast.success("Remote transcription enabled");
         // Re-fetch firewall status when enabling sharing
         fetchFirewallStatus();
       } else {
         await invoke("stop_sharing");
-        toast.success("Network sharing disabled");
+        toast.success("Remote transcription disabled");
       }
       await fetchStatus();
     } catch (error) {
       console.error("Failed to toggle sharing:", error);
       const errorMessage =
         error instanceof Error ? error.message : String(error);
-      toast.error(errorMessage || "Failed to toggle sharing");
+      toast.error(errorMessage || "Failed to toggle remote transcription");
     } finally {
       setLoading(false);
     }
@@ -318,13 +319,13 @@ export function NetworkSharingCard() {
       <div className="px-4 py-3 border-b border-border/50">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="p-1.5 rounded-md bg-blue-500/10">
-              <Network className="h-4 w-4 text-blue-500" />
+            <div className="p-1.5 rounded-md bg-primary/10">
+              <Network className="h-4 w-4 text-primary" />
             </div>
             <div>
-              <h3 className="font-medium">Network Sharing</h3>
+              <h3 className="font-medium">Remote Transcription</h3>
               <p className="text-xs text-muted-foreground">
-                Share your transcription model with other devices
+                Use this device's transcription from another VoiceTypr app
               </p>
             </div>
           </div>
@@ -347,7 +348,7 @@ export function NetworkSharingCard() {
                 No model downloaded
               </p>
               <p className="text-xs text-amber-600 dark:text-amber-500">
-                Download a transcription model in the Models tab to enable network sharing.
+                Download a transcription model in the Models tab to enable remote transcription.
               </p>
             </div>
           </div>
@@ -364,7 +365,7 @@ export function NetworkSharingCard() {
                 Using remote VoiceTypr
               </p>
               <p className="text-xs text-blue-600 dark:text-blue-500">
-                Network sharing is unavailable while using a remote VoiceTypr instance as your model source.
+                Remote transcription is unavailable while using another VoiceTypr device as your model source.
               </p>
             </div>
           </div>
@@ -375,7 +376,7 @@ export function NetworkSharingCard() {
       {hasDownloadedModel && !status.enabled && modelDisplayName && !activeRemoteServer && (
         <div className="px-4 py-3">
           <p className="text-xs text-muted-foreground">
-            When enabled, other VoiceTypr instances on your network can use your{" "}
+            When enabled, another VoiceTypr app can use this device's{" "}
             <span className="font-medium text-foreground">{modelDisplayName}</span>{" "}
             model for transcription.
           </p>
@@ -384,14 +385,14 @@ export function NetworkSharingCard() {
 
       {/* Sub-settings - only show when enabled */}
       {status.enabled && (
-        <div className="mx-3 mb-3 mt-0 rounded-lg border-l-4 border-l-blue-500/50 bg-muted/20">
+        <div className="mx-3 mb-3 mt-0 rounded-lg bg-muted/20">
           <div className="p-4 space-y-4">
             {/* Status Display */}
             <div className="flex items-center gap-2 p-3 rounded-lg bg-green-500/10 border border-green-500/20">
               <Server className="h-4 w-4 text-green-500" />
               <div className="flex-1">
                 <p className="text-sm font-medium text-green-700 dark:text-green-400">
-                  Sharing Active
+                  Ready for remote transcription
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {modelDisplayName
@@ -479,7 +480,7 @@ export function NetworkSharingCard() {
 
             {/* Connection Info Section */}
             <div className="space-y-2">
-              <Label className="text-sm font-medium">Connect Using</Label>
+              <Label className="text-sm font-medium">Connect from another device</Label>
               <div className="space-y-1">
                 {status.binding_results.length === 0 ? (
                   <div className="px-3 py-2 rounded-md bg-muted/50 border border-border/50 font-mono text-sm text-muted-foreground">
@@ -493,7 +494,7 @@ export function NetworkSharingCard() {
                       .map((result, index) => (
                         <div key={`success-${index}`} className="flex items-center gap-2">
                           <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                          <div className="flex-1 px-3 py-2 rounded-md bg-muted/50 border border-green-500/30 font-mono text-sm">
+                          <div className="flex-1 px-3 py-2 rounded-md bg-background/60 border border-border/60 font-mono text-sm">
                             <span className="font-semibold">{result.ip}:{port}</span>
                             {result.interface_name && (
                               <span className="ml-2 text-xs text-muted-foreground">
@@ -536,7 +537,7 @@ export function NetworkSharingCard() {
               </div>
               {status.binding_results.filter((r) => r.success && r.ip !== "127.0.0.1").length > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  Other VoiceTypr instances can connect using any of the addresses above
+                  Enter one of these addresses in VoiceTypr on another device on the same network.
                 </p>
               )}
               {status.binding_results.filter((r) => !r.success && r.ip !== "127.0.0.1").length > 0 && (
@@ -546,10 +547,10 @@ export function NetworkSharingCard() {
               )}
             </div>
 
-            {/* Server Configuration Section */}
+            {/* Connection Settings Section */}
             <div className="rounded-lg border border-border/50 bg-background/50 p-3 space-y-3">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Server Configuration
+                Connection Settings
               </p>
 
               {/* Port Setting */}

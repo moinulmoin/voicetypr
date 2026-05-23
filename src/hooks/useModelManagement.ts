@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ModelInfo, isCloudModel } from "../types";
 import { useEventCoordinator } from "./useEventCoordinator";
+import { getModelDisplayName } from "@/lib/model-display";
 
 interface UseModelManagementOptions {
   windowId?: "main" | "pill" | "onboarding";
@@ -12,6 +13,18 @@ interface UseModelManagementOptions {
 
 const CLOUD_SPEED_FALLBACK = 8;
 const CLOUD_ACCURACY_FALLBACK = 9;
+
+const isDownloadCancellation = (error: unknown) =>
+  String(error).toLowerCase().includes("cancelled") ||
+  String(error).toLowerCase().includes("canceled");
+
+const createDownloadRequestId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
 
 const getSpeedScore = (model: ModelInfo) =>
   model.speed_score ?? (isCloudModel(model) ? CLOUD_SPEED_FALLBACK : 0);
@@ -62,6 +75,10 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
   // Track active downloads to prevent duplicates
   const activeDownloads = useRef(new Set<string>());
+  const cancelledDownloads = useRef(new Set<string>());
+  const activeDownloadRequests = useRef(new Map<string, string>());
+  const cancelledDownloadRequests = useRef(new Set<string>());
+  const modelsRef = useRef<Record<string, ModelInfo>>({});
 
   const [models, setModels] = useState<Record<string, ModelInfo>>({});
   const [downloadProgress, setDownloadProgress] = useState<
@@ -92,6 +109,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         response.models.map((model) => [model.name, model]),
       );
       setModels(modelStatus);
+      modelsRef.current = modelStatus;
 
       return response.models;
     } catch (error) {
@@ -124,14 +142,17 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       // Check if already downloading
       if (activeDownloads.current.has(modelName)) {
         if (showToasts) {
-          toast.info(`Model ${modelName} is already downloading`);
+          toast.info(`${getModelDisplayName(modelName, models)} is already downloading`);
         }
         return;
       }
 
       try {
+        const requestId = createDownloadRequestId();
+
         // Mark as downloading
         activeDownloads.current.add(modelName);
+        activeDownloadRequests.current.set(modelName, requestId);
 
         // Set initial progress to show download started
         setDownloadProgress((prev) => ({
@@ -140,13 +161,34 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         }));
 
         // Don't await - let it run async so progress events can update UI
-        invoke("download_model", { modelName }).catch((error) => {
+        invoke("download_model", { modelName, requestId }).catch((error) => {
+          if (cancelledDownloadRequests.current.has(requestId) || isDownloadCancellation(error)) {
+            const isCurrentRequest = activeDownloadRequests.current.get(modelName) === requestId;
+            if (isCurrentRequest) {
+              activeDownloads.current.delete(modelName);
+              activeDownloadRequests.current.delete(modelName);
+            }
+            cancelledDownloadRequests.current.add(requestId);
+            if (isCurrentRequest) {
+              setDownloadProgress((prev) => {
+                const newProgress = { ...prev };
+                delete newProgress[modelName];
+                return newProgress;
+              });
+            }
+            return;
+          }
+
+          if (activeDownloadRequests.current.get(modelName) !== requestId) {
+            return;
+          }
+
           console.error(
             "[useModelManagement.downloadModel] Failed to download model:",
             error,
           );
           if (showToasts) {
-            toast.error(`Failed to download model: ${error}`);
+            toast.error(`Failed to download ${getModelDisplayName(modelName, models)}: ${error}`);
           }
           // Remove from progress on error
           setDownloadProgress((prev) => {
@@ -155,7 +197,10 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
             return newProgress;
           });
           // Remove from active downloads
-          activeDownloads.current.delete(modelName);
+          if (activeDownloadRequests.current.get(modelName) === requestId) {
+            activeDownloads.current.delete(modelName);
+            activeDownloadRequests.current.delete(modelName);
+          }
         });
       } catch (error) {
         console.error(
@@ -163,10 +208,11 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           error,
         );
         if (showToasts) {
-          toast.error(`Failed to start download: ${error}`);
+          toast.error(`Failed to start ${getModelDisplayName(modelName, models)} download: ${error}`);
         }
         // Remove from active downloads
         activeDownloads.current.delete(modelName);
+        activeDownloadRequests.current.delete(modelName);
       }
     },
     [models, showToasts],
@@ -175,11 +221,19 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   // Cancel download
   const cancelDownload = useCallback(
     async (modelName: string) => {
+      const requestId = activeDownloadRequests.current.get(modelName);
+
       try {
+        cancelledDownloads.current.add(modelName);
+        if (requestId) {
+          cancelledDownloadRequests.current.add(requestId);
+        }
+
         await invoke("cancel_download", { modelName });
 
         // Immediately remove from active downloads to allow retry
         activeDownloads.current.delete(modelName);
+        activeDownloadRequests.current.delete(modelName);
 
         // Remove from progress tracking
         setDownloadProgress((prev) => {
@@ -188,9 +242,13 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           return newProgress;
         });
       } catch (error) {
+        cancelledDownloads.current.delete(modelName);
+        if (requestId) {
+          cancelledDownloadRequests.current.delete(requestId);
+        }
         console.error("Failed to cancel download:", error);
         if (showToasts) {
-          toast.error(`Failed to cancel download: ${error}`);
+          toast.error(`Failed to cancel ${getModelDisplayName(modelName, modelsRef.current)} download: ${error}`);
         }
       }
     },
@@ -212,7 +270,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
       try {
         const confirmed = await ask(
-          `Are you sure you want to delete the ${modelName} model?`,
+          `Are you sure you want to delete the ${getModelDisplayName(modelName, models)} model?`,
           {
             title: "Delete Model",
             kind: "warning",
@@ -232,7 +290,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       } catch (error) {
         console.error("Failed to delete model:", error);
         if (showToasts) {
-          toast.error(`Failed to delete model: ${error}`);
+          toast.error(`Failed to delete ${getModelDisplayName(modelName, models)}: ${error}`);
         }
       }
     },
@@ -247,26 +305,6 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     let unregisterCancelled: (() => void) | undefined;
 
     const setupListeners = async () => {
-      // DEBUG: Add direct listener to verify events are reaching frontend
-      if (typeof window !== "undefined") {
-        const { listen } = await import("@tauri-apps/api/event");
-
-        // Direct debug listener bypassing EventCoordinator
-        const debugUnlisten = await listen("download-progress", (event) => {
-          console.log(
-            "[DEBUG] Direct download-progress event received:",
-            event,
-          );
-        });
-
-        // Clean up debug listener on unmount
-        const originalCleanup = () => {
-          debugUnlisten();
-        };
-
-        // Store for cleanup
-        (window as any).__debugUnlisten = originalCleanup;
-      }
       // Progress updates
       unregisterProgress = await registerEvent<{
         model: string;
@@ -274,8 +312,17 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         downloaded: number;
         total: number;
         progress: number;
+        requestId?: string;
       }>("download-progress", (payload) => {
-        const { model, progress, downloaded, total, engine } = payload;
+        const { model, progress, downloaded, total, engine, requestId } = payload;
+        if (requestId && cancelledDownloadRequests.current.has(requestId)) {
+          return;
+        }
+
+        const activeRequestId = activeDownloadRequests.current.get(model);
+        if (requestId && activeRequestId && activeRequestId !== requestId) {
+          return;
+        }
 
         console.log(
           `[useModelManagement] Download progress for ${model} (${engine ?? "whisper"}): ${progress.toFixed(1)}% (${downloaded}/${total} bytes)`,
@@ -292,8 +339,18 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       unregisterVerifying = await registerEvent<{
         model: string;
         engine?: string;
+        requestId?: string;
       }>("model-verifying", (event) => {
         const modelName = event.model;
+        const requestId = event.requestId;
+        if (requestId && cancelledDownloadRequests.current.has(requestId)) {
+          return;
+        }
+
+        const activeRequestId = activeDownloadRequests.current.get(modelName);
+        if (requestId && activeRequestId && activeRequestId !== requestId) {
+          return;
+        }
 
         // First ensure the progress shows 100% before transitioning to verification
         setDownloadProgress((prev) => ({
@@ -318,12 +375,39 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       unregisterComplete = await registerEvent<{
         model: string;
         engine?: string;
+        requestId?: string;
       }>("model-downloaded", async (event) => {
         const modelName = event.model;
+        const requestId = event.requestId;
+        const isCancelledCompletion = requestId
+          ? cancelledDownloadRequests.current.has(requestId)
+          : cancelledDownloads.current.has(modelName);
+
+        if (isCancelledCompletion) {
+          if (requestId) {
+            cancelledDownloadRequests.current.delete(requestId);
+          }
+          cancelledDownloads.current.delete(modelName);
+          if (!requestId || activeDownloadRequests.current.get(modelName) === requestId) {
+            activeDownloads.current.delete(modelName);
+            activeDownloadRequests.current.delete(modelName);
+          }
+          setDownloadProgress((prev) => {
+            const newProgress = { ...prev };
+            delete newProgress[modelName];
+            return newProgress;
+          });
+          return;
+        }
+
+        const activeRequestId = activeDownloadRequests.current.get(modelName);
+        if (requestId && activeRequestId && activeRequestId !== requestId) {
+          return;
+        }
 
         // Remove from active downloads
         activeDownloads.current.delete(modelName);
-
+        activeDownloadRequests.current.delete(modelName);
         setModels((prev) => {
           const existing = prev[modelName];
           if (!existing) {
@@ -358,7 +442,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         await loadModels();
 
         if (showToasts) {
-          toast.success(`Model ${modelName} downloaded successfully`);
+          toast.success(`${getModelDisplayName(modelName, modelsRef.current)} downloaded successfully`);
         }
       });
 
@@ -366,20 +450,33 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       unregisterCancelled = await registerEvent<{
         model: string;
         engine?: string;
+        requestId?: string;
       }>("download-cancelled", (payload) => {
         const modelName = typeof payload === "string" ? payload : payload.model;
+        const requestId = typeof payload === "string" ? undefined : payload.requestId;
+        const isCurrentRequest =
+          !requestId || activeDownloadRequests.current.get(modelName) === requestId;
         // Remove from active downloads
-        activeDownloads.current.delete(modelName);
+        if (isCurrentRequest) {
+          activeDownloads.current.delete(modelName);
+          activeDownloadRequests.current.delete(modelName);
+        }
+        cancelledDownloads.current.add(modelName);
+        if (requestId) {
+          cancelledDownloadRequests.current.add(requestId);
+        }
 
         // Remove from progress tracking
-        setDownloadProgress((prev) => {
-          const newProgress = { ...prev };
-          delete newProgress[modelName];
-          return newProgress;
-        });
+        if (isCurrentRequest) {
+          setDownloadProgress((prev) => {
+            const newProgress = { ...prev };
+            delete newProgress[modelName];
+            return newProgress;
+          });
+        }
 
         if (showToasts) {
-          toast.info(`Download cancelled for ${modelName}`);
+          toast.info(`Download cancelled for ${getModelDisplayName(modelName, modelsRef.current)}`);
         }
       });
     };
@@ -388,11 +485,6 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
     // Cleanup
     return () => {
-      // Clean up debug listener
-      if ((window as any).__debugUnlisten) {
-        (window as any).__debugUnlisten();
-        delete (window as any).__debugUnlisten;
-      }
       unregisterProgress?.();
       unregisterVerifying?.();
       unregisterComplete?.();

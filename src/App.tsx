@@ -16,7 +16,28 @@ export default function App() {
             <ModelManagementProvider>
               <TooltipProvider>
                 <AppContainer />
-                <Toaster position="top-center" />
+                <Toaster
+                  position="top-center"
+                  closeButton
+                  toastOptions={{
+                    classNames: {
+                      toast:
+                        "border-border/60 bg-card/95 text-card-foreground shadow-xl shadow-black/10 backdrop-blur supports-[backdrop-filter]:bg-card/90",
+                      title: "text-sm font-semibold",
+                      description: "text-sm text-muted-foreground",
+                      closeButton:
+                        "border-border/60 bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                      success:
+                        "border-green-500/25 bg-green-500/10 text-green-900 dark:text-green-100",
+                      error:
+                        "border-red-500/25 bg-red-500/10 text-red-900 dark:text-red-100",
+                      warning:
+                        "border-amber-500/25 bg-amber-500/10 text-amber-900 dark:text-amber-100",
+                      info:
+                        "border-blue-500/25 bg-blue-500/10 text-blue-900 dark:text-blue-100",
+                    },
+                  }}
+                />
               </TooltipProvider>
             </ModelManagementProvider>
           </ReadinessProvider>

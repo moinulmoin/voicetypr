@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import type { AIProviderConfig, AIProviderModel } from "@/types/providers";
+import { humanizeModelId } from "@/lib/model-display";
 
 interface ProviderCardProps {
   provider: AIProviderConfig;
@@ -99,9 +100,8 @@ export function ProviderCard({
                     </>
                   ) : selectedModel ? (
                     <>
-                      {/* Show model ID as fallback when model data not loaded */}
                       <span className="truncate max-w-[180px]">
-                        {selectedModel}
+                        {humanizeModelId(selectedModel)}
                       </span>
                       <ChevronDown className="w-3.5 h-3.5 ml-1 flex-shrink-0" />
                     </>
@@ -187,9 +187,6 @@ export function ProviderCard({
                           <Check className="w-3.5 h-3.5 text-primary flex-shrink-0" />
                         )}
                       </div>
-                      <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                        {model.id}
-                      </p>
                     </div>
                   </DropdownMenuItem>
                 ))}

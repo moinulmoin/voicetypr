@@ -4,6 +4,7 @@
 //! between VoiceTypr instances over the network.
 
 pub mod client;
+pub mod discovery;
 pub mod http;
 pub mod lifecycle;
 pub mod server;

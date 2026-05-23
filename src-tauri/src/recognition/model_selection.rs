@@ -153,32 +153,21 @@ async fn pick_best_whisper_model(
     downloaded.first().map(|(name, _)| name.clone())
 }
 
-/// Auto-select the best available model if none is currently selected
+/// Auto-select the best available model if none is currently selected.
+///
+/// This must not mark onboarding complete: reset/re-run onboarding should still
+/// require the user to confirm setup instead of being closed by startup checks.
 pub async fn auto_select_model_if_needed(
     app: &tauri::AppHandle,
     availability: &RecognitionAvailabilitySnapshot,
 ) -> Result<(), String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
-    let onboarding_completed = store
-        .get("onboarding_completed")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let current_model = store
         .get("current_model")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_default();
 
     if !current_model.is_empty() {
-        if !onboarding_completed && availability.any_available() {
-            store.set("onboarding_completed", serde_json::Value::Bool(true));
-            store.save().map_err(|e| e.to_string())?;
-            if let Err(e) = app.emit("settings-changed", ()) {
-                log::warn!(
-                    "Failed to emit settings-changed after onboarding repair: {}",
-                    e
-                );
-            }
-        }
         return Ok(());
     }
 
@@ -207,19 +196,6 @@ pub async fn auto_select_model_if_needed(
     }
 
     let Some((engine, model)) = selection else {
-        if availability.remote_available {
-            store.set("onboarding_completed", serde_json::Value::Bool(true));
-            store.save().map_err(|e| e.to_string())?;
-            if let Err(e) = app.emit("settings-changed", ()) {
-                log::warn!(
-                    "Failed to emit settings-changed after remote onboarding completion: {}",
-                    e
-                );
-            }
-
-            log::info!("Marked onboarding complete because an active remote server is available");
-        }
-
         return Ok(());
     };
 
@@ -228,7 +204,6 @@ pub async fn auto_select_model_if_needed(
         "current_model_engine",
         serde_json::Value::String(engine.clone()),
     );
-    store.set("onboarding_completed", serde_json::Value::Bool(true));
     store.save().map_err(|e| e.to_string())?;
     if let Err(e) = app.emit("settings-changed", ()) {
         log::warn!(

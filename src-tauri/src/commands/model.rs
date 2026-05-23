@@ -41,6 +41,7 @@ struct DownloadTarget {
 pub async fn download_model(
     app: AppHandle,
     model_name: String,
+    request_id: Option<String>,
     whisper_state: State<'_, RwLock<WhisperManager>>,
     parakeet_manager: State<'_, ParakeetManager>,
     active_downloads: ActiveDownloadsState<'_>,
@@ -79,6 +80,7 @@ pub async fn download_model(
     }
 
     let model_name_clone = model_name.clone();
+    let request_id_for_progress = request_id.clone();
 
     // Create an async-safe wrapper for progress callback
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, u64)>();
@@ -110,7 +112,8 @@ pub async fn download_model(
                     "engine": download_target.engine.as_str(),
                     "downloaded": downloaded,
                     "total": total,
-                    "progress": progress
+                    "progress": progress,
+                    "requestId": request_id_for_progress.as_deref()
                 }),
             ) {
                 log::warn!("Failed to emit download progress: {}", e);
@@ -128,7 +131,8 @@ pub async fn download_model(
                     "model-verifying",
                     serde_json::json!({
                         "model": &model_name_clone,
-                        "engine": download_target.engine.as_str()
+                        "engine": download_target.engine.as_str(),
+                        "requestId": request_id_for_progress.as_deref()
                     }),
                 ) {
                     log::warn!("Failed to emit model-verifying event: {}", e);
@@ -224,7 +228,8 @@ pub async fn download_model(
                 "download-cancelled",
                 serde_json::json!({
                     "model": model_name,
-                    "engine": download_target.engine.as_str()
+                    "engine": download_target.engine.as_str(),
+                    "requestId": request_id.as_deref()
                 }),
             ) {
                 log::warn!("Failed to emit download-cancelled event: {}", e);
@@ -290,7 +295,8 @@ pub async fn download_model(
                 "model-downloaded",
                 serde_json::json!({
                     "model": model_name,
-                    "engine": download_target.engine.as_str()
+                    "engine": download_target.engine.as_str(),
+                    "requestId": request_id.as_deref()
                 }),
             ) {
                 log::warn!("Failed to emit model-downloaded event: {}", e);
@@ -318,6 +324,7 @@ pub async fn download_model(
                 serde_json::json!({
                     "model": model_name,
                     "engine": download_target.engine.as_str(),
+                    "requestId": request_id.as_deref(),
                     "error": e.to_string()
                 }),
             ) {

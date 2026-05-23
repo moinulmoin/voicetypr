@@ -20,6 +20,16 @@ vi.mock('@/contexts/SettingsContext', () => ({
   }),
 }));
 
+vi.mock('@/contexts/ModelManagementContext', () => ({
+  useModelManagementContext: () => ({
+    models: {
+      'base.en': {
+        display_name: 'Base English',
+      },
+    },
+  }),
+}));
+
 vi.mock('@/utils/crashReport', () => ({
   gatherManualReportData: vi.fn(),
   buildReportBody: vi.fn(),
@@ -145,7 +155,7 @@ describe('ReportBugDialog', () => {
       'Moin',
       'moin@example.com',
       'The app broke',
-      'base.en'
+      'Base English'
     );
     expect(submitManualReport).toHaveBeenCalledWith(expect.objectContaining({
       message: 'The app broke',

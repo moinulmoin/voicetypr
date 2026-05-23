@@ -25,6 +25,7 @@ import type { useModelManagement } from "@/hooks/useModelManagement";
 import { useRecording } from "@/hooks/useRecording";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { isMacOS } from "@/lib/platform";
+import { getModelDisplayName } from "@/lib/model-display";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -41,7 +42,6 @@ import {
   Laptop,
   Mic,
   Network,
-  Radio,
   Server,
   ShieldCheck,
   Sparkles,
@@ -50,7 +50,7 @@ import {
   WifiOff,
   Zap,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 interface OnboardingDesktopProps {
@@ -81,6 +81,15 @@ interface TranscriptionAddedPayload {
   timestamp?: string;
 }
 
+interface DiscoveredRemoteServer {
+  name: string;
+  host: string;
+  port: number;
+  model: string;
+  auth_required: boolean;
+  machine_id: string;
+}
+
 const SOURCE_OPTIONS: Array<{
   id: SourceType;
   title: string;
@@ -91,11 +100,11 @@ const SOURCE_OPTIONS: Array<{
 }> = [
   {
     id: "local",
-    title: "Use this Mac",
-    eyebrow: "Private by default",
-    description: "Download a local model and transcribe without depending on another machine.",
+    title: "Use this device",
+    eyebrow: "Local source",
+    description: "Download a local model and transcribe on this device.",
     icon: Laptop,
-    bullets: ["Raw audio stays here", "Works offline after setup", "Best default for one Mac"],
+    bullets: ["Raw audio stays here", "Works offline after setup", "Best default for one device"],
   },
   {
     id: "remote",
@@ -110,8 +119,8 @@ const SOURCE_OPTIONS: Array<{
 const isRemoteServerOnline = (server?: SavedConnection | null) =>
   server?.status === "Online";
 
-const sourceLabel = (sourceType: SourceType) =>
-  sourceType === "local" ? "This Mac" : "Remote VoiceTypr";
+const sourceLabel = (sourceType: SourceType, confirmed: boolean) =>
+  confirmed ? (sourceType === "local" ? "This device" : "Remote VoiceTypr") : "Choose source";
 
 export const OnboardingDesktop = function OnboardingDesktop({
   onComplete,
@@ -142,6 +151,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
   const [sourceType, setSourceType] = useState<SourceType>("local");
+  const [sourceConfirmed, setSourceConfirmed] = useState(false);
+  const sourceConfirmedRef = useRef(false);
   const [hotkey, setHotkey] = useState(
     settings?.hotkey || "CommandOrControl+Shift+Space",
   );
@@ -158,9 +169,15 @@ export const OnboardingDesktop = function OnboardingDesktop({
   >(null);
   const [isLoadingRemoteServers, setIsLoadingRemoteServers] = useState(false);
   const [showAddRemoteModal, setShowAddRemoteModal] = useState(false);
+  const [discoveredRemoteServers, setDiscoveredRemoteServers] = useState<DiscoveredRemoteServer[]>([]);
+  const [selectedDiscoveredServer, setSelectedDiscoveredServer] = useState<DiscoveredRemoteServer | null>(null);
   const [sampleTranscript, setSampleTranscript] = useState<string | null>(null);
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [isSavingCompletion, setIsSavingCompletion] = useState(false);
+
+  useEffect(() => {
+    sourceConfirmedRef.current = sourceConfirmed;
+  }, [sourceConfirmed]);
 
   const permissions = {
     microphone: {
@@ -219,16 +236,29 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const loadRemoteServers = useCallback(async () => {
     setIsLoadingRemoteServers(true);
     try {
-      const [savedServers, activeServer] = await Promise.all([
+      const [savedServers, activeServer, discoveredServers] = await Promise.all([
         invoke<SavedConnection[]>("list_remote_servers"),
         invoke<string | null>("get_active_remote_server"),
+        invoke<DiscoveredRemoteServer[]>("discover_remote_servers", { timeoutMs: 1200 }).catch(
+          (error) => {
+            console.error("[OnboardingDesktop] Failed to discover remote servers:", error);
+            return [] as DiscoveredRemoteServer[];
+          },
+        ),
       ]);
+      const discoveredCandidates = discoveredServers.filter(
+        (server) =>
+          !savedServers.some((saved) => saved.host === server.host && saved.port === server.port),
+      );
+
+      const allServers = savedServers;
 
       setActiveRemoteServerId(activeServer);
-      setRemoteServers(savedServers);
+      setRemoteServers(allServers);
+      setDiscoveredRemoteServers(discoveredCandidates);
 
       const refreshedServers = await Promise.all(
-        savedServers.map(async (server) => {
+        allServers.map(async (server) => {
           try {
             return await invoke<SavedConnection>("check_remote_server_status", {
               serverId: server.id,
@@ -244,7 +274,11 @@ export const OnboardingDesktop = function OnboardingDesktop({
       );
 
       setRemoteServers(refreshedServers);
-      if (activeServer && refreshedServers.some((server) => server.id === activeServer)) {
+      if (
+        !sourceConfirmedRef.current &&
+        activeServer &&
+        refreshedServers.some((server) => server.id === activeServer)
+      ) {
         setSourceType("remote");
       }
     } catch (error) {
@@ -274,27 +308,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
     void loadRemoteServers();
   }, [currentStep, loadRemoteServers]);
 
-  useEffect(() => {
-    if (settings?.current_model || sourceType !== "local") {
-      return;
-    }
-
-    const downloadedModelEntry = Object.entries(models).find(
-      ([, model]) => model.downloaded,
-    );
-    if (!downloadedModelEntry) {
-      return;
-    }
-
-    const [modelName, info] = downloadedModelEntry;
-    updateSettings({
-      current_model: modelName,
-      current_model_engine: info.engine ?? "whisper",
-      speech_language: "en",
-    }).catch((error) => {
-      console.error("[OnboardingDesktop] Failed to auto-select model:", error);
-    });
-  }, [models, settings?.current_model, sourceType, updateSettings]);
 
   useEffect(() => {
     const setup = async () => {
@@ -328,6 +341,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
   const checkPermissions = async () => {
     await Promise.all([checkMicPermission(), checkAccessPermission()]);
+  };
+
+  const confirmSource = (nextSourceType: SourceType) => {
+    sourceConfirmedRef.current = true;
+    setSourceType(nextSourceType);
+    setSourceConfirmed(true);
   };
 
   const checkSinglePermission = async (type: "microphone" | "accessibility") => {
@@ -396,7 +415,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
     await invoke("set_active_remote_server", { serverId });
     setActiveRemoteServerId(serverId);
-    setSourceType("remote");
+    confirmSource("remote");
     toast.success("Remote VoiceTypr selected");
   };
 
@@ -410,9 +429,40 @@ export const OnboardingDesktop = function OnboardingDesktop({
       }
       return [...prev, server];
     });
-    setSourceType("remote");
+    setDiscoveredRemoteServers((prev) =>
+      prev.filter((candidate) => !(candidate.host === server.host && candidate.port === server.port)),
+    );
+    setActiveRemoteServerId(server.id);
+    void invoke("set_active_remote_server", { serverId: server.id }).catch((error) => {
+      console.error("[OnboardingDesktop] Failed to activate remote server:", error);
+      toast.error("Remote VoiceTypr was added, but could not be selected");
+    });
+    confirmSource("remote");
     void loadRemoteServers();
   };
+
+  const handleAddDiscoveredRemoteServer = async (server: DiscoveredRemoteServer) => {
+    if (server.auth_required) {
+      setSelectedDiscoveredServer(server);
+      setShowAddRemoteModal(true);
+      return;
+    }
+
+    try {
+      const added = await invoke<SavedConnection>("add_remote_server", {
+        host: server.host,
+        port: server.port,
+        password: null,
+        name: server.name,
+      });
+      handleRemoteServerAdded(added);
+      toast.success(`${server.name} selected`);
+    } catch (error) {
+      console.error("[OnboardingDesktop] Failed to add discovered remote server:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to add remote VoiceTypr");
+    }
+  };
+
 
   const saveHotkeySettings = async () => {
     await invoke("set_global_shortcut", { shortcut: hotkey });
@@ -499,6 +549,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
   const canProceed = () => {
     switch (currentStep) {
+      case "source":
+        return sourceConfirmed;
       case "permissions":
         if (!isMacOS) return true;
         return (
@@ -520,14 +572,9 @@ export const OnboardingDesktop = function OnboardingDesktop({
     <div className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,var(--color-voice-wash),transparent_34%),linear-gradient(180deg,var(--color-background),var(--color-muted))] text-foreground">
       {currentStep !== "success" && (
         <div className="mx-auto flex w-full max-w-5xl items-center gap-4 px-8 py-5">
-          <div className="flex items-center gap-3">
-            <div className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-              <Radio className="size-4" />
-            </div>
-            <div>
-              <p className="text-sm font-medium tracking-tight">VoiceTypr setup</p>
-              <p className="text-xs text-muted-foreground">{sourceLabel(sourceType)}</p>
-            </div>
+          <div>
+            <p className="text-sm font-semibold tracking-tight">VoiceTypr Setup</p>
+            <p className="text-xs text-muted-foreground">{sourceLabel(sourceType, sourceConfirmed)}</p>
           </div>
           <Progress value={progress} className="h-2 flex-1" />
           <p className="text-xs tabular-nums text-muted-foreground">
@@ -540,25 +587,21 @@ export const OnboardingDesktop = function OnboardingDesktop({
         {currentStep === "welcome" && (
           <section className="grid w-full gap-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
             <div className="flex flex-col gap-6">
-              <Badge variant="secondary" className="w-fit rounded-md uppercase tracking-[0.16em]">
-                Local transcription by default
-              </Badge>
               <div className="flex flex-col gap-4">
                 <h1 className="max-w-3xl text-5xl font-semibold tracking-[-0.045em] text-balance sm:text-6xl">
-                  Type by talking. Prove it once before we finish setup.
+                  Welcome to VoiceTypr
                 </h1>
                 <p className="max-w-2xl text-base leading-7 text-muted-foreground">
-                  Choose where transcription runs, grant only the permissions needed,
-                  then complete onboarding with a real first transcription.
+                  Choose where transcription runs, set your hotkey, then try one real voice typing test before setup finishes.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  By continuing, you agree to our Terms and Privacy Policy.
                 </p>
               </div>
               <div className="flex flex-wrap gap-3">
                 <Button size="lg" onClick={handleNext}>
                   Start setup
                   <ChevronRight />
-                </Button>
-                <Button variant="outline" size="lg" onClick={() => void open("https://voicetypr.com/privacy") }>
-                  Privacy promise
                 </Button>
               </div>
             </div>
@@ -595,7 +638,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
           <OnboardingPanel
             eyebrow="Step 1"
             title="Where should transcription run?"
-            description="This choice controls the rest of setup. Local is simplest. Remote is for using a stronger VoiceTypr machine on your network."
+            description="Choose local transcription on this device or remote transcription from another VoiceTypr device."
             footer={
               <StepFooter
                 onBack={handleBack}
@@ -608,7 +651,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
             <div role="radiogroup" aria-label="Transcription source" className="grid gap-4 md:grid-cols-2">
               {SOURCE_OPTIONS.map((option) => {
                 const Icon = option.icon;
-                const selected = sourceType === option.id;
+                const selected = sourceConfirmed && sourceType === option.id;
                 return (
                   <Card
                     key={option.id}
@@ -619,11 +662,13 @@ export const OnboardingDesktop = function OnboardingDesktop({
                       "cursor-pointer border-border/70 bg-card/80 transition hover:-translate-y-0.5 hover:shadow-lg",
                       selected && "border-primary/60 bg-primary/5 ring-2 ring-primary/20",
                     )}
-                    onClick={() => setSourceType(option.id)}
+                    onClick={() => {
+                      confirmSource(option.id);
+                    }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
-                        setSourceType(option.id);
+                        confirmSource(option.id);
                       }
                     }}
                   >
@@ -709,7 +754,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                         </div>
                       </div>
                       {perm.status === "granted" ? (
-                        <Badge variant="secondary" className="text-primary">
+                        <Badge variant="secondary" className="border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-400">
                           Granted
                         </Badge>
                       ) : null}
@@ -743,7 +788,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         {currentStep === "readiness" && (
           <OnboardingPanel
             eyebrow="Step 3"
-            title={sourceType === "local" ? "Prepare this Mac" : "Connect a remote VoiceTypr"}
+            title={sourceType === "local" ? "Prepare this device" : "Connect a remote VoiceTypr"}
             description={
               sourceType === "local"
                 ? "Pick a downloaded local model, or download one now. The button unlocks as soon as the model is usable."
@@ -807,7 +852,10 @@ export const OnboardingDesktop = function OnboardingDesktop({
                       {isLoadingRemoteServers ? <Spinner /> : null}
                       Refresh
                     </Button>
-                    <Button onClick={() => setShowAddRemoteModal(true)}>
+                    <Button onClick={() => {
+                      setSelectedDiscoveredServer(null);
+                      setShowAddRemoteModal(true);
+                    }}>
                       Add server
                     </Button>
                   </div>
@@ -825,6 +873,37 @@ export const OnboardingDesktop = function OnboardingDesktop({
                           description="Add the host and password from a VoiceTypr machine with sharing enabled."
                         />
                       ) : null}
+                      {discoveredRemoteServers.map((server) => (
+                        <Card
+                          key={`${server.machine_id}:${server.host}:${server.port}`}
+                          size="sm"
+                          className="border-border/70 bg-background/60"
+                        >
+                          <CardHeader>
+                            <CardAction>
+                              <Badge variant={server.auth_required ? "outline" : "secondary"}>
+                                {server.auth_required ? "Password required" : "Found on LAN"}
+                              </Badge>
+                            </CardAction>
+                            <div className="flex items-start gap-3">
+                              <div className="flex size-10 items-center justify-center rounded-xl bg-muted text-primary">
+                                <Wifi className="size-5" />
+                              </div>
+                              <div>
+                                <CardTitle>{server.name || `${server.host}:${server.port}`}</CardTitle>
+                                <CardDescription>
+                                  {server.host}:{server.port} · {getModelDisplayName(server.model)}
+                                </CardDescription>
+                              </div>
+                            </div>
+                          </CardHeader>
+                          <CardFooter className="justify-end">
+                            <Button size="sm" onClick={() => void handleAddDiscoveredRemoteServer(server)}>
+                              {server.auth_required ? "Add with password" : "Use this server"}
+                            </Button>
+                          </CardFooter>
+                        </Card>
+                      ))}
                       {remoteServers.map((server) => {
                         const selected = server.id === activeRemoteServerId;
                         const online = isRemoteServerOnline(server);
@@ -850,7 +929,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                                 <div>
                                   <CardTitle>{server.name || `${server.host}:${server.port}`}</CardTitle>
                                   <CardDescription>
-                                    {server.host}:{server.port}{server.model ? ` · ${server.model}` : ""}
+                                    {server.host}:{server.port}{server.model ? ` · ${getModelDisplayName(server.model)}` : ""}
                                   </CardDescription>
                                 </div>
                               </div>
@@ -874,8 +953,23 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
                 <AddServerModal
                   open={showAddRemoteModal}
-                  onOpenChange={setShowAddRemoteModal}
+                  onOpenChange={(open) => {
+                    setShowAddRemoteModal(open);
+                    if (!open) {
+                      setSelectedDiscoveredServer(null);
+                    }
+                  }}
                   onServerAdded={handleRemoteServerAdded}
+                  initialServer={
+                    selectedDiscoveredServer
+                      ? {
+                          host: selectedDiscoveredServer.host,
+                          port: selectedDiscoveredServer.port,
+                          name: selectedDiscoveredServer.name,
+                          authRequired: selectedDiscoveredServer.auth_required,
+                        }
+                      : null
+                  }
                 />
               </div>
             )}
@@ -941,7 +1035,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
             <Card className="mx-auto w-full max-w-2xl border-border/70 bg-card/80">
               <CardHeader>
                 <CardAction>
-                  <Badge variant="outline">{sourceLabel(sourceType)}</Badge>
+                  <Badge variant="outline">{sourceLabel(sourceType, true)}</Badge>
                 </CardAction>
                 <CardTitle className="flex items-center gap-2 text-xl">
                   <Mic className="size-5 text-primary" />
@@ -975,7 +1069,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                     <Spinner />
                     <AlertTitle>Transcribing</AlertTitle>
                     <AlertDescription>
-                      Waiting for the selected {sourceLabel(sourceType).toLowerCase()} source to return text.
+                      Waiting for the selected {sourceLabel(sourceType, true).toLowerCase()} source to return text.
                     </AlertDescription>
                   </Alert>
                 ) : null}
@@ -1015,7 +1109,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 Ready
               </Badge>
               <h1 className="text-4xl font-semibold tracking-[-0.04em]">
-                VoiceTypr is ready on {sourceLabel(sourceType).toLowerCase()}.
+                VoiceTypr is ready on {sourceLabel(sourceType, true).toLowerCase()}.
               </h1>
               <p className="text-muted-foreground">
                 Press {formatHotkey(hotkey)} anywhere to start recording.

@@ -20,6 +20,8 @@ import {
   type ManualReportData,
 } from '@/utils/crashReport';
 import { useSettings } from '@/contexts/SettingsContext';
+import { useModelManagementContext } from '@/contexts/ModelManagementContext';
+import { getModelDisplayName } from '@/lib/model-display';
 
 interface ReportBugDialogProps {
   isOpen: boolean;
@@ -37,6 +39,8 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
   const [copied, setCopied] = useState(false);
   const [fallbackReportData, setFallbackReportData] = useState<ManualReportData | null>(null);
   const { settings } = useSettings();
+  const { models } = useModelManagementContext();
+  const currentModelLabel = getModelDisplayName(settings?.current_model, models);
   const actionIdRef = useRef(0);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -117,7 +121,7 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
         name.trim() || undefined,
         email.trim() || undefined,
         message.trim(),
-        settings?.current_model || null
+        currentModelLabel
       );
 
       return actionId === actionIdRef.current ? data : null;

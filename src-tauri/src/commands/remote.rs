@@ -15,6 +15,7 @@ use crate::remote::client::{
     self, timeout_ms_for_wav_file, RemoteClientError, RemoteServerConnection, TranscriptionRequest,
     TranscriptionSource,
 };
+use crate::remote::discovery::DiscoveredRemoteServer;
 use crate::remote::lifecycle::{RemoteServerManager, SharingStatus};
 use crate::remote::server::StatusResponse;
 use crate::remote::settings::{ConnectionStatus, RemoteSettings, SavedConnection};
@@ -440,6 +441,18 @@ pub async fn add_remote_server(
     save_remote_settings(&app, &settings)?;
 
     Ok(connection)
+}
+
+#[tauri::command]
+pub async fn discover_remote_servers(
+    timeout_ms: Option<u64>,
+) -> Result<Vec<DiscoveredRemoteServer>, String> {
+    let local_machine_id = get_local_machine_id().ok();
+    crate::remote::discovery::discover_remote_servers(
+        local_machine_id.as_deref(),
+        std::time::Duration::from_millis(timeout_ms.unwrap_or(1_200)),
+    )
+    .await
 }
 
 /// Remove a remote server connection

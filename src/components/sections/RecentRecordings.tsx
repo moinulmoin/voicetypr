@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { TranscriptionHistory } from "@/types";
-import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
+import { useCanAutoInsert, useReadiness } from "@/contexts/ReadinessContext";
 import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -27,6 +27,8 @@ import { AlertCircle, AlertTriangle, Mic, Trash2, Search, Copy, Calendar, Downlo
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { getModelDisplayName } from "@/lib/model-display";
+import { isMacOS } from "@/lib/platform";
 
 // Interface for available transcription sources
 interface TranscriptionSource {
@@ -45,27 +47,6 @@ interface SavedConnection {
   status?: "Unknown" | "Online" | "Offline" | "AuthFailed" | "SelfConnection";
 }
 
-// Static mapping for model display names
-const MODEL_DISPLAY_NAMES: Record<string, string> = {
-  // Turbo models
-  'large-v3-turbo': 'Large v3 Turbo',
-  'large-v3-turbo-q8_0': 'Large v3 Turbo (Q8)',
-  // Large models
-  'large-v3': 'Large v3',
-  'large-v3-q5_0': 'Large v3 (Q5)',
-  // Small models
-  'small.en': 'Small (English)',
-  'small': 'Small',
-  // Base models
-  'base.en': 'Base (English)',
-  'base': 'Base',
-  // Tiny models
-  'tiny.en': 'Tiny (English)',
-  'tiny': 'Tiny',
-  // Parakeet models
-  'parakeet-tdt-0.6b-v2': 'Parakeet V2 (English)',
-  'parakeet-tdt-0.6b-v3': 'Parakeet V3',
-};
 
 interface RecentRecordingsProps {
   history: TranscriptionHistory[];
@@ -85,8 +66,17 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
   const { modelOrder } = useModelManagementContext();
   const [reTranscribingModels, setReTranscribingModels] = useState<Map<string, string>>(new Map());
   const onlineServersRef = useRef<Map<string, { name: string; model: string }>>(new Map()); // serverId -> { name, model }
-  const canRecord = useCanRecord();
+  const readiness = useReadiness();
+  const canRecord = readiness.canRecord;
   const canAutoInsert = useCanAutoInsert();
+  const unavailableMessage =
+    readiness.licenseStatus === "expired" || readiness.licenseStatus === "none"
+      ? "Activate a license to record again."
+      : readiness.hasModels === false || readiness.selectedModelAvailable === false
+        ? "Choose a ready local model, cloud provider, or remote VoiceTypr source in Models."
+        : isMacOS && readiness.hasMicrophonePermission === false
+          ? "Allow microphone access in macOS Settings."
+          : "Finish setup in Settings before recording.";
 
   const refreshOnlineRemoteServers = useCallback(async () => {
     try {
@@ -113,10 +103,11 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       for (const result of results) {
         if (!result.online) continue;
 
+        const modelDisplayName = getModelDisplayName(result.model) ?? result.model;
         onlineMap.set(result.id, { name: result.name, model: result.model });
         onlineSources.push({
           id: `remote:${result.id}`,
-          name: result.model ? `${result.name} - ${result.model}` : result.name,
+          name: modelDisplayName ? `${result.name} - ${modelDisplayName}` : result.name,
           type: 'remote',
         });
       }
@@ -179,7 +170,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       );
       for (const model of availableSources) {
         const sourceType = model.kind === 'cloud' ? 'cloud' : 'local';
-        const fallbackName = MODEL_DISPLAY_NAMES[model.name] || model.name;
+        const fallbackName = getModelDisplayName(model.name) ?? model.name;
         const sourceName = model.display_name || (sourceType === 'cloud' ? `${fallbackName} (Cloud)` : fallbackName);
         sources.push({
           id: `${sourceType}:${model.name}:${model.engine}`,
@@ -228,10 +219,10 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
 
     let displayModelName: string;
     if (sourceType === 'local') {
-      displayModelName = MODEL_DISPLAY_NAMES[modelNameOrServerId] || modelNameOrServerId;
+      displayModelName = getModelDisplayName(modelNameOrServerId) ?? modelNameOrServerId;
     } else if (sourceType === 'cloud') {
       const source = transcriptionSources.find(s => s.id === sourceId);
-      displayModelName = source ? source.name : `${MODEL_DISPLAY_NAMES[modelNameOrServerId] || modelNameOrServerId} (Cloud)`;
+      displayModelName = source ? source.name : `${getModelDisplayName(modelNameOrServerId) ?? modelNameOrServerId} (Cloud)`;
     } else {
       const server = transcriptionSources.find(s => s.id === sourceId);
       displayModelName = server ? server.name : modelNameOrServerId;
@@ -260,9 +251,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
           const server = transcriptionSources.find(s => s.id === sourceId);
           return server ? `Remote: ${server.name}` : `Remote: ${modelNameOrServerId}`;
         })()
-      : sourceType === 'cloud'
-        ? displayModelName
-        : modelNameOrServerId;
+      : displayModelName;
     let retryTimestamp: string | null = null;
 
     try {
@@ -347,7 +336,8 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     const query = searchQuery.toLowerCase();
     return history.filter(item =>
       item.text.toLowerCase().includes(query) ||
-      (item.model && item.model.toLowerCase().includes(query))
+      (item.model && item.model.toLowerCase().includes(query)) ||
+      (item.model && (getModelDisplayName(item.model) ?? item.model).toLowerCase().includes(query))
     );
   }, [history, searchQuery]);
 
@@ -600,7 +590,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                             <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
                             <span className="text-xs text-primary font-medium">
                               {isPersistedInProgress && !reTranscribingIds.has(item.id)
-                                ? `Re-transcription in progress with ${item.model}...`
+                                ? `Re-transcription in progress with ${getModelDisplayName(item.model) ?? item.model}...`
                                 : `Re-transcribing with ${reTranscribingModels.get(item.id)}...`}
                             </span>
                           </div>
@@ -748,7 +738,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                           <div className="flex items-center justify-between mt-2">
                             <div className="flex items-center gap-2 text-xs text-muted-foreground">
                               {item.model && (
-                                <span>{MODEL_DISPLAY_NAMES[item.model] || item.model}</span>
+                                <span>{getModelDisplayName(item.model) ?? item.model}</span>
                               )}
                               {item.model && <span className="text-muted-foreground/50">•</span>}
                               <span>
@@ -958,7 +948,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                 <AlertCircle className="w-12 h-12 text-amber-500/50 mx-auto mb-4" />
                 <p className="text-sm text-muted-foreground">Cannot record yet</p>
                 <p className="text-xs text-amber-600 mt-2">
-                  Check permissions and download a model in Settings
+                  {unavailableMessage}
                 </p>
               </>
             )}

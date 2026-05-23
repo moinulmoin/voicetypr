@@ -497,8 +497,8 @@ export function GeneralSettings() {
                             Distance from screen edge.
                           </FieldDescription>
                         </FieldContent>
-                        <div className="w-full min-w-0 md:w-[420px] md:max-w-[50vw]">
-                          <div className="space-y-2">
+                        <div className="w-full min-w-0 md:flex-1">
+                          <div className="flex items-center gap-3">
                             <Slider
                               aria-label="Indicator edge offset"
                               min={10}
@@ -512,7 +512,7 @@ export function GeneralSettings() {
                               }
                               className="w-full"
                             />
-                            <div className="text-right text-[11px] font-medium text-foreground tabular-nums">
+                            <div className="min-w-12 rounded-md border bg-muted/60 px-2 py-1 text-center text-[11px] font-medium text-foreground tabular-nums">
                               {settings.pill_indicator_offset ?? 10}px
                             </div>
                           </div>

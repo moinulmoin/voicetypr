@@ -16,6 +16,14 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 vi.mock('@/contexts/ReadinessContext', () => ({
   useCanRecord: () => true,
+  useReadiness: () => ({
+    canRecord: true,
+    licenseStatus: 'licensed',
+    hasModels: true,
+    selectedModelAvailable: true,
+    remoteSelected: false,
+    hasMicrophonePermission: true,
+  }),
   useCanAutoInsert: () => true,
 }));
 
@@ -100,7 +108,7 @@ describe('RecentRecordings re-transcription', () => {
     const retranscribeButton = await screen.findByTitle('Re-transcribe');
     await user.click(retranscribeButton);
 
-    expect(await screen.findByText('Office PC - large-v3')).toBeInTheDocument();
+    expect(await screen.findByText('Office PC - Large v3')).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.queryByText('Old PC')).not.toBeInTheDocument();
     });
@@ -145,7 +153,7 @@ describe('RecentRecordings re-transcription', () => {
       expect(screen.getByText('Re-transcribing with Small (English)...')).toBeInTheDocument();
       expect(invokeMock).toHaveBeenCalledWith('save_retranscription', {
         text: 'In progress...',
-        model: 'small.en',
+        model: 'Small (English)',
         recordingFile: 'sample.wav',
         sourceRecordingId: '2024-01-01T00:00:00Z',
         status: 'in_progress',
@@ -204,7 +212,7 @@ describe('RecentRecordings re-transcription', () => {
       expect(invokeMock).toHaveBeenCalledWith('update_transcription', {
         timestamp: 'retry-2',
         text: 'Re-transcription failed: Error: remote offline',
-        model: 'small.en',
+        model: 'Small (English)',
         status: 'failed',
       });
     });
@@ -223,7 +231,7 @@ describe('RecentRecordings re-transcription', () => {
     const retranscribeButton = await screen.findByTitle('Re-transcribe');
 
     expect(retranscribeButton).toBeDisabled();
-    expect(screen.getByText('Re-transcription in progress with base.en...')).toBeInTheDocument();
+    expect(screen.getByText('Re-transcription in progress with Base (English)...')).toBeInTheDocument();
   });
 
   it('keeps reconciled failed rows retryable after reload', async () => {

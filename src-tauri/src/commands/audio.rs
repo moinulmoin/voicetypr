@@ -24,7 +24,9 @@ use crate::utils::logger::*;
 use crate::utils::system_monitor;
 use crate::whisper::cache::TranscriberCache;
 use crate::whisper::manager::WhisperManager;
-use crate::{emit_to_window, update_recording_state, AppState, RecordingMode, RecordingState};
+use crate::{
+    emit_to_all, emit_to_window, update_recording_state, AppState, RecordingMode, RecordingState,
+};
 use cpal::traits::{DeviceTrait, HostTrait};
 use once_cell::sync::Lazy;
 use serde_json;
@@ -1651,9 +1653,8 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
                 let _ = window.set_focus();
             }
 
-            let _ = emit_to_window(
+            let _ = emit_to_all(
                 app,
-                "main",
                 "license-required",
                 serde_json::json!({
                     "title": "License Required",

@@ -32,6 +32,7 @@ import { hasApiKey, removeApiKey, saveApiKey, getApiKey } from "@/utils/keyring"
 import { getErrorMessage } from "@/utils/error";
 import { useReadinessState } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
+import { humanizeModelId } from "@/lib/model-display";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState, useCallback, useRef } from "react";
@@ -421,7 +422,7 @@ export function EnhancementsSection() {
   const activeModelName = isUsingCustomProvider
     ? customModelName
     : getModels(aiSettings.provider).find((model) => model.id === aiSettings.model)?.name ||
-      aiSettings.model;
+      humanizeModelId(aiSettings.model);
 
   const hasLoadingProviders = AI_PROVIDERS.some((provider) => isModelsLoading(provider.id));
 

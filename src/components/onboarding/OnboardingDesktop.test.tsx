@@ -149,6 +149,8 @@ beforeEach(() => {
   stopRecordingMock.mockResolvedValue(undefined);
   invokeMock.mockImplementation((command: string) => {
     switch (command) {
+      case "discover_remote_servers":
+        return Promise.resolve([]);
       case "list_remote_servers":
         return Promise.resolve([]);
       case "get_active_remote_server":
@@ -168,6 +170,7 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
@@ -195,6 +198,22 @@ describe("OnboardingDesktop", () => {
     expect(onCompleteMock).toHaveBeenCalledTimes(1);
   });
 
+  it("requires an explicit source choice even when a local model is already saved", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+
+    const continueButton = screen.getByRole("button", { name: /continue/i });
+    expect(continueButton).toBeDisabled();
+    expect(updateSettingsMock).not.toHaveBeenCalledWith(expect.objectContaining({
+      current_model: "base.en",
+    }));
+
+    await user.click(screen.getByText("Use this device"));
+    expect(continueButton).toBeEnabled();
+  });
+
   it("allows an online remote VoiceTypr source without a local model", async () => {
     const user = userEvent.setup();
     settingsState.current_model = "";
@@ -203,6 +222,8 @@ describe("OnboardingDesktop", () => {
 
     invokeMock.mockImplementation((command: string, args?: { serverId?: string }) => {
       switch (command) {
+        case "discover_remote_servers":
+          return Promise.resolve([]);
         case "list_remote_servers":
           return Promise.resolve([
             {

@@ -26,6 +26,7 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { useModelAvailability } from "@/hooks/useModelAvailability";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
+import { getModelDisplayName } from "@/lib/model-display";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useUploadStore } from "@/state/upload";
 
@@ -54,7 +55,7 @@ export function AudioUploadSection() {
   const resolveHistoryModelName = async (remoteServerIdOverride?: string | null) => {
     const effectiveRemoteId = remoteServerIdOverride ?? activeRemoteServer;
     if (!effectiveRemoteId) {
-      return settings?.current_model_engine === 'soniox' ? 'Soniox' : (settings?.current_model || '');
+      return settings?.current_model_engine === 'soniox' ? 'Soniox (Cloud)' : (getModelDisplayName(settings?.current_model) || '');
     }
 
     try {
@@ -107,8 +108,8 @@ export function AudioUploadSection() {
   const activeSourceLabel = activeRemoteServer
     ? "Remote VoiceTypr"
     : settings?.current_model_engine === 'soniox'
-      ? "Soniox cloud"
-      : settings?.current_model || "No source selected";
+      ? "Soniox (Cloud)"
+      : getModelDisplayName(settings?.current_model) || "No source selected";
 
   const handleFileSelect = async () => {
     try {

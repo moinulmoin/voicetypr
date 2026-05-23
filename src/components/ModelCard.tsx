@@ -6,6 +6,7 @@ import { Card } from './ui/card';
 import { Progress } from './ui/progress';
 import { Spinner } from './ui/spinner';
 import { cn } from '@/lib/utils';
+import { getModelDisplayName } from '@/lib/model-display';
 
 interface ModelCardProps {
   name: string;
@@ -68,7 +69,7 @@ export const ModelCard = function ModelCard({
                 isSelected && "text-primary"
               )}
             >
-              {model.display_name || name}
+              {getModelDisplayName(name, { [name]: model })}
             </h3>
             {model.recommended && (
               <Badge variant="secondary" className="gap-1 bg-amber-500/10 text-amber-700">
@@ -145,7 +146,7 @@ export const ModelCard = function ModelCard({
                   variant="ghost"
                   size="icon"
                   className="size-8"
-                  aria-label={`Cancel ${model.display_name || name} download`}
+                  aria-label={`Cancel ${getModelDisplayName(name, { [name]: model })} download`}
                 >
                   <X className="size-4" />
                 </Button>
@@ -157,7 +158,7 @@ export const ModelCard = function ModelCard({
                 e.stopPropagation();
                 onDownload(name);
               }}
-              variant="outline"
+              variant="default"
               size="sm"
             >
               <Download className="size-4" />

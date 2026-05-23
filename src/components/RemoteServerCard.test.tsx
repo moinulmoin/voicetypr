@@ -158,8 +158,8 @@ describe("RemoteServerCard", () => {
       });
 
       await waitFor(() => {
-        // Model is displayed with a bullet prefix "• large-v3-turbo"
-        expect(screen.getByText(/large-v3-turbo/)).toBeInTheDocument();
+        // Model is displayed with a bullet prefix and user-facing display name.
+        expect(screen.getByText(/Large v3 Turbo/)).toBeInTheDocument();
       });
     });
 

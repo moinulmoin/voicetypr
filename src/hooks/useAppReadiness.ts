@@ -56,6 +56,10 @@ export function useAppReadiness() {
     hasModels: models.hasModels,
     selectedModelAvailable: models.selectedModelAvailable,
     licenseValid: license.isValid,
+    licenseStatus: license.licenseStatus?.status ?? null,
+    remoteSelected: models.remoteSelected,
+    remoteAvailable: models.remoteAvailable,
+    remoteStatus: models.remoteStatus,
 
     // Computed values
     canRecord,

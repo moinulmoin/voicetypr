@@ -34,6 +34,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useSettings } from "@/contexts/SettingsContext";
 import { getCloudProviderByModel } from "@/lib/cloudProviders";
 import { cn } from "@/lib/utils";
+import { getModelDisplayName, humanizeModelId } from "@/lib/model-display";
 import { ModelInfo, isCloudModel, isLocalModel } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -67,6 +68,15 @@ interface ModelsSectionProps {
 
 type CloudModalMode = "connect" | "update";
 
+interface DiscoveredRemoteServer {
+  name: string;
+  host: string;
+  port: number;
+  model: string;
+  auth_required: boolean;
+  machine_id: string;
+}
+
 interface CloudModalState {
   providerId: string;
   mode: CloudModalMode;
@@ -93,6 +103,9 @@ export function ModelsSection({
   const [addServerModalOpen, setAddServerModalOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<SavedConnection | null>(null);
   const [isRefreshingServers, setIsRefreshingServers] = useState(false);
+  const [discoveredServers, setDiscoveredServers] = useState<DiscoveredRemoteServer[]>([]);
+  const [selectedDiscoveredServer, setSelectedDiscoveredServer] = useState<DiscoveredRemoteServer | null>(null);
+  const [isDiscoveringServers, setIsDiscoveringServers] = useState(false);
 
   const { availableToUse, availableToSetup } = useMemo(() => {
     const useList: [string, ModelInfo][] = [];
@@ -207,6 +220,27 @@ export function ModelsSection({
     }
   }, []);
 
+  const discoverRemoteServers = useCallback(async (notifyEmpty = false) => {
+    setIsDiscoveringServers(true);
+    try {
+      const discovered = await invoke<DiscoveredRemoteServer[]>("discover_remote_servers", {
+        timeoutMs: 1200,
+      });
+      setDiscoveredServers(discovered);
+      if (notifyEmpty && discovered.length === 0) {
+        toast.info("No remote VoiceTypr devices found. You can still add one manually.");
+      }
+    } catch (error) {
+      console.error("Failed to discover remote VoiceTypr devices:", error);
+      if (notifyEmpty) {
+        toast.error("Failed to scan for remote VoiceTypr devices");
+      }
+    } finally {
+      await refreshRemoteServers();
+      setIsDiscoveringServers(false);
+    }
+  }, [refreshRemoteServers]);
+
   const fetchActiveRemoteServer = useCallback(async () => {
     try {
       const activeId = await invoke<string | null>("get_active_remote_server");
@@ -221,8 +255,8 @@ export function ModelsSection({
     fetchRemoteServers();
     fetchActiveRemoteServer();
     // Trigger status refresh after initial list load
-    refreshRemoteServers();
-  }, [fetchRemoteServers, fetchActiveRemoteServer, refreshRemoteServers]);
+    discoverRemoteServers();
+  }, [fetchRemoteServers, fetchActiveRemoteServer, discoverRemoteServers]);
 
   // Note: Status updates are handled via the refreshRemoteServers function
   // which calls check_remote_server_status for each server in parallel
@@ -327,7 +361,38 @@ export function ModelsSection({
     [refreshRemoteServers]
   );
 
+  const handleAddDiscoveredServer = useCallback(
+    async (server: DiscoveredRemoteServer) => {
+      if (server.auth_required) {
+        toast.info("This remote VoiceTypr requires a password. Enter it to finish adding the server.");
+        setSelectedDiscoveredServer(server);
+        setEditingServer(null);
+        setAddServerModalOpen(true);
+        return;
+      }
+
+      try {
+        const added = await invoke<SavedConnection>("add_remote_server", {
+          host: server.host,
+          port: server.port,
+          password: null,
+          name: server.name,
+        });
+        handleServerAdded(added);
+        setDiscoveredServers((prev) =>
+          prev.filter((candidate) => !(candidate.host === server.host && candidate.port === server.port)),
+        );
+        toast.success(`${server.name} added`);
+      } catch (error) {
+        console.error("Failed to add discovered remote VoiceTypr:", error);
+        toast.error(error instanceof Error ? error.message : "Failed to add remote VoiceTypr");
+      }
+    },
+    [handleServerAdded],
+  );
+
   const handleEditServer = useCallback((server: SavedConnection) => {
+    setSelectedDiscoveredServer(null);
     setEditingServer(server);
     setAddServerModalOpen(true);
   }, []);
@@ -339,15 +404,15 @@ export function ModelsSection({
       if (activeServer) {
         const serverName = activeServer.name || activeServer.host;
         if (activeServer.model) {
-          return `${serverName} - ${activeServer.model}`;
+          return `${serverName} - ${getModelDisplayName(activeServer.model) ?? activeServer.model}`;
         }
         return serverName;
       }
     }
     if (!currentModel) return null;
     const entry = models.find(([name]) => name === currentModel);
-    if (!entry) return currentModel;
-    return entry[1].display_name || currentModel;
+    if (!entry) return getModelDisplayName(currentModel) ?? currentModel;
+    return getModelDisplayName(currentModel, { [currentModel]: entry[1] }) ?? currentModel;
   }, [currentModel, models, activeRemoteServer, remoteServers]);
 
   useEffect(() => {
@@ -489,7 +554,7 @@ export function ModelsSection({
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h3 className={cn("truncate text-sm font-semibold tracking-tight", isActive && "text-primary")}>
-                  {model.display_name || provider?.displayName || name}
+                  {getModelDisplayName(name, { [name]: model }) || provider?.displayName || name}
                 </h3>
                 {isActive && (
                   <Badge className="gap-1">
@@ -735,18 +800,65 @@ export function ModelsSection({
                     Remote VoiceTypr ({remoteServers.length})
                   </h2>
                   <p className="text-xs text-muted-foreground">
-                    Use a stronger Mac on your network without copying audio to the cloud.
+                    Use another VoiceTypr device on your network without copying audio to the cloud.
                   </p>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setAddServerModalOpen(true)}
-                >
-                  <Plus className="size-4" />
-                  Add Remote
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void discoverRemoteServers(true)}
+                    disabled={isDiscoveringServers}
+                  >
+                    {isDiscoveringServers ? <Spinner className="size-4" /> : null}
+                    Scan LAN
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setSelectedDiscoveredServer(null);
+                      setAddServerModalOpen(true);
+                    }}
+                  >
+                    <Plus className="size-4" />
+                    Add manually
+                  </Button>
+                </div>
               </div>
+              {discoveredServers.length > 0 && (
+                <div className="grid gap-3">
+                  {discoveredServers.map((server) => {
+                    const alreadySaved = remoteServers.some(
+                      (saved) => saved.host === server.host && saved.port === server.port,
+                    );
+
+                    if (alreadySaved) return null;
+
+                    return (
+                      <Card key={`${server.machine_id}:${server.host}:${server.port}`} className="border-border/60 bg-card/80 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <Server className="size-4 text-primary" />
+                              <h3 className="truncate text-sm font-semibold">{server.name}</h3>
+                              <Badge variant={server.auth_required ? "outline" : "secondary"}>
+                                {server.auth_required ? "Password required" : "Found on LAN"}
+                              </Badge>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {server.host}:{server.port} · {getModelDisplayName(server.model) ?? humanizeModelId(server.model)}
+                            </p>
+                          </div>
+                          <Button size="sm" onClick={() => void handleAddDiscoveredServer(server)}>
+                            {server.auth_required ? "Add with password" : "Add"}
+                          </Button>
+                        </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
               {remoteServers.length > 0 ? (
                 <div className="grid gap-3">
                   {remoteServers.map((server) => (
@@ -823,10 +935,23 @@ export function ModelsSection({
         open={addServerModalOpen}
         onOpenChange={(open) => {
           setAddServerModalOpen(open);
-          if (!open) setEditingServer(null);
+          if (!open) {
+            setEditingServer(null);
+            setSelectedDiscoveredServer(null);
+          }
         }}
         onServerAdded={handleServerAdded}
         editServer={editingServer}
+        initialServer={
+          selectedDiscoveredServer
+            ? {
+                host: selectedDiscoveredServer.host,
+                port: selectedDiscoveredServer.port,
+                name: selectedDiscoveredServer.name,
+                authRequired: selectedDiscoveredServer.auth_required,
+              }
+            : null
+        }
       />
     </div>
   );

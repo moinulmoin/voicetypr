@@ -25,6 +25,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { CheckCircle2, Eye, EyeOff, Server, XCircle } from "lucide-react";
 import React, { useState } from "react";
 import { toast } from "sonner";
+import { getModelDisplayName } from "@/lib/model-display";
 
 interface SavedConnection {
   id: string;
@@ -44,11 +45,19 @@ interface StatusResponse {
   machine_id: string;
 }
 
+interface InitialServerValues {
+  host: string;
+  port: number;
+  name?: string | null;
+  authRequired?: boolean;
+}
+
 interface AddServerModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onServerAdded?: (server: SavedConnection) => void;
   editServer?: SavedConnection | null; // If provided, modal is in edit mode
+  initialServer?: InitialServerValues | null;
 }
 
 type TestStatus = "idle" | "testing" | "success" | "error";
@@ -58,6 +67,7 @@ export function AddServerModal({
   onOpenChange,
   onServerAdded,
   editServer,
+  initialServer,
 }: AddServerModalProps) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState("47842");
@@ -75,8 +85,11 @@ export function AddServerModal({
   const isEditMode = !!editServer;
   const testRequiresReplacementPassword =
     isEditMode && !!editServer?.has_password && !password && !clearSavedPassword;
+  const initialServerRequiresPassword = !isEditMode && !!initialServer?.authRequired;
+  const initialPasswordRequirementUnmet =
+    initialServerRequiresPassword && (!password.trim() || testStatus !== "success");
 
-  // Update form when editServer changes
+  // Update form when editServer or initial values change
   React.useEffect(() => {
     if (editServer && open) {
       setHost(editServer.host);
@@ -84,8 +97,17 @@ export function AddServerModal({
       setPassword(editServer.password || "");
       setName(editServer.name || "");
       setClearSavedPassword(false);
+    } else if (initialServer && open) {
+      setHost(initialServer.host);
+      setPort(initialServer.port.toString());
+      setPassword("");
+      setName(initialServer.name || "");
+      setTestStatus("idle");
+      setTestResult(null);
+      setTestError(null);
+      setClearSavedPassword(false);
     }
-  }, [editServer, open]);
+  }, [editServer, initialServer, open]);
 
   // Fetch local machine ID for self-connection detection
   React.useEffect(() => {
@@ -176,6 +198,13 @@ export function AddServerModal({
     }
   };
 
+  const resetConnectionTest = () => {
+    setTestStatus("idle");
+    setTestResult(null);
+    setTestError(null);
+    setIsSelfConnection(false);
+  };
+
   const handleSaveServer = async () => {
     if (!host.trim()) {
       toast.error("Please enter a host address");
@@ -185,6 +214,16 @@ export function AddServerModal({
     // Block save if self-connection detected
     if (isSelfConnection) {
       toast.error("Cannot add your own machine as a remote");
+      return;
+    }
+
+    if (initialServerRequiresPassword && !password.trim()) {
+      toast.error("Enter the remote VoiceTypr password before adding this server");
+      return;
+    }
+
+    if (initialServerRequiresPassword && testStatus !== "success") {
+      toast.error("Test the password-protected server before adding it");
       return;
     }
 
@@ -250,7 +289,10 @@ export function AddServerModal({
               id="server-host"
               placeholder="192.168.1.100 or hostname"
               value={host}
-              onChange={(e) => setHost(e.target.value)}
+              onChange={(e) => {
+                setHost(e.target.value);
+                if (initialServerRequiresPassword) resetConnectionTest();
+              }}
               disabled={saving}
             />
             <FieldDescription>
@@ -265,21 +307,35 @@ export function AddServerModal({
               type="number"
               placeholder="47842"
               value={port}
-              onChange={(e) => setPort(e.target.value)}
+              onChange={(e) => {
+                setPort(e.target.value);
+                if (initialServerRequiresPassword) resetConnectionTest();
+              }}
               disabled={saving}
               className="font-mono"
             />
           </Field>
 
           <Field>
-            <FieldLabel htmlFor="server-password">Password (if required)</FieldLabel>
+            <FieldLabel htmlFor="server-password">
+              Password {initialServerRequiresPassword ? "(required)" : "(if required)"}
+            </FieldLabel>
             <InputGroup>
               <InputGroupInput
                 id="server-password"
                 type={showPassword ? "text" : "password"}
-                placeholder={isEditMode && editServer?.has_password ? "Leave empty to keep saved password" : "Leave empty if no password"}
+                placeholder={
+                  initialServerRequiresPassword
+                    ? "Enter remote VoiceTypr password"
+                    : isEditMode && editServer?.has_password
+                      ? "Leave empty to keep saved password"
+                      : "Leave empty if no password"
+                }
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (initialServerRequiresPassword) resetConnectionTest();
+                }}
                 disabled={saving}
                 className="[&::-ms-reveal]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
               />
@@ -354,7 +410,7 @@ export function AddServerModal({
                   <span className="text-xs font-medium">Connected</span>
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  {testResult.name} • {testResult.model}
+                  {testResult.name} • {getModelDisplayName(testResult.model)}
                 </span>
               </div>
             </div>
@@ -387,7 +443,7 @@ export function AddServerModal({
           </Button>
           <Button
             onClick={handleSaveServer}
-            disabled={!host.trim() || saving || isSelfConnection}
+            disabled={!host.trim() || saving || isSelfConnection || initialPasswordRequirementUnmet}
           >
             {saving ? (
               <>

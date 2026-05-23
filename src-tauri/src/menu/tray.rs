@@ -33,6 +33,39 @@ pub fn should_mark_model_selected(
     onboarding_done && model_name == current_model
 }
 
+fn title_case_token(token: &str) -> String {
+    if token.is_empty() {
+        return String::new();
+    }
+    if token.len() >= 2 && token.starts_with('v') && token[1..].chars().all(|c| c.is_ascii_digit())
+    {
+        return token.to_ascii_lowercase();
+    }
+    if token.contains('_') && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return token.to_ascii_uppercase();
+    }
+    let mut chars = token.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+fn humanize_model_id(model_id: &str) -> String {
+    let without_en = model_id.strip_suffix(".en").unwrap_or(model_id);
+    let suffix = if without_en.len() != model_id.len() {
+        " English"
+    } else {
+        ""
+    };
+    let name = without_en
+        .split(['-', '_'])
+        .filter(|token| !token.is_empty())
+        .map(title_case_token)
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{}{}", name, suffix)
+}
 /// Formats the tray's model label given onboarding status and an optional resolved display name
 pub fn format_tray_model_label(
     onboarding_done: bool,
@@ -42,7 +75,7 @@ pub fn format_tray_model_label(
     if !onboarding_done || current_model.is_empty() {
         "Model: None".to_string()
     } else {
-        let name = resolved_display_name.unwrap_or_else(|| current_model.to_string());
+        let name = resolved_display_name.unwrap_or_else(|| humanize_model_id(current_model));
         format!("Model: {}", name)
     }
 }
@@ -301,12 +334,12 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
                     } else if current_model == "soniox" {
                         Some("Soniox (Cloud)".to_string())
                     } else {
-                        Some(current_model.clone())
+                        Some(humanize_model_id(&current_model))
                     }
                 } else if current_model == "soniox" {
                     Some("Soniox (Cloud)".to_string())
                 } else {
-                    Some(current_model.clone())
+                    Some(humanize_model_id(&current_model))
                 };
                 (current_model.clone(), display)
             } else {

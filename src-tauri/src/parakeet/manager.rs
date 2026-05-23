@@ -140,7 +140,7 @@ impl ParakeetManager {
         &self,
         app: &AppHandle,
         model_name: &str,
-        _cancel_flag: Option<Arc<AtomicBool>>,
+        cancel_flag: Option<Arc<AtomicBool>>,
         progress_callback: impl Fn(u64, u64) + Send + 'static,
     ) -> Result<(), String> {
         let Some(definition) = self.get_model_definition(model_name) else {
@@ -171,6 +171,14 @@ impl ParakeetManager {
                 loaded_model: Some(id),
                 ..
             }) if id == definition.id => {
+                if cancel_flag
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+                {
+                    let _ = self.delete_model(app, model_name).await;
+                    return Err("Download cancelled by user".to_string());
+                }
+
                 // Download/load completed for the requested version
                 progress_callback(definition.estimated_size, definition.estimated_size);
                 Ok(())

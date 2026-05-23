@@ -29,4 +29,10 @@ mod tray_onboarding_tests {
         );
         assert_eq!(label, "Model: Parakeet Tiny V3");
     }
+
+    #[test]
+    fn test_tray_label_humanizes_known_model_id_when_display_name_missing() {
+        let label = crate::format_tray_model_label(true, "large-v3-turbo", None);
+        assert_eq!(label, "Model: Large v3 Turbo");
+    }
 }

@@ -1,10 +1,11 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { ModelsSection } from "../sections/ModelsSection";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
 import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { AppSettings } from "@/types";
+import { getModelDisplayName } from "@/lib/model-display";
 
 export function ModelsTab() {
   const { registerEvent } = useEventCoordinator("main");
@@ -20,6 +21,16 @@ export function ModelsTab() {
     loadModels,
     sortedModels
   } = useModelManagementContext();
+
+  const modelLabels = useMemo(
+    () => new Map(sortedModels.map(([name, model]) => [name, getModelDisplayName(name, { [name]: model }) ?? name])),
+    [sortedModels]
+  );
+  const modelLabelsRef = useRef(modelLabels);
+
+  useEffect(() => {
+    modelLabelsRef.current = modelLabels;
+  }, [modelLabels]);
 
   // Save settings
   const saveSettings = useCallback(
@@ -55,13 +66,15 @@ export function ModelsTab() {
           "download-error",
           (errorData) => {
             const { model, error } = errorData;
+            const modelLabel = modelLabelsRef.current.get(model) || getModelDisplayName(model) || "Unknown model";
             console.error("Download error:", errorData);
 
             // Don't show error toast if it was cancelled - cancellation has its own toast
+
             if (!error.toLowerCase().includes('cancel')) {
               // Show user-friendly error message
               toast.error(`Download Failed`, {
-                description: `Failed to download ${model}. Please try again.`,
+                description: `Failed to download ${modelLabel}. Please try again.`,
                 duration: 5000
               });
             }

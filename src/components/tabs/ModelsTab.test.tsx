@@ -114,7 +114,7 @@ describe('ModelsTab', () => {
     expect(toast.error).toHaveBeenCalledWith(
       'Download Failed',
       expect.objectContaining({
-        description: expect.stringContaining('small.en')
+        description: expect.stringContaining('Small English')
       })
     );
   });

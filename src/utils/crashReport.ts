@@ -1,6 +1,7 @@
 import { getVersion } from '@tauri-apps/api/app';
 import { platform, version as osVersion, arch } from '@tauri-apps/plugin-os';
 import { invoke } from '@tauri-apps/api/core';
+import { getModelDisplayName } from '@/lib/model-display';
 
 export interface CrashReportData {
   errorMessage: string;
@@ -164,7 +165,7 @@ export function buildReportBody(data: ManualReportData): string {
   parts.push(`| Platform | ${data.platform} |`);
   parts.push(`| OS Version | ${data.osVersion} |`);
   parts.push(`| Architecture | ${data.architecture} |`);
-  parts.push(`| Current Model | ${data.currentModel || 'None'} |`);
+  parts.push(`| Current Model | ${getModelDisplayName(data.currentModel) || 'None'} |`);
   parts.push(`| Device ID | ${data.deviceId} |`);
   parts.push(`| Timestamp | ${data.timestamp} |`);
   parts.push('');
