@@ -105,18 +105,23 @@ impl ParakeetManager {
     /// FluidAudio stores models in ~/Library/Application Support/FluidAudio/Models/
     pub fn is_model_downloaded(&self, definition: &ParakeetModelDefinition) -> bool {
         if let Some(home) = dirs::home_dir() {
-            // FluidAudio's actual model storage path
-            // IMPORTANT: "Application Support" has a SPACE (macOS standard path)
-            let fluid_audio_models_path = home
-                .join("Library/Application Support/FluidAudio/Models")
-                .join(format!("{}-coreml", definition.id));
+            // FluidAudio 0.14+ stores default repos without the historical "-coreml" suffix.
+            // Keep the legacy path as a fallback so older installs remain visible until deleted.
+            let fluid_audio_model_paths = [
+                home.join("Library/Application Support/FluidAudio/Models")
+                    .join(definition.id),
+                home.join("Library/Application Support/FluidAudio/Models")
+                    .join(format!("{}-coreml", definition.id)),
+            ];
 
-            if fluid_audio_models_path.exists() {
-                // Check if directory contains model files
-                if let Ok(entries) = std::fs::read_dir(&fluid_audio_models_path) {
-                    if entries.count() > 0 {
-                        info!("Found FluidAudio model at: {:?}", fluid_audio_models_path);
-                        return true;
+            for fluid_audio_models_path in fluid_audio_model_paths {
+                if fluid_audio_models_path.exists() {
+                    // Check if directory contains model files
+                    if let Ok(entries) = std::fs::read_dir(&fluid_audio_models_path) {
+                        if entries.count() > 0 {
+                            info!("Found FluidAudio model at: {:?}", fluid_audio_models_path);
+                            return true;
+                        }
                     }
                 }
             }
@@ -141,7 +146,7 @@ impl ParakeetManager {
         app: &AppHandle,
         model_name: &str,
         cancel_flag: Option<Arc<AtomicBool>>,
-        progress_callback: impl Fn(u64, u64) + Send + 'static,
+        mut progress_callback: impl FnMut(u64, u64) + Send + 'static,
     ) -> Result<(), String> {
         let Some(definition) = self.get_model_definition(model_name) else {
             return Err(format!("Unknown Parakeet model: {model_name}"));
@@ -166,7 +171,18 @@ impl ParakeetManager {
         };
 
         // Send to sidecar and let it handle the download
-        match self.send_command(app, &command).await {
+        let estimated_size = definition.estimated_size;
+        let mut last_downloaded = 0;
+        match self
+            .client
+            .send_with_progress(app, &command, |progress| {
+                let progress = progress.clamp(0.0, 1.0) as f64;
+                let downloaded = (estimated_size as f64 * progress).round() as u64;
+                last_downloaded = downloaded;
+                progress_callback(downloaded, estimated_size);
+            })
+            .await
+        {
             Ok(ParakeetResponse::Status {
                 loaded_model: Some(id),
                 ..
@@ -180,7 +196,9 @@ impl ParakeetManager {
                 }
 
                 // Download/load completed for the requested version
-                progress_callback(definition.estimated_size, definition.estimated_size);
+                if last_downloaded < estimated_size {
+                    progress_callback(estimated_size, estimated_size);
+                }
                 Ok(())
             }
             Ok(ParakeetResponse::Status {

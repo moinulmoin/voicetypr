@@ -7,7 +7,7 @@
 
   [![GitHub release](https://img.shields.io/github/v/release/moinulmoin/voicetypr)](https://github.com/moinulmoin/voicetypr/releases)
   [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE.md)
-  [![macOS](https://img.shields.io/badge/macOS-13.0+-black)](https://www.apple.com/macos)
+  [![macOS](https://img.shields.io/badge/macOS-14.0+-black)](https://www.apple.com/macos)
   [![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6)](https://www.microsoft.com/windows)
   [![Downloads](https://img.shields.io/github/downloads/moinulmoin/voicetypr/total)](https://github.com/moinulmoin/voicetypr/releases)
 
@@ -58,7 +58,7 @@ VoiceTypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 ### Requirements
 
 #### macOS
-- macOS 13.0 (Ventura) or later
+- macOS 14.0 (Sonoma) or later
 - 3-4 GB free disk space (for AI models)
 - Microphone access permission
 - Accessibility access permission

@@ -82,7 +82,7 @@ echo "🔍 Verifying binary..."
 if echo '{"type":"status"}' | "$OUTPUT_PATH" 2>/dev/null | grep -q '"type"'; then
     echo "✅ Binary verification successful!"
 else
-    echo "⚠️  Warning: Binary verification failed (this is OK if not on macOS 13+)"
+    echo "⚠️  Warning: Binary verification failed (this is OK if not on macOS 14+)"
 fi
 
 # Print size

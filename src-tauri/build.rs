@@ -108,7 +108,7 @@ fn ensure_formatting_sidecar() {
 
 fn main() {
     // Set the deployment target to match our minimum system version
-    println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.0");
+    println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=14.0");
 
     // Build Swift Parakeet sidecar on macOS
     #[cfg(target_os = "macos")]

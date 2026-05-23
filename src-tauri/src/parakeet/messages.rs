@@ -98,6 +98,12 @@ pub enum ParakeetResponse {
         attention: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
+    Progress {
+        progress: f32,
+        #[serde(default)]
+        phase: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
     Transcription {
         text: String,
         #[serde(default)]

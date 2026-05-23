@@ -55,6 +55,12 @@ struct StatusResponse: Encodable {
     let attention: String? = nil
 }
 
+struct ProgressResponse: Encodable {
+    let type: String = "progress"
+    let progress: Double
+    let phase: String
+}
+
 struct ErrorResponse: Encodable {
     let type: String = "error"
     let code: String
@@ -81,16 +87,21 @@ enum SupportedModelVersion: String, CaseIterable {
     }
 
     var repoFolderName: String {
+        modelIdentifier
+    }
+
+    var legacyRepoFolderName: String {
         "\(modelIdentifier)-coreml"
     }
 }
 
 // Global ASR manager state
-var asrManager: AsrManager?
-var isModelLoaded = false
-var loadedModelVersion: SupportedModelVersion?
-var downloadedVersions = Set<SupportedModelVersion>()
+@MainActor var asrManager: AsrManager?
+@MainActor var isModelLoaded = false
+@MainActor var loadedModelVersion: SupportedModelVersion?
+@MainActor var downloadedVersions = Set<SupportedModelVersion>()
 
+@MainActor
 @main
 struct ParakeetSidecar {
     static func main() async {
@@ -141,14 +152,14 @@ struct ParakeetSidecar {
                     await loadModel(version: version, forceDownload: forceDownload, encoder: encoder)
 
                 case "unload_model":
-                    unloadModel()
+                    await unloadModel()
                     sendResponse(StatusResponse(loadedModel: nil, modelVersion: nil), encoder: encoder)
 
                 case "delete_model":
                     let version = parseModelVersion(json["model_version"], fallbackModelId: json["model_id"] as? String)
                     deleteModelFiles(for: version)
                     if loadedModelVersion == version {
-                        unloadModel()
+                        await unloadModel()
                     }
                     sendResponse(StatusResponse(loadedModel: loadedModelVersion?.modelIdentifier, modelVersion: loadedModelVersion?.rawValue), encoder: encoder)
 
@@ -172,7 +183,7 @@ struct ParakeetSidecar {
                     )
 
                 case "shutdown":
-                    unloadModel()
+                    await unloadModel()
                     exit(0)
 
                 default:
@@ -217,17 +228,20 @@ struct ParakeetSidecar {
 
         do {
             let models: AsrModels
+            let progressHandler: DownloadUtils.ProgressHandler = { progress in
+                sendProgress(progress, encoder: encoder)
+            }
 
             if forceDownload {
                 log("📥 Force-downloading Parakeet \(version.rawValue.uppercased()) via FluidAudio...")
                 log("🌐 This will download ~500MB. Please wait...")
-                models = try await AsrModels.downloadAndLoad(version: version.asrVersion)
+                models = try await AsrModels.downloadAndLoad(version: version.asrVersion, progressHandler: progressHandler)
                 downloadedVersions.insert(version)
                 log("✅ Download complete for \(version.rawValue.uppercased())")
             } else {
                 log("🔍 Attempting to load Parakeet \(version.rawValue.uppercased()) from cache...")
                 do {
-                    models = try await AsrModels.loadFromCache(version: version.asrVersion)
+                    models = try await AsrModels.loadFromCache(version: version.asrVersion, progressHandler: progressHandler)
                     downloadedVersions.insert(version)
                     log("✅ Loaded Parakeet \(version.rawValue.uppercased()) from cache")
                 } catch {
@@ -242,8 +256,8 @@ struct ParakeetSidecar {
 
             log("🔧 Initializing AsrManager...")
             let manager = AsrManager(config: .default)
-            log("🔧 Calling manager.initialize(models:)...")
-            try await manager.initialize(models: models)
+            log("🔧 Calling manager.loadModels(_:)...")
+            try await manager.loadModels(models)
             log("✅ AsrManager initialized successfully")
             asrManager = manager
 
@@ -263,8 +277,8 @@ struct ParakeetSidecar {
         log("───────────────────────────────────────────────────────")
     }
 
-    static func unloadModel() {
-        asrManager?.cleanup()
+    static func unloadModel() async {
+        await asrManager?.cleanup()
         asrManager = nil
         isModelLoaded = false
         loadedModelVersion = nil
@@ -274,19 +288,21 @@ struct ParakeetSidecar {
         let fileManager = FileManager.default
 
         let home = fileManager.homeDirectoryForCurrentUser
-        let repoFolder = version.repoFolderName
+        let repoFolders = [version.repoFolderName, version.legacyRepoFolderName]
 
-        let targets: [URL] = [
-            home
-                .appendingPathComponent("Library/Application Support/FluidAudio/Models", isDirectory: true)
-                .appendingPathComponent(repoFolder, isDirectory: true),
-            home
-                .appendingPathComponent("Library/Application Support", isDirectory: true)
-                .appendingPathComponent(repoFolder, isDirectory: true),
-            home
-                .appendingPathComponent("Library/Caches/FluidAudio", isDirectory: true)
-                .appendingPathComponent(repoFolder, isDirectory: true)
-        ]
+        let targets: [URL] = repoFolders.flatMap { repoFolder in
+            [
+                home
+                    .appendingPathComponent("Library/Application Support/FluidAudio/Models", isDirectory: true)
+                    .appendingPathComponent(repoFolder, isDirectory: true),
+                home
+                    .appendingPathComponent("Library/Application Support", isDirectory: true)
+                    .appendingPathComponent(repoFolder, isDirectory: true),
+                home
+                    .appendingPathComponent("Library/Caches/FluidAudio", isDirectory: true)
+                    .appendingPathComponent(repoFolder, isDirectory: true)
+            ]
+        }
 
         for path in targets {
             if fileManager.fileExists(atPath: path.path) {
@@ -345,7 +361,8 @@ struct ParakeetSidecar {
             let startTime = Date()
 
             // Transcribe the audio file (returns ASRResult)
-            let result = try await manager.transcribe(fileURL)
+            var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+            let result = try await manager.transcribe(fileURL, decoderState: &decoderState)
 
             let elapsed = Date().timeIntervalSince(startTime)
             log("✅ Transcription complete in \(String(format: "%.2f", elapsed))s")
@@ -371,7 +388,7 @@ struct ParakeetSidecar {
         log("───────────────────────────────────────────────────────")
     }
 
-    static func sendResponse<T: Encodable>(_ response: T, encoder: JSONEncoder) {
+    nonisolated static func sendResponse<T: Encodable>(_ response: T, encoder: JSONEncoder) {
         do {
             let data = try encoder.encode(response)
             if let jsonString = String(data: data, encoding: .utf8) {
@@ -384,8 +401,28 @@ struct ParakeetSidecar {
         }
     }
 
-    static func sendError(_ code: String, message: String, encoder: JSONEncoder) {
+    nonisolated static func sendError(_ code: String, message: String, encoder: JSONEncoder) {
         sendResponse(ErrorResponse(code: code, message: message), encoder: encoder)
+    }
+
+    nonisolated static func sendProgress(_ progress: DownloadUtils.DownloadProgress, encoder: JSONEncoder) {
+        let phase: String
+        switch progress.phase {
+        case .listing:
+            phase = "listing"
+        case .downloading(let completedFiles, let totalFiles):
+            phase = "downloading \(completedFiles)/\(totalFiles)"
+        case .compiling(let modelName):
+            phase = modelName.isEmpty ? "compiling" : "compiling \(modelName)"
+        }
+
+        sendResponse(
+            ProgressResponse(
+                progress: max(0.0, min(1.0, progress.fractionCompleted)),
+                phase: phase
+            ),
+            encoder: encoder
+        )
     }
 
     static func parseModelVersion(_ value: Any?) -> SupportedModelVersion {

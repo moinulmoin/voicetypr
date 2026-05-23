@@ -68,6 +68,18 @@ impl ParakeetSidecar {
         &mut self,
         command: &ParakeetCommand,
     ) -> Result<ParakeetResponse, ParakeetError> {
+        self.request_with_progress(command, None::<&mut fn(f32)>)
+            .await
+    }
+
+    pub async fn request_with_progress<F>(
+        &mut self,
+        command: &ParakeetCommand,
+        mut progress_callback: Option<&mut F>,
+    ) -> Result<ParakeetResponse, ParakeetError>
+    where
+        F: FnMut(f32),
+    {
         let mut payload = serde_json::to_string(command)?;
         payload.push('\n');
         self.child
@@ -83,15 +95,21 @@ impl ParakeetSidecar {
                         continue;
                     }
                     match parse_response_line(trimmed) {
-                        Ok(response) => {
-                            if let ParakeetResponse::Error { code, message, .. } = &response {
+                        Ok(response) => match &response {
+                            ParakeetResponse::Error { code, message, .. } => {
                                 return Err(ParakeetError::SidecarError {
                                     code: code.clone(),
                                     message: message.clone(),
                                 });
                             }
-                            return Ok(response);
-                        }
+                            ParakeetResponse::Progress { progress, .. } => {
+                                if let Some(callback) = progress_callback.as_deref_mut() {
+                                    callback(*progress);
+                                }
+                                continue;
+                            }
+                            _ => return Ok(response),
+                        },
                         Err(err) => {
                             return Err(err);
                         }
@@ -182,6 +200,45 @@ impl ParakeetClient {
         }
     }
 
+    pub async fn send_with_progress<F>(
+        &self,
+        app: &AppHandle,
+        command: &ParakeetCommand,
+        mut progress_callback: F,
+    ) -> Result<ParakeetResponse, ParakeetError>
+    where
+        F: FnMut(f32),
+    {
+        let mut guard = self.ensure(app).await?;
+        let response = match guard.as_mut() {
+            Some(sidecar) => {
+                sidecar
+                    .request_with_progress(command, Some(&mut progress_callback))
+                    .await
+            }
+            None => return Err(ParakeetError::Terminated),
+        };
+
+        match response {
+            Err(ParakeetError::Terminated) => {
+                let old = guard.take();
+                drop(guard);
+                if let Some(sidecar) = old {
+                    sidecar.kill();
+                }
+                let mut guard = self.ensure(app).await?;
+                if let Some(sidecar) = guard.as_mut() {
+                    sidecar
+                        .request_with_progress(command, Some(&mut progress_callback))
+                        .await
+                } else {
+                    Err(ParakeetError::Terminated)
+                }
+            }
+            other => other,
+        }
+    }
+
     pub async fn shutdown(&self) {
         if let Some(sidecar) = self.inner.write().await.take() {
             sidecar.kill();
@@ -235,6 +292,20 @@ mod tests {
             } => {
                 assert_eq!(loaded_model.as_deref(), Some("parakeet-tdt-0.6b-v2"));
                 assert_eq!(model_version.as_deref(), Some("v2"));
+            }
+            other => panic!("unexpected response: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_response_line_accepts_progress_events() {
+        let raw = r#"{"type":"progress","progress":0.42,"phase":"downloading 1/3"}"#;
+        let response = parse_response_line(raw).expect("expected valid response");
+
+        match response {
+            ParakeetResponse::Progress { progress, phase } => {
+                assert!((progress - 0.42).abs() < f32::EPSILON);
+                assert_eq!(phase.as_deref(), Some("downloading 1/3"));
             }
             other => panic!("unexpected response: {:?}", other),
         }

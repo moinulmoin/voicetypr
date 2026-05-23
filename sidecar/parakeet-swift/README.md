@@ -13,9 +13,9 @@ This Swift sidecar replaces the previous 123MB Python/MLX implementation with a 
 
 ## Requirements
 
-- macOS 13.0+ (Ventura or later)
-- Swift 5.10+
-- Xcode Command Line Tools
+- macOS 14.0+ (Sonoma or later)
+- Swift 6.0+
+- Xcode 16 Command Line Tools
 
 ## Building
 
