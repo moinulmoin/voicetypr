@@ -173,6 +173,7 @@ fn parakeet_segments_to_transcription_segments(
             text: segment.text,
             start_ms: segment.start.map(|value| (value.max(0.0) * 1000.0) as u64),
             end_ms: segment.end.map(|value| (value.max(0.0) * 1000.0) as u64),
+            speaker_id: None,
         })
         .collect()
 }

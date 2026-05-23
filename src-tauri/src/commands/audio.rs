@@ -473,8 +473,16 @@ fn parakeet_segments_to_transcription_segments(
             text: segment.text,
             start_ms: seconds_to_duration_ms(segment.start),
             end_ms: seconds_to_duration_ms(segment.end),
+            speaker_id: None,
         })
         .collect()
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UploadDiarizationSegment {
+    pub speaker_id: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
 }
 
 fn build_remote_transcription_result(
@@ -4082,6 +4090,39 @@ async fn transcribe_audio_file_impl(
         crate::writing::process_transcription(app.clone(), transcription_result, ai_enabled)
             .await?;
     Ok(writing_result.final_text)
+}
+
+#[tauri::command]
+pub async fn diarize_audio_file(
+    app: AppHandle,
+    file_path: String,
+) -> Result<Vec<UploadDiarizationSegment>, String> {
+    validate_recording_requirements(&app).await?;
+
+    let audio_path = std::path::PathBuf::from(&file_path);
+    if !audio_path.exists() {
+        return Err(format!("Audio file not found: {}", file_path));
+    }
+
+    let parakeet_manager = app.state::<ParakeetManager>();
+    match parakeet_manager
+        .diarize(&app, audio_path)
+        .await
+        .map_err(|err| format!("Parakeet diarization failed: {}", err))?
+    {
+        ParakeetResponse::Diarization { segments } => Ok(segments
+            .into_iter()
+            .map(|segment| UploadDiarizationSegment {
+                speaker_id: segment.speaker_id,
+                start_ms: seconds_to_duration_ms(Some(segment.start)).unwrap_or_default(),
+                end_ms: seconds_to_duration_ms(Some(segment.end)).unwrap_or_default(),
+            })
+            .collect()),
+        other => Err(format!(
+            "Unexpected Parakeet diarization response: {:?}",
+            other
+        )),
+    }
 }
 
 #[tauri::command]

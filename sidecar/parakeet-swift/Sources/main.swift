@@ -42,6 +42,17 @@ struct TranscriptionResponse: Encodable {
     }
 }
 
+struct DiarizationResponse: Encodable {
+    let type: String = "diarization"
+    let segments: [SpeakerSegment]
+}
+
+struct SpeakerSegment: Encodable {
+    let speakerId: String
+    let start: Float
+    let end: Float
+}
+
 struct Segment: Encodable {
     let text: String
 }
@@ -88,10 +99,6 @@ enum SupportedModelVersion: String, CaseIterable {
 
     var repoFolderName: String {
         modelIdentifier
-    }
-
-    var legacyRepoFolderName: String {
-        "\(modelIdentifier)-coreml"
     }
 }
 
@@ -169,6 +176,13 @@ struct ParakeetSidecar {
                         let language = json["language"] as? String
                         let translateToEnglish = json["translate_to_english"] as? Bool ?? false
                         await transcribeFile(audioPath, language: language, translateToEnglish: translateToEnglish, encoder: encoder)
+                    } else {
+                        sendError("missing_audio_path", message: "audio_path is required", encoder: encoder)
+                    }
+
+                case "diarize":
+                    if let audioPath = json["audio_path"] as? String {
+                        await diarizeFile(audioPath, encoder: encoder)
                     } else {
                         sendError("missing_audio_path", message: "audio_path is required", encoder: encoder)
                     }
@@ -288,21 +302,17 @@ struct ParakeetSidecar {
         let fileManager = FileManager.default
 
         let home = fileManager.homeDirectoryForCurrentUser
-        let repoFolders = [version.repoFolderName, version.legacyRepoFolderName]
-
-        let targets: [URL] = repoFolders.flatMap { repoFolder in
-            [
-                home
-                    .appendingPathComponent("Library/Application Support/FluidAudio/Models", isDirectory: true)
-                    .appendingPathComponent(repoFolder, isDirectory: true),
-                home
-                    .appendingPathComponent("Library/Application Support", isDirectory: true)
-                    .appendingPathComponent(repoFolder, isDirectory: true),
-                home
-                    .appendingPathComponent("Library/Caches/FluidAudio", isDirectory: true)
-                    .appendingPathComponent(repoFolder, isDirectory: true)
-            ]
-        }
+        let targets: [URL] = [
+            home
+                .appendingPathComponent("Library/Application Support/FluidAudio/Models", isDirectory: true)
+                .appendingPathComponent(version.repoFolderName, isDirectory: true),
+            home
+                .appendingPathComponent("Library/Application Support", isDirectory: true)
+                .appendingPathComponent(version.repoFolderName, isDirectory: true),
+            home
+                .appendingPathComponent("Library/Caches/FluidAudio", isDirectory: true)
+                .appendingPathComponent(version.repoFolderName, isDirectory: true)
+        ]
 
         for path in targets {
             if fileManager.fileExists(atPath: path.path) {
@@ -385,6 +395,42 @@ struct ParakeetSidecar {
             // Send error response instead of transcription with error
             sendError("transcription_failed", message: "Transcription failed: \(error.localizedDescription)", encoder: encoder)
         }
+        log("───────────────────────────────────────────────────────")
+    }
+
+    nonisolated static func diarizeFile(_ audioPath: String, encoder: JSONEncoder) async {
+        log("───────────────────────────────────────────────────────")
+        log("👥 DIARIZATION REQUEST")
+        log("───────────────────────────────────────────────────────")
+        log("📄 Audio path: \(audioPath)")
+
+        guard FileManager.default.fileExists(atPath: audioPath) else {
+            log("❌ Audio file not found: \(audioPath)")
+            sendError("file_not_found", message: "Audio file not found: \(audioPath)", encoder: encoder)
+            return
+        }
+
+        do {
+            let manager = OfflineDiarizerManager()
+            try await manager.prepareModels()
+            let result = try await manager.process(URL(fileURLWithPath: audioPath))
+            let segments = result.segments.map { segment in
+                SpeakerSegment(
+                    speakerId: segment.speakerId,
+                    start: segment.startTimeSeconds,
+                    end: segment.endTimeSeconds
+                )
+            }
+
+            sendResponse(DiarizationResponse(segments: segments), encoder: encoder)
+        } catch {
+            log("❌ DIARIZATION FAILED")
+            log("❌ Error type: \(type(of: error))")
+            log("❌ Error details: \(error)")
+            log("❌ Localized: \(error.localizedDescription)")
+            sendError("diarization_failed", message: "Diarization failed: \(error.localizedDescription)", encoder: encoder)
+        }
+
         log("───────────────────────────────────────────────────────")
     }
 

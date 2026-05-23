@@ -83,13 +83,14 @@ pub async fn download_model(
     let request_id_for_progress = request_id.clone();
 
     // Create an async-safe wrapper for progress callback
-    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, u64)>();
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(u64, u64, Option<String>)>();
 
     // Spawn task to handle progress updates
     let progress_handle = tokio::spawn(async move {
         let mut verification_emitted = false;
 
-        while let Some((downloaded, total)) = progress_rx.recv().await {
+        while let Some((downloaded, total, phase)) = progress_rx.recv().await {
             let progress = (downloaded as f64 / total as f64) * 100.0;
             log::debug!(
                 "Download progress for {}: {:.1}%",
@@ -113,7 +114,8 @@ pub async fn download_model(
                     "downloaded": downloaded,
                     "total": total,
                     "progress": progress,
-                    "requestId": request_id_for_progress.as_deref()
+                    "requestId": request_id_for_progress.as_deref(),
+                    "phase": phase.as_deref(),
                 }),
             ) {
                 log::warn!("Failed to emit download progress: {}", e);
@@ -157,7 +159,7 @@ pub async fn download_model(
                         &model_name,
                         Some(cancel_flag.clone()),
                         move |downloaded, total| {
-                            let _ = progress_tx_clone.send((downloaded, total));
+                            let _ = progress_tx_clone.send((downloaded, total, None));
                         },
                     )
                     .await;
@@ -170,8 +172,8 @@ pub async fn download_model(
                         &app,
                         &model_name,
                         Some(cancel_flag.clone()),
-                        move |downloaded, total| {
-                            let _ = progress_tx_clone.send((downloaded, total));
+                        move |downloaded, total, phase| {
+                            let _ = progress_tx_clone.send((downloaded, total, phase));
                         },
                     )
                     .await

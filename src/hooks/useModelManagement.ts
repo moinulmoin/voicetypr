@@ -84,6 +84,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   const [downloadProgress, setDownloadProgress] = useState<
     Record<string, number>
   >({});
+  const [downloadPhases, setDownloadPhases] = useState<Record<string, string>>({});
   const [verifyingModels, setVerifyingModels] = useState<Set<string>>(
     new Set(),
   );
@@ -159,6 +160,11 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           ...prev,
           [modelName]: 0,
         }));
+        setDownloadPhases((prev) => {
+          const newPhases = { ...prev };
+          delete newPhases[modelName];
+          return newPhases;
+        });
 
         // Don't await - let it run async so progress events can update UI
         invoke("download_model", { modelName, requestId }).catch((error) => {
@@ -195,6 +201,11 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
             const newProgress = { ...prev };
             delete newProgress[modelName];
             return newProgress;
+          });
+          setDownloadPhases((prev) => {
+            const newPhases = { ...prev };
+            delete newPhases[modelName];
+            return newPhases;
           });
           // Remove from active downloads
           if (activeDownloadRequests.current.get(modelName) === requestId) {
@@ -240,6 +251,11 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           const newProgress = { ...prev };
           delete newProgress[modelName];
           return newProgress;
+        });
+        setDownloadPhases((prev) => {
+          const newPhases = { ...prev };
+          delete newPhases[modelName];
+          return newPhases;
         });
       } catch (error) {
         cancelledDownloads.current.delete(modelName);
@@ -297,6 +313,48 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     [loadModels, models, showToasts],
   );
 
+  const repairModel = useCallback(
+    async (modelName: string) => {
+      const confirmed = await ask(
+        `Repair ${getModelDisplayName(modelName, modelsRef.current)} by deleting its local cache and downloading it again?`,
+        {
+          title: "Repair Model",
+          kind: "warning",
+        },
+      );
+
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        await invoke("delete_model", { modelName });
+        setModels((prev) => {
+          const existing = prev[modelName];
+          if (!existing) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            [modelName]: {
+              ...existing,
+              downloaded: false,
+              requires_setup: true,
+            },
+          };
+        });
+        await downloadModel(modelName);
+      } catch (error) {
+        console.error("Failed to repair model:", error);
+        if (showToasts) {
+          toast.error(`Failed to repair ${getModelDisplayName(modelName, modelsRef.current)}: ${error}`);
+        }
+      }
+    },
+    [downloadModel, showToasts],
+  );
+
   // Setup event listeners BEFORE any other effects
   useEffect(() => {
     let unregisterProgress: (() => void) | undefined;
@@ -313,8 +371,9 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         total: number;
         progress: number;
         requestId?: string;
+        phase?: string | null;
       }>("download-progress", (payload) => {
-        const { model, progress, downloaded, total, engine, requestId } = payload;
+        const { model, progress, downloaded, total, engine, requestId, phase } = payload;
         if (requestId && cancelledDownloadRequests.current.has(requestId)) {
           return;
         }
@@ -333,6 +392,12 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           ...prev,
           [model]: Math.min(progress, 100), // Ensure progress doesn't exceed 100%
         }));
+        if (phase) {
+          setDownloadPhases((prev) => ({
+            ...prev,
+            [model]: phase,
+          }));
+        }
       });
 
       // Model verifying (after download, before verification)
@@ -357,12 +422,25 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           ...prev,
           [modelName]: 100,
         }));
+        setDownloadPhases((prev) => {
+          const newPhases = { ...prev };
+          delete newPhases[modelName];
+          return newPhases;
+        });
 
         // Add to verifying set
         setVerifyingModels((prev) => new Set(prev).add(modelName));
 
         // Remove from download progress after a brief delay to ensure UI updates
         setTimeout(() => {
+          const activeRequestId = activeDownloadRequests.current.get(modelName);
+          if (
+            (requestId && activeRequestId !== requestId) ||
+            (!requestId && activeRequestId)
+          ) {
+            return;
+          }
+
           setDownloadProgress((prev) => {
             const newProgress = { ...prev };
             delete newProgress[modelName];
@@ -397,6 +475,11 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
             delete newProgress[modelName];
             return newProgress;
           });
+          setDownloadPhases((prev) => {
+            const newPhases = { ...prev };
+            delete newPhases[modelName];
+            return newPhases;
+          });
           return;
         }
 
@@ -429,6 +512,11 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           const newProgress = { ...prev };
           delete newProgress[modelName];
           return newProgress;
+        });
+        setDownloadPhases((prev) => {
+          const newPhases = { ...prev };
+          delete newPhases[modelName];
+          return newPhases;
         });
 
         // Remove from verifying set
@@ -473,6 +561,11 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
             delete newProgress[modelName];
             return newProgress;
           });
+          setDownloadPhases((prev) => {
+            const newPhases = { ...prev };
+            delete newPhases[modelName];
+            return newPhases;
+          });
         }
 
         if (showToasts) {
@@ -507,6 +600,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     modelOrder,
     downloadProgress,
     verifyingModels,
+    downloadPhases,
     isLoading,
 
     // Actions
@@ -514,6 +608,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     downloadModel,
     cancelDownload,
     deleteModel,
+    repairModel,
 
     // Utils
     sortedModels: sortedModelsArray,

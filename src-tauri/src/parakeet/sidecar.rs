@@ -3,6 +3,9 @@
 use super::error::ParakeetError;
 use super::messages::{ParakeetCommand, ParakeetResponse};
 use log::{error, warn};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 use tauri::async_runtime::{Receiver, RwLock};
 use tauri::AppHandle;
 use tauri_plugin_shell::{
@@ -42,7 +45,7 @@ fn parse_response_line(raw: &str) -> Result<ParakeetResponse, ParakeetError> {
 }
 pub struct ParakeetSidecar {
     rx: Receiver<CommandEvent>,
-    child: CommandChild,
+    child: Option<CommandChild>,
 }
 
 impl ParakeetSidecar {
@@ -61,32 +64,66 @@ impl ParakeetSidecar {
             child.pid(),
             binary_name
         );
-        Ok(Self { rx, child })
+        Ok(Self {
+            rx,
+            child: Some(child),
+        })
     }
 
     pub async fn request(
         &mut self,
         command: &ParakeetCommand,
     ) -> Result<ParakeetResponse, ParakeetError> {
-        self.request_with_progress(command, None::<&mut fn(f32)>)
+        self.request_with_progress_and_cancel(command, None::<&mut fn(f32, Option<&str>)>, None)
             .await
     }
 
-    pub async fn request_with_progress<F>(
+    pub async fn request_with_progress_and_cancel<F>(
         &mut self,
         command: &ParakeetCommand,
         mut progress_callback: Option<&mut F>,
+        cancel_flag: Option<Arc<AtomicBool>>,
     ) -> Result<ParakeetResponse, ParakeetError>
     where
-        F: FnMut(f32),
+        F: FnMut(f32, Option<&str>),
     {
         let mut payload = serde_json::to_string(command)?;
         payload.push('\n');
         self.child
+            .as_mut()
+            .ok_or(ParakeetError::Terminated)?
             .write(payload.as_bytes())
             .map_err(|e| ParakeetError::SpawnError(e.to_string()))?;
 
-        while let Some(event) = self.rx.recv().await {
+        loop {
+            if cancel_flag
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                if let Some(child) = self.child.take() {
+                    if let Err(err) = child.kill() {
+                        warn!("Failed to kill Parakeet sidecar during cancellation: {err:?}");
+                    }
+                }
+                return Err(ParakeetError::SidecarError {
+                    code: "cancelled".to_string(),
+                    message: "Download cancelled by user".to_string(),
+                });
+            }
+
+            let event = if cancel_flag.is_some() {
+                tokio::select! {
+                    event = self.rx.recv() => event,
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => continue,
+                }
+            } else {
+                self.rx.recv().await
+            };
+
+            let Some(event) = event else {
+                break;
+            };
+
             match event {
                 CommandEvent::Stdout(line) => {
                     let text = String::from_utf8_lossy(&line);
@@ -102,9 +139,9 @@ impl ParakeetSidecar {
                                     message: message.clone(),
                                 });
                             }
-                            ParakeetResponse::Progress { progress, .. } => {
+                            ParakeetResponse::Progress { progress, phase } => {
                                 if let Some(callback) = progress_callback.as_deref_mut() {
-                                    callback(*progress);
+                                    callback(*progress, phase.as_deref());
                                 }
                                 continue;
                             }
@@ -140,8 +177,10 @@ impl ParakeetSidecar {
     }
 
     pub fn kill(self) {
-        if let Err(err) = self.child.kill() {
-            warn!("Failed to kill Parakeet sidecar: {err:?}");
+        if let Some(child) = self.child {
+            if let Err(err) = child.kill() {
+                warn!("Failed to kill Parakeet sidecar: {err:?}");
+            }
         }
     }
 }
@@ -200,27 +239,36 @@ impl ParakeetClient {
         }
     }
 
-    pub async fn send_with_progress<F>(
+    pub async fn send_with_progress_and_cancel<F>(
         &self,
         app: &AppHandle,
         command: &ParakeetCommand,
+        cancel_flag: Option<Arc<AtomicBool>>,
         mut progress_callback: F,
     ) -> Result<ParakeetResponse, ParakeetError>
     where
-        F: FnMut(f32),
+        F: FnMut(f32, Option<&str>),
     {
         let mut guard = self.ensure(app).await?;
         let response = match guard.as_mut() {
             Some(sidecar) => {
                 sidecar
-                    .request_with_progress(command, Some(&mut progress_callback))
+                    .request_with_progress_and_cancel(
+                        command,
+                        Some(&mut progress_callback),
+                        cancel_flag.clone(),
+                    )
                     .await
             }
             None => return Err(ParakeetError::Terminated),
         };
 
         match response {
-            Err(ParakeetError::Terminated) => {
+            Err(ParakeetError::Terminated)
+                if !cancel_flag
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed)) =>
+            {
                 let old = guard.take();
                 drop(guard);
                 if let Some(sidecar) = old {
@@ -229,11 +277,23 @@ impl ParakeetClient {
                 let mut guard = self.ensure(app).await?;
                 if let Some(sidecar) = guard.as_mut() {
                     sidecar
-                        .request_with_progress(command, Some(&mut progress_callback))
+                        .request_with_progress_and_cancel(
+                            command,
+                            Some(&mut progress_callback),
+                            cancel_flag,
+                        )
                         .await
                 } else {
                     Err(ParakeetError::Terminated)
                 }
+            }
+            Err(ParakeetError::SidecarError { code, message }) if code == "cancelled" => {
+                let old = guard.take();
+                drop(guard);
+                if let Some(sidecar) = old {
+                    sidecar.kill();
+                }
+                Err(ParakeetError::SidecarError { code, message })
             }
             other => other,
         }
@@ -306,6 +366,22 @@ mod tests {
             ParakeetResponse::Progress { progress, phase } => {
                 assert!((progress - 0.42).abs() < f32::EPSILON);
                 assert_eq!(phase.as_deref(), Some("downloading 1/3"));
+            }
+            other => panic!("unexpected response: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_response_line_accepts_diarization_events() {
+        let raw = r#"{"type":"diarization","segments":[{"speakerId":"speaker_1","start":0.5,"end":2.25}]}"#;
+        let response = parse_response_line(raw).expect("expected valid response");
+
+        match response {
+            ParakeetResponse::Diarization { segments } => {
+                assert_eq!(segments.len(), 1);
+                assert_eq!(segments[0].speaker_id, "speaker_1");
+                assert!((segments[0].start - 0.5).abs() < f32::EPSILON);
+                assert!((segments[0].end - 2.25).abs() < f32::EPSILON);
             }
             other => panic!("unexpected response: {:?}", other),
         }

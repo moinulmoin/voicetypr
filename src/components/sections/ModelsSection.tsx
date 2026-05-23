@@ -57,11 +57,13 @@ import { AddServerModal } from "./AddServerModal";
 interface ModelsSectionProps {
   models: [string, ModelInfo][];
   downloadProgress: Record<string, number>;
+  downloadPhases?: Record<string, string>;
   verifyingModels: Set<string>;
   currentModel?: string;
   onDownload: (modelName: string) => Promise<void> | void;
   onDelete: (modelName: string) => Promise<void> | void;
   onCancelDownload: (modelName: string) => Promise<void> | void;
+  onRepair?: (modelName: string) => Promise<void> | void;
   onSelect: (modelName: string) => Promise<void> | void;
   refreshModels: () => Promise<void>;
 }
@@ -85,11 +87,13 @@ interface CloudModalState {
 export function ModelsSection({
   models,
   downloadProgress,
+  downloadPhases = {},
   verifyingModels,
   currentModel,
   onDownload,
   onDelete,
   onCancelDownload,
+  onRepair,
   onSelect,
   refreshModels,
 }: ModelsSectionProps) {
@@ -719,10 +723,12 @@ export function ModelsSection({
                       name={name}
                       model={model}
                       downloadProgress={downloadProgress[name]}
+                      downloadPhase={downloadPhases[name]}
                       isVerifying={verifyingModels.has(name)}
                       onDownload={onDownload}
                       onDelete={onDelete}
                       onCancelDownload={onCancelDownload}
+                      onRepair={onRepair}
                       onSelect={async (modelName) => {
                         await clearActiveRemote();
                         void onSelect(modelName);
@@ -771,9 +777,11 @@ export function ModelsSection({
                         model={model}
                         downloadProgress={downloadProgress[name]}
                         isVerifying={verifyingModels.has(name)}
+                        downloadPhase={downloadPhases[name]}
                         onDownload={onDownload}
                         onDelete={onDelete}
                         onCancelDownload={onCancelDownload}
+                        onRepair={onRepair}
                         onSelect={async (modelName) => {
                           await clearActiveRemote();
                           void onSelect(modelName);

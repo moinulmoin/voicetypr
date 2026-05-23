@@ -43,6 +43,8 @@ export function AudioUploadSection() {
     status,
     resultText,
     error: storeError,
+    speakerSegments,
+    diarizationError,
     select,
     clearSelection,
     start,
@@ -51,6 +53,13 @@ export function AudioUploadSection() {
   const isProcessing = status === 'processing';
   const effectiveFileName = selectedFile?.name || null;
   const hasEffectiveSelection = !!selectedFile;
+  const formatTimestamp = (milliseconds: number) => {
+    const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
+
 
   const resolveHistoryModelName = async (remoteServerIdOverride?: string | null) => {
     const effectiveRemoteId = remoteServerIdOverride ?? activeRemoteServer;
@@ -406,6 +415,40 @@ export function AudioUploadSection() {
                           <span>{resultText.split(' ').length} words</span>
                         </div>
                       </div>
+
+                      {speakerSegments.length > 0 && (
+                        <div className="rounded-lg border border-border/50 bg-card/60 p-4">
+                          <div className="mb-3 flex items-center justify-between gap-3">
+                            <h3 className="text-sm font-medium">Speaker timeline</h3>
+                            <Badge variant="secondary">
+                              {new Set(speakerSegments.map((segment) => segment.speaker_id)).size} speakers
+                            </Badge>
+                          </div>
+                          <ScrollArea className="max-h-48">
+                            <div className="space-y-2 pr-2">
+                              {speakerSegments.map((segment, index) => (
+                                <div
+                                  key={`${segment.speaker_id}-${segment.start_ms}-${segment.end_ms}-${index}`}
+                                  className="flex items-center justify-between gap-3 rounded-md bg-accent/30 px-3 py-2 text-xs"
+                                >
+                                  <span className="font-medium text-foreground">
+                                    {segment.speaker_id}
+                                  </span>
+                                  <span className="font-mono text-muted-foreground">
+                                    {formatTimestamp(segment.start_ms)}–{formatTimestamp(segment.end_ms)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </ScrollArea>
+                        </div>
+                      )}
+
+                      {diarizationError && (
+                        <div className="rounded-lg border border-amber-200/50 bg-amber-500/10 p-3 text-xs text-amber-700">
+                          Speaker timeline unavailable: {diarizationError}
+                        </div>
+                      )}
 
                       <div className="flex items-center justify-between gap-3">
                         <Button onClick={handleCopy} variant="outline">

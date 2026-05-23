@@ -65,6 +65,8 @@ pub struct TranscriptionSegment {
     pub text: String,
     pub start_ms: Option<u64>,
     pub end_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

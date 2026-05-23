@@ -1224,6 +1224,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             verify_model,
             transcribe_audio,
             transcribe_audio_file,
+            diarize_audio_file,
             get_settings,
             save_settings,
             set_audio_device,

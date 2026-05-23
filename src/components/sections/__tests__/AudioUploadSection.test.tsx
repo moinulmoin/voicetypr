@@ -119,6 +119,58 @@ describe('AudioUploadSection - Essential User Flows', () => {
       expect(toast.success).toHaveBeenCalledWith('Transcription completed and saved to history!');
     });
 
+    it('shows a speaker timeline for Parakeet uploads', async () => {
+      const user = userEvent.setup();
+      mockSettings.current_model = 'parakeet-tdt-0.6b-v3';
+      mockSettings.current_model_engine = 'parakeet';
+      vi.mocked(open).mockResolvedValue('/audio/interview.wav');
+      vi.mocked(invoke).mockImplementation(async (cmd) => {
+        if (cmd === 'get_model_status') {
+          return {
+            models: [{
+              ...readyLocalModel,
+              name: 'parakeet-tdt-0.6b-v3',
+              display_name: 'Parakeet V3',
+              engine: 'parakeet',
+            }],
+          };
+        }
+        if (cmd === 'get_active_remote_server') {
+          return null;
+        }
+        if (cmd === 'get_recognition_availability_snapshot') {
+          return {
+            parakeet_available: true,
+            remote_available: false,
+          };
+        }
+        if (cmd === 'transcribe_audio_file') {
+          return 'Speaker transcript';
+        }
+        if (cmd === 'diarize_audio_file') {
+          return [{ speaker_id: 'speaker_1', start_ms: 0, end_ms: 2500 }];
+        }
+        return null;
+      });
+
+      render(<AudioUploadSection />);
+
+      await user.click(await screen.findByRole('button', { name: /select file/i }));
+      await waitFor(() => screen.getByText(/interview.wav/));
+      await user.click(await screen.findByRole('button', { name: /transcribe/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Speaker transcript')).toBeInTheDocument();
+      });
+
+      expect(invoke).toHaveBeenCalledWith('diarize_audio_file', {
+        filePath: '/audio/interview.wav',
+      });
+      expect(screen.getByText('Speaker timeline')).toBeInTheDocument();
+      expect(screen.getByText('speaker_1')).toBeInTheDocument();
+      expect(screen.getByText('0:00–0:02')).toBeInTheDocument();
+    });
+
     it('user can copy transcribed text to clipboard', async () => {
       const user = userEvent.setup();
 
@@ -394,7 +446,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
 
       expect(invoke).toHaveBeenCalledWith('save_transcription', {
         text: 'Soniox transcript',
-        model: 'Soniox'
+        model: 'Soniox (Cloud)'
       });
     });
 

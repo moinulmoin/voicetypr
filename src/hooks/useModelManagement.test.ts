@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { useModelManagement } from './useModelManagement';
 
@@ -85,6 +85,10 @@ describe('useModelManagement', () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('does not show a downloaded toast when completion arrives after cancellation', async () => {
     const { result } = renderHook(() => useModelManagement());
 
@@ -156,5 +160,52 @@ describe('useModelManagement', () => {
     });
 
     expect(toast.success).toHaveBeenCalledWith('Parakeet V3 downloaded successfully');
+  });
+
+  it('does not let an old verification timer hide a retry progress update', async () => {
+    const { result } = renderHook(() => useModelManagement());
+
+    await waitFor(() => {
+      expect(result.current.models['parakeet-tdt-0.6b-v3']).toBeDefined();
+      expect(eventHandlers.has('model-verifying')).toBe(true);
+      expect(eventHandlers.has('download-progress')).toBe(true);
+    });
+
+    vi.useFakeTimers();
+
+    await act(async () => {
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
+    });
+    const staleRequestId = getDownloadRequestId(0);
+
+    await act(async () => {
+      await emitModelEvent('model-verifying', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId: staleRequestId,
+      });
+      await result.current.cancelDownload('parakeet-tdt-0.6b-v3');
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
+    });
+    const retryRequestId = getDownloadRequestId(1);
+
+    await act(async () => {
+      await emitModelEvent('download-progress', {
+        model: 'parakeet-tdt-0.6b-v3',
+        downloaded: 25,
+        total: 100,
+        progress: 25,
+        requestId: retryRequestId,
+        phase: 'downloading 1/4',
+      });
+    });
+
+    expect(result.current.downloadProgress['parakeet-tdt-0.6b-v3']).toBe(25);
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(result.current.downloadProgress['parakeet-tdt-0.6b-v3']).toBe(25);
+    expect(result.current.downloadPhases['parakeet-tdt-0.6b-v3']).toBe('downloading 1/4');
   });
 });

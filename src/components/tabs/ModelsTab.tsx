@@ -14,10 +14,12 @@ export function ModelsTab() {
   // Use the model management context
   const {
     downloadProgress,
+    downloadPhases,
     verifyingModels,
     downloadModel,
     cancelDownload,
     deleteModel,
+    repairModel,
     loadModels,
     sortedModels
   } = useModelManagementContext();
@@ -92,11 +94,13 @@ export function ModelsTab() {
     <ModelsSection
       models={sortedModels}
       downloadProgress={downloadProgress}
+      downloadPhases={downloadPhases}
       verifyingModels={verifyingModels}
       currentModel={settings?.current_model}
       onDownload={downloadModel}
       onDelete={handleDeleteModel}
       onCancelDownload={cancelDownload}
+      onRepair={repairModel}
       onSelect={async (modelName) => {
         if (!settings) return;
         const engine = sortedModels.find(([name]) => name === modelName)?.[1]?.engine ?? 'whisper';

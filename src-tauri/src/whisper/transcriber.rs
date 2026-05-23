@@ -768,6 +768,7 @@ impl Transcriber {
                 text: segment_text,
                 start_ms: None,
                 end_ms: None,
+                speaker_id: None,
             });
         }
 

@@ -81,7 +81,7 @@ pub static AVAILABLE_MODELS: Lazy<Vec<ParakeetModelDefinition>> = Lazy::new(|| {
                     filename: "Decoder.mlmodelc",
                 },
                 ParakeetModelFile {
-                    filename: "JointDecision.mlmodelc",
+                    filename: "JointDecisionv3.mlmodelc",
                 },
                 ParakeetModelFile {
                     filename: "parakeet_vocab.json",

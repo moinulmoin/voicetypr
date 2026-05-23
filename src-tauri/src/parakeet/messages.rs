@@ -50,6 +50,9 @@ pub enum ParakeetCommand {
         #[serde(skip_serializing_if = "Option::is_none")]
         local_attention_context: Option<i32>,
     },
+    Diarize {
+        audio_path: String,
+    },
     Status {},
     DeleteModel {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -104,6 +107,11 @@ pub enum ParakeetResponse {
         phase: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
+    Diarization {
+        #[serde(default)]
+        segments: Vec<ParakeetSpeakerSegment>,
+    },
+    #[serde(rename_all = "camelCase")]
     Transcription {
         text: String,
         #[serde(default)]
@@ -124,4 +132,12 @@ pub struct ParakeetSegment {
     pub end: Option<f32>,
     #[serde(default)]
     pub tokens: Option<Vec<Value>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ParakeetSpeakerSegment {
+    #[serde(rename = "speakerId")]
+    pub speaker_id: String,
+    pub start: f32,
+    pub end: f32,
 }
