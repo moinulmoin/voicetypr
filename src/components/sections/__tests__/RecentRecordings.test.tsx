@@ -6,6 +6,14 @@ import type { TranscriptionHistory } from '@/types';
 
 const invokeMock = vi.fn();
 
+const mockSettings: {
+  current_model: string;
+  current_model_engine: 'whisper' | 'parakeet' | 'soniox';
+} = {
+  current_model: 'small.en',
+  current_model_engine: 'whisper',
+};
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
@@ -27,11 +35,12 @@ vi.mock('@/contexts/ReadinessContext', () => ({
   useCanAutoInsert: () => true,
 }));
 
-vi.mock('@/contexts/ModelManagementContext', () => ({
-  useModelManagementContext: () => ({
-    modelOrder: ['small.en', 'base.en', 'large-v3'],
+vi.mock('@/contexts/SettingsContext', () => ({
+  useSettings: () => ({
+    settings: mockSettings,
   }),
 }));
+
 
 vi.mock('sonner', () => ({
   toast: {
@@ -61,6 +70,8 @@ const createDeferred = <T,>() => {
 describe('RecentRecordings re-transcription', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSettings.current_model = 'small.en';
+    mockSettings.current_model_engine = 'whisper';
     invokeMock.mockImplementation(async (cmd: string) => {
       switch (cmd) {
         case 'check_recording_exists':
@@ -71,33 +82,33 @@ describe('RecentRecordings re-transcription', () => {
           };
         case 'list_remote_servers':
           return [];
+        case 'get_active_remote_server':
+          return null;
         default:
           return null;
       }
     });
   });
 
-  it('only lists online remote servers in the re-transcribe menu', async () => {
+  it('uses the active remote server when re-transcribing', async () => {
     const user = userEvent.setup();
 
-    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+    invokeMock.mockImplementation(async (cmd: string) => {
       switch (cmd) {
         case 'check_recording_exists':
           return true;
-        case 'get_model_status':
-          return {
-            models: [{ name: 'small.en', downloaded: true, engine: 'whisper' }],
-          };
+        case 'get_active_remote_server':
+          return 'online-server';
         case 'list_remote_servers':
           return [
-            { id: 'online-server', name: 'Office PC', host: '10.0.0.4', port: 47842 },
-            { id: 'offline-server', name: 'Old PC', host: '10.0.0.8', port: 47842 },
+            { id: 'online-server', name: 'Office PC', host: '10.0.0.4', port: 47842, model: 'large-v3' },
           ];
-        case 'check_remote_server_status':
-          if (args?.serverId === 'online-server') {
-            return { id: 'online-server', name: 'Office PC', host: '10.0.0.4', port: 47842, model: 'large-v3', status: 'Online' };
-          }
-          return { id: 'offline-server', name: 'Old PC', host: '10.0.0.8', port: 47842, model: 'large-v3', status: 'Offline' };
+        case 'get_recordings_directory':
+          return '/recordings';
+        case 'save_retranscription':
+          return 'retry-remote';
+        case 'transcribe_remote':
+          return 'Remote retry text';
         default:
           return null;
       }
@@ -105,12 +116,27 @@ describe('RecentRecordings re-transcription', () => {
 
     render(<RecentRecordings history={[historyItem]} onHistoryUpdate={vi.fn()} />);
 
-    const retranscribeButton = await screen.findByTitle('Re-transcribe');
+    const retranscribeButton = await screen.findByTitle('Re-transcribe with current source');
     await user.click(retranscribeButton);
 
-    expect(await screen.findByText('Office PC - Large v3')).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.queryByText('Old PC')).not.toBeInTheDocument();
+      expect(invokeMock).toHaveBeenCalledWith('save_retranscription', {
+        text: 'In progress...',
+        model: 'Remote: Office PC',
+        recordingFile: 'sample.wav',
+        sourceRecordingId: '2024-01-01T00:00:00Z',
+        status: 'in_progress',
+      });
+      expect(invokeMock).toHaveBeenCalledWith('transcribe_remote', {
+        serverId: 'online-server',
+        audioPath: '/recordings/sample.wav',
+      });
+      expect(invokeMock).toHaveBeenCalledWith('update_transcription', {
+        timestamp: 'retry-remote',
+        text: 'Remote retry text',
+        model: 'Remote: Office PC',
+        status: 'completed',
+      });
     });
   });
 
@@ -142,14 +168,11 @@ describe('RecentRecordings re-transcription', () => {
 
     render(<RecentRecordings history={[historyItem]} onHistoryUpdate={onHistoryUpdate} />);
 
-    const retranscribeButton = await screen.findByTitle('Re-transcribe');
+    const retranscribeButton = await screen.findByTitle('Re-transcribe with current source');
     await user.click(retranscribeButton);
 
-    const sourceOption = await screen.findByRole('menuitem', { name: 'Small (English)' });
-    await user.click(sourceOption);
-
     await waitFor(() => {
-      expect(screen.getByTitle('Re-transcribe')).toBeDisabled();
+      expect(screen.getByTitle('Re-transcribe with current source')).toBeDisabled();
       expect(screen.getByText('Re-transcribing with Small (English)...')).toBeInTheDocument();
       expect(invokeMock).toHaveBeenCalledWith('save_retranscription', {
         text: 'In progress...',
@@ -202,11 +225,8 @@ describe('RecentRecordings re-transcription', () => {
 
     render(<RecentRecordings history={[historyItem]} onHistoryUpdate={onHistoryUpdate} />);
 
-    const retranscribeButton = await screen.findByTitle('Re-transcribe');
+    const retranscribeButton = await screen.findByTitle('Re-transcribe with current source');
     await user.click(retranscribeButton);
-
-    const sourceOption = await screen.findByRole('menuitem', { name: 'Small (English)' });
-    await user.click(sourceOption);
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('update_transcription', {
@@ -228,14 +248,13 @@ describe('RecentRecordings re-transcription', () => {
       />
     );
 
-    const retranscribeButton = await screen.findByTitle('Re-transcribe');
+    const retranscribeButton = await screen.findByTitle('Re-transcribe with current source');
 
     expect(retranscribeButton).toBeDisabled();
     expect(screen.getByText('Re-transcription in progress with Base (English)...')).toBeInTheDocument();
   });
 
   it('keeps reconciled failed rows retryable after reload', async () => {
-    const user = userEvent.setup();
 
     render(
       <RecentRecordings
@@ -244,13 +263,9 @@ describe('RecentRecordings re-transcription', () => {
       />
     );
 
-    const retranscribeButton = await screen.findByTitle('Re-transcribe');
+    const retranscribeButton = await screen.findByTitle('Re-transcribe with current source');
 
     expect(retranscribeButton).toBeEnabled();
-
-    await user.click(retranscribeButton);
-
-    expect(await screen.findByRole('menuitem', { name: 'Small (English)' })).toBeInTheDocument();
   });
   it('shows neutral failed copy when the recording is unavailable for retry', async () => {
     invokeMock.mockImplementation(async (cmd: string) => {
@@ -276,27 +291,28 @@ describe('RecentRecordings re-transcription', () => {
     );
 
     expect(await screen.findByText('Transcription failed - recording unavailable for retry')).toBeInTheDocument();
-    expect(screen.queryByTitle('Re-transcribe')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Re-transcribe with current source')).not.toBeInTheDocument();
   });
 
 });
 
-it('shows Soniox as a cloud retranscription source when configured', async () => {
+it('uses Soniox when it is the current cloud transcription source', async () => {
   const user = userEvent.setup();
+  mockSettings.current_model = 'soniox';
+  mockSettings.current_model_engine = 'soniox';
 
   invokeMock.mockImplementation(async (cmd: string) => {
     switch (cmd) {
       case 'check_recording_exists':
         return true;
-      case 'get_model_status':
-        return {
-          models: [
-            { name: 'small.en', downloaded: true, engine: 'whisper', kind: 'local', requires_setup: false },
-            { name: 'soniox', display_name: 'Soniox', downloaded: true, engine: 'soniox', kind: 'cloud', requires_setup: false },
-          ],
-        };
-      case 'list_remote_servers':
-        return [];
+      case 'get_active_remote_server':
+        return null;
+      case 'get_recordings_directory':
+        return '/recordings';
+      case 'save_retranscription':
+        return 'retry-soniox';
+      case 'transcribe_audio_file':
+        return 'Cloud retry text';
       default:
         return null;
     }
@@ -304,8 +320,27 @@ it('shows Soniox as a cloud retranscription source when configured', async () =>
 
   render(<RecentRecordings history={[historyItem]} onHistoryUpdate={vi.fn()} />);
 
-  const retranscribeButton = await screen.findByTitle('Re-transcribe');
+  const retranscribeButton = await screen.findByTitle('Re-transcribe with current source');
   await user.click(retranscribeButton);
 
-  expect(await screen.findByRole('menuitem', { name: 'Soniox' })).toBeInTheDocument();
+  await waitFor(() => {
+    expect(invokeMock).toHaveBeenCalledWith('save_retranscription', {
+      text: 'In progress...',
+      model: 'Soniox (Cloud)',
+      recordingFile: 'sample.wav',
+      sourceRecordingId: '2024-01-01T00:00:00Z',
+      status: 'in_progress',
+    });
+    expect(invokeMock).toHaveBeenCalledWith('transcribe_audio_file', {
+      filePath: '/recordings/sample.wav',
+      modelName: 'soniox',
+      modelEngine: 'soniox',
+    });
+    expect(invokeMock).toHaveBeenCalledWith('update_transcription', {
+      timestamp: 'retry-soniox',
+      text: 'Cloud retry text',
+      model: 'Soniox (Cloud)',
+      status: 'completed',
+    });
+  });
 });

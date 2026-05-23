@@ -702,6 +702,38 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         });
                     }
+                    else if event_id == "copy_last_transcription" {
+                        let app_handle = app.app_handle().clone();
+                        tauri::async_runtime::spawn(async move {
+                            match app_handle.store("transcriptions") {
+                                Ok(store) => {
+                                    let mut entries: Vec<(String, serde_json::Value)> = Vec::new();
+                                    for key in store.keys() {
+                                        if let Some(value) = store.get(&key) {
+                                            entries.push((key.to_string(), value));
+                                        }
+                                    }
+
+                                    if let Some(timestamp) = crate::menu::latest_copyable_transcription_id(&entries) {
+                                        if let Some(text) = store
+                                            .get(&timestamp)
+                                            .and_then(|value| value.get("text").and_then(|text| text.as_str().map(str::to_string)))
+                                        {
+                                            if let Err(error) = crate::commands::text::copy_text_to_clipboard(text).await {
+                                                log::error!("Failed to copy last transcription: {}", error);
+                                                let _ = app_handle.emit("tray-action-error", &format!("Failed to copy: {}", error));
+                                            } else {
+                                                log::info!("Copied last transcription to clipboard");
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    log::error!("Failed to open transcriptions store: {}", error);
+                                }
+                            }
+                        });
+                    }
                     // Recent transcriptions copy handler
                     else if let Some(ts) = event_id.strip_prefix("recent_copy_") {
                         let ts_owned = ts.to_string();

@@ -80,6 +80,31 @@ pub fn format_tray_model_label(
     }
 }
 
+fn is_copyable_transcription_entry(entry: &serde_json::Value) -> bool {
+    let status = entry
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("completed");
+
+    if matches!(status, "in_progress" | "failed") {
+        return false;
+    }
+
+    entry
+        .get("text")
+        .and_then(|value| value.as_str())
+        .is_some_and(|text| !text.trim().is_empty())
+}
+
+pub(crate) fn latest_copyable_transcription_id(
+    entries: &[(String, serde_json::Value)],
+) -> Option<String> {
+    entries
+        .iter()
+        .filter(|(_, entry)| is_copyable_transcription_entry(entry))
+        .max_by(|(left_ts, _), (right_ts, _)| left_ts.cmp(right_ts))
+        .map(|(timestamp, _)| timestamp.clone())
+}
 /// Build the tray menu with all submenus (models, microphones, recent transcriptions, recording mode)
 pub async fn build_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -418,6 +443,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
     };
 
     let mut recent_owned: Vec<tauri::menu::MenuItem<R>> = Vec::new();
+    let mut latest_copyable_id: Option<String> = None;
     {
         if let Ok(store) = app.store("transcriptions") {
             let mut entries: Vec<(String, serde_json::Value)> = Vec::new();
@@ -427,6 +453,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
                 }
             }
             entries.sort_by(|a, b| b.0.cmp(&a.0));
+            latest_copyable_id = latest_copyable_transcription_id(&entries);
             entries.truncate(5);
 
             for (ts, entry) in entries {
@@ -496,6 +523,13 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         (toggle, ptt)
     };
 
+    let copy_last_i = MenuItem::with_id(
+        app,
+        "copy_last_transcription",
+        "Copy Last Transcription",
+        latest_copyable_id.is_some(),
+        None::<&str>,
+    )?;
     let separator1 = PredefinedMenuItem::separator(app)?;
     let settings_i = MenuItem::with_id(app, "dashboard", "Dashboard", true, None::<&str>)?;
     let check_updates_i = MenuItem::with_id(
@@ -518,6 +552,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         menu_builder = menu_builder.item(&microphone_submenu);
     }
 
+    menu_builder = menu_builder.item(&copy_last_i);
     if !recent_refs.is_empty() {
         let recent_submenu =
             Submenu::with_id_and_items(app, "recent", "Recent Transcriptions", true, &recent_refs)?;
@@ -560,6 +595,38 @@ mod tests {
         assert_eq!(
             effective_active_remote_id(Some("remote-1"), &visible_connections),
             Some("remote-1".to_string())
+        );
+    }
+
+    #[test]
+    fn latest_copyable_transcription_id_skips_failed_and_in_progress_entries() {
+        let entries = vec![
+            (
+                "2026-05-23T10:00:00Z".to_string(),
+                serde_json::json!({
+                    "text": "Older success",
+                    "status": "completed",
+                }),
+            ),
+            (
+                "2026-05-23T11:00:00Z".to_string(),
+                serde_json::json!({
+                    "text": "Still running",
+                    "status": "in_progress",
+                }),
+            ),
+            (
+                "2026-05-23T12:00:00Z".to_string(),
+                serde_json::json!({
+                    "text": "Failed retry",
+                    "status": "failed",
+                }),
+            ),
+        ];
+
+        assert_eq!(
+            latest_copyable_transcription_id(&entries),
+            Some("2026-05-23T10:00:00Z".to_string())
         );
     }
 }

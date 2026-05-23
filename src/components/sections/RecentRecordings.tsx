@@ -8,43 +8,34 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { TranscriptionHistory } from "@/types";
 import { useCanAutoInsert, useReadiness } from "@/contexts/ReadinessContext";
-import { useModelManagementContext } from "@/contexts/ModelManagementContext";
+import { useSettings } from "@/contexts/SettingsContext";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, AlertTriangle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, FolderOpen, Server, Cpu, Cloud, HelpCircle } from "lucide-react";
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { AlertCircle, AlertTriangle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, FolderOpen, HelpCircle } from "lucide-react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { getModelDisplayName } from "@/lib/model-display";
 import { isMacOS } from "@/lib/platform";
 
-// Interface for available transcription sources
-interface TranscriptionSource {
-  id: string;
-  name: string;
-  type: 'local' | 'cloud' | 'remote';
-}
-
-// Interface for remote server connection
 interface SavedConnection {
   id: string;
   name: string;
   host: string;
   port: number;
   model?: string;
-  status?: "Unknown" | "Online" | "Offline" | "AuthFailed" | "SelfConnection";
+}
+
+interface CurrentTranscriptionSource {
+  type: 'local' | 'cloud' | 'remote';
+  displayName: string;
+  historyModelName: string;
+  modelName?: string;
+  modelEngine?: string;
+  serverId?: string;
 }
 
 
@@ -55,17 +46,12 @@ interface RecentRecordingsProps {
 }
 
 export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistoryUpdate }: RecentRecordingsProps) {
-  const [, setDropdownOpenId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [transcriptionSources, setTranscriptionSources] = useState<TranscriptionSource[]>([]);
-  const [loadingSources, setLoadingSources] = useState(false);
   const [reTranscribingIds, setReTranscribingIds] = useState<Set<string>>(new Set());
   const [verifiedRecordings, setVerifiedRecordings] = useState<Set<string>>(new Set());
   const [checkedRecordings, setCheckedRecordings] = useState<Set<string>>(new Set());
-  // Track which items are being re-transcribed and with which model
-  const { modelOrder } = useModelManagementContext();
   const [reTranscribingModels, setReTranscribingModels] = useState<Map<string, string>>(new Map());
-  const onlineServersRef = useRef<Map<string, { name: string; model: string }>>(new Map()); // serverId -> { name, model }
+  const { settings } = useSettings();
   const readiness = useReadiness();
   const canRecord = readiness.canRecord;
   const canAutoInsert = useCanAutoInsert();
@@ -78,53 +64,53 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
           ? "Allow microphone access in macOS Settings."
           : "Finish setup in Settings before recording.";
 
-  const refreshOnlineRemoteServers = useCallback(async () => {
-    try {
-      const servers = await invoke<SavedConnection[]>("list_remote_servers");
-      const checks = servers.map(async (server) => {
-        try {
-          const updated = await invoke<SavedConnection>("check_remote_server_status", { serverId: server.id });
-          const displayName = server.name || `${server.host}:${server.port}`;
-          return {
-            id: server.id,
-            name: displayName,
-            model: updated.model || "",
-            online: updated.status === "Online",
-          };
-        } catch {
-          return { id: server.id, name: server.name || `${server.host}:${server.port}`, model: '', online: false };
+  const resolveCurrentTranscriptionSource = useCallback(async (): Promise<CurrentTranscriptionSource | null> => {
+    const activeRemoteServerId = await invoke<string | null>("get_active_remote_server").catch((error) => {
+      console.error("Failed to resolve active remote VoiceTypr:", error);
+      return null;
+    });
+
+    if (activeRemoteServerId) {
+      let displayBase = "Remote VoiceTypr";
+      let remoteModel = "";
+
+      try {
+        const servers = await invoke<SavedConnection[]>("list_remote_servers");
+        const server = servers.find((candidate) => candidate.id === activeRemoteServerId);
+        if (server) {
+          displayBase = server.name || `${server.host}:${server.port}`;
+          remoteModel = server.model ?? "";
         }
-      });
-
-      const results = await Promise.all(checks);
-      const onlineMap = new Map<string, { name: string; model: string }>();
-      const onlineSources: TranscriptionSource[] = [];
-
-      for (const result of results) {
-        if (!result.online) continue;
-
-        const modelDisplayName = getModelDisplayName(result.model) ?? result.model;
-        onlineMap.set(result.id, { name: result.name, model: result.model });
-        onlineSources.push({
-          id: `remote:${result.id}`,
-          name: modelDisplayName ? `${result.name} - ${modelDisplayName}` : result.name,
-          type: 'remote',
-        });
+      } catch (error) {
+        console.error("Failed to load active remote VoiceTypr label:", error);
       }
 
-      onlineServersRef.current = onlineMap;
-      return onlineSources;
-    } catch (error) {
-      console.error("Failed to check remote servers:", error);
-      onlineServersRef.current = new Map();
-      return [] as TranscriptionSource[];
+      const modelDisplayName = getModelDisplayName(remoteModel) ?? remoteModel;
+      return {
+        type: 'remote',
+        serverId: activeRemoteServerId,
+        displayName: modelDisplayName ? `${displayBase} - ${modelDisplayName}` : displayBase,
+        historyModelName: `Remote: ${displayBase}`,
+      };
     }
-  }, []);
 
-  // Check remote server connectivity in the background (runs once on mount)
-  useEffect(() => {
-    refreshOnlineRemoteServers();
-  }, [refreshOnlineRemoteServers]);
+    const modelName = settings?.current_model?.trim();
+    if (!modelName) {
+      return null;
+    }
+
+    const modelEngine = settings?.current_model_engine ?? 'whisper';
+    const isCloud = modelEngine === 'soniox';
+    const displayName = getModelDisplayName(modelName) ?? modelName;
+
+    return {
+      type: isCloud ? 'cloud' : 'local',
+      modelName,
+      modelEngine,
+      displayName,
+      historyModelName: displayName,
+    };
+  }, [settings?.current_model, settings?.current_model_engine]);
 
   // Verify which recordings exist on filesystem
   useEffect(() => {
@@ -158,35 +144,6 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     verifyRecordings();
   }, [history]);
 
-  // Fetch available transcription sources (local models and all remote servers)
-  const fetchTranscriptionSources = useCallback(async () => {
-    setLoadingSources(true);
-    const sources: TranscriptionSource[] = [];
-
-    try {
-      const response = await invoke<{models: {name: string; downloaded: boolean; engine: string; kind?: string; requires_setup?: boolean; display_name?: string}[]}>('get_model_status');
-      const availableSources = response.models.filter(m =>
-        m.downloaded && !(m.requires_setup ?? false)
-      );
-      for (const model of availableSources) {
-        const sourceType = model.kind === 'cloud' ? 'cloud' : 'local';
-        const fallbackName = getModelDisplayName(model.name) ?? model.name;
-        const sourceName = model.display_name || (sourceType === 'cloud' ? `${fallbackName} (Cloud)` : fallbackName);
-        sources.push({
-          id: `${sourceType}:${model.name}:${model.engine}`,
-          name: sourceName,
-          type: sourceType,
-        });
-      }
-    } catch (error) {
-      console.error("Failed to fetch local models:", error);
-    }
-
-    sources.push(...await refreshOnlineRemoteServers());
-
-    setTranscriptionSources(sources);
-    setLoadingSources(false);
-  }, [refreshOnlineRemoteServers]);
 
   // Handle showing recording in folder
   const handleShowInFolder = useCallback(async (item: TranscriptionHistory) => {
@@ -205,32 +162,23 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
   }, []);
 
   // Handle re-transcription
-  const handleReTranscribe = async (item: TranscriptionHistory, sourceId: string) => {
+  const handleReTranscribe = async (item: TranscriptionHistory) => {
     if (!item.recording_file) {
-      toast.error("No recording file available for re-transcription");
+      toast.error("Re-transcription needs a saved audio file", {
+        description: "Enable Save recordings for future takes you may want to re-transcribe.",
+      });
       return;
     }
 
-    // Parse source ID - format is "local:modelName:engine" or "remote:serverId"
-    const parts = sourceId.split(':');
-    const sourceType = parts[0];
-    const modelNameOrServerId = parts[1];
-    const engine = parts[2]; // undefined for remote
-
-    let displayModelName: string;
-    if (sourceType === 'local') {
-      displayModelName = getModelDisplayName(modelNameOrServerId) ?? modelNameOrServerId;
-    } else if (sourceType === 'cloud') {
-      const source = transcriptionSources.find(s => s.id === sourceId);
-      displayModelName = source ? source.name : `${getModelDisplayName(modelNameOrServerId) ?? modelNameOrServerId} (Cloud)`;
-    } else {
-      const server = transcriptionSources.find(s => s.id === sourceId);
-      displayModelName = server ? server.name : modelNameOrServerId;
+    const currentSource = await resolveCurrentTranscriptionSource();
+    if (!currentSource) {
+      toast.error("Choose a ready transcription source in Models before re-transcribing.");
+      return;
     }
 
-    // Mark this item as re-transcribing with the model name
+    // Mark this item as re-transcribing with the current source name
     setReTranscribingIds(prev => new Set(prev).add(item.id));
-    setReTranscribingModels(prev => new Map(prev).set(item.id, displayModelName));
+    setReTranscribingModels(prev => new Map(prev).set(item.id, currentSource.displayName));
 
     // Helper to clear the transcribing state for this item
     const cleanup = () => {
@@ -246,12 +194,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       });
     };
 
-    const pendingModelName = sourceType === 'remote'
-      ? (() => {
-          const server = transcriptionSources.find(s => s.id === sourceId);
-          return server ? `Remote: ${server.name}` : `Remote: ${modelNameOrServerId}`;
-        })()
-      : displayModelName;
+    const pendingModelName = currentSource.historyModelName;
     let retryTimestamp: string | null = null;
 
     try {
@@ -270,22 +213,27 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       let result: string;
       let modelName: string;
 
-      if (sourceType === 'local' || sourceType === 'cloud') {
-        result = await invoke<string>('transcribe_audio_file', {
-          filePath: fullPath,
-          modelName: modelNameOrServerId,
-          modelEngine: engine || null,
-        });
-        modelName = sourceType === 'cloud' ? displayModelName : modelNameOrServerId;
-      } else if (sourceType === 'remote') {
+      if (currentSource.type === 'remote') {
+        if (!currentSource.serverId) {
+          throw new Error("No active remote VoiceTypr source selected");
+        }
+
         result = await invoke<string>('transcribe_remote', {
-          serverId: modelNameOrServerId,
+          serverId: currentSource.serverId,
           audioPath: fullPath,
         });
-        const server = transcriptionSources.find(s => s.id === sourceId);
-        modelName = server ? `Remote: ${server.name}` : `Remote: ${modelNameOrServerId}`;
+        modelName = currentSource.historyModelName;
       } else {
-        throw new Error(`Unknown source type: ${sourceType}`);
+        if (!currentSource.modelName) {
+          throw new Error("No local or cloud transcription model selected");
+        }
+
+        result = await invoke<string>('transcribe_audio_file', {
+          filePath: fullPath,
+          modelName: currentSource.modelName,
+          modelEngine: currentSource.modelEngine ?? null,
+        });
+        modelName = currentSource.type === 'cloud' ? currentSource.displayName : currentSource.modelName;
       }
 
       await invoke("update_transcription", {
@@ -485,7 +433,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                   </DialogHeader>
                   <div className="space-y-3 text-sm leading-6 text-muted-foreground">
                     <p><strong className="text-foreground">Search</strong> filters saved transcripts by text and source metadata.</p>
-                    <p><strong className="text-foreground">Re-transcribe</strong> reruns a saved audio take with the selected local, cloud, or remote source when the audio file is still available.</p>
+                    <p><strong className="text-foreground">Re-transcribe</strong> reruns a saved audio take with your current transcription source. It only appears when the original audio file was saved.</p>
                     <p><strong className="text-foreground">Export</strong> saves transcript history as JSON for backup or review.</p>
                   </div>
                 </DialogContent>
@@ -609,120 +557,16 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                               </span>
                             </div>
                             {verifiedRecordings.has(item.id) && (
-                              <DropdownMenu onOpenChange={(open) => {
-                                setDropdownOpenId(open ? item.id : null);
-                                if (open) fetchTranscriptionSources();
-                              }}>
-                                <DropdownMenuTrigger asChild>
-                                  <button
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-400 bg-amber-500/20 rounded hover:bg-amber-500/30 transition-colors"
-                                  >
-                                    <RotateCcw className="w-3 h-3" />
-                                    Re-transcribe
-                                  </button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent
-                                  align="end"
-                                  className="w-44 max-h-72 overflow-y-auto text-xs"
-                                >
-                                  <DropdownMenuLabel className="text-xs py-1.5 px-2 -mx-1 bg-zinc-100 dark:bg-zinc-800 font-medium">Re-transcribe using...</DropdownMenuLabel>
-                                  <DropdownMenuSeparator />
-                                  {loadingSources ? (
-                                    <div className="flex items-center justify-center py-2">
-                                      <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
-                                    </div>
-                                  ) : transcriptionSources.length === 0 ? (
-                                    <div className="py-2 text-center text-xs text-muted-foreground">
-                                      No transcription sources available
-                                    </div>
-                                  ) : (
-                                    <>
-                                      {transcriptionSources.filter(s => s.type === 'local').length > 0 && (
-                                        <DropdownMenuGroup>
-                                          <DropdownMenuLabel className="text-[10px] text-muted-foreground flex items-center gap-1 py-0.5">
-                                            <Cpu className="w-2.5 h-2.5" />
-                                            Local Models
-                                          </DropdownMenuLabel>
-                                          {transcriptionSources
-                                            .filter(s => s.type === 'local')
-                                            .sort((a, b) => {
-                                              const aModelName = a.id.split(':')[1];
-                                              const bModelName = b.id.split(':')[1];
-                                              const aIndex = modelOrder.indexOf(aModelName);
-                                              const bIndex = modelOrder.indexOf(bModelName);
-                                              const aOrder = aIndex === -1 ? 999 : aIndex;
-                                              const bOrder = bIndex === -1 ? 999 : bIndex;
-                                              return aOrder - bOrder;
-                                            })
-                                            .map(source => (
-                                              <DropdownMenuItem
-                                                key={source.id}
-                                                className="text-xs py-1"
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  handleReTranscribe(item, source.id);
-                                                }}
-                                              >
-                                                {source.name}
-                                              </DropdownMenuItem>
-                                            ))}
-                                        </DropdownMenuGroup>
-                                      )}
-                                      {transcriptionSources.filter(s => s.type === 'cloud').length > 0 && (
-                                        <>
-                                          <DropdownMenuSeparator />
-                                          <DropdownMenuGroup>
-                                            <DropdownMenuLabel className="text-[10px] text-muted-foreground flex items-center gap-1 py-0.5">
-                                              <Cloud className="w-2.5 h-2.5" />
-                                              Cloud Providers
-                                            </DropdownMenuLabel>
-                                            {transcriptionSources
-                                              .filter(s => s.type === 'cloud')
-                                              .map(source => (
-                                                <DropdownMenuItem
-                                                  key={source.id}
-                                                  className="text-xs py-1"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleReTranscribe(item, source.id);
-                                                  }}
-                                                >
-                                                  {source.name}
-                                                </DropdownMenuItem>
-                                              ))}
-                                          </DropdownMenuGroup>
-                                        </>
-                                      )}
-                                      {transcriptionSources.filter(s => s.type === 'remote').length > 0 && (
-                                        <>
-                                          <DropdownMenuSeparator />
-                                          <DropdownMenuGroup>
-                                            <DropdownMenuLabel className="text-[10px] text-muted-foreground flex items-center gap-1 py-0.5">
-                                              <Server className="w-2.5 h-2.5" />
-                                              Remote Servers
-                                            </DropdownMenuLabel>
-                                            {transcriptionSources
-                                              .filter(s => s.type === 'remote')
-                                              .map(source => (
-                                                <DropdownMenuItem
-                                                  key={source.id}
-                                                  className="text-xs py-1"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleReTranscribe(item, source.id);
-                                                  }}
-                                                >
-                                                  {source.name}
-                                                </DropdownMenuItem>
-                                              ))}
-                                          </DropdownMenuGroup>
-                                        </>
-                                      )}
-                                    </>
-                                  )}
-                                </DropdownMenuContent>
-                              </DropdownMenu>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void handleReTranscribe(item);
+                                }}
+                                className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-400 bg-amber-500/20 rounded hover:bg-amber-500/30 transition-colors"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                Re-transcribe
+                              </button>
                             )}
                           </div>
                         )}
@@ -775,128 +619,24 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                               )}
                               {/* Re-transcribe button - only show if recording file exists and verified */}
                               {verifiedRecordings.has(item.id) && (
-                                <DropdownMenu onOpenChange={(open) => {
-                                  setDropdownOpenId(open ? item.id : null);
-                                  if (open) fetchTranscriptionSources();
-                                }}>
-                                  <DropdownMenuTrigger asChild>
-                                    <button
-                                      onClick={(e) => e.stopPropagation()}
-                                      className={cn(
-                                        "p-1.5 rounded hover:bg-accent transition-colors",
-                                        isInProgress && "pointer-events-none"
-                                      )}
-                                      title="Re-transcribe"
-                                      disabled={isInProgress}
-                                    >
-                                      {isInProgress ? (
-                                        <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
-                                      ) : (
-                                        <RotateCcw className="w-4 h-4 text-muted-foreground" />
-                                      )}
-                                    </button>
-                                  </DropdownMenuTrigger>
-                                  <DropdownMenuContent
-                                    align="end"
-                                    className="w-44 max-h-72 overflow-y-auto text-xs"
-                                  >
-                                    <DropdownMenuLabel className="text-xs py-1.5 px-2 -mx-1 bg-zinc-100 dark:bg-zinc-800 font-medium">Re-transcribe using...</DropdownMenuLabel>
-                                    <DropdownMenuSeparator />
-                                    {loadingSources ? (
-                                      <div className="flex items-center justify-center py-2">
-                                        <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
-                                      </div>
-                                    ) : transcriptionSources.length === 0 ? (
-                                      <div className="py-2 text-center text-xs text-muted-foreground">
-                                        No transcription sources available
-                                      </div>
-                                    ) : (
-                                      <>
-                                        {transcriptionSources.filter(s => s.type === 'local').length > 0 && (
-                                          <DropdownMenuGroup>
-                                            <DropdownMenuLabel className="text-[10px] text-muted-foreground flex items-center gap-1 py-0.5">
-                                              <Cpu className="w-2.5 h-2.5" />
-                                              Local Models
-                                            </DropdownMenuLabel>
-                                            {transcriptionSources
-                                              .filter(s => s.type === 'local')
-                                              .sort((a, b) => {
-                                                const aModelName = a.id.split(':')[1];
-                                                const bModelName = b.id.split(':')[1];
-                                                const aIndex = modelOrder.indexOf(aModelName);
-                                                const bIndex = modelOrder.indexOf(bModelName);
-                                                const aOrder = aIndex === -1 ? 999 : aIndex;
-                                                const bOrder = bIndex === -1 ? 999 : bIndex;
-                                                return aOrder - bOrder;
-                                              })
-                                              .map(source => (
-                                                <DropdownMenuItem
-                                                  key={source.id}
-                                                  className="text-xs py-1"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleReTranscribe(item, source.id);
-                                                  }}
-                                                >
-                                                  {source.name}
-                                                </DropdownMenuItem>
-                                              ))}
-                                          </DropdownMenuGroup>
-                                        )}
-                                        {transcriptionSources.filter(s => s.type === 'cloud').length > 0 && (
-                                          <>
-                                            <DropdownMenuSeparator />
-                                            <DropdownMenuGroup>
-                                              <DropdownMenuLabel className="text-[10px] text-muted-foreground flex items-center gap-1 py-0.5">
-                                                <Cloud className="w-2.5 h-2.5" />
-                                                Cloud Providers
-                                              </DropdownMenuLabel>
-                                              {transcriptionSources
-                                                .filter(s => s.type === 'cloud')
-                                                .map(source => (
-                                                  <DropdownMenuItem
-                                                    key={source.id}
-                                                    className="text-xs py-1"
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      handleReTranscribe(item, source.id);
-                                                    }}
-                                                  >
-                                                    {source.name}
-                                                  </DropdownMenuItem>
-                                                ))}
-                                            </DropdownMenuGroup>
-                                          </>
-                                        )}
-                                        {transcriptionSources.filter(s => s.type === 'remote').length > 0 && (
-                                          <>
-                                            <DropdownMenuSeparator />
-                                            <DropdownMenuGroup>
-                                              <DropdownMenuLabel className="text-[10px] text-muted-foreground flex items-center gap-1 py-0.5">
-                                                <Server className="w-2.5 h-2.5" />
-                                                Remote Servers
-                                              </DropdownMenuLabel>
-                                              {transcriptionSources
-                                                .filter(s => s.type === 'remote')
-                                                .map(source => (
-                                                  <DropdownMenuItem
-                                                    key={source.id}
-                                                    className="text-xs py-1"
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      handleReTranscribe(item, source.id);
-                                                    }}
-                                                  >
-                                                    {source.name}
-                                                  </DropdownMenuItem>
-                                                ))}
-                                            </DropdownMenuGroup>
-                                          </>
-                                        )}
-                                      </>
-                                    )}
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void handleReTranscribe(item);
+                                  }}
+                                  className={cn(
+                                    "p-1.5 rounded hover:bg-accent transition-colors",
+                                    isInProgress && "pointer-events-none"
+                                  )}
+                                  title="Re-transcribe with current source"
+                                  disabled={isInProgress}
+                                >
+                                  {isInProgress ? (
+                                    <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
+                                  ) : (
+                                    <RotateCcw className="w-4 h-4 text-muted-foreground" />
+                                  )}
+                                </button>
                               )}
                               <button
                                 onClick={(e) => handleDelete(e, item.id)}
