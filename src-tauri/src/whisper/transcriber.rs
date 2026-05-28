@@ -383,6 +383,26 @@ impl Transcriber {
     where
         F: Fn() -> bool,
     {
+        self.transcribe_with_metadata_with_prompt(
+            audio_path,
+            language,
+            translate,
+            None,
+            should_cancel,
+        )
+    }
+
+    pub fn transcribe_with_metadata_with_prompt<F>(
+        &self,
+        audio_path: &Path,
+        language: Option<&str>,
+        translate: bool,
+        initial_prompt: Option<&str>,
+        should_cancel: F,
+    ) -> Result<WhisperTranscriptionOutput, String>
+    where
+        F: Fn() -> bool,
+    {
         let transcription_start = Instant::now();
         let audio_path_str = format!("{:?}", audio_path);
 
@@ -658,8 +678,7 @@ impl Transcriber {
         // Use default log probability threshold to avoid being too strict
         params.set_logprob_thold(-1.0); // Default value - balanced probability requirements
 
-        // Set initial prompt to help with context
-        params.set_initial_prompt(""); // Empty prompt to avoid biasing the model
+        params.set_initial_prompt(initial_prompt.unwrap_or(""));
 
         // Temperature settings - slight randomness helps avoid repetitive loops
         params.set_temperature(0.2); // Small amount of randomness instead of deterministic

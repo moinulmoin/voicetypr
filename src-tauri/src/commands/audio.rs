@@ -520,6 +520,16 @@ fn load_ai_enabled(app: &AppHandle) -> Result<bool, String> {
         .unwrap_or(false))
 }
 
+fn compile_whisper_initial_prompt(app: &AppHandle, language: Option<&str>) -> Option<String> {
+    let settings = crate::writing::load_writing_settings(app).ok()?;
+    crate::writing::compile_context_for_target(
+        &settings,
+        language,
+        None,
+        crate::writing::ProviderContextTarget::WhisperInitialPrompt,
+    )
+}
+
 fn build_remote_upload_transcription_request(
     audio_path: &Path,
     audio_data: Vec<u8>,
@@ -2935,6 +2945,11 @@ pub async fn stop_recording(
                         }
                     };
 
+                    let initial_prompt = compile_whisper_initial_prompt(
+                        &app_for_task,
+                        language_for_task.as_deref(),
+                    );
+
                     const MAX_RETRIES: u32 = 3;
                     const RETRY_DELAY_MS: u64 = 500;
 
@@ -2947,10 +2962,11 @@ pub async fn stop_recording(
                             break;
                         }
 
-                        result = transcriber.transcribe_with_metadata(
+                        result = transcriber.transcribe_with_metadata_with_prompt(
                             &audio_path_clone,
                             language_for_task.as_deref(),
                             translate_to_english,
+                            initial_prompt.as_deref(),
                             || app_state.is_cancellation_requested(),
                         );
 
@@ -3970,10 +3986,12 @@ async fn transcribe_audio_file_impl(
                 cache.get_or_create(&model_path)?
             };
 
-            let output = transcriber.transcribe_with_metadata(
+            let initial_prompt = compile_whisper_initial_prompt(&app, Some(&language));
+            let output = transcriber.transcribe_with_metadata_with_prompt(
                 normalized_file.path(),
                 Some(&language),
                 translate_to_english,
+                initial_prompt.as_deref(),
                 || false,
             )?;
             TranscriptionResult::new(&transcription_job, output.raw_text)
@@ -4235,10 +4253,12 @@ pub async fn transcribe_audio(
                 cache.get_or_create(&model_path)?
             };
 
-            let output = transcriber.transcribe_with_metadata(
+            let initial_prompt = compile_whisper_initial_prompt(&app, Some(language.as_str()));
+            let output = transcriber.transcribe_with_metadata_with_prompt(
                 &temp_path,
                 Some(language.as_str()),
                 translate_to_english,
+                initial_prompt.as_deref(),
                 || false,
             )?;
             TranscriptionResult::new(&transcription_job, output.raw_text)

@@ -566,7 +566,6 @@ fn capture_context_hint(policy: ContextPolicy) -> Option<ContextHint> {
     })
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderContextTarget {
     SmartFormatting,
