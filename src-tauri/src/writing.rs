@@ -538,6 +538,48 @@ fn build_ai_context(
     (!sections.is_empty()).then(|| sections.join(" "))
 }
 
+struct LibraryRulesResult {
+    text: String,
+    literal_locked: bool,
+}
+
+fn run_transcript_cleanup_mechanical(text: &str) -> &str {
+    text
+}
+
+fn apply_library_rules(
+    text: &str,
+    settings: &WritingSettings,
+    transcript_language: Option<&str>,
+    applied_operations: &mut Vec<AppliedWritingOperation>,
+) -> LibraryRulesResult {
+    let snippet_match = match_snippet(text, &settings.snippets, transcript_language);
+
+    if let Some(snippet) = snippet_match {
+        applied_operations.push(AppliedWritingOperation {
+            kind: WritingOperationKind::Snippet,
+            detail: format!("{} → literal snippet", snippet.trigger),
+        });
+        return LibraryRulesResult {
+            text: snippet.body.clone(),
+            literal_locked: snippet.preserve_literal,
+        };
+    }
+
+    let (replaced_text, replacement_ops) = apply_text_replacements(
+        text,
+        &settings.replacements,
+        &settings.custom_words,
+        transcript_language,
+    );
+    applied_operations.extend(replacement_ops);
+
+    LibraryRulesResult {
+        text: replaced_text,
+        literal_locked: false,
+    }
+}
+
 fn record_output_language_transform_fallback(
     warnings: &mut Vec<WritingWarning>,
     output_language: &mut String,
@@ -552,6 +594,91 @@ fn record_output_language_transform_fallback(
 
     if let Some(language) = transcript_language {
         *output_language = language.to_string();
+    }
+}
+
+struct SmartFormattingRequest<'a> {
+    app: AppHandle,
+    text: &'a str,
+    transcript_language: Option<String>,
+    output_language: &'a mut String,
+    profile: &'a WritingProfile,
+    settings: &'a WritingSettings,
+    context_hint: Option<&'a ContextHint>,
+    needs_output_language_transform: bool,
+    applied_operations: &'a mut Vec<AppliedWritingOperation>,
+    warnings: &'a mut Vec<WritingWarning>,
+}
+
+async fn run_smart_formatting(request: SmartFormattingRequest<'_>) -> Result<String, String> {
+    let ai_context = build_ai_context(
+        &request.settings.custom_words,
+        request.transcript_language.as_deref(),
+        request.context_hint,
+    );
+    match crate::commands::ai::enhance_transcription(
+        request.text.to_string(),
+        request.transcript_language.clone(),
+        Some(true),
+        Some(request.output_language.clone()),
+        ai_context,
+        request.app,
+    )
+    .await
+    {
+        Ok(enhanced) => {
+            if enhanced != request.text {
+                request.applied_operations.push(AppliedWritingOperation {
+                    kind: if request.needs_output_language_transform {
+                        WritingOperationKind::Translation
+                    } else {
+                        WritingOperationKind::AiCleanup
+                    },
+                    detail: if request.needs_output_language_transform {
+                        format!(
+                            "Translated/rewrote transcript to {} using {:?}",
+                            request.output_language, request.profile.mode
+                        )
+                    } else {
+                        format!("Applied {:?} cleanup", request.profile.mode)
+                    },
+                });
+            } else if request.needs_output_language_transform {
+                record_output_language_transform_fallback(
+                    request.warnings,
+                    request.output_language,
+                    request.transcript_language.as_deref(),
+                    "output_language_transform_failed",
+                    format!(
+                        "AI formatting returned the original transcript; output language remains {}",
+                        request
+                            .transcript_language
+                            .as_deref()
+                            .unwrap_or("the transcript language")
+                    ),
+                );
+            }
+
+            if request.context_hint.is_some() {
+                request.applied_operations.push(AppliedWritingOperation {
+                    kind: WritingOperationKind::ContextHint,
+                    detail: "Used active app context hint".to_string(),
+                });
+            }
+
+            Ok(enhanced)
+        }
+        Err(error) if !request.needs_output_language_transform => {
+            request.warnings.push(WritingWarning {
+                code: "ai_cleanup_failed".to_string(),
+                message: format!(
+                    "AI cleanup failed; deterministic writing result was used: {}",
+                    error
+                ),
+            });
+            Ok(request.text.to_string())
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -572,41 +699,26 @@ pub async fn process_transcription(
 
     let mut applied_operations = Vec::new();
     let mut warnings = Vec::new();
-    let snippet_match = match_snippet(
-        &transcription.raw_text,
-        &settings.snippets,
+    let cleaned_text = run_transcript_cleanup_mechanical(&transcription.raw_text);
+    let library_result = apply_library_rules(
+        cleaned_text,
+        &settings,
         transcript_language.as_deref(),
+        &mut applied_operations,
     );
-
-    let (working_text, literal_locked) = if let Some(snippet) = snippet_match {
-        applied_operations.push(AppliedWritingOperation {
-            kind: WritingOperationKind::Snippet,
-            detail: format!("{} → literal snippet", snippet.trigger),
-        });
-        (snippet.body.clone(), snippet.preserve_literal)
-    } else {
-        let (replaced_text, replacement_ops) = apply_text_replacements(
-            &transcription.raw_text,
-            &settings.replacements,
-            &settings.custom_words,
-            transcript_language.as_deref(),
-        );
-        applied_operations.extend(replacement_ops);
-        (replaced_text, false)
-    };
 
     let needs_output_language_transform = transcript_language
         .as_deref()
         .map(|language| language != output_language)
         .unwrap_or(false);
 
-    if needs_output_language_transform && !ai_enabled && !literal_locked {
+    if needs_output_language_transform && !ai_enabled && !library_result.literal_locked {
         return Err(
             "Final output language requires AI enhancement or native translation".to_string(),
         );
     }
 
-    let final_text = if literal_locked {
+    let final_text = if library_result.literal_locked {
         if needs_output_language_transform {
             record_output_language_transform_fallback(
                 &mut warnings,
@@ -616,81 +728,28 @@ pub async fn process_transcription(
                 "Snippet preserved literally; output language was not transformed".to_string(),
             );
         }
-        working_text.clone()
+        library_result.text.clone()
     } else if ai_enabled {
-        let ai_context = build_ai_context(
-            &settings.custom_words,
-            transcript_language.as_deref(),
-            context_hint.as_ref(),
-        );
-        match crate::commands::ai::enhance_transcription(
-            working_text.clone(),
-            transcript_language.clone(),
-            Some(true),
-            Some(output_language.clone()),
-            ai_context,
+        run_smart_formatting(SmartFormattingRequest {
             app,
-        )
-        .await
-        {
-            Ok(enhanced) => {
-                if enhanced != working_text {
-                    applied_operations.push(AppliedWritingOperation {
-                        kind: if needs_output_language_transform {
-                            WritingOperationKind::Translation
-                        } else {
-                            WritingOperationKind::AiCleanup
-                        },
-                        detail: if needs_output_language_transform {
-                            format!(
-                                "Translated/rewrote transcript to {} using {:?}",
-                                output_language, profile.mode
-                            )
-                        } else {
-                            format!("Applied {:?} cleanup", profile.mode)
-                        },
-                    });
-                } else if needs_output_language_transform {
-                    record_output_language_transform_fallback(
-                        &mut warnings,
-                        &mut output_language,
-                        transcript_language.as_deref(),
-                        "output_language_transform_failed",
-                        format!(
-                            "AI formatting returned the original transcript; output language remains {}",
-                            transcript_language.as_deref().unwrap_or("the transcript language")
-                        ),
-                    );
-                }
-
-                if context_hint.is_some() {
-                    applied_operations.push(AppliedWritingOperation {
-                        kind: WritingOperationKind::ContextHint,
-                        detail: "Used active app context hint".to_string(),
-                    });
-                }
-
-                enhanced
-            }
-            Err(error) if !needs_output_language_transform => {
-                warnings.push(WritingWarning {
-                    code: "ai_cleanup_failed".to_string(),
-                    message: format!(
-                        "AI cleanup failed; deterministic writing result was used: {}",
-                        error
-                    ),
-                });
-                working_text.clone()
-            }
-            Err(error) => return Err(error),
-        }
+            text: &library_result.text,
+            transcript_language: transcript_language.clone(),
+            output_language: &mut output_language,
+            profile: &profile,
+            settings: &settings,
+            context_hint: context_hint.as_ref(),
+            needs_output_language_transform,
+            applied_operations: &mut applied_operations,
+            warnings: &mut warnings,
+        })
+        .await?
     } else {
-        working_text.clone()
+        library_result.text.clone()
     };
 
     Ok(WritingResult {
         raw_text: transcription.raw_text.clone(),
-        ai_applied: ai_enabled && final_text != working_text,
+        ai_applied: ai_enabled && final_text != library_result.text,
         final_text,
         output_language,
         mode: profile.mode,
