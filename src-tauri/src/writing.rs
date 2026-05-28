@@ -115,6 +115,7 @@ pub enum WritingOperationKind {
     AiCleanup,
     ContextHint,
     VoiceCommand,
+    FinalGuard,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -915,7 +916,7 @@ fn build_ai_context(
 struct LibraryRulesResult {
     text: String,
     literal_locked: bool,
-    _provenance: Vec<LibraryRuleApplication>,
+    provenance: Vec<LibraryRuleApplication>,
 }
 
 fn run_transcript_cleanup_mechanical(text: &str) -> Cow<'_, str> {
@@ -961,7 +962,7 @@ fn apply_library_rules(
         return LibraryRulesResult {
             text: snippet.body.clone(),
             literal_locked: snippet.preserve_literal,
-            _provenance: Vec::new(),
+            provenance: Vec::new(),
         };
     }
 
@@ -976,8 +977,97 @@ fn apply_library_rules(
     LibraryRulesResult {
         text: replacement_result.text,
         literal_locked: false,
-        _provenance: replacement_result.provenance,
+        provenance: replacement_result.provenance,
     }
+}
+
+#[derive(Clone)]
+struct FinalGuardCandidate {
+    start: usize,
+    end: usize,
+    replacement: String,
+    detail: String,
+}
+
+fn collect_final_guard_candidates(
+    text: &str,
+    provenance: &[LibraryRuleApplication],
+) -> Vec<FinalGuardCandidate> {
+    let mut candidates = Vec::new();
+    for application in provenance {
+        if application.source_form == application.target_text {
+            continue;
+        }
+        let Ok(regex) = RegexBuilder::new(&regex::escape(&application.source_form))
+            .case_insensitive(true)
+            .build()
+        else {
+            continue;
+        };
+
+        for mat in regex.find_iter(text) {
+            if candidate_has_boundaries(text, mat.start(), mat.end()) {
+                candidates.push(FinalGuardCandidate {
+                    start: mat.start(),
+                    end: mat.end(),
+                    replacement: application.target_text.clone(),
+                    detail: format!("{} → {}", application.source_form, application.target_text),
+                });
+            }
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.start
+            .cmp(&right.start)
+            .then((right.end - right.start).cmp(&(left.end - left.start)))
+    });
+    candidates
+}
+
+fn apply_final_restoration_guard(
+    text: &str,
+    provenance: &[LibraryRuleApplication],
+    literal_locked: bool,
+    needs_output_language_transform: bool,
+) -> (String, Vec<AppliedWritingOperation>) {
+    if literal_locked || needs_output_language_transform || provenance.is_empty() {
+        return (text.to_string(), Vec::new());
+    }
+
+    let candidates = collect_final_guard_candidates(text, provenance);
+    if candidates.is_empty() {
+        return (text.to_string(), Vec::new());
+    }
+
+    let mut selected = Vec::new();
+    let mut cursor = 0usize;
+    for candidate in candidates {
+        if candidate.start < cursor {
+            continue;
+        }
+        cursor = candidate.end;
+        selected.push(candidate);
+    }
+
+    if selected.is_empty() {
+        return (text.to_string(), Vec::new());
+    }
+
+    let mut output = String::with_capacity(text.len());
+    let mut operations = Vec::with_capacity(selected.len());
+    let mut last = 0usize;
+    for candidate in selected {
+        output.push_str(&text[last..candidate.start]);
+        output.push_str(&candidate.replacement);
+        operations.push(AppliedWritingOperation {
+            kind: WritingOperationKind::FinalGuard,
+            detail: candidate.detail,
+        });
+        last = candidate.end;
+    }
+    output.push_str(&text[last..]);
+
+    (output, operations)
 }
 
 fn record_output_language_transform_fallback(
@@ -1130,7 +1220,7 @@ pub async fn process_transcription(
         );
     }
 
-    let final_text = if library_result.literal_locked {
+    let mut final_text = if library_result.literal_locked {
         if needs_output_language_transform {
             record_output_language_transform_fallback(
                 &mut warnings,
@@ -1158,6 +1248,15 @@ pub async fn process_transcription(
     } else {
         library_result.text.clone()
     };
+
+    let (guarded_text, guard_operations) = apply_final_restoration_guard(
+        &final_text,
+        &library_result.provenance,
+        library_result.literal_locked,
+        needs_output_language_transform,
+    );
+    final_text = guarded_text;
+    applied_operations.extend(guard_operations);
 
     Ok(WritingResult {
         raw_text: transcription.raw_text.clone(),
@@ -1639,6 +1738,77 @@ mod tests {
     }
 
     #[test]
+    fn test_final_guard_restores_only_provenance_sources() {
+        let replacement_result = apply_text_replacements_with_provenance(
+            "voice typer is fast",
+            &[TextReplacementRule {
+                from: "voice typer".to_string(),
+                to: "VoiceTypr".to_string(),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            &[],
+            Some("en"),
+        );
+
+        let (guarded, ops) = apply_final_restoration_guard(
+            "voice typer is fast",
+            &replacement_result.provenance,
+            false,
+            false,
+        );
+
+        assert_eq!(guarded, "VoiceTypr is fast");
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].kind, WritingOperationKind::FinalGuard);
+
+        let (unproven, unproven_ops) =
+            apply_final_restoration_guard("voice typer is fast", &[], false, false);
+        assert_eq!(unproven, "voice typer is fast");
+        assert!(unproven_ops.is_empty());
+    }
+
+    #[test]
+    fn test_final_guard_skips_literal_and_language_transform_paths() {
+        let provenance = vec![LibraryRuleApplication {
+            source_form: "voice typer".to_string(),
+            target_text: "VoiceTypr".to_string(),
+            source_kind: LibraryRuleSourceKind::ExplicitReplacement,
+            language_scope: Some("en".to_string()),
+            start: 0,
+            end: 11,
+        }];
+
+        let (literal_text, literal_ops) =
+            apply_final_restoration_guard("voice typer", &provenance, true, false);
+        assert_eq!(literal_text, "voice typer");
+        assert!(literal_ops.is_empty());
+
+        let (translated_text, translated_ops) =
+            apply_final_restoration_guard("voice typer", &provenance, false, true);
+        assert_eq!(translated_text, "voice typer");
+        assert!(translated_ops.is_empty());
+    }
+
+    #[test]
+    fn test_final_guard_respects_boundaries() {
+        let provenance = vec![LibraryRuleApplication {
+            source_form: "react".to_string(),
+            target_text: "React".to_string(),
+            source_kind: LibraryRuleSourceKind::ExplicitReplacement,
+            language_scope: Some("en".to_string()),
+            start: 0,
+            end: 5,
+        }];
+
+        let (guarded, ops) =
+            apply_final_restoration_guard("createReactiveStore react", &provenance, false, false);
+
+        assert_eq!(guarded, "createReactiveStore React");
+        assert_eq!(ops.len(), 1);
+    }
+
+    #[test]
     fn test_transcript_cleanup_is_mechanical_only() {
         let cleaned = run_transcript_cleanup_mechanical(" \r\nhello\rworld\tthere\0\u{0008} ");
         assert_eq!(cleaned.as_ref(), "hello\nworld\tthere");
@@ -1701,7 +1871,7 @@ mod tests {
         let mut result = LibraryRulesResult {
             text: "hello comma world".to_string(),
             literal_locked: true,
-            _provenance: Vec::new(),
+            provenance: Vec::new(),
         };
         let mut ops = Vec::new();
 
