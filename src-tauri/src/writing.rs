@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use active_win_pos_rs::get_active_window;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
@@ -106,6 +108,7 @@ pub struct WritingProfile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WritingOperationKind {
+    TranscriptCleanup,
     Replacement,
     Snippet,
     Translation,
@@ -543,8 +546,31 @@ struct LibraryRulesResult {
     literal_locked: bool,
 }
 
-fn run_transcript_cleanup_mechanical(text: &str) -> &str {
-    text
+fn run_transcript_cleanup_mechanical(text: &str) -> Cow<'_, str> {
+    let trimmed = text.trim();
+    let needs_cleanup = trimmed.len() != text.len()
+        || trimmed
+            .chars()
+            .any(|ch| ch == '\r' || (ch.is_control() && ch != '\n' && ch != '\t'));
+
+    if !needs_cleanup {
+        return Cow::Borrowed(text);
+    }
+
+    let mut output = String::with_capacity(trimmed.len());
+    let mut chars = trimmed.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            output.push('\n');
+        } else if !ch.is_control() || ch == '\n' || ch == '\t' {
+            output.push(ch);
+        }
+    }
+
+    Cow::Owned(output)
 }
 
 fn apply_library_rules(
@@ -700,8 +726,14 @@ pub async fn process_transcription(
     let mut applied_operations = Vec::new();
     let mut warnings = Vec::new();
     let cleaned_text = run_transcript_cleanup_mechanical(&transcription.raw_text);
+    if cleaned_text.as_ref() != transcription.raw_text {
+        applied_operations.push(AppliedWritingOperation {
+            kind: WritingOperationKind::TranscriptCleanup,
+            detail: "Applied mechanical transcript cleanup".to_string(),
+        });
+    }
     let library_result = apply_library_rules(
-        cleaned_text,
+        cleaned_text.as_ref(),
         &settings,
         transcript_language.as_deref(),
         &mut applied_operations,
@@ -1063,5 +1095,38 @@ mod tests {
         assert!(context.contains("VoiceTypr"));
         assert!(!context.contains("DisabledTerm"));
         assert!(!context.contains("TermeFrançais"));
+    }
+
+    #[test]
+    fn test_transcript_cleanup_is_mechanical_only() {
+        let cleaned = run_transcript_cleanup_mechanical(" \r\nhello\rworld\tthere\0\u{0008} ");
+        assert_eq!(cleaned.as_ref(), "hello\nworld\tthere");
+
+        let semantic_text = "um I mean send it to Bob no Alice period";
+        let untouched = run_transcript_cleanup_mechanical(semantic_text);
+        assert!(matches!(untouched, Cow::Borrowed(_)));
+        assert_eq!(untouched.as_ref(), semantic_text);
+    }
+
+    #[test]
+    fn test_library_rules_run_after_mechanical_cleanup() {
+        let settings = WritingSettings {
+            snippets: vec![Snippet {
+                trigger: "insert note".to_string(),
+                body: "Saved body".to_string(),
+                language: Some("en".to_string()),
+                enabled: true,
+                preserve_literal: true,
+            }],
+            ..WritingSettings::default()
+        };
+        let cleaned = run_transcript_cleanup_mechanical("\r\ninsert note\n");
+        let mut ops = Vec::new();
+        let result = apply_library_rules(cleaned.as_ref(), &settings, Some("en"), &mut ops);
+
+        assert_eq!(result.text, "Saved body");
+        assert!(result.literal_locked);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].kind, WritingOperationKind::Snippet);
     }
 }
