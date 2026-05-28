@@ -566,47 +566,168 @@ fn capture_context_hint(policy: ContextPolicy) -> Option<ContextHint> {
     })
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderContextTarget {
+    SmartFormatting,
+    WhisperInitialPrompt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderContextCapabilities {
+    pub max_bytes: usize,
+    pub includes_app_hint: bool,
+    pub includes_spoken_forms: bool,
+}
+
+impl ProviderContextTarget {
+    pub fn capabilities(self) -> ProviderContextCapabilities {
+        match self {
+            ProviderContextTarget::SmartFormatting => ProviderContextCapabilities {
+                max_bytes: 10_000,
+                includes_app_hint: true,
+                includes_spoken_forms: true,
+            },
+            ProviderContextTarget::WhisperInitialPrompt => ProviderContextCapabilities {
+                max_bytes: 900,
+                includes_app_hint: true,
+                includes_spoken_forms: true,
+            },
+        }
+    }
+}
+
+fn push_unique_term(terms: &mut Vec<String>, value: &str) {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if terms.iter().any(|term| term.eq_ignore_ascii_case(trimmed)) {
+        return;
+    }
+    terms.push(trimmed.to_string());
+}
+
+fn truncate_at_char_boundary(mut text: String, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text
+}
+
+pub fn compile_context_for_target(
+    settings: &WritingSettings,
+    transcript_language: Option<&str>,
+    context_hint: Option<&ContextHint>,
+    target: ProviderContextTarget,
+) -> Option<String> {
+    let capabilities = target.capabilities();
+    let mut sections = Vec::new();
+
+    match target {
+        ProviderContextTarget::SmartFormatting => {
+            let preferred_terms: Vec<String> = settings
+                .custom_words
+                .iter()
+                .filter(|word| {
+                    word.enabled
+                        && language_scope_matches(word.language.as_deref(), transcript_language)
+                })
+                .map(|word| match word.spoken_form.as_deref() {
+                    Some(spoken_form) => format!("{} (spoken as {})", word.phrase, spoken_form),
+                    None => word.phrase.clone(),
+                })
+                .collect();
+
+            if !preferred_terms.is_empty() {
+                sections.push(format!(
+                    "Preferred terms: {}. Preserve exact spelling/casing.",
+                    preferred_terms.join(", ")
+                ));
+            }
+        }
+        ProviderContextTarget::WhisperInitialPrompt => {
+            let mut spellings = Vec::new();
+            let mut spoken_forms = Vec::new();
+            for word in settings.custom_words.iter().filter(|word| {
+                word.enabled
+                    && language_scope_matches(word.language.as_deref(), transcript_language)
+            }) {
+                push_unique_term(&mut spellings, &word.phrase);
+                if capabilities.includes_spoken_forms {
+                    if let Some(spoken_form) = word.spoken_form.as_deref() {
+                        push_unique_term(&mut spoken_forms, spoken_form);
+                    }
+                }
+            }
+            for rule in settings.replacements.iter().filter(|rule| {
+                rule.enabled
+                    && language_scope_matches(rule.language.as_deref(), transcript_language)
+            }) {
+                push_unique_term(&mut spellings, &rule.to);
+                if capabilities.includes_spoken_forms
+                    && !rule.from.eq_ignore_ascii_case(&rule.to)
+                {
+                    push_unique_term(&mut spoken_forms, &rule.from);
+                }
+            }
+
+            if !spellings.is_empty() {
+                sections.push(format!("Preferred spellings: {}.", spellings.join(", ")));
+            }
+            if !spoken_forms.is_empty() {
+                sections.push(format!("Possible spoken forms: {}.", spoken_forms.join(", ")));
+            }
+        }
+    }
+
+    if capabilities.includes_app_hint {
+        if let Some(context_hint) = context_hint {
+            if context_hint.app_name.is_some() || context_hint.app_category.is_some() {
+                let mut context_parts = Vec::new();
+                if let Some(app_name) = context_hint.app_name.as_deref() {
+                    context_parts.push(format!("app {}", app_name));
+                }
+                if let Some(category) = context_hint.app_category.as_deref() {
+                    context_parts.push(format!("category {}", category));
+                }
+                sections.push(format!(
+                    "Context hint: target {}.",
+                    context_parts.join(", ")
+                ));
+            }
+        }
+    }
+
+    let context = sections.join(" ");
+    if context.is_empty() {
+        return None;
+    }
+    let context = truncate_at_char_boundary(context, capabilities.max_bytes);
+    (!context.is_empty()).then_some(context)
+}
+
+#[cfg(test)]
 fn build_ai_context(
     custom_words: &[CustomWord],
     transcript_language: Option<&str>,
     context_hint: Option<&ContextHint>,
 ) -> Option<String> {
-    let preferred_terms: Vec<String> = custom_words
-        .iter()
-        .filter(|word| {
-            word.enabled && language_scope_matches(word.language.as_deref(), transcript_language)
-        })
-        .map(|word| match word.spoken_form.as_deref() {
-            Some(spoken_form) => format!("{} (spoken as {})", word.phrase, spoken_form),
-            None => word.phrase.clone(),
-        })
-        .collect();
-
-    let mut sections = Vec::new();
-    if !preferred_terms.is_empty() {
-        sections.push(format!(
-            "Preferred terms: {}. Preserve exact spelling/casing.",
-            preferred_terms.join(", ")
-        ));
-    }
-
-    if let Some(context_hint) = context_hint {
-        if context_hint.app_name.is_some() || context_hint.app_category.is_some() {
-            let mut context_parts = Vec::new();
-            if let Some(app_name) = context_hint.app_name.as_deref() {
-                context_parts.push(format!("app {}", app_name));
-            }
-            if let Some(category) = context_hint.app_category.as_deref() {
-                context_parts.push(format!("category {}", category));
-            }
-            sections.push(format!(
-                "Context hint: target {}.",
-                context_parts.join(", ")
-            ));
-        }
-    }
-
-    (!sections.is_empty()).then(|| sections.join(" "))
+    let settings = WritingSettings {
+        custom_words: custom_words.to_vec(),
+        ..WritingSettings::default()
+    };
+    compile_context_for_target(
+        &settings,
+        transcript_language,
+        context_hint,
+        ProviderContextTarget::SmartFormatting,
+    )
 }
 
 struct LibraryRulesResult {
@@ -708,10 +829,11 @@ struct SmartFormattingRequest<'a> {
 }
 
 async fn run_smart_formatting(request: SmartFormattingRequest<'_>) -> Result<String, String> {
-    let ai_context = build_ai_context(
-        &request.settings.custom_words,
+    let ai_context = compile_context_for_target(
+        request.settings,
         request.transcript_language.as_deref(),
         request.context_hint,
+        ProviderContextTarget::SmartFormatting,
     );
     match crate::commands::ai::enhance_transcription(
         request.text.to_string(),
@@ -1166,6 +1288,86 @@ mod tests {
         assert!(context.contains("VoiceTypr"));
         assert!(!context.contains("DisabledTerm"));
         assert!(!context.contains("TermeFrançais"));
+    }
+
+    #[test]
+    fn test_compile_whisper_context_uses_vocabulary_not_snippet_bodies() {
+        let settings = WritingSettings {
+            replacements: vec![TextReplacementRule {
+                from: "voice typer".to_string(),
+                to: "VoiceTypr".to_string(),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            custom_words: vec![
+                CustomWord {
+                    phrase: "Tauri".to_string(),
+                    spoken_form: None,
+                    language: Some("en".to_string()),
+                    enabled: true,
+                },
+                CustomWord {
+                    phrase: "DisabledTerm".to_string(),
+                    spoken_form: None,
+                    language: Some("en".to_string()),
+                    enabled: false,
+                },
+            ],
+            snippets: vec![Snippet {
+                trigger: "insert secret".to_string(),
+                body: "private snippet body".to_string(),
+                language: Some("en".to_string()),
+                enabled: true,
+                preserve_literal: true,
+            }],
+            context_policy: ContextPolicy::Off,
+        };
+
+        let context = compile_context_for_target(
+            &settings,
+            Some("en"),
+            Some(&ContextHint {
+                app_name: Some("Cursor".to_string()),
+                app_category: Some("editor".to_string()),
+            }),
+            ProviderContextTarget::WhisperInitialPrompt,
+        )
+        .unwrap();
+
+        assert!(context.contains("VoiceTypr"));
+        assert!(context.contains("voice typer"));
+        assert!(context.contains("Tauri"));
+        assert!(context.contains("Cursor"));
+        assert!(!context.contains("DisabledTerm"));
+        assert!(!context.contains("private snippet body"));
+    }
+
+    #[test]
+    fn test_compile_context_returns_none_without_matching_context() {
+        let settings = WritingSettings {
+            custom_words: vec![CustomWord {
+                phrase: "TermeFrançais".to_string(),
+                spoken_form: None,
+                language: Some("fr".to_string()),
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+
+        assert!(compile_context_for_target(
+            &settings,
+            Some("en"),
+            None,
+            ProviderContextTarget::WhisperInitialPrompt,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn test_context_truncation_preserves_utf8_boundaries() {
+        let truncated = truncate_at_char_boundary("ééé".to_string(), 5);
+
+        assert_eq!(truncated, "éé");
     }
 
     #[test]
