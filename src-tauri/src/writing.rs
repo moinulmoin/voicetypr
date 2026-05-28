@@ -114,6 +114,7 @@ pub enum WritingOperationKind {
     Translation,
     AiCleanup,
     ContextHint,
+    VoiceCommand,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -515,6 +516,188 @@ fn match_snippet<'a>(
         })
         .filter(|snippet| snippet.trigger.eq_ignore_ascii_case(trimmed))
         .max_by_key(|snippet| snippet.trigger.len())
+}
+
+#[derive(Clone, Copy)]
+enum VoiceCommandOutput {
+    Punctuation(&'static str),
+    Break(&'static str),
+}
+
+#[derive(Clone, Copy)]
+struct VoiceCommandDefinition {
+    phrase: &'static str,
+    output: VoiceCommandOutput,
+}
+
+#[derive(Clone, Copy)]
+struct VoiceCommandCandidate {
+    start: usize,
+    end: usize,
+    definition: VoiceCommandDefinition,
+}
+
+const VOICE_COMMANDS_EN: &[VoiceCommandDefinition] = &[
+    VoiceCommandDefinition {
+        phrase: "new paragraph",
+        output: VoiceCommandOutput::Break("\n\n"),
+    },
+    VoiceCommandDefinition {
+        phrase: "new line",
+        output: VoiceCommandOutput::Break("\n"),
+    },
+    VoiceCommandDefinition {
+        phrase: "question mark",
+        output: VoiceCommandOutput::Punctuation("?"),
+    },
+    VoiceCommandDefinition {
+        phrase: "exclamation point",
+        output: VoiceCommandOutput::Punctuation("!"),
+    },
+    VoiceCommandDefinition {
+        phrase: "exclamation mark",
+        output: VoiceCommandOutput::Punctuation("!"),
+    },
+    VoiceCommandDefinition {
+        phrase: "full stop",
+        output: VoiceCommandOutput::Punctuation("."),
+    },
+    VoiceCommandDefinition {
+        phrase: "comma",
+        output: VoiceCommandOutput::Punctuation(","),
+    },
+    VoiceCommandDefinition {
+        phrase: "period",
+        output: VoiceCommandOutput::Punctuation("."),
+    },
+];
+
+fn voice_commands_enabled_for_language(transcript_language: Option<&str>) -> bool {
+    match normalize_language_scope(transcript_language) {
+        Some(language) => language == "en" || language.starts_with("en-"),
+        None => true,
+    }
+}
+
+fn collect_voice_command_candidates(text: &str) -> Vec<VoiceCommandCandidate> {
+    let mut candidates = Vec::new();
+    for definition in VOICE_COMMANDS_EN {
+        let Ok(regex) = RegexBuilder::new(&regex::escape(definition.phrase))
+            .case_insensitive(true)
+            .build()
+        else {
+            continue;
+        };
+
+        for mat in regex.find_iter(text) {
+            if candidate_has_boundaries(text, mat.start(), mat.end()) {
+                candidates.push(VoiceCommandCandidate {
+                    start: mat.start(),
+                    end: mat.end(),
+                    definition: *definition,
+                });
+            }
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.start
+            .cmp(&right.start)
+            .then((right.end - right.start).cmp(&(left.end - left.start)))
+    });
+    candidates
+}
+
+fn normalize_voice_command_spacing(text: String) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut suppress_space_after_break = false;
+    for ch in text.chars() {
+        if suppress_space_after_break && (ch == ' ' || ch == '\t') {
+            continue;
+        }
+
+        match ch {
+            ',' | '.' | '?' | '!' => {
+                while output.ends_with(' ') || output.ends_with('\t') {
+                    output.pop();
+                }
+                output.push(ch);
+                suppress_space_after_break = false;
+            }
+            '\n' => {
+                while output.ends_with(' ') || output.ends_with('\t') {
+                    output.pop();
+                }
+                output.push('\n');
+                suppress_space_after_break = true;
+            }
+            _ => {
+                output.push(ch);
+                suppress_space_after_break = false;
+            }
+        }
+    }
+    output
+}
+
+fn apply_voice_commands(
+    text: &str,
+    transcript_language: Option<&str>,
+) -> (String, Vec<AppliedWritingOperation>) {
+    if !voice_commands_enabled_for_language(transcript_language) {
+        return (text.to_string(), Vec::new());
+    }
+
+    let candidates = collect_voice_command_candidates(text);
+    if candidates.is_empty() {
+        return (text.to_string(), Vec::new());
+    }
+
+    let mut selected = Vec::new();
+    let mut cursor = 0usize;
+    for candidate in candidates {
+        if candidate.start < cursor {
+            continue;
+        }
+        cursor = candidate.end;
+        selected.push(candidate);
+    }
+
+    if selected.is_empty() {
+        return (text.to_string(), Vec::new());
+    }
+
+    let mut output = String::with_capacity(text.len());
+    let mut operations = Vec::with_capacity(selected.len());
+    let mut last = 0usize;
+    for candidate in selected {
+        output.push_str(&text[last..candidate.start]);
+        let replacement = match candidate.definition.output {
+            VoiceCommandOutput::Punctuation(value) | VoiceCommandOutput::Break(value) => value,
+        };
+        output.push_str(replacement);
+        operations.push(AppliedWritingOperation {
+            kind: WritingOperationKind::VoiceCommand,
+            detail: format!("{} → {}", candidate.definition.phrase, replacement.escape_debug()),
+        });
+        last = candidate.end;
+    }
+    output.push_str(&text[last..]);
+
+    (normalize_voice_command_spacing(output), operations)
+}
+
+fn apply_voice_command_stage(
+    library_result: &mut LibraryRulesResult,
+    transcript_language: Option<&str>,
+    applied_operations: &mut Vec<AppliedWritingOperation>,
+) {
+    if library_result.literal_locked {
+        return;
+    }
+
+    let (text, operations) = apply_voice_commands(&library_result.text, transcript_language);
+    library_result.text = text;
+    applied_operations.extend(operations);
 }
 
 fn classify_app_category(app_name: &str) -> Option<String> {
@@ -924,9 +1107,14 @@ pub async fn process_transcription(
             detail: "Applied mechanical transcript cleanup".to_string(),
         });
     }
-    let library_result = apply_library_rules(
+    let mut library_result = apply_library_rules(
         cleaned_text.as_ref(),
         &settings,
+        transcript_language.as_deref(),
+        &mut applied_operations,
+    );
+    apply_voice_command_stage(
+        &mut library_result,
         transcript_language.as_deref(),
         &mut applied_operations,
     );
@@ -1481,5 +1669,53 @@ mod tests {
         assert!(result.literal_locked);
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].kind, WritingOperationKind::Snippet);
+    }
+
+    #[test]
+    fn test_voice_commands_apply_punctuation_and_breaks() {
+        let (text, ops) = apply_voice_commands(
+            "hello comma world period first line new line second line new paragraph done",
+            Some("en"),
+        );
+
+        assert_eq!(text, "hello, world. first line\nsecond line\n\ndone");
+        assert_eq!(ops.len(), 4);
+        assert!(ops.iter().all(|op| op.kind == WritingOperationKind::VoiceCommand));
+    }
+
+    #[test]
+    fn test_voice_commands_respect_boundaries_and_language() {
+        let (boundary_text, boundary_ops) =
+            apply_voice_commands("periodic commaful question marking", Some("en"));
+        assert_eq!(boundary_text, "periodic commaful question marking");
+        assert!(boundary_ops.is_empty());
+
+        let (language_text, language_ops) =
+            apply_voice_commands("hello comma world", Some("fr"));
+        assert_eq!(language_text, "hello comma world");
+        assert!(language_ops.is_empty());
+    }
+
+    #[test]
+    fn test_voice_command_stage_skips_literal_snippets() {
+        let mut result = LibraryRulesResult {
+            text: "hello comma world".to_string(),
+            literal_locked: true,
+            _provenance: Vec::new(),
+        };
+        let mut ops = Vec::new();
+
+        apply_voice_command_stage(&mut result, Some("en"), &mut ops);
+
+        assert_eq!(result.text, "hello comma world");
+        assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn test_voice_commands_do_not_resolve_semantic_cleanup() {
+        let (text, ops) = apply_voice_commands("um I mean send it to Bob no Alice", Some("en"));
+
+        assert_eq!(text, "um I mean send it to Bob no Alice");
+        assert!(ops.is_empty());
     }
 }
