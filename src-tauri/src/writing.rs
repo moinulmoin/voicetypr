@@ -934,4 +934,75 @@ mod tests {
         assert!(context.contains("Mail"));
         assert!(context.contains("email"));
     }
+
+    #[test]
+    fn test_phrase_only_custom_word_does_not_replace_text() {
+        let (text, ops) = apply_text_replacements(
+            "shawn joined the call",
+            &[],
+            &[CustomWord {
+                phrase: "Sean".to_string(),
+                spoken_form: None,
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            Some("en"),
+        );
+
+        assert_eq!(text, "shawn joined the call");
+        assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn test_replacements_require_boundaries_and_language_match() {
+        let replacements = vec![TextReplacementRule {
+            from: "react".to_string(),
+            to: "React".to_string(),
+            language: Some("en".to_string()),
+            enabled: true,
+        }];
+
+        let (identifier_text, identifier_ops) =
+            apply_text_replacements("createReactiveStore", &replacements, &[], Some("en"));
+        assert_eq!(identifier_text, "createReactiveStore");
+        assert!(identifier_ops.is_empty());
+
+        let (language_text, language_ops) =
+            apply_text_replacements("react", &replacements, &[], Some("fr"));
+        assert_eq!(language_text, "react");
+        assert!(language_ops.is_empty());
+    }
+
+    #[test]
+    fn test_build_ai_context_excludes_disabled_and_wrong_language_terms() {
+        let context = build_ai_context(
+            &[
+                CustomWord {
+                    phrase: "VoiceTypr".to_string(),
+                    spoken_form: Some("voice typer".to_string()),
+                    language: Some("en".to_string()),
+                    enabled: true,
+                },
+                CustomWord {
+                    phrase: "DisabledTerm".to_string(),
+                    spoken_form: None,
+                    language: Some("en".to_string()),
+                    enabled: false,
+                },
+                CustomWord {
+                    phrase: "TermeFrançais".to_string(),
+                    spoken_form: None,
+                    language: Some("fr".to_string()),
+                    enabled: true,
+                },
+            ],
+            Some("en"),
+            None,
+        )
+        .unwrap();
+
+        assert!(context.contains("VoiceTypr"));
+        assert!(!context.contains("DisabledTerm"));
+        assert!(!context.contains("TermeFrançais"));
+    }
 }

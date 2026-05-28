@@ -455,4 +455,29 @@ mod tests {
         assert!(conn.status_url().contains("/api/v1/status"));
         assert!(conn.transcribe_url().contains("/api/v1/transcribe"));
     }
+
+    #[test]
+    fn transcription_request_defaults_to_audio_only() {
+        let request = TranscriptionRequest::new(vec![1, 2, 3], TranscriptionSource::Upload);
+
+        assert_eq!(request.audio_data, vec![1, 2, 3]);
+        assert_eq!(request.source, TranscriptionSource::Upload);
+        assert!(request.spoken_language.is_none());
+        assert!(request.transcription_task.is_none());
+    }
+
+    #[test]
+    fn transcription_request_carries_language_and_task_headers() {
+        let request = TranscriptionRequest::new(vec![1], TranscriptionSource::LiveRecording)
+            .with_language_and_task(
+                Some("en".to_string()),
+                Some("translate_to_english".to_string()),
+            );
+
+        assert_eq!(request.spoken_language.as_deref(), Some("en"));
+        assert_eq!(
+            request.transcription_task.as_deref(),
+            Some("translate_to_english")
+        );
+    }
 }

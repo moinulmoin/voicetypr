@@ -117,4 +117,39 @@ mod tests {
         assert!(config.password.is_none());
         assert!(!config.enabled);
     }
+
+    #[test]
+    fn status_response_serializes_current_contract() {
+        let response = StatusResponse {
+            status: "ok".to_string(),
+            version: "1.2.3".to_string(),
+            model: "base.en".to_string(),
+            name: "desk".to_string(),
+            machine_id: "machine".to_string(),
+        };
+
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["version"], "1.2.3");
+        assert_eq!(value["model"], "base.en");
+        assert_eq!(value["name"], "desk");
+        assert_eq!(value["machine_id"], "machine");
+        assert_eq!(value.as_object().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn transcribe_response_omits_absent_transcript_language() {
+        let value = serde_json::to_value(TranscribeResponse {
+            text: "hello".to_string(),
+            duration_ms: 42,
+            model: "base.en".to_string(),
+            transcript_language: None,
+        })
+        .unwrap();
+
+        assert_eq!(value["text"], "hello");
+        assert_eq!(value["duration_ms"], 42);
+        assert_eq!(value["model"], "base.en");
+        assert!(value.get("transcript_language").is_none());
+    }
 }

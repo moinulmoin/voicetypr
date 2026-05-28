@@ -549,9 +549,9 @@ fn transcription_task_header_value(task: crate::transcription::TranscriptionTask
 mod tests {
     use super::{
         build_failed_transcription_row, build_remote_server_error_payload,
-        build_remote_upload_transcription_request, build_transcription_job,
-        build_writing_history_metadata, recording_license_state, remote_server_error_pill_message,
-        should_hide_pill_when_idle, should_use_active_remote,
+        build_remote_transcription_result, build_remote_upload_transcription_request,
+        build_transcription_job, build_writing_history_metadata, recording_license_state,
+        remote_server_error_pill_message, should_hide_pill_when_idle, should_use_active_remote,
         sync_retranscription_failure_metadata, NormalizedTempFile, RecordingLicenseState,
         TranscriptionFailure, TranscriptionStatus,
     };
@@ -625,6 +625,31 @@ mod tests {
             request.transcription_task.as_deref(),
             Some("translate_to_english")
         );
+    }
+
+    #[test]
+    fn remote_transcription_result_preserves_server_metadata() {
+        let job = build_transcription_job(
+            crate::transcription::TranscriptionSource::DesktopRecording,
+            "remote",
+            "remote-placeholder",
+            Some("en".to_string()),
+            false,
+        );
+        let result = build_remote_transcription_result(
+            &job,
+            crate::remote::server::TranscribeResponse {
+                text: "hello world".to_string(),
+                duration_ms: 1234,
+                model: "base.en".to_string(),
+                transcript_language: Some("en".to_string()),
+            },
+        );
+
+        assert_eq!(result.raw_text, "hello world");
+        assert_eq!(result.model, "base.en");
+        assert_eq!(result.transcript_language.as_deref(), Some("en"));
+        assert_eq!(result.timings.processing_duration_ms, Some(1234));
     }
 
     #[test]
