@@ -502,8 +502,9 @@ impl Transcriber {
         3) multi-channel → mono  (Whisper needs mono)
         ---------------------------------------------- */
         if spec.channels == 2 {
-            // Use the built-in stereo to mono conversion
-            audio = convert_stereo_to_mono_audio(&audio).map_err(|e| e.to_string())?;
+            let mut mono_audio = vec![0.0; audio.len() / 2];
+            convert_stereo_to_mono_audio(&audio, &mut mono_audio).map_err(|e| e.to_string())?;
+            audio = mono_audio;
         } else if spec.channels > 2 {
             // Handle multi-channel audio (3, 4, 5.1, 7.1, etc.)
             log::info!(
