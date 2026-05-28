@@ -312,6 +312,22 @@ fn candidate_has_boundaries(text: &str, start: usize, end: usize) -> bool {
     left_ok && right_ok
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LibraryRuleSourceKind {
+    ExplicitReplacement,
+    CustomWordSpokenForm,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LibraryRuleApplication {
+    source_form: String,
+    target_text: String,
+    source_kind: LibraryRuleSourceKind,
+    language_scope: Option<String>,
+    start: usize,
+    end: usize,
+}
+
 #[derive(Clone)]
 struct ReplacementCandidate {
     start: usize,
@@ -319,6 +335,9 @@ struct ReplacementCandidate {
     replacement: String,
     detail: String,
     priority: u8,
+    source_form: String,
+    source_kind: LibraryRuleSourceKind,
+    language_scope: Option<String>,
 }
 
 fn collect_replacement_candidates(
@@ -349,6 +368,9 @@ fn collect_replacement_candidates(
                 replacement: rule.to.clone(),
                 detail: format!("{} → {}", rule.from, rule.to),
                 priority: 2,
+                source_form: rule.from.clone(),
+                source_kind: LibraryRuleSourceKind::ExplicitReplacement,
+                language_scope: normalize_language_scope(rule.language.as_deref()),
             });
         }
     }
@@ -376,6 +398,9 @@ fn collect_replacement_candidates(
                 replacement: word.phrase.clone(),
                 detail: format!("{} → {}", spoken_form, word.phrase),
                 priority: 1,
+                source_form: spoken_form.to_string(),
+                source_kind: LibraryRuleSourceKind::CustomWordSpokenForm,
+                language_scope: normalize_language_scope(word.language.as_deref()),
             });
         }
     }
@@ -389,16 +414,26 @@ fn collect_replacement_candidates(
     candidates
 }
 
-fn apply_text_replacements(
+struct TextReplacementResult {
+    text: String,
+    operations: Vec<AppliedWritingOperation>,
+    provenance: Vec<LibraryRuleApplication>,
+}
+
+fn apply_text_replacements_with_provenance(
     text: &str,
     replacements: &[TextReplacementRule],
     custom_words: &[CustomWord],
     transcript_language: Option<&str>,
-) -> (String, Vec<AppliedWritingOperation>) {
+) -> TextReplacementResult {
     let candidates =
         collect_replacement_candidates(text, replacements, custom_words, transcript_language);
     if candidates.is_empty() {
-        return (text.to_string(), Vec::new());
+        return TextReplacementResult {
+            text: text.to_string(),
+            operations: Vec::new(),
+            provenance: Vec::new(),
+        };
     }
 
     let mut selected = Vec::new();
@@ -412,11 +447,16 @@ fn apply_text_replacements(
     }
 
     if selected.is_empty() {
-        return (text.to_string(), Vec::new());
+        return TextReplacementResult {
+            text: text.to_string(),
+            operations: Vec::new(),
+            provenance: Vec::new(),
+        };
     }
 
     let mut output = String::with_capacity(text.len());
     let mut operations = Vec::with_capacity(selected.len());
+    let mut provenance = Vec::with_capacity(selected.len());
     let mut last = 0usize;
 
     for candidate in selected {
@@ -426,11 +466,39 @@ fn apply_text_replacements(
             kind: WritingOperationKind::Replacement,
             detail: candidate.detail,
         });
+        provenance.push(LibraryRuleApplication {
+            source_form: candidate.source_form,
+            target_text: candidate.replacement,
+            source_kind: candidate.source_kind,
+            language_scope: candidate.language_scope,
+            start: candidate.start,
+            end: candidate.end,
+        });
         last = candidate.end;
     }
     output.push_str(&text[last..]);
 
-    (output, operations)
+    TextReplacementResult {
+        text: output,
+        operations,
+        provenance,
+    }
+}
+
+#[cfg(test)]
+fn apply_text_replacements(
+    text: &str,
+    replacements: &[TextReplacementRule],
+    custom_words: &[CustomWord],
+    transcript_language: Option<&str>,
+) -> (String, Vec<AppliedWritingOperation>) {
+    let result = apply_text_replacements_with_provenance(
+        text,
+        replacements,
+        custom_words,
+        transcript_language,
+    );
+    (result.text, result.operations)
 }
 
 fn match_snippet<'a>(
@@ -544,6 +612,7 @@ fn build_ai_context(
 struct LibraryRulesResult {
     text: String,
     literal_locked: bool,
+    _provenance: Vec<LibraryRuleApplication>,
 }
 
 fn run_transcript_cleanup_mechanical(text: &str) -> Cow<'_, str> {
@@ -589,20 +658,22 @@ fn apply_library_rules(
         return LibraryRulesResult {
             text: snippet.body.clone(),
             literal_locked: snippet.preserve_literal,
+            _provenance: Vec::new(),
         };
     }
 
-    let (replaced_text, replacement_ops) = apply_text_replacements(
+    let replacement_result = apply_text_replacements_with_provenance(
         text,
         &settings.replacements,
         &settings.custom_words,
         transcript_language,
     );
-    applied_operations.extend(replacement_ops);
+    applied_operations.extend(replacement_result.operations);
 
     LibraryRulesResult {
-        text: replaced_text,
+        text: replacement_result.text,
         literal_locked: false,
+        _provenance: replacement_result.provenance,
     }
 }
 
@@ -1095,6 +1166,87 @@ mod tests {
         assert!(context.contains("VoiceTypr"));
         assert!(!context.contains("DisabledTerm"));
         assert!(!context.contains("TermeFrançais"));
+    }
+
+    #[test]
+    fn test_replacement_provenance_records_selected_rules() {
+        let result = apply_text_replacements_with_provenance(
+            "voice typer uses react",
+            &[TextReplacementRule {
+                from: "voice typer".to_string(),
+                to: "VoiceTypr".to_string(),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            &[CustomWord {
+                phrase: "React".to_string(),
+                spoken_form: Some("react".to_string()),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            Some("en"),
+        );
+
+        assert_eq!(result.text, "VoiceTypr uses React");
+        assert_eq!(result.provenance.len(), 2);
+        assert_eq!(result.provenance[0].source_form, "voice typer");
+        assert_eq!(result.provenance[0].target_text, "VoiceTypr");
+        assert_eq!(
+            result.provenance[0].source_kind,
+            LibraryRuleSourceKind::ExplicitReplacement
+        );
+        assert_eq!(result.provenance[0].language_scope.as_deref(), Some("en"));
+        assert_eq!(
+            (result.provenance[0].start, result.provenance[0].end),
+            (0, 11)
+        );
+        assert_eq!(result.provenance[1].source_form, "react");
+        assert_eq!(result.provenance[1].target_text, "React");
+        assert_eq!(
+            result.provenance[1].source_kind,
+            LibraryRuleSourceKind::CustomWordSpokenForm
+        );
+    }
+
+    #[test]
+    fn test_replacement_provenance_tracks_only_applied_rules() {
+        let result = apply_text_replacements_with_provenance(
+            "voice typer",
+            &[TextReplacementRule {
+                from: "voice typer".to_string(),
+                to: "VoiceTypr".to_string(),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            &[
+                CustomWord {
+                    phrase: "VoiceTypr".to_string(),
+                    spoken_form: Some("voice typer".to_string()),
+                    language: Some("en".to_string()),
+                    enabled: true,
+                },
+                CustomWord {
+                    phrase: "Sean".to_string(),
+                    spoken_form: None,
+                    language: Some("en".to_string()),
+                    enabled: true,
+                },
+                CustomWord {
+                    phrase: "Bonjour".to_string(),
+                    spoken_form: Some("hello".to_string()),
+                    language: Some("fr".to_string()),
+                    enabled: true,
+                },
+            ],
+            Some("en"),
+        );
+
+        assert_eq!(result.text, "VoiceTypr");
+        assert_eq!(result.provenance.len(), 1);
+        assert_eq!(
+            result.provenance[0].source_kind,
+            LibraryRuleSourceKind::ExplicitReplacement
+        );
     }
 
     #[test]
