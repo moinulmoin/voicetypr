@@ -1031,7 +1031,8 @@ pub fn compile_context_for_target(
         }
     }
 
-    let context = sections.join(" ");
+    let mut context = sections.join(" ");
+    context.retain(|ch| ch != '\0');
     if context.is_empty() {
         return None;
     }
@@ -1649,6 +1650,30 @@ mod tests {
         assert!(context.contains("voice typer"));
         assert!(context.contains("Mail"));
         assert!(context.contains("email"));
+    }
+
+    #[test]
+    fn test_compile_context_removes_nul_bytes() {
+        let settings = WritingSettings {
+            custom_words: vec![CustomWord {
+                phrase: "Voice\0Typr".to_string(),
+                spoken_form: Some("voice\0typer".to_string()),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+
+        let context = compile_context_for_target(
+            &settings,
+            Some("en"),
+            None,
+            ProviderContextTarget::WhisperInitialPrompt,
+        )
+        .unwrap();
+
+        assert!(!context.contains('\0'));
+        assert!(context.contains("VoiceTypr"));
     }
 
     #[test]
