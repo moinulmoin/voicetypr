@@ -631,50 +631,101 @@ fn collect_voice_command_candidates(
     candidates
 }
 
-fn normalize_voice_command_spacing(text: String) -> String {
-    let mut output = String::with_capacity(text.len());
-    let mut suppress_space_after_break = false;
-    for ch in text.chars() {
-        if suppress_space_after_break && (ch == ' ' || ch == '\t') {
-            continue;
-        }
-
-        match ch {
-            ',' | '.' | '?' | '!' => {
-                while output.ends_with(' ') || output.ends_with('\t') {
-                    output.pop();
-                }
-                output.push(ch);
-                suppress_space_after_break = false;
-            }
-            '\n' => {
-                while output.ends_with(' ') || output.ends_with('\t') {
-                    output.pop();
-                }
-                output.push('\n');
-                suppress_space_after_break = true;
-            }
-            _ => {
-                output.push(ch);
-                suppress_space_after_break = false;
-            }
-        }
-    }
-    output
+struct VoiceCommandResult {
+    text: String,
+    operations: Vec<AppliedWritingOperation>,
+    index_map: Vec<Option<usize>>,
 }
 
-fn apply_voice_commands(
+fn push_voice_output_char(
+    output: &mut String,
+    index_map: &mut [Option<usize>],
+    original_index: Option<usize>,
+    ch: char,
+    suppress_space_after_break: &mut bool,
+) {
+    if *suppress_space_after_break && (ch == ' ' || ch == '\t') {
+        return;
+    }
+
+    match ch {
+        ',' | '.' | '?' | '!' => {
+            while output.ends_with(' ') || output.ends_with('\t') {
+                output.pop();
+            }
+            if let Some(index) = original_index {
+                index_map[index] = Some(output.len());
+            }
+            output.push(ch);
+            if let Some(index) = original_index {
+                index_map[index + ch.len_utf8()] = Some(output.len());
+            }
+            *suppress_space_after_break = false;
+        }
+        '\n' => {
+            while output.ends_with(' ') || output.ends_with('\t') {
+                output.pop();
+            }
+            if let Some(index) = original_index {
+                index_map[index] = Some(output.len());
+            }
+            output.push('\n');
+            if let Some(index) = original_index {
+                index_map[index + ch.len_utf8()] = Some(output.len());
+            }
+            *suppress_space_after_break = true;
+        }
+        _ => {
+            if let Some(index) = original_index {
+                index_map[index] = Some(output.len());
+            }
+            output.push(ch);
+            if let Some(index) = original_index {
+                index_map[index + ch.len_utf8()] = Some(output.len());
+            }
+            *suppress_space_after_break = false;
+        }
+    }
+}
+
+fn push_voice_output(
+    output: &mut String,
+    index_map: &mut [Option<usize>],
+    text: &str,
+    original_start: Option<usize>,
+    suppress_space_after_break: &mut bool,
+) {
+    for (relative_index, ch) in text.char_indices() {
+        push_voice_output_char(
+            output,
+            index_map,
+            original_start.map(|start| start + relative_index),
+            ch,
+            suppress_space_after_break,
+        );
+    }
+}
+
+fn apply_voice_commands_with_map(
     text: &str,
     transcript_language: Option<&str>,
     protected_spans: &[(usize, usize)],
-) -> (String, Vec<AppliedWritingOperation>) {
+) -> VoiceCommandResult {
     if !voice_commands_enabled_for_language(transcript_language) {
-        return (text.to_string(), Vec::new());
+        return VoiceCommandResult {
+            text: text.to_string(),
+            operations: Vec::new(),
+            index_map: (0..=text.len()).map(Some).collect(),
+        };
     }
 
     let candidates = collect_voice_command_candidates(text, protected_spans);
     if candidates.is_empty() {
-        return (text.to_string(), Vec::new());
+        return VoiceCommandResult {
+            text: text.to_string(),
+            operations: Vec::new(),
+            index_map: (0..=text.len()).map(Some).collect(),
+        };
     }
 
     let mut selected = Vec::new();
@@ -688,49 +739,82 @@ fn apply_voice_commands(
     }
 
     if selected.is_empty() {
-        return (text.to_string(), Vec::new());
+        return VoiceCommandResult {
+            text: text.to_string(),
+            operations: Vec::new(),
+            index_map: (0..=text.len()).map(Some).collect(),
+        };
     }
 
     let mut output = String::with_capacity(text.len());
     let mut operations = Vec::with_capacity(selected.len());
+    let mut index_map = vec![None; text.len() + 1];
+    index_map[0] = Some(0);
+    let mut suppress_space_after_break = false;
     let mut last = 0usize;
     for candidate in selected {
-        output.push_str(&text[last..candidate.start]);
+        push_voice_output(
+            &mut output,
+            &mut index_map,
+            &text[last..candidate.start],
+            Some(last),
+            &mut suppress_space_after_break,
+        );
         let replacement = match candidate.definition.output {
             VoiceCommandOutput::Punctuation(value) | VoiceCommandOutput::Break(value) => value,
         };
-        output.push_str(replacement);
+        push_voice_output(
+            &mut output,
+            &mut index_map,
+            replacement,
+            None,
+            &mut suppress_space_after_break,
+        );
         operations.push(AppliedWritingOperation {
             kind: WritingOperationKind::VoiceCommand,
             detail: format!("{} → {}", candidate.definition.phrase, replacement.escape_debug()),
         });
         last = candidate.end;
     }
-    output.push_str(&text[last..]);
+    push_voice_output(
+        &mut output,
+        &mut index_map,
+        &text[last..],
+        Some(last),
+        &mut suppress_space_after_break,
+    );
+    index_map[text.len()] = Some(output.len());
 
-    (normalize_voice_command_spacing(output), operations)
+    VoiceCommandResult {
+        text: output,
+        operations,
+        index_map,
+    }
 }
 
-fn refresh_provenance_target_spans(text: &str, provenance: &mut [LibraryRuleApplication]) {
-    for application in provenance {
-        let mut best_match: Option<(usize, usize)> = None;
-        for (start, _) in text.match_indices(&application.target_text) {
-            let end = start + application.target_text.len();
-            if !candidate_has_boundaries(text, start, end) {
-                continue;
-            }
-            let should_replace = best_match
-                .map(|(best_start, _)| {
-                    start.abs_diff(application.target_start)
-                        < best_start.abs_diff(application.target_start)
-                })
-                .unwrap_or(true);
-            if should_replace {
-                best_match = Some((start, end));
-            }
-        }
+#[cfg(test)]
+fn apply_voice_commands(
+    text: &str,
+    transcript_language: Option<&str>,
+    protected_spans: &[(usize, usize)],
+) -> (String, Vec<AppliedWritingOperation>) {
+    let result = apply_voice_commands_with_map(text, transcript_language, protected_spans);
+    (result.text, result.operations)
+}
 
-        if let Some((start, end)) = best_match {
+fn remap_provenance_target_spans(
+    index_map: &[Option<usize>],
+    provenance: &mut [LibraryRuleApplication],
+) {
+    for application in provenance {
+        if let (Some(start), Some(end)) = (
+            index_map
+                .get(application.target_start)
+                .and_then(|value| *value),
+            index_map
+                .get(application.target_end)
+                .and_then(|value| *value),
+        ) {
             application.target_start = start;
             application.target_end = end;
         }
@@ -751,14 +835,14 @@ fn apply_voice_command_stage(
         .iter()
         .map(|application| (application.target_start, application.target_end))
         .collect();
-    let (text, operations) = apply_voice_commands(
+    let result = apply_voice_commands_with_map(
         &library_result.text,
         transcript_language,
         &protected_spans,
     );
-    library_result.text = text;
-    refresh_provenance_target_spans(&library_result.text, &mut library_result.provenance);
-    applied_operations.extend(operations);
+    library_result.text = result.text;
+    remap_provenance_target_spans(&result.index_map, &mut library_result.provenance);
+    applied_operations.extend(result.operations);
 }
 
 fn classify_app_category(app_name: &str) -> Option<String> {
