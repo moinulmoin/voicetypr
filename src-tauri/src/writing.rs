@@ -711,6 +711,32 @@ fn apply_voice_commands(
     (normalize_voice_command_spacing(output), operations)
 }
 
+fn refresh_provenance_target_spans(text: &str, provenance: &mut [LibraryRuleApplication]) {
+    for application in provenance {
+        let mut best_match: Option<(usize, usize)> = None;
+        for (start, _) in text.match_indices(&application.target_text) {
+            let end = start + application.target_text.len();
+            if !candidate_has_boundaries(text, start, end) {
+                continue;
+            }
+            let should_replace = best_match
+                .map(|(best_start, _)| {
+                    start.abs_diff(application.target_start)
+                        < best_start.abs_diff(application.target_start)
+                })
+                .unwrap_or(true);
+            if should_replace {
+                best_match = Some((start, end));
+            }
+        }
+
+        if let Some((start, end)) = best_match {
+            application.target_start = start;
+            application.target_end = end;
+        }
+    }
+}
+
 fn apply_voice_command_stage(
     library_result: &mut LibraryRulesResult,
     transcript_language: Option<&str>,
@@ -731,6 +757,7 @@ fn apply_voice_command_stage(
         &protected_spans,
     );
     library_result.text = text;
+    refresh_provenance_target_spans(&library_result.text, &mut library_result.provenance);
     applied_operations.extend(operations);
 }
 
@@ -1819,7 +1846,7 @@ mod tests {
             start: 0,
             end: 11,
             target_start: 0,
-            target_end: 8,
+            target_end: 9,
         }];
 
         let (literal_text, literal_ops) =
@@ -1973,6 +2000,35 @@ mod tests {
 
         assert_eq!(result.text, "New Line Cinema made Period Tracker");
         assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn test_voice_commands_refresh_final_guard_positions() {
+        let settings = WritingSettings {
+            custom_words: vec![CustomWord {
+                phrase: "VoiceTypr".to_string(),
+                spoken_form: Some("voice typer".to_string()),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+        let mut ops = Vec::new();
+        let mut result =
+            apply_library_rules("hello insert comma voice typer", &settings, Some("en"), &mut ops);
+
+        apply_voice_command_stage(&mut result, Some("en"), &mut ops);
+
+        assert_eq!(result.text, "hello, VoiceTypr");
+        assert_eq!(result.provenance[0].target_start, 7);
+        let (guarded, guard_ops) = apply_final_restoration_guard(
+            "hello, voice typer",
+            &result.provenance,
+            false,
+            false,
+        );
+        assert_eq!(guarded, "hello, VoiceTypr");
+        assert_eq!(guard_ops.len(), 1);
     }
 
     #[test]
