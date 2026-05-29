@@ -328,6 +328,8 @@ struct LibraryRuleApplication {
     language_scope: Option<String>,
     start: usize,
     end: usize,
+    target_start: usize,
+    target_end: usize,
 }
 
 #[derive(Clone)]
@@ -463,7 +465,9 @@ fn apply_text_replacements_with_provenance(
 
     for candidate in selected {
         output.push_str(&text[last..candidate.start]);
+        let target_start = output.len();
         output.push_str(&candidate.replacement);
+        let target_end = output.len();
         operations.push(AppliedWritingOperation {
             kind: WritingOperationKind::Replacement,
             detail: candidate.detail,
@@ -475,6 +479,8 @@ fn apply_text_replacements_with_provenance(
             language_scope: candidate.language_scope,
             start: candidate.start,
             end: candidate.end,
+            target_start,
+            target_end,
         });
         last = candidate.end;
     }
@@ -564,11 +570,11 @@ const VOICE_COMMANDS_EN: &[VoiceCommandDefinition] = &[
         output: VoiceCommandOutput::Punctuation("."),
     },
     VoiceCommandDefinition {
-        phrase: "comma",
+        phrase: "insert comma",
         output: VoiceCommandOutput::Punctuation(","),
     },
     VoiceCommandDefinition {
-        phrase: "period",
+        phrase: "insert period",
         output: VoiceCommandOutput::Punctuation("."),
     },
 ];
@@ -580,7 +586,22 @@ fn voice_commands_enabled_for_language(transcript_language: Option<&str>) -> boo
     }
 }
 
-fn collect_voice_command_candidates(text: &str) -> Vec<VoiceCommandCandidate> {
+fn spans_overlap(left_start: usize, left_end: usize, right_start: usize, right_end: usize) -> bool {
+    left_start < right_end && right_start < left_end
+}
+
+fn protected_span_contains(protected_spans: &[(usize, usize)], start: usize, end: usize) -> bool {
+    protected_spans
+        .iter()
+        .any(|(protected_start, protected_end)| {
+            spans_overlap(start, end, *protected_start, *protected_end)
+        })
+}
+
+fn collect_voice_command_candidates(
+    text: &str,
+    protected_spans: &[(usize, usize)],
+) -> Vec<VoiceCommandCandidate> {
     let mut candidates = Vec::new();
     for definition in VOICE_COMMANDS_EN {
         let Ok(regex) = RegexBuilder::new(&regex::escape(definition.phrase))
@@ -591,7 +612,9 @@ fn collect_voice_command_candidates(text: &str) -> Vec<VoiceCommandCandidate> {
         };
 
         for mat in regex.find_iter(text) {
-            if candidate_has_boundaries(text, mat.start(), mat.end()) {
+            if candidate_has_boundaries(text, mat.start(), mat.end())
+                && !protected_span_contains(protected_spans, mat.start(), mat.end())
+            {
                 candidates.push(VoiceCommandCandidate {
                     start: mat.start(),
                     end: mat.end(),
@@ -643,12 +666,13 @@ fn normalize_voice_command_spacing(text: String) -> String {
 fn apply_voice_commands(
     text: &str,
     transcript_language: Option<&str>,
+    protected_spans: &[(usize, usize)],
 ) -> (String, Vec<AppliedWritingOperation>) {
     if !voice_commands_enabled_for_language(transcript_language) {
         return (text.to_string(), Vec::new());
     }
 
-    let candidates = collect_voice_command_candidates(text);
+    let candidates = collect_voice_command_candidates(text, protected_spans);
     if candidates.is_empty() {
         return (text.to_string(), Vec::new());
     }
@@ -696,7 +720,16 @@ fn apply_voice_command_stage(
         return;
     }
 
-    let (text, operations) = apply_voice_commands(&library_result.text, transcript_language);
+    let protected_spans: Vec<(usize, usize)> = library_result
+        .provenance
+        .iter()
+        .map(|application| (application.target_start, application.target_end))
+        .collect();
+    let (text, operations) = apply_voice_commands(
+        &library_result.text,
+        transcript_language,
+        &protected_spans,
+    );
     library_result.text = text;
     applied_operations.extend(operations);
 }
@@ -1006,7 +1039,9 @@ fn collect_final_guard_candidates(
         };
 
         for mat in regex.find_iter(text) {
-            if candidate_has_boundaries(text, mat.start(), mat.end()) {
+            if mat.start() == application.target_start
+                && candidate_has_boundaries(text, mat.start(), mat.end())
+            {
                 candidates.push(FinalGuardCandidate {
                     start: mat.start(),
                     end: mat.end(),
@@ -1683,10 +1718,16 @@ mod tests {
             result.provenance[0].source_kind,
             LibraryRuleSourceKind::ExplicitReplacement
         );
-        assert_eq!(result.provenance[0].language_scope.as_deref(), Some("en"));
         assert_eq!(
             (result.provenance[0].start, result.provenance[0].end),
             (0, 11)
+        );
+        assert_eq!(
+            (
+                result.provenance[0].target_start,
+                result.provenance[0].target_end
+            ),
+            (0, 9)
         );
         assert_eq!(result.provenance[1].source_form, "react");
         assert_eq!(result.provenance[1].target_text, "React");
@@ -1777,6 +1818,8 @@ mod tests {
             language_scope: Some("en".to_string()),
             start: 0,
             end: 11,
+            target_start: 0,
+            target_end: 8,
         }];
 
         let (literal_text, literal_ops) =
@@ -1799,6 +1842,8 @@ mod tests {
             language_scope: Some("en".to_string()),
             start: 0,
             end: 5,
+            target_start: 20,
+            target_end: 25,
         }];
 
         let (guarded, ops) =
@@ -1806,6 +1851,11 @@ mod tests {
 
         assert_eq!(guarded, "createReactiveStore React");
         assert_eq!(ops.len(), 1);
+
+        let (shifted, shifted_ops) =
+            apply_final_restoration_guard("please react", &provenance, false, false);
+        assert_eq!(shifted, "please react");
+        assert!(shifted_ops.is_empty());
     }
 
     #[test]
@@ -1844,25 +1894,34 @@ mod tests {
     #[test]
     fn test_voice_commands_apply_punctuation_and_breaks() {
         let (text, ops) = apply_voice_commands(
-            "hello comma world period first line new line second line new paragraph done",
+            "hello insert comma world insert period first line new line second line new paragraph done",
             Some("en"),
+            &[],
         );
 
         assert_eq!(text, "hello, world. first line\nsecond line\n\ndone");
         assert_eq!(ops.len(), 4);
-        assert!(ops.iter().all(|op| op.kind == WritingOperationKind::VoiceCommand));
+        assert!(ops
+            .iter()
+            .all(|op| op.kind == WritingOperationKind::VoiceCommand));
     }
 
     #[test]
     fn test_voice_commands_respect_boundaries_and_language() {
-        let (boundary_text, boundary_ops) =
-            apply_voice_commands("periodic commaful question marking", Some("en"));
-        assert_eq!(boundary_text, "periodic commaful question marking");
+        let (boundary_text, boundary_ops) = apply_voice_commands(
+            "the Jurassic period used comma separated values",
+            Some("en"),
+            &[],
+        );
+        assert_eq!(
+            boundary_text,
+            "the Jurassic period used comma separated values"
+        );
         assert!(boundary_ops.is_empty());
 
         let (language_text, language_ops) =
-            apply_voice_commands("hello comma world", Some("fr"));
-        assert_eq!(language_text, "hello comma world");
+            apply_voice_commands("hello insert comma world", Some("fr"), &[]);
+        assert_eq!(language_text, "hello insert comma world");
         assert!(language_ops.is_empty());
     }
 
@@ -1880,10 +1939,46 @@ mod tests {
         assert_eq!(result.text, "hello comma world");
         assert!(ops.is_empty());
     }
+    #[test]
+    fn test_voice_command_stage_protects_library_outputs() {
+        let mut result = LibraryRulesResult {
+            text: "New Line Cinema made Period Tracker".to_string(),
+            literal_locked: false,
+            provenance: vec![
+                LibraryRuleApplication {
+                    source_form: "new line cinema".to_string(),
+                    target_text: "New Line Cinema".to_string(),
+                    source_kind: LibraryRuleSourceKind::ExplicitReplacement,
+                    language_scope: Some("en".to_string()),
+                    start: 0,
+                    end: 15,
+                    target_start: 0,
+                    target_end: 15,
+                },
+                LibraryRuleApplication {
+                    source_form: "period tracker".to_string(),
+                    target_text: "Period Tracker".to_string(),
+                    source_kind: LibraryRuleSourceKind::CustomWordSpokenForm,
+                    language_scope: Some("en".to_string()),
+                    start: 21,
+                    end: 35,
+                    target_start: 21,
+                    target_end: 35,
+                },
+            ],
+        };
+        let mut ops = Vec::new();
+
+        apply_voice_command_stage(&mut result, Some("en"), &mut ops);
+
+        assert_eq!(result.text, "New Line Cinema made Period Tracker");
+        assert!(ops.is_empty());
+    }
 
     #[test]
     fn test_voice_commands_do_not_resolve_semantic_cleanup() {
-        let (text, ops) = apply_voice_commands("um I mean send it to Bob no Alice", Some("en"));
+        let (text, ops) =
+            apply_voice_commands("um I mean send it to Bob no Alice", Some("en"), &[]);
 
         assert_eq!(text, "um I mean send it to Bob no Alice");
         assert!(ops.is_empty());
