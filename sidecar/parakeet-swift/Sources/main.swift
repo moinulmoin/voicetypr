@@ -149,7 +149,10 @@ struct ParakeetSidecar {
 
                 switch json["type"] as? String {
                 case "load_model", "download_model":
-                    let version = parseModelVersion(json["model_version"], fallbackModelId: json["model_id"] as? String)
+                    guard let version = parseModelVersion(json["model_version"]) else {
+                        sendError("invalid_model_version", message: "model_version must be \"v2\" or \"v3\"", encoder: encoder)
+                        continue
+                    }
                     let forceDownload: Bool
                     if let explicit = json["force_download"] as? Bool {
                         forceDownload = explicit
@@ -163,7 +166,10 @@ struct ParakeetSidecar {
                     sendResponse(StatusResponse(loadedModel: nil, modelVersion: nil), encoder: encoder)
 
                 case "delete_model":
-                    let version = parseModelVersion(json["model_version"], fallbackModelId: json["model_id"] as? String)
+                    guard let version = parseModelVersion(json["model_version"]) else {
+                        sendError("invalid_model_version", message: "model_version must be \"v2\" or \"v3\"", encoder: encoder)
+                        continue
+                    }
                     deleteModelFiles(for: version)
                     if loadedModelVersion == version {
                         await unloadModel()
@@ -471,23 +477,19 @@ struct ParakeetSidecar {
         )
     }
 
-    static func parseModelVersion(_ value: Any?) -> SupportedModelVersion {
-        if let str = (value as? String)?.lowercased(), str == "v2" {
+    static func parseModelVersion(_ value: Any?) -> SupportedModelVersion? {
+        guard let str = (value as? String)?.lowercased() else {
+            return nil
+        }
+
+        switch str {
+        case "v2":
             return .v2
+        case "v3":
+            return .v3
+        default:
+            return nil
         }
-        return .v3
-    }
-
-    static func parseModelVersion(_ value: Any?, fallbackModelId: String?) -> SupportedModelVersion {
-        if let value = value {
-            return parseModelVersion(value)
-        }
-
-        if let modelId = fallbackModelId?.lowercased(), modelId.contains("-v2") {
-            return .v2
-        }
-
-        return .v3
     }
 }
 
