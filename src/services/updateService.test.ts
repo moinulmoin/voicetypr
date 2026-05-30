@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
+import { ask } from '@tauri-apps/plugin-dialog';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { check, type Update } from '@tauri-apps/plugin-updater';
 
 // Mock Tauri plugins before importing the module under test
 vi.mock('@tauri-apps/plugin-updater', () => ({
@@ -36,6 +40,21 @@ import { UpdateService } from './updateService';
 
 const JUST_UPDATED_KEY = 'just_updated_version';
 
+
+type TestUpdate = Update & {
+  downloadAndInstall: ReturnType<typeof vi.fn>;
+};
+
+function createAvailableUpdate(): TestUpdate {
+  return {
+    available: true,
+    currentVersion: '1.0.0',
+    version: '1.2.3',
+    body: 'Security and reliability fixes',
+    rawJson: {},
+    downloadAndInstall: vi.fn().mockResolvedValue(undefined),
+  } as unknown as TestUpdate;
+}
 describe('UpdateService version marker', () => {
   let service: UpdateService;
 
@@ -95,5 +114,38 @@ describe('UpdateService version marker', () => {
 
     const result = freshService.getJustUpdatedVersion();
     expect(result).toBe('1.12.1');
+  });
+
+  it('asks before installing an update found during a background check', async () => {
+    const update = createAvailableUpdate();
+    vi.mocked(check).mockResolvedValue(update);
+    vi.mocked(ask).mockResolvedValue(false);
+
+    await service.checkForUpdatesInBackground();
+
+    expect(ask).toHaveBeenCalledWith(
+      expect.stringContaining('Update 1.2.3 is available'),
+      expect.objectContaining({
+        title: 'Update Available',
+        okLabel: 'Update',
+        cancelLabel: 'Later',
+      }),
+    );
+    expect(update.downloadAndInstall).not.toHaveBeenCalled();
+    expect(relaunch).not.toHaveBeenCalled();
+  });
+
+  it('installs a background update only after explicit confirmation', async () => {
+    const update = createAvailableUpdate();
+    vi.mocked(check).mockResolvedValue(update);
+    vi.mocked(ask).mockResolvedValue(true);
+    vi.mocked(invoke).mockResolvedValue({ state: 'idle' });
+    vi.mocked(relaunch).mockResolvedValue(undefined);
+
+    await service.checkForUpdatesInBackground();
+
+    expect(update.downloadAndInstall).toHaveBeenCalledOnce();
+    expect(relaunch).toHaveBeenCalledOnce();
+    expect(localStorage.getItem(JUST_UPDATED_KEY)).toBe('1.2.3');
   });
 });
