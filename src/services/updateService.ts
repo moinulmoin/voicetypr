@@ -92,7 +92,7 @@ export class UpdateService {
   /**
    * Initialize the update service
    * - Checks for updates on startup if enabled
-   * - Sets up daily update checks
+   * - Never downloads or installs an update until the user confirms
    */
   async initialize(settings: AppSettings): Promise<void> {
     // Check if automatic updates are enabled (default to true if not set)
@@ -153,9 +153,9 @@ export class UpdateService {
   }
 
   /**
-   * Check for updates in the background and auto-install if available.
-   * Shows progress toasts during download/install, then relaunches the app.
-   * Runs on startup and daily when automatic updates are enabled.
+   * Check for updates in the background.
+   * If an update is available, ask the user before downloading or installing.
+   * Runs on startup and daily when automatic update checks are enabled.
    */
   async checkForUpdatesInBackground(): Promise<void> {
     if (this.checkInProgress) {
@@ -184,7 +184,7 @@ export class UpdateService {
       localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
       
       if (update?.available) {
-        await this.handleUpdateAvailable(update, true);
+        await this.handleUpdateAvailable(update);
       }
     } catch (error) {
       console.error('Background update check failed:', error);
@@ -213,7 +213,7 @@ export class UpdateService {
       localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
       
       if (update?.available) {
-        await this.handleUpdateAvailable(update, false);
+        await this.handleUpdateAvailable(update);
       } else {
         toast.success("You're on the latest version!");
       }
@@ -228,71 +228,8 @@ export class UpdateService {
   /**
    * Handle when an update is available
    */
-  private async handleUpdateAvailable(update: Update, isBackgroundCheck: boolean): Promise<void> {
-    if (isBackgroundCheck) {
-      // For background checks, auto-install silently
-      await this.autoInstallUpdate(update);
-    } else {
-      // For manual checks, show dialog to let user decide
-      await this.showUpdateDialog(update);
-    }
-  }
-
-  /**
-   * Auto-install update silently with progress feedback
-   */
-  private async autoInstallUpdate(update: Update, retryCount = 0): Promise<void> {
-    const MAX_RETRIES = 3;
-    const RETRY_DELAY = 30000; // 30 seconds
-
-    // Defer auto-update if user is in active session (recording/transcribing)
-    if (this.isSessionActive) {
-      if (retryCount < MAX_RETRIES) {
-        console.log(`Deferring auto-update - session active (retry ${retryCount + 1}/${MAX_RETRIES} in 30s)`);
-        setTimeout(() => this.autoInstallUpdate(update, retryCount + 1), RETRY_DELAY);
-        return;
-      }
-      console.log('Skipping auto-update - session still active after max retries');
-      return;
-    }
-
-    const toastId = 'update-progress';
-    
-    try {
-      await update.downloadAndInstall((event) => {
-        if (event.event === 'Started') {
-          toast.info(`Downloading update ${update.version}...`, { 
-            id: toastId,
-            duration: Infinity 
-          });
-        } else if (event.event === 'Finished') {
-          toast.success('Update ready, restarting...', { 
-            id: toastId,
-            duration: Infinity 
-          });
-        }
-      });
-    } catch (error) {
-      console.error('Auto-update failed:', error);
-      toast.error('Update failed. You can try again from Settings > About.', { 
-        id: toastId,
-        duration: 5000 
-      });
-      return;
-    }
-
-    // Re-check session state before relaunch (user may have started recording during download)
-    if (this.isSessionActive) {
-      console.log('Update downloaded but session active - will relaunch when session ends');
-      this.pendingRelaunch = true;
-      this.pendingUpdateVersion = update.version;
-      toast.dismiss(toastId);
-      await this.sendSystemNotification('Update Ready', 'VoiceTypr will restart when recording ends');
-      return;
-    }
-
-    this.pendingUpdateVersion = update.version;
-    await this.performRelaunch();
+  private async handleUpdateAvailable(update: Update): Promise<void> {
+    await this.showUpdateDialog(update);
   }
 
   /**
