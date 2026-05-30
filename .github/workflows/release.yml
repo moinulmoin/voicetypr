@@ -373,12 +373,19 @@ jobs:
           RUSTFLAGS: -C target-feature=+crt-static
         run: |
           cargo build --manifest-path sidecar/whisper-vulkan/Cargo.toml --release
+          if ($LASTEXITCODE -ne 0) {
+            throw "Whisper Vulkan sidecar build failed with exit code $LASTEXITCODE"
+          }
           New-Item -ItemType Directory -Force -Path "sidecar/whisper-vulkan/dist" | Out-Null
           $targetDir = $env:CARGO_TARGET_DIR
           if ([string]::IsNullOrWhiteSpace($targetDir)) {
             $targetDir = "sidecar/whisper-vulkan/target"
           }
-          Copy-Item (Join-Path $targetDir "release/whisper-vulkan-sidecar.exe") "sidecar/whisper-vulkan/dist/whisper-vulkan-sidecar-x86_64-pc-windows-msvc.exe"
+          $sidecarExe = Join-Path $targetDir "release/whisper-vulkan-sidecar.exe"
+          if (-not (Test-Path $sidecarExe)) {
+            throw "Whisper Vulkan sidecar binary not found: $sidecarExe"
+          }
+          Copy-Item $sidecarExe "sidecar/whisper-vulkan/dist/whisper-vulkan-sidecar-x86_64-pc-windows-msvc.exe"
 
       - name: Download Windows runtime installers
         shell: pwsh

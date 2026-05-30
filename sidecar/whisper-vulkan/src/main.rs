@@ -2,7 +2,7 @@ use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::time::Instant;
 
-use rubato::{FftFixedInOut, Resampler};
+use rubato::{audioadapter_buffers::direct::InterleavedSlice, Fft, FixedSync, Resampler};
 use serde::{Deserialize, Serialize};
 use whisper_rs::{
     convert_integer_to_float_audio, convert_stereo_to_mono_audio, FullParams, SamplingStrategy,
@@ -328,30 +328,22 @@ fn resample_to_16khz(audio: &[f32], sample_rate: u32) -> Result<Vec<f32>, String
         return Ok(Vec::new());
     }
 
-    let chunk_size = 1024;
-    let mut resampler = FftFixedInOut::<f32>::new(sample_rate as usize, 16_000, chunk_size, 1)
+    let input_frames = audio.len();
+    let input = InterleavedSlice::new(audio, 1, input_frames)
+        .map_err(|err| format!("failed to adapt resampler input: {err}"))?;
+
+    let mut resampler = Fft::<f32>::new(sample_rate as usize, 16_000, 1024, 2, 1, FixedSync::Both)
         .map_err(|err| format!("failed to create resampler: {err}"))?;
 
-    let mut output = Vec::with_capacity((audio.len() * 16_000) / sample_rate as usize + 1024);
-    let mut position = 0;
-    while position + chunk_size <= audio.len() {
-        let chunk = &audio[position..position + chunk_size];
-        let processed = resampler
-            .process(&[chunk], None)
-            .map_err(|err| format!("resampling failed: {err}"))?;
-        output.extend_from_slice(&processed[0]);
-        position += chunk_size;
-    }
+    let output_capacity = resampler.process_all_needed_output_len(input_frames);
+    let mut output = vec![0.0; output_capacity];
+    let mut output_adapter = InterleavedSlice::new_mut(&mut output, 1, output_capacity)
+        .map_err(|err| format!("failed to adapt resampler output: {err}"))?;
 
-    if position < audio.len() {
-        let mut final_chunk = audio[position..].to_vec();
-        final_chunk.resize(chunk_size, 0.0);
-        let processed = resampler
-            .process(&[&final_chunk], None)
-            .map_err(|err| format!("final resampling failed: {err}"))?;
-        let expected = ((audio.len() - position) * 16_000).div_ceil(sample_rate as usize);
-        output.extend_from_slice(&processed[0][..expected.min(processed[0].len())]);
-    }
+    let (_, output_frames) = resampler
+        .process_all_into_buffer(&input, &mut output_adapter, input_frames, None)
+        .map_err(|err| format!("resampling failed: {err}"))?;
+    output.truncate(output_frames);
 
     Ok(output)
 }
