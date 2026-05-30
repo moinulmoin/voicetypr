@@ -1,4 +1,5 @@
 import { HotkeyInput } from "@/components/HotkeyInput";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -14,19 +15,42 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { isMacOS } from "@/lib/platform";
-import { PillIndicatorMode, PillIndicatorPosition } from "@/types";
+import {
+  PillIndicatorMode,
+  PillIndicatorPosition,
+  TranscriptionAcceleration,
+} from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AlertCircle,
+  Cpu,
   Info,
   Keyboard,
   Mic,
   Rocket,
   ToggleLeft,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { MicrophoneSelection } from "../MicrophoneSelection";
+
+
+interface AccelerationStatus {
+  mode: string;
+  effective_backend: string;
+  gpu_available: boolean | null;
+  message: string;
+  last_error?: string | null;
+}
+
+function isAccelerationStatus(value: unknown): value is AccelerationStatus {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    "message" in value &&
+    "effective_backend" in value
+  );
+}
 
 export function GeneralSettings() {
   const { settings, updateSettings } = useSettings();
@@ -35,22 +59,39 @@ export function GeneralSettings() {
   const [showAccessibilityWarning, setShowAccessibilityWarning] =
     useState(true);
   const canAutoInsert = useCanAutoInsert();
+  const [accelerationStatus, setAccelerationStatus] =
+    useState<AccelerationStatus | null>(null);
+  const [testingAcceleration, setTestingAcceleration] = useState(false);
+
+  const loadAccelerationStatus = useCallback(async () => {
+    try {
+      const status = await invoke<AccelerationStatus>(
+        "get_transcription_acceleration_status",
+      );
+      if (isAccelerationStatus(status)) {
+        setAccelerationStatus(status);
+      }
+    } catch (error) {
+      console.error("Failed to check acceleration status:", error);
+    }
+  }, []);
+
 
   useEffect(() => {
     // Query autostart status from backend (OS-level truth)
     const checkAutostart = async () => {
       try {
-        const enabled = await invoke<boolean>('get_autostart_status');
+        const enabled = await invoke<boolean>("get_autostart_status");
         setAutostartEnabled(enabled);
       } catch (error) {
-        console.error('Failed to check autostart status:', error);
+        console.error("Failed to check autostart status:", error);
       }
     };
-    checkAutostart();
 
-    // Check platform for accessibility warning
+    void checkAutostart();
+    void loadAccelerationStatus();
     setShowAccessibilityWarning(isMacOS);
-  }, []);
+  }, [loadAccelerationStatus]);
 
   if (!settings) return null;
 
@@ -77,6 +118,42 @@ export function GeneralSettings() {
       setAutostartLoading(false);
     }
   };
+
+  const handleAccelerationChange = async (value: TranscriptionAcceleration) => {
+    await updateSettings({ transcription_acceleration: value });
+    await loadAccelerationStatus();
+    toast.success(
+      value === "auto"
+        ? "Acceleration set to Auto"
+        : value === "gpu"
+          ? "GPU acceleration preferred"
+          : "CPU-only transcription enabled",
+    );
+  };
+
+  const handleTestAcceleration = async () => {
+    setTestingAcceleration(true);
+    try {
+      const status = await invoke<AccelerationStatus>(
+        "test_transcription_acceleration",
+      );
+      if (isAccelerationStatus(status)) {
+        setAccelerationStatus(status);
+        if (status.gpu_available) {
+          toast.success("GPU acceleration is available");
+        } else {
+          toast.warning("GPU acceleration is unavailable; CPU mode will be used");
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error("GPU acceleration test failed", { description: message });
+      await loadAccelerationStatus();
+    } finally {
+      setTestingAcceleration(false);
+    }
+  };
+
 
   return (
     <div className="h-full min-h-0 flex flex-col">
@@ -527,6 +604,84 @@ export function GeneralSettings() {
                   </kbd>{" "}
                   twice while recording to cancel
                 </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Performance Section */}
+          <div className="rounded-lg border border-border/50 bg-card">
+            <div className="px-4 py-3 border-b border-border/50">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-md bg-blue-500/10">
+                  <Cpu className="h-4 w-4 text-blue-500" />
+                </div>
+                <div>
+                  <h3 className="font-medium">Performance</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Local transcription acceleration
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor="transcription-acceleration"
+                    className="text-sm font-medium"
+                  >
+                    Transcription Acceleration
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Auto tries GPU safely and falls back to CPU if unavailable
+                  </p>
+                </div>
+                <Select
+                  value={settings.transcription_acceleration ?? "auto"}
+                  onValueChange={(value: TranscriptionAcceleration) => {
+                    void handleAccelerationChange(value);
+                  }}
+                >
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Auto</SelectItem>
+                    <SelectItem value="cpu">CPU only</SelectItem>
+                    <SelectItem value="gpu">Prefer GPU</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex items-start justify-between gap-4 rounded-lg bg-muted/40 p-3">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">
+                    {accelerationStatus?.effective_backend === "vulkan"
+                      ? "GPU acceleration ready"
+                      : accelerationStatus?.effective_backend === "cpu"
+                        ? "Using CPU mode"
+                        : "Acceleration status"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {accelerationStatus?.message ??
+                      "VoiceTypr will test GPU acceleration when needed."}
+                  </p>
+                  {accelerationStatus?.last_error && (
+                    <p className="text-xs text-amber-600 dark:text-amber-500">
+                      {accelerationStatus.last_error}
+                    </p>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleTestAcceleration}
+                  disabled={testingAcceleration}
+                >
+                  {testingAcceleration ? "Testing..." : "Test GPU"}
+                </Button>
               </div>
             </div>
           </div>

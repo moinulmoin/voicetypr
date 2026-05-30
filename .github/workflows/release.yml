@@ -307,7 +307,7 @@ jobs:
           retention-days: 5
 
   # ===========================================
-  # Build Windows (x64 with Vulkan GPU support)
+  # Build Windows x64 (CPU-safe app + bundled Vulkan sidecar)
   # ===========================================
   build-windows:
     needs: prepare
@@ -367,19 +367,42 @@ jobs:
       - name: Ensure FFmpeg sidecar
         run: pnpm run sidecar:ensure-ffmpeg
 
-      - name: Download VC++ runtime installer
+      - name: Build Whisper Vulkan sidecar
+        shell: pwsh
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: |
+          cargo build --manifest-path sidecar/whisper-vulkan/Cargo.toml --release
+          New-Item -ItemType Directory -Force -Path "sidecar/whisper-vulkan/dist" | Out-Null
+          $targetDir = $env:CARGO_TARGET_DIR
+          if ([string]::IsNullOrWhiteSpace($targetDir)) {
+            $targetDir = "sidecar/whisper-vulkan/target"
+          }
+          Copy-Item (Join-Path $targetDir "release/whisper-vulkan-sidecar.exe") "sidecar/whisper-vulkan/dist/whisper-vulkan-sidecar-x86_64-pc-windows-msvc.exe"
+
+      - name: Download Windows runtime installers
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "src-tauri/windows/resources" | Out-Null
           Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "src-tauri/windows/resources/vc_redist.x64.exe"
+          $runtime = Get-ChildItem "$env:VULKAN_SDK\runtime\x64" -Recurse -Filter "VulkanRT-*-Installer.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $runtime) {
+            throw "Vulkan Runtime installer not found under $env:VULKAN_SDK\runtime\x64"
+          }
+          Copy-Item $runtime.FullName "src-tauri/windows/resources/VulkanRT-Installer.exe"
 
-      - name: Build Tauri app
+      - name: Build Tauri app (CPU-safe main app)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           CARGO_TARGET_DIR: C:\b
           RUSTFLAGS: -C target-feature=+crt-static
         run: pnpm tauri build --ci --config src-tauri/tauri.windows.conf.json
+
+      - name: Assert CPU build does not import vulkan-1.dll
+        shell: pwsh
+        run: |
+          & ./src-tauri/windows/assert-no-vulkan-import.ps1 -ExePath "C:\b\release\voicetypr.exe"
 
       - name: Sign installer for updates
         env:
@@ -412,23 +435,35 @@ jobs:
             if ($LASTEXITCODE -ne 0) {
               throw "tauri signer failed with exit code $LASTEXITCODE"
             }
+
+            if (-not (Test-Path "$($installer.FullName).sig")) {
+              throw "tauri signer did not create $($installer.FullName).sig"
+            }
           } finally {
             Remove-Item "$keyPath" -ErrorAction SilentlyContinue
           }
 
-      - name: Stage artifacts for upload
+      - name: Stage Windows artifacts for upload
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path artifacts
-          Copy-Item "C:\b\release\bundle\nsis\*.exe" artifacts\
-          Copy-Item "C:\b\release\bundle\nsis\*.exe.sig" artifacts\
+          $version = "${{ needs.prepare.outputs.version }}"
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $installer = Get-ChildItem "C:\b\release\bundle\nsis\*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) { throw "No NSIS installer found" }
+          Copy-Item $installer.FullName "artifacts/VoiceTypr_${version}_x64-setup.exe"
+          $sig = "$($installer.FullName).sig"
+          if (-not (Test-Path $sig)) {
+            throw "Missing installer signature: $sig"
+          }
+          Copy-Item $sig "artifacts/VoiceTypr_${version}_x64-setup.exe.sig"
 
-      - name: Upload artifacts
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64
           path: artifacts/
           retention-days: 5
+
 
   # ===========================================
   # Publish: bump version, commit, tag, push
@@ -534,9 +569,9 @@ jobs:
           cp artifacts/macos-x86_64/VoiceTypr_${VERSION}_x86_64.app.tar.gz "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz"
           cp artifacts/macos-x86_64/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig"
 
-          # Windows x64
-          cp artifacts/windows-x64/*.exe "release/VoiceTypr_${VERSION}_x64-setup.exe"
-          cp artifacts/windows-x64/*.exe.sig "release/VoiceTypr_${VERSION}_x64-setup.exe.sig"
+          # Windows x64 (CPU-safe main app with bundled optional Vulkan sidecar)
+          cp artifacts/windows-x64/VoiceTypr_${VERSION}_x64-setup.exe "release/VoiceTypr_${VERSION}_x64-setup.exe"
+          cp artifacts/windows-x64/VoiceTypr_${VERSION}_x64-setup.exe.sig "release/VoiceTypr_${VERSION}_x64-setup.exe.sig"
 
       - name: Generate latest.json
         run: |

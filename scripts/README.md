@@ -4,8 +4,7 @@
 
 ### Main Release Scripts
 - `release-separate.sh` - macOS release script (creates version, builds both architectures, creates GitHub release)
-- `release-windows.ps1` - Windows release script (builds MSI, updates existing release)
-- `release-windows.bat` - Batch wrapper for the PowerShell script
+- `release-windows.ps1` - Windows release script (single CPU-safe installer with bundled optional Vulkan GPU sidecar)
 
 ### Supporting Scripts
 - `fix-release-archives.sh` - Fixes macOS tar.gz archives by removing AppleDouble files
@@ -29,18 +28,14 @@ The recommended release process is:
 
 2. **Windows Release** (adds to existing release):
    ```powershell
-   .\scripts\release-windows.ps1 [version]
-   ```
-   OR
-   ```batch
-   scripts\release-windows.bat [version]
+   .\scripts\release-windows.ps1
    ```
    - Reads version from package.json (or uses provided version)
    - Verifies the GitHub release exists
-   - Builds Windows MSI installer
-   - Creates Tauri update artifacts (.msi.zip and signatures)
-   - Downloads and updates latest.json to add Windows platform
-   - Uploads all Windows artifacts to the existing release
+   - Builds one Windows NSIS installer
+   - Keeps `voicetypr.exe` CPU-safe and free of `vulkan-1.dll`
+   - Bundles the optional Vulkan Whisper sidecar and Vulkan Runtime installer resource
+   - Signs the installer, updates latest.json, and uploads Windows artifacts
 
 ### Environment Variables
 
@@ -54,6 +49,7 @@ The recommended release process is:
 - `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` - Tauri update signing
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` - Password for signing key (if needed)
 - `GITHUB_TOKEN` - GitHub authentication (usually handled by gh CLI)
+- `VULKAN_SDK` - Required when building Windows releases; used only for the optional GPU sidecar/runtime resource
 
 ## Important: AppleDouble Files Fix
 

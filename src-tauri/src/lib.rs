@@ -359,6 +359,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Cache size is 1: only the current model (1-3GB RAM)
             // When user switches models, old one is unloaded immediately
             app.manage(AsyncMutex::new(TranscriberCache::new()));
+            app.manage(whisper::gpu_sidecar::GpuSidecarClient::new());
+            log::info!("🎮 GPU sidecar client initialized");
 
             // Initialize unified application state
             app.manage(AppState::new());
@@ -1053,6 +1055,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             transcribe_audio_file,
             get_settings,
             save_settings,
+            get_transcription_acceleration_status,
+            test_transcription_acceleration,
             set_audio_device,
             validate_microphone_selection,
             set_global_shortcut,

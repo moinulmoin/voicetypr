@@ -12,9 +12,18 @@ const baseSettings = {
   pill_indicator_mode: 'when_recording',
   pill_indicator_position: 'bottom-center',
   pill_indicator_offset: 10,
+  transcription_acceleration: 'auto',
 };
 
 let mockSettings = { ...baseSettings };
+const accelerationStatus = {
+  mode: 'auto',
+  effective_backend: 'unknown',
+  gpu_available: null,
+  message: 'GPU acceleration has not been tested yet.',
+  last_error: null,
+};
+
 
 vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
@@ -130,12 +139,20 @@ describe('GeneralSettings autostart via backend commands', () => {
   beforeEach(() => {
     mockSettings = { ...baseSettings };
     vi.clearAllMocks();
-    // Default: backend reports autostart disabled
-    mockInvoke.mockResolvedValue(false);
+    mockInvoke.mockImplementation((command: string, args?: { enabled?: boolean }) => {
+      if (command === 'get_autostart_status') return Promise.resolve(false);
+      if (command === 'set_autostart') return Promise.resolve(args?.enabled ?? false);
+      if (command === 'get_transcription_acceleration_status') {
+        return Promise.resolve(accelerationStatus);
+      }
+      if (command === 'test_transcription_acceleration') {
+        return Promise.resolve({ ...accelerationStatus, gpu_available: true });
+      }
+      return Promise.resolve(false);
+    });
   });
 
   it('calls get_autostart_status on mount and renders switch off', async () => {
-    mockInvoke.mockResolvedValue(false);
 
     render(<GeneralSettings />);
 
@@ -148,7 +165,13 @@ describe('GeneralSettings autostart via backend commands', () => {
   });
 
   it('renders switch on when backend reports autostart enabled', async () => {
-    mockInvoke.mockResolvedValue(true);
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'get_autostart_status') return Promise.resolve(true);
+      if (command === 'get_transcription_acceleration_status') {
+        return Promise.resolve(accelerationStatus);
+      }
+      return Promise.resolve(false);
+    });
 
     render(<GeneralSettings />);
 
@@ -159,8 +182,6 @@ describe('GeneralSettings autostart via backend commands', () => {
   });
 
   it('calls set_autostart when toggled and updates UI from response', async () => {
-    mockInvoke.mockResolvedValueOnce(false); // initial mount
-    mockInvoke.mockResolvedValueOnce(true); // toggle response
 
     render(<GeneralSettings />);
 
@@ -191,9 +212,14 @@ describe('GeneralSettings autostart via backend commands', () => {
   });
 
   it('shows correct UI when backend returns different state than requested', async () => {
-    mockInvoke.mockResolvedValueOnce(false); // initial mount
-    // User requests enable, but backend returns false (OS failure)
-    mockInvoke.mockResolvedValueOnce(false);
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'get_autostart_status') return Promise.resolve(false);
+      if (command === 'set_autostart') return Promise.resolve(false);
+      if (command === 'get_transcription_acceleration_status') {
+        return Promise.resolve(accelerationStatus);
+      }
+      return Promise.resolve(false);
+    });
 
     render(<GeneralSettings />);
 
@@ -236,5 +262,21 @@ describe('GeneralSettings autostart via backend commands', () => {
     expect(autostartPlugin.enable).not.toHaveBeenCalled();
     expect(autostartPlugin.disable).not.toHaveBeenCalled();
     expect(autostartPlugin.isEnabled).not.toHaveBeenCalled();
+  });
+
+  it('checks acceleration status and tests GPU through backend command', async () => {
+    render(<GeneralSettings />);
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith(
+        'get_transcription_acceleration_status',
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /test gpu/i }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith('test_transcription_acceleration');
+    });
   });
 });

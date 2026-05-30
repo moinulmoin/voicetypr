@@ -14,6 +14,7 @@ use tauri_plugin_store::StoreExt;
 pub const MIN_INDICATOR_OFFSET: u32 = 10;
 pub const MAX_INDICATOR_OFFSET: u32 = 50;
 pub const DEFAULT_INDICATOR_OFFSET: u32 = 10;
+pub const DEFAULT_TRANSCRIPTION_ACCELERATION: &str = "auto";
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
@@ -45,6 +46,8 @@ pub struct Settings {
     pub pill_indicator_offset: u32,
     // Pause system media during recording
     pub pause_media_during_recording: bool,
+    // Local Whisper acceleration mode: "auto", "cpu", or "gpu"
+    pub transcription_acceleration: String,
     // Automatically paste transcription text into the active window
     pub auto_paste_transcription: bool,
 }
@@ -74,6 +77,7 @@ impl Default for Settings {
             pill_indicator_position: "bottom-center".to_string(), // Default to bottom center of screen
             pill_indicator_offset: DEFAULT_INDICATOR_OFFSET,
             pause_media_during_recording: !cfg!(target_os = "macos"),
+            transcription_acceleration: DEFAULT_TRANSCRIPTION_ACCELERATION.to_string(),
             auto_paste_transcription: true, // Default to auto-pasting transcription
         }
     }
@@ -142,9 +146,20 @@ pub(crate) fn resolve_pill_indicator_mode(
     default_mode
 }
 
+pub(crate) fn normalize_transcription_acceleration(value: Option<&str>) -> String {
+    match value {
+        Some("cpu") => "cpu".to_string(),
+        Some("gpu") => "gpu".to_string(),
+        _ => DEFAULT_TRANSCRIPTION_ACCELERATION.to_string(),
+    }
+}
+
 #[tauri::command]
 pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
+    let stored_transcription_acceleration = store
+        .get("transcription_acceleration")
+        .and_then(|v| v.as_str().map(str::to_owned));
 
     let settings = Settings {
         hotkey: store
@@ -246,6 +261,9 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("pause_media_during_recording")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().pause_media_during_recording),
+        transcription_acceleration: normalize_transcription_acceleration(
+            stored_transcription_acceleration.as_deref(),
+        ),
         auto_paste_transcription: store
             .get("auto_paste_transcription")
             .and_then(|v| v.as_bool())
@@ -343,6 +361,12 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set(
         "pause_media_during_recording",
         json!(settings.pause_media_during_recording),
+    );
+    store.set(
+        "transcription_acceleration",
+        json!(normalize_transcription_acceleration(Some(
+            &settings.transcription_acceleration
+        ))),
     );
     store.set(
         "auto_paste_transcription",
@@ -888,11 +912,89 @@ pub async fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String
     Ok(actual)
 }
 
+#[tauri::command]
+pub async fn get_transcription_acceleration_status(
+    app: AppHandle,
+) -> Result<crate::whisper::gpu_sidecar::AccelerationRuntimeStatus, String> {
+    let settings = get_settings(app.clone()).await?;
+    let mode = normalize_transcription_acceleration(Some(&settings.transcription_acceleration));
+
+    if mode == "cpu" {
+        return Ok(crate::whisper::gpu_sidecar::AccelerationRuntimeStatus {
+            mode,
+            effective_backend: "cpu".to_string(),
+            gpu_available: None,
+            message: "CPU mode is selected. GPU acceleration will not be used.".to_string(),
+            last_error: None,
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(crate::whisper::gpu_sidecar::AccelerationRuntimeStatus {
+            mode,
+            effective_backend: if cfg!(target_os = "macos") {
+                "metal".to_string()
+            } else {
+                "cpu".to_string()
+            },
+            gpu_available: None,
+            message: "This acceleration setting applies to Windows Vulkan builds.".to_string(),
+            last_error: None,
+        })
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+        let mut status = client.status().await;
+        status.mode = mode;
+        Ok(status)
+    }
+}
+
+#[tauri::command]
+pub async fn test_transcription_acceleration(
+    app: AppHandle,
+) -> Result<crate::whisper::gpu_sidecar::AccelerationRuntimeStatus, String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        get_transcription_acceleration_status(app).await
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let settings = get_settings(app.clone()).await?;
+        if settings.current_model_engine != "whisper" {
+            return Err(
+                "GPU acceleration testing is only available for local Whisper models.".to_string(),
+            );
+        }
+
+        let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
+        let model_path = {
+            let manager = whisper_state.read().await;
+            manager
+                .get_model_path(&settings.current_model)
+                .ok_or_else(|| {
+                    "Select or download a local Whisper model before testing GPU acceleration."
+                        .to_string()
+                })?
+        };
+
+        let mode = normalize_transcription_acceleration(Some(&settings.transcription_acceleration));
+        let client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+        client.probe(&app, &model_path, &mode).await?;
+        Ok(client.status().await)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{get_autostart_status, set_autostart};
-
-    use super::resolve_pill_indicator_mode;
+    use super::{
+        get_autostart_status, normalize_transcription_acceleration, resolve_pill_indicator_mode,
+        set_autostart, DEFAULT_TRANSCRIPTION_ACCELERATION,
+    };
 
     #[test]
     fn resolve_pill_indicator_mode_prefers_new_value() {
@@ -926,6 +1028,27 @@ mod tests {
         assert_eq!(resolved, "when_recording");
     }
 
+    #[test]
+    fn normalize_transcription_acceleration_accepts_known_modes() {
+        assert_eq!(
+            normalize_transcription_acceleration(Some("auto")),
+            DEFAULT_TRANSCRIPTION_ACCELERATION
+        );
+        assert_eq!(normalize_transcription_acceleration(Some("cpu")), "cpu");
+        assert_eq!(normalize_transcription_acceleration(Some("gpu")), "gpu");
+    }
+
+    #[test]
+    fn normalize_transcription_acceleration_falls_back_to_auto() {
+        assert_eq!(
+            normalize_transcription_acceleration(None),
+            DEFAULT_TRANSCRIPTION_ACCELERATION
+        );
+        assert_eq!(
+            normalize_transcription_acceleration(Some("vulkan")),
+            DEFAULT_TRANSCRIPTION_ACCELERATION
+        );
+    }
     /// Verify the autostart command functions exist and compile.
     /// Compilation IS the test: if the functions don't exist or have
     /// wrong signatures, the imports and generate_handler! macro will fail.

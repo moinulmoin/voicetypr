@@ -95,14 +95,12 @@ jobs:
           path: src-tauri/target/release/voicetypr
           retention-days: 30
 
-  # ===========================================
-  # Build Windows (full build = catches all issues)
+  # Build Windows (CPU-safe app + Vulkan sidecar)
   # ===========================================
   build-windows:
     runs-on: windows-latest
     env:
-      # whisper.cpp/ggml Vulkan build generates very deep paths; keep Windows paths short to
-      # avoid MSBuild/FileTracker failures.
+      # Keep Windows paths short to avoid MSBuild/FileTracker failures on deep dependency trees.
       CARGO_TARGET_DIR: D:\cargo-target
     steps:
       - uses: actions/checkout@v4
@@ -139,11 +137,29 @@ jobs:
       - name: Ensure FFmpeg sidecar
         run: pnpm run sidecar:ensure-ffmpeg
 
-      - name: Download VC++ runtime installer resource
+      - name: Build Whisper Vulkan sidecar
+        shell: pwsh
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: |
+          cargo build --manifest-path sidecar/whisper-vulkan/Cargo.toml --release
+          New-Item -ItemType Directory -Force -Path "sidecar/whisper-vulkan/dist" | Out-Null
+          $targetDir = $env:CARGO_TARGET_DIR
+          if ([string]::IsNullOrWhiteSpace($targetDir)) {
+            $targetDir = "sidecar/whisper-vulkan/target"
+          }
+          Copy-Item (Join-Path $targetDir "release/whisper-vulkan-sidecar.exe") "sidecar/whisper-vulkan/dist/whisper-vulkan-sidecar-x86_64-pc-windows-msvc.exe"
+
+      - name: Download Windows runtime installer resources
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "src-tauri/windows/resources" | Out-Null
           Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "src-tauri/windows/resources/vc_redist.x64.exe"
+          $runtime = Get-ChildItem "$env:VULKAN_SDK\runtime\x64" -Recurse -Filter "VulkanRT-*-Installer.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $runtime) {
+            throw "Vulkan Runtime installer not found under $env:VULKAN_SDK\runtime\x64"
+          }
+          Copy-Item $runtime.FullName "src-tauri/windows/resources/VulkanRT-Installer.exe"
 
       - name: Build frontend
         run: pnpm build
@@ -151,8 +167,13 @@ jobs:
       - name: Rust tests (compile-only on Windows runner)
         run: cd src-tauri && cargo test --no-run
 
-      - name: Build Tauri (release)
+      - name: Build Tauri (release, CPU-safe main app)
         run: cd src-tauri && cargo build --release
+
+      - name: Assert CPU build does not import vulkan-1.dll
+        shell: pwsh
+        run: |
+          & ./src-tauri/windows/assert-no-vulkan-import.ps1 -ExePath "$env:CARGO_TARGET_DIR/release/voicetypr.exe"
 
       - name: Upload preview artifact
         uses: actions/upload-artifact@v4

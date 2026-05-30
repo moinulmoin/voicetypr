@@ -16,6 +16,7 @@ mod tests {
         assert_eq!(settings.onboarding_completed, false);
         assert_eq!(settings.check_updates_automatically, true); // Default to true
         assert_eq!(settings.auto_paste_transcription, true); // Default to true
+        assert_eq!(settings.transcription_acceleration, "auto");
     }
 
     #[test]
@@ -43,6 +44,7 @@ mod tests {
             pill_indicator_position: "bottom-center".to_string(),
             pill_indicator_offset: 10,
             pause_media_during_recording: true,
+            transcription_acceleration: "auto".to_string(),
             auto_paste_transcription: true,
         };
 
@@ -54,6 +56,7 @@ mod tests {
         assert!(json.contains("\"theme\":\"dark\""));
         assert!(json.contains("\"transcription_cleanup_days\":7"));
         assert!(json.contains("\"auto_paste_transcription\":true"));
+        assert!(json.contains("\"transcription_acceleration\":\"auto\""));
 
         // Test deserialization
         let deserialized: Settings = serde_json::from_str(&json).unwrap();
@@ -68,6 +71,10 @@ mod tests {
         assert_eq!(
             deserialized.auto_paste_transcription,
             settings.auto_paste_transcription
+        );
+        assert_eq!(
+            deserialized.transcription_acceleration,
+            settings.transcription_acceleration
         );
     }
 
@@ -112,6 +119,7 @@ mod tests {
             pill_indicator_position: "top-center".to_string(),
             pill_indicator_offset: 25,
             pause_media_during_recording: true,
+            transcription_acceleration: "gpu".to_string(),
             auto_paste_transcription: true,
         };
 
@@ -123,6 +131,10 @@ mod tests {
         assert_eq!(
             cloned.transcription_cleanup_days,
             settings.transcription_cleanup_days
+        );
+        assert_eq!(
+            cloned.transcription_acceleration,
+            settings.transcription_acceleration
         );
     }
 

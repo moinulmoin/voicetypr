@@ -16,6 +16,7 @@ node_modules
 dist
 dist-ssr
 *.local
+target/
 .env
 .env.local
 .env.production

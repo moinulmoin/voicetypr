@@ -143,124 +143,22 @@ impl Transcriber {
             }
         }
 
-        // Windows: Try Vulkan GPU first, fallback to CPU if it fails (just like macOS!)
-        // Exception: Windows ARM64 uses CPU-only mode (Vulkan unstable on Qualcomm)
+        // Windows main app is CPU-only. Optional Vulkan acceleration runs in a
+        // separate sidecar process so Vulkan loader failures cannot prevent the
+        // Tauri app from starting or falling back to CPU transcription.
         #[cfg(target_os = "windows")]
         {
-            let is_arm64 = std::env::consts::ARCH == "aarch64";
-
-            if is_arm64 {
-                // Windows ARM64: Skip Vulkan GPU, use CPU-only mode
-                // Vulkan is unstable on Qualcomm Snapdragon and causes crashes during inference
-                log::warn!(
-                    "⚠️ Windows ARM64 detected: Using CPU-only mode (Vulkan unstable on ARM)"
-                );
-                log_with_context(
-                    log::Level::Info,
-                    "🎮 GPU_SKIP",
-                    &[
-                        ("reason", "Windows ARM64 - Vulkan unstable"),
-                        ("arch", "aarch64"),
-                        ("fallback_to", "CPU"),
-                    ],
-                );
-                ctx_params.use_gpu(false);
-            } else {
-                ctx_params.use_gpu(true);
-            }
-
-            let vulkan_start = Instant::now();
-
-            // Check if Vulkan runtime is available (only relevant for x86_64)
-            let vulkan_available =
-                !is_arm64 && std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
-
-            if !is_arm64 {
-                log_with_context(
-                    log::Level::Info,
-                    "🎮 VULKAN_INIT",
-                    &[
-                        ("backend", "Vulkan"),
-                        ("platform", "Windows"),
-                        (
-                            "vulkan_dll_available",
-                            &vulkan_available.to_string().as_str(),
-                        ),
-                        ("attempt", "gpu_first"),
-                    ],
-                );
-
-                if !vulkan_available {
-                    log::warn!("⚠️  Vulkan runtime not found. GPU acceleration unavailable.");
-                }
-            }
-
-            match WhisperContext::new_with_params(model_path_str, ctx_params) {
-                Ok(ctx) => {
-                    gpu_used = !is_arm64; // Only true if actually using Vulkan GPU
-                    let init_time = vulkan_start.elapsed().as_millis();
-
-                    if is_arm64 {
-                        log_performance("CPU_INIT", init_time as u64, Some("arm64_cpu_mode"));
-                        log_with_context(
-                            log::Level::Info,
-                            "🎮 CPU_SUCCESS",
-                            &[
-                                ("init_time_ms", &init_time.to_string().as_str()),
-                                ("mode", "cpu_only"),
-                                ("reason", "arm64_vulkan_unstable"),
-                            ],
-                        );
-                        log_complete("TRANSCRIBER_INIT", init_start.elapsed().as_millis() as u64);
-                        log_with_context(
-                            log::Level::Debug,
-                            "Transcriber initialized",
-                            &[("backend", "CPU"), ("model_path", model_path_str)],
-                        );
-                    } else {
-                        log_performance(
-                            "VULKAN_INIT",
-                            init_time as u64,
-                            Some("gpu_acceleration_enabled"),
-                        );
-                        log_with_context(
-                            log::Level::Info,
-                            "🎮 VULKAN_SUCCESS",
-                            &[
-                                ("init_time_ms", &init_time.to_string().as_str()),
-                                ("acceleration", "enabled"),
-                            ],
-                        );
-                        log_complete("TRANSCRIBER_INIT", init_start.elapsed().as_millis() as u64);
-                        log_with_context(
-                            log::Level::Debug,
-                            "Transcriber initialized",
-                            &[("backend", "Vulkan"), ("model_path", model_path_str)],
-                        );
-                    }
-
-                    return Ok(Self { context: ctx });
-                }
-                Err(gpu_err) => {
-                    log_with_context(
-                        log::Level::Info,
-                        "🎮 VULKAN_FALLBACK",
-                        &[
-                            ("error", &gpu_err.to_string().as_str()),
-                            ("fallback_to", "CPU"),
-                            (
-                                "attempt_time_ms",
-                                &vulkan_start.elapsed().as_millis().to_string().as_str(),
-                            ),
-                        ],
-                    );
-
-                    ctx_params = WhisperContextParameters::default();
-                    ctx_params.use_gpu(false);
-                    gpu_used = false;
-                    log::info!("🔄 Attempting CPU-only initialization...");
-                }
-            }
+            log::info!("Windows main transcriber: CPU-only mode");
+            log_with_context(
+                log::Level::Info,
+                "🎮 CPU_ONLY_BUILD",
+                &[
+                    ("reason", "vulkan isolated in optional sidecar"),
+                    ("arch", std::env::consts::ARCH),
+                    ("fallback_to", "CPU"),
+                ],
+            );
+            ctx_params.use_gpu(false);
         }
 
         // Create context (for Windows CPU fallback or other platforms)
@@ -277,9 +175,7 @@ impl Transcriber {
 
         // Determine backend type for logging
         let backend_type = if gpu_used {
-            if cfg!(target_os = "windows") {
-                "Vulkan GPU"
-            } else if cfg!(target_os = "macos") {
+            if cfg!(target_os = "macos") {
                 "Metal GPU"
             } else {
                 "GPU"
@@ -336,15 +232,6 @@ impl Transcriber {
         );
 
         Ok(Self { context: ctx })
-    }
-
-    pub fn transcribe_with_translation(
-        &self,
-        audio_path: &Path,
-        language: Option<&str>,
-        translate: bool,
-    ) -> Result<String, String> {
-        self.transcribe_with_cancellation(audio_path, language, translate, || false)
     }
 
     pub fn transcribe_with_cancellation<F>(
@@ -476,8 +363,9 @@ impl Transcriber {
         3) multi-channel → mono  (Whisper needs mono)
         ---------------------------------------------- */
         if spec.channels == 2 {
-            // Use the built-in stereo to mono conversion
-            audio = convert_stereo_to_mono_audio(&audio).map_err(|e| e.to_string())?;
+            let mut mono_audio = vec![0.0; audio.len() / 2];
+            convert_stereo_to_mono_audio(&audio, &mut mono_audio).map_err(|e| e.to_string())?;
+            audio = mono_audio;
         } else if spec.channels > 2 {
             // Handle multi-channel audio (3, 4, 5.1, 7.1, etc.)
             log::info!(
