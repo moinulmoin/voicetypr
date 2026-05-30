@@ -35,6 +35,7 @@ import { toast } from "sonner";
 import { MicrophoneSelection } from "../MicrophoneSelection";
 
 
+// Mirrors `AccelerationRuntimeStatus` in src-tauri/src/whisper/gpu_sidecar.rs.
 interface AccelerationStatus {
   mode: string;
   effective_backend: string;

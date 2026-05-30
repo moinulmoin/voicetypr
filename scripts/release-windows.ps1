@@ -90,7 +90,10 @@ if (-not $SkipBuild) {
     Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "$runtimeDir\vc_redist.x64.exe"
 
     Write-Info "Downloading Vulkan Runtime installer..."
-    $vulkanVersion = $env:VULKAN_VERSION
+    $vulkanVersion = $env:VULKAN_RUNTIME_VERSION
+    if ([string]::IsNullOrWhiteSpace($vulkanVersion)) {
+        $vulkanVersion = $env:VULKAN_VERSION
+    }
     if ([string]::IsNullOrWhiteSpace($vulkanVersion)) {
         $vulkanVersion = Split-Path -Leaf $env:VULKAN_SDK
     }

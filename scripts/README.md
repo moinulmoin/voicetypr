@@ -50,6 +50,7 @@ The recommended release process is:
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` - Password for signing key (if needed)
 - `GITHUB_TOKEN` - GitHub authentication (usually handled by gh CLI)
 - `VULKAN_SDK` - Required when building Windows releases; used only for the optional GPU sidecar/runtime resource
+- `VULKAN_RUNTIME_VERSION` - Optional pinned Vulkan Runtime installer version; defaults to `VULKAN_VERSION`/SDK folder name
 
 ## Important: AppleDouble Files Fix
 

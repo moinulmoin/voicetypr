@@ -93,6 +93,11 @@ enum SidecarResponse {
         text: String,
         inference_time_ms: u128,
     },
+    Shutdown {
+        id: u64,
+        ok: bool,
+        backend: String,
+    },
     Error {
         id: u64,
         ok: bool,
@@ -107,6 +112,7 @@ impl SidecarResponse {
             Self::Health { id, .. }
             | Self::Probe { id, .. }
             | Self::Transcription { id, .. }
+            | Self::Shutdown { id, .. }
             | Self::Error { id, .. } => *id,
         }
     }
@@ -116,6 +122,7 @@ impl SidecarResponse {
             Self::Health { ok, .. }
             | Self::Probe { ok, .. }
             | Self::Transcription { ok, .. }
+            | Self::Shutdown { ok, .. }
             | Self::Error { ok, .. } => *ok,
         }
     }
@@ -200,9 +207,16 @@ impl GpuSidecarProcess {
         })
     }
 
-    fn kill(&mut self) {
+    async fn kill_and_wait(&mut self) {
         if let Err(err) = self.child.start_kill() {
             log::debug!("Failed to kill Whisper Vulkan sidecar: {err}");
+            return;
+        }
+
+        match tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await {
+            Ok(Ok(status)) => log::debug!("Whisper Vulkan sidecar exited after kill: {status}"),
+            Ok(Err(err)) => log::debug!("Failed waiting for Whisper Vulkan sidecar exit: {err}"),
+            Err(_) => log::warn!("Timed out waiting for Whisper Vulkan sidecar to exit after kill"),
         }
     }
 }
@@ -376,7 +390,7 @@ impl GpuSidecarClient {
             Ok(response) => response,
             Err(error) => {
                 if let Some(process) = guard.as_mut() {
-                    process.kill();
+                    process.kill_and_wait().await;
                 }
                 guard.take();
                 return Err(error);
@@ -385,7 +399,7 @@ impl GpuSidecarClient {
 
         if response.id() != request.id() {
             if let Some(process) = guard.as_mut() {
-                process.kill();
+                process.kill_and_wait().await;
             }
             guard.take();
             return Err(format!(

@@ -52,6 +52,11 @@ enum Response<'a> {
         text: String,
         inference_time_ms: u128,
     },
+    Shutdown {
+        id: u64,
+        ok: bool,
+        backend: &'a str,
+    },
     Error {
         id: u64,
         ok: bool,
@@ -176,7 +181,7 @@ fn handle_request<'a>(request: Request, cache: &'a mut Option<CachedContext>) ->
                 },
             }
         }
-        Request::Shutdown { id } => Response::Health {
+        Request::Shutdown { id } => Response::Shutdown {
             id,
             ok: true,
             backend: "vulkan",
