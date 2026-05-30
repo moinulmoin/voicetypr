@@ -162,11 +162,12 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "src-tauri/windows/resources" | Out-Null
           Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "src-tauri/windows/resources/vc_redist.x64.exe"
-          $runtime = Get-ChildItem "$env:VULKAN_SDK\runtime\x64" -Recurse -Filter "VulkanRT-*-Installer.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $runtime) {
-            throw "Vulkan Runtime installer not found under $env:VULKAN_SDK\runtime\x64"
+          $vulkanVersion = $env:VULKAN_VERSION
+          if ([string]::IsNullOrWhiteSpace($vulkanVersion)) {
+            $vulkanVersion = Split-Path -Leaf $env:VULKAN_SDK
           }
-          Copy-Item $runtime.FullName "src-tauri/windows/resources/VulkanRT-Installer.exe"
+          $vulkanRuntimeUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanRT-$vulkanVersion-Installer.exe"
+          Invoke-WebRequest -Uri $vulkanRuntimeUrl -OutFile "src-tauri/windows/resources/VulkanRT-Installer.exe"
 
       - name: Build frontend
         run: pnpm build

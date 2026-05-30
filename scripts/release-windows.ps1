@@ -89,15 +89,13 @@ if (-not $SkipBuild) {
     Write-Info "Downloading Visual C++ Runtime installer..."
     Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "$runtimeDir\vc_redist.x64.exe"
 
-    Write-Info "Bundling Vulkan Runtime installer..."
-    $runtime = Get-ChildItem "$env:VULKAN_SDK\runtime\x64" -Recurse -Filter "VulkanRT-*-Installer.exe" |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
-    if (-not $runtime) {
-        Write-Error "Vulkan Runtime installer not found under $env:VULKAN_SDK\runtime\x64"
-        exit 1
+    Write-Info "Downloading Vulkan Runtime installer..."
+    $vulkanVersion = $env:VULKAN_VERSION
+    if ([string]::IsNullOrWhiteSpace($vulkanVersion)) {
+        $vulkanVersion = Split-Path -Leaf $env:VULKAN_SDK
     }
-    Copy-Item $runtime.FullName "$runtimeDir\VulkanRT-Installer.exe" -Force
+    $vulkanRuntimeUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanRT-$vulkanVersion-Installer.exe"
+    Invoke-WebRequest -Uri $vulkanRuntimeUrl -OutFile "$runtimeDir\VulkanRT-Installer.exe"
 
     Write-Info "Building Whisper Vulkan sidecar..."
     $env:RUSTFLAGS = "-C target-feature=+crt-static"
