@@ -238,7 +238,6 @@ export type BugReportPayload =
       name?: string;
       email?: string;
       message: string;
-      additionalDiagnostics?: string;
       environment: ReportEnvironmentPayload;
       latestLog: LatestLogPayload;
     }
@@ -259,13 +258,20 @@ export interface ReportSubmitResult {
   message: string;
 }
 
+function buildManualReportMessage(data: ManualReportData): string {
+  if (!data.diagnosticContext) {
+    return data.message;
+  }
+
+  return `${data.message}\n\n## Additional Diagnostics\n\n\`\`\`\n${data.diagnosticContext}\n\`\`\``;
+}
+
 export function buildManualReportPayload(data: ManualReportData): BugReportPayload {
   return {
     kind: 'manual',
     name: data.name,
     email: data.email,
-    message: data.message,
-    ...(data.diagnosticContext ? { additionalDiagnostics: data.diagnosticContext } : {}),
+    message: buildManualReportMessage(data),
     environment: buildEnvironmentPayload(data),
     latestLog: buildLatestLogPayload(data),
   };

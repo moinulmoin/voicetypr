@@ -120,30 +120,21 @@ describe('report submission payloads', () => {
     });
   });
 
-  it('includes additional diagnostics in the manual payload', () => {
-    expect(buildManualReportPayload({
+  it('preserves diagnostics in the manual message for the current support endpoint', () => {
+    const payload = buildManualReportPayload({
       ...baseReport,
       diagnosticContext: 'Configured Hotkey: Cmd+Shift+Space',
-    })).toEqual({
-      kind: 'manual',
-      message: 'The app failed after recording.',
-      additionalDiagnostics: 'Configured Hotkey: Cmd+Shift+Space',
-      environment: {
-        appVersion: '1.12.2',
-        platform: 'macos',
-        osVersion: '15.0',
-        architecture: 'aarch64',
-        currentModel: 'base.en',
-        deviceId: 'device-123',
-        timestamp: '2026-04-27T00:00:00.000Z',
-      },
-      latestLog: {
-        fileName: 'voicetypr-2026-04-27.log',
-        content: 'INFO redacted log line',
-        truncated: false,
-        statusNote: '',
-      },
     });
+
+    expect(payload).toMatchObject({
+      kind: 'manual',
+      message: expect.stringContaining('The app failed after recording.'),
+    });
+    expect(payload).not.toHaveProperty('additionalDiagnostics');
+    if (payload.kind === 'manual') {
+      expect(payload.message).toContain('## Additional Diagnostics');
+      expect(payload.message).toContain('Configured Hotkey: Cmd+Shift+Space');
+    }
   });
 
   it('builds the crash report endpoint payload', () => {

@@ -3,7 +3,7 @@ use crate::commands::audio::{
 };
 use crate::recording::escape_handler::handle_escape_key_press;
 use crate::{get_recording_state, update_recording_state, AppState, RecordingMode, RecordingState};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
 use tauri_plugin_global_shortcut::{Shortcut, ShortcutState};
 
@@ -177,6 +177,10 @@ fn handle_toggle_mode(
     }
 }
 
+fn claim_ptt_press(ptt_key_held: &AtomicBool) -> bool {
+    !ptt_key_held.swap(true, Ordering::SeqCst)
+}
+
 /// Handle push-to-talk mode recording (hold to record, release to stop)
 fn handle_ptt_mode(
     app: &tauri::AppHandle,
@@ -187,7 +191,11 @@ fn handle_ptt_mode(
     match event_state {
         ShortcutState::Pressed => {
             log::info!("PTT: Key pressed");
-            app_state.ptt_key_held.store(true, Ordering::Relaxed);
+
+            if !claim_ptt_press(&app_state.ptt_key_held) {
+                log::debug!("PTT: Ignoring duplicate key press");
+                return;
+            }
 
             if matches!(current_state, RecordingState::Idle | RecordingState::Error) {
                 log::info!("PTT: Starting recording");
@@ -281,5 +289,22 @@ fn handle_non_recording_shortcut(
             let app_state = app_handle.state::<AppState>();
             handle_escape_key_press(&app_state, &app_handle, event_state).await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::claim_ptt_press;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn claim_ptt_press_allows_only_first_press_until_release() {
+        let held = AtomicBool::new(false);
+
+        assert!(claim_ptt_press(&held));
+        assert!(!claim_ptt_press(&held));
+
+        held.store(false, Ordering::SeqCst);
+        assert!(claim_ptt_press(&held));
     }
 }
