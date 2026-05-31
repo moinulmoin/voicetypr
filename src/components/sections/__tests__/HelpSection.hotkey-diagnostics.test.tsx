@@ -278,6 +278,38 @@ describe('HelpSection diagnostics flows', () => {
     });
   });
 
+  it('does not treat stale event counts as success when baseline diagnostics fail', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let failNextDiagnostics = false;
+
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_device_id') {
+        return Promise.resolve('device-1');
+      }
+      if (cmd === 'get_hotkey_diagnostics') {
+        if (failNextDiagnostics) {
+          failNextDiagnostics = false;
+          return Promise.reject(new Error('diagnostics unavailable'));
+        }
+        return Promise.resolve({ ...baseHotkeyDiag, eventCount: 3 });
+      }
+      return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
+    });
+
+    await renderHelpSection();
+    await waitFor(() => {
+      expect(screen.getByText('Ready')).toBeInTheDocument();
+    });
+    failNextDiagnostics = true;
+    fireEvent.click(screen.getByRole('button', { name: /test hotkey/i }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Shortcut diagnostics unavailable');
+    });
+    expect(toast.success).not.toHaveBeenCalledWith('Hotkey detected');
+    expect(screen.getByText('Shortcut diagnostics unavailable')).toBeInTheDocument();
+  });
+
   it('shows success when eventCount increases during hotkey test', async () => {
     let hotkeyDiagCall = 0;
 
@@ -378,8 +410,8 @@ describe('HelpSection diagnostics flows', () => {
       { timeout: 3000 }
     );
     expect(screen.getByText('Hotkey detected, but recording did not start')).toBeInTheDocument();
-
   });
+
   it('shows timeout error when no hotkey event is detected', async () => {
     const dateNow = vi.spyOn(Date, 'now');
     let now = 1_000_000;

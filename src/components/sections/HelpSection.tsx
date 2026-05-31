@@ -456,7 +456,14 @@ Actual behavior:
       const baseline = await loadHotkeyDiagnostics();
       if (isCancelled()) return;
 
-      const startCount = baseline?.eventCount ?? 0;
+      if (!baseline) {
+        setHotkeyTestIssue("Shortcut diagnostics unavailable");
+        setLastDiagnosticsCheckAt(new Date().toISOString());
+        toast.error("Shortcut diagnostics unavailable");
+        return;
+      }
+
+      const startCount = baseline.eventCount;
       const deadline = Date.now() + HOTKEY_TEST_TIMEOUT_MS;
 
       while (Date.now() < deadline) {
