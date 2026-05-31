@@ -68,6 +68,7 @@ export interface ManualReportData {
   name?: string;
   email?: string;
   message: string;
+  diagnosticContext?: string;
   appVersion: string;
   platform: string;
   osVersion: string;
@@ -101,7 +102,8 @@ export async function gatherManualReportData(
   name: string | undefined,
   email: string | undefined,
   message: string,
-  currentModel?: string | null
+  currentModel?: string | null,
+  diagnosticContext?: string
 ): Promise<ManualReportData> {
   const [appVer, deviceId, logAttachment] = await Promise.all([
     getVersion().catch(() => 'Unknown'),
@@ -121,10 +123,13 @@ export async function gatherManualReportData(
     console.error('Failed to get OS info:', e);
   }
 
+  const trimmedDiagnosticContext = diagnosticContext?.trim();
+
   return {
     name,
     email,
     message,
+    diagnosticContext: trimmedDiagnosticContext || undefined,
     appVersion: appVer,
     platform: os,
     osVersion: osVer,
@@ -155,6 +160,15 @@ export function buildReportBody(data: ManualReportData): string {
   parts.push('### Message');
   parts.push(data.message);
   parts.push('');
+
+  if (data.diagnosticContext) {
+    parts.push('## Additional Diagnostics');
+    parts.push('');
+    parts.push('```');
+    parts.push(data.diagnosticContext);
+    parts.push('```');
+    parts.push('');
+  }
 
   parts.push('## Environment');
   parts.push('');
@@ -224,6 +238,7 @@ export type BugReportPayload =
       name?: string;
       email?: string;
       message: string;
+      additionalDiagnostics?: string;
       environment: ReportEnvironmentPayload;
       latestLog: LatestLogPayload;
     }
@@ -250,6 +265,7 @@ export function buildManualReportPayload(data: ManualReportData): BugReportPaylo
     name: data.name,
     email: data.email,
     message: data.message,
+    ...(data.diagnosticContext ? { additionalDiagnostics: data.diagnosticContext } : {}),
     environment: buildEnvironmentPayload(data),
     latestLog: buildLatestLogPayload(data),
   };

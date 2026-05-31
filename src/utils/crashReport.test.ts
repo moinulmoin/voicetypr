@@ -74,6 +74,18 @@ describe('buildReportBody', () => {
   });
 
 
+
+  it('includes additional diagnostics when diagnostic context is provided', () => {
+    const body = buildReportBody({
+      ...baseReport,
+      diagnosticContext: 'Configured Hotkey: Cmd+Shift+Space\nRegistration Status: registered',
+    });
+
+    expect(body).toContain('## Additional Diagnostics');
+    expect(body).toContain('Configured Hotkey: Cmd+Shift+Space');
+    expect(body).toContain('Registration Status: registered');
+  });
+
   it('labels latest log status notes without log content', () => {
     const body = buildReportBody({
       ...baseReport,
@@ -93,6 +105,33 @@ describe('report submission payloads', () => {
     expect(buildManualReportPayload(baseReport)).toEqual({
       kind: 'manual',
       message: 'The app failed after recording.',
+      environment: {
+        appVersion: '1.12.2',
+        platform: 'macos',
+        osVersion: '15.0',
+        architecture: 'aarch64',
+        currentModel: 'base.en',
+        deviceId: 'device-123',
+        timestamp: '2026-04-27T00:00:00.000Z',
+      },
+      latestLog: {
+        fileName: 'voicetypr-2026-04-27.log',
+        content: 'INFO redacted log line',
+        truncated: false,
+        statusNote: '',
+      },
+    });
+  });
+
+
+  it('includes additional diagnostics in the manual payload', () => {
+    expect(buildManualReportPayload({
+      ...baseReport,
+      diagnosticContext: 'Configured Hotkey: Cmd+Shift+Space',
+    })).toEqual({
+      kind: 'manual',
+      message: 'The app failed after recording.',
+      additionalDiagnostics: 'Configured Hotkey: Cmd+Shift+Space',
       environment: {
         appVersion: '1.12.2',
         platform: 'macos',

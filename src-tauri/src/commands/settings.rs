@@ -3,7 +3,8 @@ use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_comb
 use crate::parakeet::ParakeetManager;
 use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
 use crate::whisper::manager::WhisperManager;
-use crate::AppState;
+use crate::{AppState, RecordingState};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
@@ -623,11 +624,14 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
     // Register new shortcut immediately
     log::debug!("Registering new shortcut: {}", normalized_shortcut);
 
+    app_state.record_primary_registration_attempt();
+
     // Attempt registration - according to docs, ANY error means hotkey won't work
     let registration_result = shortcuts.register(new_shortcut);
 
     match registration_result {
         Ok(_) => {
+            app_state.record_primary_registration_success();
             log::info!("Successfully registered hotkey: {}", normalized_shortcut);
             // Hotkey registered successfully, no conflicts
         }
@@ -652,11 +656,32 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
                 format!("Failed to register hotkey: {}", e)
             };
 
+            if let Some(old) = old_shortcut {
+                match shortcuts.register(old) {
+                    Ok(_) => {
+                        app_state.record_primary_registration_success();
+                        log::info!("Restored previous hotkey after failed update");
+                    }
+                    Err(restore_err) => {
+                        log::error!(
+                            "Failed to restore previous hotkey after update failure: {}",
+                            restore_err
+                        );
+                        app_state.record_primary_registration_failure(format!(
+                            "Failed to register new hotkey: {}; failed to restore previous hotkey: {}",
+                            error_msg, restore_err
+                        ));
+                    }
+                }
+            } else {
+                app_state.record_primary_registration_failure(error_msg);
+            }
+
             return Err(detailed_error);
         }
     }
 
-    // Update the recording shortcut in managed state regardless of registration warnings
+    // Update the recording shortcut in managed state after successful registration.
     match app_state.recording_shortcut.lock() {
         Ok(mut shortcut_guard) => {
             *shortcut_guard = Some(new_shortcut);
@@ -685,6 +710,80 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
     log::info!("Successfully updated global shortcut to: {}", shortcut);
 
     Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HotkeyDiagnosticsResponse {
+    pub configured_hotkey: String,
+    pub normalized_hotkey: String,
+    pub recording_mode: String,
+    pub use_different_ptt_key: bool,
+    pub ptt_hotkey: Option<String>,
+    pub normalized_ptt_hotkey: Option<String>,
+    pub registration_status: String,
+    pub registration_error: Option<String>,
+    pub last_registration_attempt_at: Option<String>,
+    pub last_successful_registration_at: Option<String>,
+    pub last_event_at: Option<String>,
+    pub last_event_kind: Option<String>,
+    pub last_event_state: Option<String>,
+    pub event_count: u64,
+    pub current_recording_state: String,
+    pub generated_at: String,
+    pub is_registered: Option<bool>,
+}
+
+fn recording_state_label(state: RecordingState) -> &'static str {
+    match state {
+        RecordingState::Idle => "idle",
+        RecordingState::Starting => "starting",
+        RecordingState::Recording => "recording",
+        RecordingState::Stopping => "stopping",
+        RecordingState::Transcribing => "transcribing",
+        RecordingState::Error => "error",
+    }
+}
+
+#[tauri::command]
+pub async fn get_hotkey_diagnostics(app: AppHandle) -> Result<HotkeyDiagnosticsResponse, String> {
+    let settings = get_settings(app.clone()).await?;
+    let normalized_hotkey = normalize_shortcut_keys(&settings.hotkey);
+    let normalized_ptt_hotkey = settings
+        .ptt_hotkey
+        .as_ref()
+        .map(|hotkey| normalize_shortcut_keys(hotkey));
+
+    let app_state = app.state::<AppState>();
+    let diagnostics = app_state.primary_hotkey_diagnostics_snapshot();
+    let current_recording_state = recording_state_label(app_state.get_current_state()).to_string();
+
+    let is_registered = app_state
+        .recording_shortcut
+        .lock()
+        .ok()
+        .and_then(|guard| *guard)
+        .map(|shortcut| app.global_shortcut().is_registered(shortcut));
+
+    Ok(HotkeyDiagnosticsResponse {
+        configured_hotkey: settings.hotkey,
+        normalized_hotkey,
+        recording_mode: settings.recording_mode,
+        use_different_ptt_key: settings.use_different_ptt_key,
+        ptt_hotkey: settings.ptt_hotkey,
+        normalized_ptt_hotkey,
+        registration_status: diagnostics.registration_status.as_str().to_string(),
+        registration_error: diagnostics.registration_error,
+        last_registration_attempt_at: diagnostics.last_registration_attempt_at,
+        last_successful_registration_at: diagnostics.last_successful_registration_at,
+        last_event_at: diagnostics.last_event_at,
+        last_event_kind: diagnostics.last_event_kind,
+        last_event_state: diagnostics.last_event_state,
+        event_count: diagnostics.event_count,
+        current_recording_state,
+        generated_at: Utc::now().to_rfc3339(),
+        is_registered,
+    })
 }
 
 #[derive(Serialize)]

@@ -65,6 +65,17 @@ pub fn handle_global_shortcut(
     };
 
     if should_handle {
+        let event_state_label = match event_state {
+            ShortcutState::Pressed => "pressed",
+            ShortcutState::Released => "released",
+        };
+        let event_kind = if is_ptt_shortcut && !is_recording_shortcut {
+            "ptt"
+        } else {
+            "recording"
+        };
+        app_state.record_handled_hotkey_event(event_kind, event_state_label);
+
         let current_state = get_recording_state(app);
         handle_recording_shortcut(app, &app_state, recording_mode, current_state, event_state);
     } else if !is_recording_shortcut && !is_ptt_shortcut {
