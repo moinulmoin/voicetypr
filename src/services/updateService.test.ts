@@ -36,10 +36,6 @@ vi.mock('sonner', () => ({
   },
 }));
 
-import { check, type Update } from '@tauri-apps/plugin-updater';
-import { ask } from '@tauri-apps/plugin-dialog';
-import { invoke } from '@tauri-apps/api/core';
-import { relaunch } from '@tauri-apps/plugin-process';
 import { UpdateService } from './updateService';
 
 const JUST_UPDATED_KEY = 'just_updated_version';
