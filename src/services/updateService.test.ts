@@ -149,6 +149,21 @@ describe('UpdateService update consent', () => {
     expect(relaunch).not.toHaveBeenCalled();
   });
 
+  it('auto-installs background updates only after explicit opt-in', async () => {
+    await service.initialize({
+      hotkey: 'CommandOrControl+Shift+Space',
+      current_model: 'base.en',
+      language: 'en',
+      theme: 'system',
+      install_updates_automatically: true,
+    });
+
+    expect(check).toHaveBeenCalledOnce();
+    expect(ask).not.toHaveBeenCalled();
+    expect(downloadAndInstall).toHaveBeenCalledOnce();
+    expect(relaunch).toHaveBeenCalledOnce();
+  });
+
   it('downloads and relaunches only after user accepts', async () => {
     vi.mocked(ask).mockResolvedValue(true);
 

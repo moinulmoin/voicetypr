@@ -32,6 +32,7 @@ mod tests {
             onboarding_completed: true,
             translate_to_english: false,
             check_updates_automatically: true,
+            install_updates_automatically: false,
             selected_microphone: None,
             recording_mode: "toggle".to_string(),
             use_different_ptt_key: false,
@@ -54,6 +55,7 @@ mod tests {
         assert!(json.contains("\"theme\":\"dark\""));
         assert!(json.contains("\"transcription_cleanup_days\":7"));
         assert!(json.contains("\"auto_paste_transcription\":true"));
+        assert!(json.contains("\"install_updates_automatically\":false"));
 
         // Test deserialization
         let deserialized: Settings = serde_json::from_str(&json).unwrap();
@@ -68,6 +70,10 @@ mod tests {
         assert_eq!(
             deserialized.auto_paste_transcription,
             settings.auto_paste_transcription
+        );
+        assert_eq!(
+            deserialized.install_updates_automatically,
+            settings.install_updates_automatically
         );
     }
 
@@ -101,6 +107,7 @@ mod tests {
             onboarding_completed: false,
             translate_to_english: true,
             check_updates_automatically: true,
+            install_updates_automatically: true,
             selected_microphone: Some("USB Microphone".to_string()),
             recording_mode: "push_to_talk".to_string(),
             use_different_ptt_key: true,
@@ -123,6 +130,10 @@ mod tests {
         assert_eq!(
             cloned.transcription_cleanup_days,
             settings.transcription_cleanup_days
+        );
+        assert_eq!(
+            cloned.install_updates_automatically,
+            settings.install_updates_automatically
         );
     }
 

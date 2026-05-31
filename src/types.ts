@@ -51,6 +51,7 @@ export interface AppSettings {
   launch_at_startup?: boolean;
   onboarding_completed?: boolean;
   check_updates_automatically?: boolean;
+  install_updates_automatically?: boolean;
   selected_microphone?: string | null;
   // Push-to-talk support
   recording_mode?: RecordingMode;
