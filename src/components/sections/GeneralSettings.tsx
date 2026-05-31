@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
-import { isMacOS } from "@/lib/platform";
+import { isMacOS, isWindows } from "@/lib/platform";
 import {
   PillIndicatorMode,
   PillIndicatorPosition,
@@ -33,7 +33,6 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { MicrophoneSelection } from "../MicrophoneSelection";
-
 
 // Mirrors `AccelerationRuntimeStatus` in src-tauri/src/whisper/gpu_sidecar.rs.
 interface AccelerationStatus {
@@ -76,7 +75,6 @@ export function GeneralSettings() {
       console.error("Failed to check acceleration status:", error);
     }
   }, []);
-
 
   useEffect(() => {
     // Query autostart status from backend (OS-level truth)
@@ -140,10 +138,12 @@ export function GeneralSettings() {
       );
       if (isAccelerationStatus(status)) {
         setAccelerationStatus(status);
-        if (status.gpu_available) {
+        if (status.gpu_available === true) {
           toast.success("GPU acceleration is available");
-        } else {
+        } else if (status.gpu_available === false) {
           toast.warning("GPU acceleration is unavailable; CPU mode will be used");
+        } else {
+          toast.info(status.message);
         }
       }
     } catch (error) {
@@ -154,7 +154,6 @@ export function GeneralSettings() {
       setTestingAcceleration(false);
     }
   };
-
 
   return (
     <div className="h-full min-h-0 flex flex-col">
@@ -562,7 +561,7 @@ export function GeneralSettings() {
                       </SelectContent>
                     </Select>
                   </div>
-                  
+
                   {/* Indicator edge offset slider */}
                   <div className="flex items-center justify-between">
                     <div className="space-y-0.5">
@@ -660,9 +659,11 @@ export function GeneralSettings() {
                   <p className="text-sm font-medium">
                     {accelerationStatus?.effective_backend === "vulkan"
                       ? "GPU acceleration ready"
-                      : accelerationStatus?.effective_backend === "cpu"
-                        ? "Using CPU mode"
-                        : "Acceleration status"}
+                      : accelerationStatus?.effective_backend === "metal"
+                        ? "Using Metal acceleration"
+                        : accelerationStatus?.effective_backend === "cpu"
+                          ? "Using CPU mode"
+                          : "Acceleration status"}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {accelerationStatus?.message ??
@@ -681,7 +682,7 @@ export function GeneralSettings() {
                   onClick={handleTestAcceleration}
                   disabled={testingAcceleration}
                 >
-                  {testingAcceleration ? "Testing..." : "Test GPU"}
+                  {testingAcceleration ? "Checking..." : isWindows ? "Test GPU" : "Check Status"}
                 </Button>
               </div>
             </div>

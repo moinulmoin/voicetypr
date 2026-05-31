@@ -1,6 +1,5 @@
 #![cfg_attr(not(target_os = "windows"), allow(dead_code, unused_imports))]
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -16,7 +15,10 @@ use std::os::windows::process::CommandExt as _;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
+const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(180);
+const MIN_TRANSCRIPTION_TIMEOUT_SECS: u64 = 180;
+const MAX_TRANSCRIPTION_TIMEOUT_SECS: u64 = 30 * 60;
 
 #[cfg(target_os = "windows")]
 const SIDECAR_CANDIDATES: &[&str] = &[
@@ -70,8 +72,14 @@ impl SidecarRequest<'_> {
             Self::Probe { id, .. } | Self::Transcribe { id, .. } => *id,
         }
     }
-}
 
+    fn response_timeout(&self) -> Duration {
+        match self {
+            Self::Probe { .. } => CONTROL_REQUEST_TIMEOUT,
+            Self::Transcribe { audio_path, .. } => transcription_timeout(Path::new(audio_path)),
+        }
+    }
+}
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SidecarResponse {
@@ -143,7 +151,8 @@ impl GpuSidecarProcess {
         command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
 
         #[cfg(target_os = "windows")]
         {
@@ -193,12 +202,11 @@ impl GpuSidecarProcess {
             .await
             .map_err(|err| format!("failed to flush Vulkan sidecar request: {err}"))?;
 
-        let line = tokio::time::timeout(REQUEST_TIMEOUT, self.stdout.next_line())
+        let line = tokio::time::timeout(request.response_timeout(), self.stdout.next_line())
             .await
             .map_err(|_| "Vulkan sidecar request timed out".to_string())?
             .map_err(|err| format!("failed to read Vulkan sidecar response: {err}"))?
             .ok_or_else(|| "Vulkan sidecar exited before responding".to_string())?;
-
         serde_json::from_str::<SidecarResponse>(&line).map_err(|err| {
             format!(
                 "failed to parse Vulkan sidecar response: {err}; response_bytes={}",
@@ -217,6 +225,14 @@ impl GpuSidecarProcess {
             Ok(Ok(status)) => log::debug!("Whisper Vulkan sidecar exited after kill: {status}"),
             Ok(Err(err)) => log::debug!("Failed waiting for Whisper Vulkan sidecar exit: {err}"),
             Err(_) => log::warn!("Timed out waiting for Whisper Vulkan sidecar to exit after kill"),
+        }
+    }
+}
+
+impl Drop for GpuSidecarProcess {
+    fn drop(&mut self) {
+        if let Err(err) = self.child.start_kill() {
+            log::debug!("Failed to kill Whisper Vulkan sidecar on drop: {err}");
         }
     }
 }
@@ -430,51 +446,45 @@ impl GpuSidecarClient {
     }
 }
 
+fn transcription_timeout(audio_path: &Path) -> Duration {
+    wav_duration_seconds(audio_path)
+        .map(transcription_timeout_for_duration)
+        .unwrap_or(DEFAULT_TRANSCRIPTION_TIMEOUT)
+}
+
+fn transcription_timeout_for_duration(duration_secs: f64) -> Duration {
+    if !duration_secs.is_finite() || duration_secs <= 0.0 {
+        return DEFAULT_TRANSCRIPTION_TIMEOUT;
+    }
+
+    let timeout_secs = (duration_secs.ceil() as u64)
+        .saturating_mul(4)
+        .saturating_add(60)
+        .clamp(
+            MIN_TRANSCRIPTION_TIMEOUT_SECS,
+            MAX_TRANSCRIPTION_TIMEOUT_SECS,
+        );
+    Duration::from_secs(timeout_secs)
+}
+
+fn wav_duration_seconds(audio_path: &Path) -> Option<f64> {
+    let reader = hound::WavReader::open(audio_path).ok()?;
+    let spec = reader.spec();
+    if spec.sample_rate == 0 || spec.channels == 0 {
+        return None;
+    }
+
+    let frames = reader.duration() as f64 / f64::from(spec.channels);
+    Some(frames / f64::from(spec.sample_rate))
+}
+
 fn resolve_sidecar_binary(app: &AppHandle) -> Result<PathBuf, String> {
+    let search_dirs = sidecar_search_dirs(
+        app.path().resource_dir().ok(),
+        std::env::current_exe().ok(),
+        dev_sidecar_cwd(),
+    );
     let mut tried = Vec::new();
-    let mut seen_dirs = HashSet::new();
-    let mut search_dirs = Vec::new();
-
-    let mut push_dir = |dir: PathBuf| {
-        if seen_dirs.insert(dir.clone()) {
-            search_dirs.push(dir);
-        }
-    };
-
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        push_dir(resource_dir.clone());
-        push_dir(
-            resource_dir
-                .join("sidecar")
-                .join("whisper-vulkan")
-                .join("dist"),
-        );
-    }
-
-    if let Ok(exe_path) = std::env::current_exe() {
-        let mut dir_opt = exe_path.parent();
-        while let Some(dir) = dir_opt {
-            push_dir(dir.to_path_buf());
-            push_dir(dir.join("sidecar").join("whisper-vulkan").join("dist"));
-            push_dir(
-                dir.join("Resources")
-                    .join("sidecar")
-                    .join("whisper-vulkan")
-                    .join("dist"),
-            );
-            dir_opt = dir.parent();
-        }
-    }
-
-    if let Ok(cwd) = std::env::current_dir() {
-        push_dir(cwd.join("sidecar").join("whisper-vulkan").join("dist"));
-        push_dir(
-            cwd.join("..")
-                .join("sidecar")
-                .join("whisper-vulkan")
-                .join("dist"),
-        );
-    }
 
     for dir in &search_dirs {
         for name in SIDECAR_CANDIDATES {
@@ -494,4 +504,108 @@ fn resolve_sidecar_binary(app: &AppHandle) -> Result<PathBuf, String> {
     Err(format!(
         "Whisper Vulkan sidecar not found. Searched: {searched}"
     ))
+}
+
+fn sidecar_search_dirs(
+    resource_dir: Option<PathBuf>,
+    exe_path: Option<PathBuf>,
+    dev_cwd: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Some(resource_dir) = resource_dir {
+        push_sidecar_dir(&mut dirs, resource_dir);
+    }
+
+    if let Some(exe_dir) = exe_path.and_then(|path| path.parent().map(Path::to_path_buf)) {
+        push_unique_dir(&mut dirs, exe_dir);
+    }
+
+    if let Some(cwd) = dev_cwd {
+        push_sidecar_dir(&mut dirs, cwd.clone());
+        push_sidecar_dir(&mut dirs, cwd.join(".."));
+    }
+
+    dirs
+}
+
+fn push_sidecar_dir(dirs: &mut Vec<PathBuf>, base: PathBuf) {
+    push_unique_dir(dirs, base.clone());
+    push_unique_dir(
+        dirs,
+        base.join("sidecar").join("whisper-vulkan").join("dist"),
+    );
+}
+
+fn push_unique_dir(dirs: &mut Vec<PathBuf>, dir: PathBuf) {
+    if !dirs.iter().any(|existing| existing == &dir) {
+        dirs.push(dir);
+    }
+}
+
+#[cfg(debug_assertions)]
+fn dev_sidecar_cwd() -> Option<PathBuf> {
+    std::env::current_dir().ok()
+}
+
+#[cfg(not(debug_assertions))]
+fn dev_sidecar_cwd() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        sidecar_search_dirs, transcription_timeout_for_duration, SidecarRequest,
+        CONTROL_REQUEST_TIMEOUT, DEFAULT_TRANSCRIPTION_TIMEOUT, MAX_TRANSCRIPTION_TIMEOUT_SECS,
+        MIN_TRANSCRIPTION_TIMEOUT_SECS,
+    };
+    use std::path::PathBuf;
+
+    #[test]
+    fn sidecar_search_dirs_do_not_traverse_parent_directories() {
+        let dirs = sidecar_search_dirs(
+            Some(PathBuf::from("/opt/VoiceTypr/resources")),
+            Some(PathBuf::from("/opt/VoiceTypr/voicetypr.exe")),
+            None,
+        );
+
+        assert!(dirs.contains(&PathBuf::from("/opt/VoiceTypr/resources")));
+        assert!(dirs.contains(&PathBuf::from(
+            "/opt/VoiceTypr/resources/sidecar/whisper-vulkan/dist"
+        )));
+        assert!(dirs.contains(&PathBuf::from("/opt/VoiceTypr")));
+        assert!(!dirs.contains(&PathBuf::from("/opt")));
+        assert!(!dirs.contains(&PathBuf::from("/")));
+    }
+
+    #[test]
+    fn transcribe_requests_use_duration_based_timeout() {
+        let probe = SidecarRequest::Probe {
+            id: 1,
+            model_path: "model.bin",
+        };
+        let transcribe = SidecarRequest::Transcribe {
+            id: 2,
+            model_path: "model.bin",
+            audio_path: "missing-audio.wav",
+            language: None,
+            translate: false,
+        };
+
+        assert_eq!(probe.response_timeout(), CONTROL_REQUEST_TIMEOUT);
+        assert_eq!(transcribe.response_timeout(), DEFAULT_TRANSCRIPTION_TIMEOUT);
+    }
+
+    #[test]
+    fn transcription_timeout_scales_with_audio_duration_and_stays_bounded() {
+        assert_eq!(
+            transcription_timeout_for_duration(1.0),
+            std::time::Duration::from_secs(MIN_TRANSCRIPTION_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            transcription_timeout_for_duration(600.0),
+            std::time::Duration::from_secs(MAX_TRANSCRIPTION_TIMEOUT_SECS)
+        );
+    }
 }

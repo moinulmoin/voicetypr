@@ -25,7 +25,7 @@ import {
   Monitor,
 } from "lucide-react";
 import XIcon from "@/components/icons/XIcon";
-import { useState, useEffect, useCallback, useRef, type ComponentType } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type ComponentType } from "react";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
@@ -560,16 +560,29 @@ Actual behavior:
     checkedAt: lastDiagnosticsCheckAt,
   });
 
-  const diagnostics = buildSystemDiagnostics({
-    appVer: appVersion || "Unknown",
-    os: osPlatform || "unknown",
-    osVer: osVersionText || "Unknown",
-    deviceId,
-    model: settings?.current_model || "None selected",
-    canRecord,
-    canAutoInsert,
-    hotkeyDiag: hotkeyDiagnostics,
-  });
+  const diagnostics = useMemo(
+    () =>
+      buildSystemDiagnostics({
+        appVer: appVersion || "Unknown",
+        os: osPlatform || "unknown",
+        osVer: osVersionText || "Unknown",
+        deviceId,
+        model: settings?.current_model || "None selected",
+        canRecord,
+        canAutoInsert,
+        hotkeyDiag: hotkeyDiagnostics,
+      }),
+    [
+      appVersion,
+      osPlatform,
+      osVersionText,
+      deviceId,
+      settings?.current_model,
+      canRecord,
+      canAutoInsert,
+      hotkeyDiagnostics,
+    ],
+  );
 
   return (
     <div className="h-full min-h-0 flex flex-col">

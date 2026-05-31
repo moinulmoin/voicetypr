@@ -38,6 +38,7 @@ vi.mock('@/contexts/ReadinessContext', () => ({
 
 vi.mock('@/lib/platform', () => ({
   isMacOS: false,
+  isWindows: false,
 }));
 
 // Mock invoke — the new backend commands replace the autostart plugin
@@ -132,6 +133,7 @@ vi.mock('sonner', () => ({
     success: vi.fn(),
     error: vi.fn(),
     warning: vi.fn(),
+    info: vi.fn(),
   },
 }));
 
@@ -264,7 +266,25 @@ describe('GeneralSettings autostart via backend commands', () => {
     expect(autostartPlugin.isEnabled).not.toHaveBeenCalled();
   });
 
-  it('checks acceleration status and tests GPU through backend command', async () => {
+  it('checks acceleration status through backend command without showing a false GPU warning', async () => {
+    const { toast } = await import('sonner');
+    mockInvoke.mockImplementation((command: string, args?: { enabled?: boolean }) => {
+      if (command === 'get_autostart_status') return Promise.resolve(false);
+      if (command === 'set_autostart') return Promise.resolve(args?.enabled ?? false);
+      if (command === 'get_transcription_acceleration_status') {
+        return Promise.resolve(accelerationStatus);
+      }
+      if (command === 'test_transcription_acceleration') {
+        return Promise.resolve({
+          ...accelerationStatus,
+          effective_backend: 'metal',
+          message: 'GPU controls only apply to Windows Vulkan builds.',
+          gpu_available: null,
+        });
+      }
+      return Promise.resolve(false);
+    });
+
     render(<GeneralSettings />);
 
     await waitFor(() => {
@@ -273,10 +293,14 @@ describe('GeneralSettings autostart via backend commands', () => {
       );
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /test gpu/i }));
+    fireEvent.click(screen.getByRole('button', { name: /check status/i }));
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('test_transcription_acceleration');
     });
+    expect(toast.info).toHaveBeenCalledWith('GPU controls only apply to Windows Vulkan builds.');
+    expect(toast.warning).not.toHaveBeenCalledWith(
+      'GPU acceleration is unavailable; CPU mode will be used',
+    );
   });
 });
