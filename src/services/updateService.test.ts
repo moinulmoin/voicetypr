@@ -36,6 +36,10 @@ vi.mock('sonner', () => ({
   },
 }));
 
+import { check, type Update } from '@tauri-apps/plugin-updater';
+import { ask } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { UpdateService } from './updateService';
 
 const JUST_UPDATED_KEY = 'just_updated_version';
@@ -147,5 +151,64 @@ describe('UpdateService version marker', () => {
     expect(update.downloadAndInstall).toHaveBeenCalledOnce();
     expect(relaunch).toHaveBeenCalledOnce();
     expect(localStorage.getItem(JUST_UPDATED_KEY)).toBe('1.2.3');
+  });
+});
+
+describe('UpdateService update consent', () => {
+  let service: UpdateService;
+  let update: Update;
+  let downloadAndInstall: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    // @ts-expect-error accessing private static for test isolation
+    UpdateService.instance = undefined;
+    service = UpdateService.getInstance();
+    downloadAndInstall = vi.fn(async () => undefined);
+    update = {
+      available: true,
+      version: '1.12.4',
+      currentVersion: '1.12.3',
+      body: 'Bug fixes',
+      date: null,
+      rawJson: {},
+      downloadAndInstall,
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Update;
+    vi.mocked(check).mockResolvedValue(update);
+    vi.mocked(invoke).mockResolvedValue({ state: 'idle' });
+  });
+
+  it('prompts on startup but does not download when user declines', async () => {
+    vi.mocked(ask).mockResolvedValue(false);
+
+    await service.initialize({
+      hotkey: 'CommandOrControl+Shift+Space',
+      current_model: 'base.en',
+      language: 'en',
+      theme: 'system',
+    });
+
+    expect(check).toHaveBeenCalledOnce();
+    expect(ask).toHaveBeenCalledWith(expect.stringContaining('Update 1.12.4 is available'), {
+      title: 'Update Available',
+      kind: 'info',
+      okLabel: 'Update',
+      cancelLabel: 'Later',
+    });
+    expect(downloadAndInstall).not.toHaveBeenCalled();
+    expect(relaunch).not.toHaveBeenCalled();
+  });
+
+  it('downloads and relaunches only after user accepts', async () => {
+    vi.mocked(ask).mockResolvedValue(true);
+
+    await service.checkForUpdatesManually();
+
+    expect(check).toHaveBeenCalledOnce();
+    expect(ask).toHaveBeenCalled();
+    expect(downloadAndInstall).toHaveBeenCalledOnce();
+    expect(relaunch).toHaveBeenCalledOnce();
   });
 });

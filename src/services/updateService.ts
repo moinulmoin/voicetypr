@@ -97,7 +97,7 @@ export class UpdateService {
   async initialize(settings: AppSettings): Promise<void> {
     // Check if automatic updates are enabled (default to true if not set)
     const autoUpdateEnabled = settings.check_updates_automatically ?? true;
-    
+
     if (!autoUpdateEnabled) {
       console.log('Automatic updates are disabled');
       return;
@@ -153,6 +153,7 @@ export class UpdateService {
   }
 
   /**
+  /**
    * Check for updates in the background.
    * If an update is available, ask the user before downloading or installing.
    * Runs on startup and daily when automatic update checks are enabled.
@@ -165,7 +166,6 @@ export class UpdateService {
 
     try {
       this.checkInProgress = true;
-      
       // Check if we should skip based on last check time
       const lastCheck = localStorage.getItem(LAST_UPDATE_CHECK_KEY);
       if (lastCheck) {
