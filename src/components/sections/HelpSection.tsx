@@ -34,12 +34,9 @@ import { open } from "@tauri-apps/plugin-shell";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { ReportBugDialog } from "@/components/ReportBugDialog";
-import { formatHotkey } from "@/lib/hotkey-utils";
 import {
-  formatRegistrationStatus,
   formatHotkeyDiagnosticContext,
   formatHotkeyDiagnosticLines,
-  formatLastEventSummary,
   type HotkeyDiagnostics,
 } from "@/utils/hotkeyDiagnostics";
 
@@ -84,14 +81,58 @@ function buildSystemDiagnostics(params: {
   return lines.join("\n");
 }
 
-function getHotkeyGuidance(os: string): string {
+function getDiagnosticsGuidance(os: string): string {
   if (os === "windows") {
-    return "If your hotkey does not work, try a different combination. Security software or antivirus can block global shortcuts.";
+    return "If diagnostics find an issue, try a different shortcut combination. Security software or antivirus can block global input checks.";
   }
   if (os === "macos") {
-    return "If Test Hotkey fails, try a different combination and check for conflicts in macOS Keyboard Shortcuts.";
+    return "If diagnostics find an issue, try a different shortcut combination and check for conflicts in macOS Keyboard Shortcuts.";
   }
-  return "If your hotkey does not work, try a different combination and check system shortcut settings.";
+  return "If diagnostics find an issue, try a different shortcut combination and check system shortcut settings.";
+}
+
+function getDiagnosticsSummary(diag: HotkeyDiagnostics | null): {
+  status: "All good" | "Needs attention" | "Not tested yet";
+  issue: string;
+  lastChecked: "Just now" | "Not checked";
+} {
+  if (!diag) {
+    return {
+      status: "Not tested yet",
+      issue: "Diagnostics not loaded",
+      lastChecked: "Not checked",
+    };
+  }
+
+  if (diag.registrationStatus === "failed" || diag.isRegistered === false) {
+    return {
+      status: "Needs attention",
+      issue: "Global hotkey is not registered",
+      lastChecked: "Just now",
+    };
+  }
+
+  if (diag.registrationStatus === "restored_after_failure") {
+    return {
+      status: "Needs attention",
+      issue: diag.registrationError || "Previous hotkey restored after update failure",
+      lastChecked: "Just now",
+    };
+  }
+
+  if (!diag.lastEventAt) {
+    return {
+      status: "Not tested yet",
+      issue: "No issue found yet — run a check to verify input capture",
+      lastChecked: "Just now",
+    };
+  }
+
+  return {
+    status: "All good",
+    issue: "None",
+    lastChecked: "Just now",
+  };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -213,10 +254,10 @@ export function HelpSection() {
       issue: "Global hotkey doesn't trigger recording",
       solution:
         osPlatform === "windows"
-          ? "Use Test Hotkey below. If it fails, try another combination and allow VoiceTypr in your security or antivirus software."
+          ? "Use Run Check below. If it finds an issue, try another combination and allow VoiceTypr in your security or antivirus software."
           : osPlatform === "macos"
-            ? "Use Test Hotkey below. If it fails, try another combination and check macOS Keyboard Shortcuts for conflicts."
-            : "Use Test Hotkey below and check for system shortcut conflicts.",
+            ? "Use Run Check below. If it finds an issue, try another combination and check macOS Keyboard Shortcuts for conflicts."
+            : "Use Run Check below and check for system shortcut conflicts.",
       checkStatus: () =>
         hotkeyDiagnostics?.isRegistered === true ||
         hotkeyDiagnostics?.registrationStatus === "registered",
@@ -379,6 +420,7 @@ Actual behavior:
 
   const handleReportHotkeyIssue = async () => {
     const diag = await loadHotkeyDiagnostics();
+
     setReportBugInitialMessage(
       "I'm having trouble with my global hotkey.\n\nWhat I tried:\n\nWhat I expected:\n\nWhat happened instead:\n"
     );
@@ -388,11 +430,7 @@ Actual behavior:
     setShowReportBugDialog(true);
   };
 
-  const configuredHotkeyLabel = hotkeyDiagnostics?.configuredHotkey
-    ? formatHotkey(hotkeyDiagnostics.configuredHotkey)
-    : settings?.hotkey
-      ? formatHotkey(settings.hotkey)
-      : "—";
+  const diagnosticsSummary = getDiagnosticsSummary(hotkeyDiagnostics);
 
   const diagnostics = buildSystemDiagnostics({
     appVer: appVersion || "Unknown",
@@ -420,6 +458,92 @@ Actual behavior:
 
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-6 space-y-6">
+          <div className="space-y-4">
+            <h2 className="text-base font-semibold">Diagnostics</h2>
+
+            <div className="rounded-lg border border-border/50 bg-card p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Keyboard className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium">System check</h3>
+              </div>
+
+              <dl className="grid gap-2 text-xs">
+                <div className="flex justify-between gap-4">
+                  <dt className="text-muted-foreground">Status</dt>
+                  <dd className="font-medium text-right">{diagnosticsSummary.status}</dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="text-muted-foreground">Latest issue</dt>
+                  <dd className="font-medium text-right">{diagnosticsSummary.issue}</dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="text-muted-foreground">Last checked</dt>
+                  <dd className="font-medium text-right">{diagnosticsSummary.lastChecked}</dd>
+                </div>
+              </dl>
+
+              <p className="text-xs text-muted-foreground">{getDiagnosticsGuidance(osPlatform)}</p>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleTestHotkey()}
+                  disabled={testingHotkey}
+                >
+                  {testingHotkey ? "Testing…" : "Run Check"}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleReportHotkeyIssue()}
+                >
+                  Report Issue
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={handleCopySystemInfo}
+                className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
+                    <Copy className="h-4 w-4" />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-sm font-medium">Copy System Info</p>
+                    <p className="text-xs text-muted-foreground">
+                      Copy system diagnostics to clipboard
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
+              </button>
+
+              <button
+                onClick={handleOpenLogs}
+                className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
+                    <FileText className="h-4 w-4" />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-sm font-medium">Open Logs Folder</p>
+                    <p className="text-xs text-muted-foreground">
+                      Open logs folder to attach to support messages
+                    </p>
+                  </div>
+                </div>
+                <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
+              </button>
+            </div>
+          </div>
+
           <div className="space-y-4">
             <h2 className="text-base font-semibold">Quick Fixes</h2>
 
@@ -501,94 +625,6 @@ Actual behavior:
                     <p className="text-sm font-medium">Email Support</p>
                     <p className="text-xs text-muted-foreground">
                       Send us an email with diagnostic info
-                    </p>
-                  </div>
-                </div>
-                <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <h2 className="text-base font-semibold">Diagnostics</h2>
-
-            <div className="rounded-lg border border-border/50 bg-card p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <Keyboard className="h-4 w-4 text-muted-foreground" />
-                <h3 className="text-sm font-medium">Hotkey Diagnostics</h3>
-              </div>
-
-              <dl className="grid gap-2 text-xs">
-                <div className="flex justify-between gap-4">
-                  <dt className="text-muted-foreground">Configured hotkey</dt>
-                  <dd className="font-medium text-right">{configuredHotkeyLabel}</dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt className="text-muted-foreground">Registration</dt>
-                  <dd className="font-medium text-right">
-                    {formatRegistrationStatus(hotkeyDiagnostics?.registrationStatus)}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt className="text-muted-foreground">Last event</dt>
-                  <dd className="font-medium text-right">{formatLastEventSummary(hotkeyDiagnostics)}</dd>
-                </div>
-              </dl>
-
-              <p className="text-xs text-muted-foreground">{getHotkeyGuidance(osPlatform)}</p>
-
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void handleTestHotkey()}
-                  disabled={testingHotkey}
-                >
-                  {testingHotkey ? "Testing…" : "Test Hotkey"}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void handleReportHotkeyIssue()}
-                >
-                  Report Hotkey Issue
-                </Button>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <button
-                onClick={handleCopySystemInfo}
-                className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
-                    <Copy className="h-4 w-4" />
-                  </div>
-                  <div className="text-left">
-                    <p className="text-sm font-medium">Copy System Info</p>
-                    <p className="text-xs text-muted-foreground">
-                      Copy system and hotkey diagnostics to clipboard
-                    </p>
-                  </div>
-                </div>
-                <ChevronDown className="h-4 w-4 text-muted-foreground -rotate-90" />
-              </button>
-
-              <button
-                onClick={handleOpenLogs}
-                className="w-full rounded-lg border border-border/50 bg-card hover:bg-accent/50 transition-colors p-4 flex items-center justify-between group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
-                    <FileText className="h-4 w-4" />
-                  </div>
-                  <div className="text-left">
-                    <p className="text-sm font-medium">Open Logs Folder</p>
-                    <p className="text-xs text-muted-foreground">
-                      Open logs folder to attach to support messages
                     </p>
                   </div>
                 </div>
