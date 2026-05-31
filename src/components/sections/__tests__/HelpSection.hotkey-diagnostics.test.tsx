@@ -179,6 +179,41 @@ describe('HelpSection hotkey flows', () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
+  it('cancels recording if Test Hotkey starts one from idle', async () => {
+    let hotkeyDiagCall = 0;
+
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_device_id') {
+        return Promise.resolve('device-1');
+      }
+      if (cmd === 'cancel_recording') {
+        return Promise.resolve(undefined);
+      }
+      if (cmd === 'get_hotkey_diagnostics') {
+        hotkeyDiagCall += 1;
+        const detected = hotkeyDiagCall >= 3;
+        return Promise.resolve({
+          ...baseHotkeyDiag,
+          eventCount: detected ? 1 : 0,
+          currentRecordingState: detected ? 'recording' : 'idle',
+        });
+      }
+      return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
+    });
+
+    await renderHelpSection();
+
+    fireEvent.click(screen.getByRole('button', { name: /test hotkey/i }));
+
+    await waitFor(
+      () => {
+        expect(mockInvoke).toHaveBeenCalledWith('cancel_recording');
+        expect(toast.success).toHaveBeenCalledWith('Hotkey detected');
+      },
+      { timeout: 3000 }
+    );
+  });
+
   it('shows timeout error when no hotkey event is detected', async () => {
     const dateNow = vi.spyOn(Date, 'now');
     let now = 1_000_000;

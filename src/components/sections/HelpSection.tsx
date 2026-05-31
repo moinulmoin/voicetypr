@@ -100,6 +100,39 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function shouldCancelRecordingAfterHotkeyTest(
+  baseline: HotkeyDiagnostics | null,
+  current: HotkeyDiagnostics
+): boolean {
+  const baselineState = baseline?.currentRecordingState;
+  const currentState = current.currentRecordingState;
+
+  if (baselineState !== "idle" && baselineState !== "error") {
+    return false;
+  }
+
+  return Boolean(currentState && currentState !== "idle" && currentState !== "error");
+}
+
+async function cancelRecordingStartedByHotkeyTest(
+  baseline: HotkeyDiagnostics | null,
+  current: HotkeyDiagnostics,
+  isCancelled: () => boolean
+): Promise<void> {
+  if (!shouldCancelRecordingAfterHotkeyTest(baseline, current) || isCancelled()) {
+    return;
+  }
+
+  try {
+    await invoke("cancel_recording");
+  } catch (error) {
+    if (!isCancelled()) {
+      console.error("Failed to clean up recording started by hotkey test:", error);
+      toast.error("Stop recording manually");
+    }
+  }
+}
+
 export function HelpSection() {
   const [appVersion, setAppVersion] = useState<string>("");
   const [platformName, setPlatformName] = useState<string>("");
@@ -321,7 +354,10 @@ Actual behavior:
         setHotkeyDiagnostics(current);
 
         if (current.eventCount > startCount) {
-          toast.success("Hotkey detected");
+          await cancelRecordingStartedByHotkeyTest(baseline, current, isCancelled);
+          if (!isCancelled()) {
+            toast.success("Hotkey detected");
+          }
           return;
         }
       }
