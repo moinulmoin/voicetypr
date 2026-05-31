@@ -126,6 +126,16 @@ describe('ReportBugDialog', () => {
     expect(screen.getByText(/anonymous device ID/i)).toBeInTheDocument();
   });
 
+  it('keeps the report form scrollable inside the viewport', () => {
+    render(<ReportBugDialog isOpen onClose={vi.fn()} initialMessage={'Line\n'.repeat(80)} />);
+
+    expect(screen.getByRole('dialog')).toHaveClass('max-h-[90dvh]');
+    expect(screen.getByRole('dialog')).toHaveClass('overflow-y-auto');
+    expect(screen.getByLabelText(/message/i)).toHaveClass('field-sizing-fixed');
+    expect(screen.getByLabelText(/message/i)).toHaveClass('max-h-48');
+    expect(screen.getByLabelText(/message/i)).toHaveClass('overflow-y-auto');
+  });
+
   it('submits a report directly to support', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
