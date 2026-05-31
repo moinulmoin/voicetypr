@@ -32,7 +32,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { platform, version as osVersion } from "@tauri-apps/plugin-os";
 import { open } from "@tauri-apps/plugin-shell";
 import { useSettings } from "@/contexts/SettingsContext";
-import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
+import { useReadiness } from "@/contexts/ReadinessContext";
 import { ReportBugDialog } from "@/components/ReportBugDialog";
 import {
   formatHotkeyDiagnosticContext,
@@ -49,8 +49,24 @@ interface QuickFix {
   checkStatus?: () => boolean;
 }
 
+type DiagnosticsStatus = "Ready" | "Needs attention" | "Not checked";
+
+interface ReadinessSnapshot {
+  has_accessibility_permission: boolean | null;
+  has_microphone_permission: boolean | null;
+  has_models: boolean | null;
+  selected_model_available: boolean | null;
+}
+
+interface DiagnosticsSummary {
+  status: DiagnosticsStatus;
+  issue: string;
+  lastChecked: "Just now" | "Not checked";
+}
+
 const HOTKEY_TEST_POLL_MS = 500;
 const HOTKEY_TEST_TIMEOUT_MS = 10_000;
+const HOTKEY_ACTION_TIMEOUT_MS = 2_000;
 
 function buildSystemDiagnostics(params: {
   appVer: string;
@@ -81,57 +97,105 @@ function buildSystemDiagnostics(params: {
   return lines.join("\n");
 }
 
-function getDiagnosticsGuidance(os: string): string {
-  if (os === "windows") {
-    return "If diagnostics find an issue, try a different shortcut combination. Security software or antivirus can block global input checks.";
-  }
-  if (os === "macos") {
-    return "If diagnostics find an issue, try a different shortcut combination and check for conflicts in macOS Keyboard Shortcuts.";
-  }
-  return "If diagnostics find an issue, try a different shortcut combination and check system shortcut settings.";
+function getDiagnosticsGuidance(): string {
+  return "Readiness checks use permissions, model availability, and shortcut registration. Test Hotkey confirms the actual shortcut press is detected.";
 }
 
-function getDiagnosticsSummary(diag: HotkeyDiagnostics | null): {
-  status: "All good" | "Needs attention" | "Not tested yet";
-  issue: string;
-  lastChecked: "Just now" | "Not checked";
-} {
-  if (!diag) {
+function getDiagnosticsSummary(params: {
+  canRecord: boolean;
+  canAutoInsert: boolean;
+  readiness: ReadinessSnapshot | null;
+  hotkeyDiag: HotkeyDiagnostics | null;
+  hotkeyTestIssue: string | null;
+  checkedAt: string | null;
+}): DiagnosticsSummary {
+  const { canRecord, canAutoInsert, readiness, hotkeyDiag, hotkeyTestIssue, checkedAt } = params;
+  const lastChecked = checkedAt ? "Just now" : "Not checked";
+
+  if (!checkedAt) {
     return {
-      status: "Not tested yet",
-      issue: "Diagnostics not loaded",
-      lastChecked: "Not checked",
+      status: "Not checked",
+      issue: "Diagnostics are still loading",
+      lastChecked,
     };
   }
 
-  if (diag.registrationStatus === "failed" || diag.isRegistered === false) {
+  if (readiness?.has_microphone_permission === false) {
+    return {
+      status: "Needs attention",
+      issue: "Microphone permission is missing",
+      lastChecked,
+    };
+  }
+
+  if (readiness?.has_models === false) {
+    return {
+      status: "Needs attention",
+      issue: "No transcription model is installed",
+      lastChecked,
+    };
+  }
+
+  if (readiness?.selected_model_available === false) {
+    return {
+      status: "Needs attention",
+      issue: "Selected transcription model is unavailable",
+      lastChecked,
+    };
+  }
+
+  if (!canRecord) {
+    return {
+      status: "Needs attention",
+      issue: "Recording pipeline is not ready",
+      lastChecked,
+    };
+  }
+
+  if (readiness?.has_accessibility_permission === false || !canAutoInsert) {
+    return {
+      status: "Needs attention",
+      issue: "Accessibility permission is missing",
+      lastChecked,
+    };
+  }
+
+  if (!hotkeyDiag) {
+    return {
+      status: "Needs attention",
+      issue: "Shortcut diagnostics could not be loaded",
+      lastChecked,
+    };
+  }
+
+  if (hotkeyDiag.registrationStatus === "failed" || hotkeyDiag.isRegistered === false) {
     return {
       status: "Needs attention",
       issue: "Global hotkey is not registered",
-      lastChecked: "Just now",
+      lastChecked,
     };
   }
 
-  if (diag.registrationStatus === "restored_after_failure") {
+  if (hotkeyDiag.registrationStatus === "restored_after_failure") {
     return {
       status: "Needs attention",
-      issue: diag.registrationError || "Previous hotkey restored after update failure",
-      lastChecked: "Just now",
+      issue: hotkeyDiag.registrationError || "Previous hotkey restored after update failure",
+      lastChecked,
     };
   }
 
-  if (!diag.lastEventAt) {
+  if (hotkeyTestIssue) {
     return {
-      status: "Not tested yet",
-      issue: "No issue found yet — run a check to verify input capture",
-      lastChecked: "Just now",
+      status: "Needs attention",
+      issue: hotkeyTestIssue,
+      lastChecked,
     };
   }
 
   return {
-    status: "All good",
-    issue: "None",
-    lastChecked: "Just now",
+    status: "Ready",
+    issue: "No readiness issue detected",
+    lastChecked,
   };
 }
 
@@ -183,6 +247,8 @@ export function HelpSection() {
   const [openItems, setOpenItems] = useState<string[]>([]);
   const [hotkeyDiagnostics, setHotkeyDiagnostics] = useState<HotkeyDiagnostics | null>(null);
   const [testingHotkey, setTestingHotkey] = useState(false);
+  const [hotkeyTestIssue, setHotkeyTestIssue] = useState<string | null>(null);
+  const [lastDiagnosticsCheckAt, setLastDiagnosticsCheckAt] = useState<string | null>(null);
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [emailSubject, setEmailSubject] = useState<string>("");
   const [emailBody, setEmailBody] = useState<string>("");
@@ -190,8 +256,15 @@ export function HelpSection() {
   const [reportBugInitialMessage, setReportBugInitialMessage] = useState<string | undefined>();
   const [reportBugDiagnosticContext, setReportBugDiagnosticContext] = useState<string | undefined>();
   const { settings } = useSettings();
-  const canRecord = useCanRecord();
-  const canAutoInsert = useCanAutoInsert();
+  const readiness = useReadiness();
+  const canRecord = readiness.canRecord;
+  const canAutoInsert = readiness.canAutoInsert;
+  const readinessState: ReadinessSnapshot = {
+    has_accessibility_permission: readiness.hasAccessibilityPermission,
+    has_microphone_permission: readiness.hasMicrophonePermission,
+    has_models: readiness.hasModels,
+    selected_model_available: readiness.selectedModelAvailable,
+  };
   const hotkeyTestRunRef = useRef(0);
 
   useEffect(() => {
@@ -229,6 +302,7 @@ export function HelpSection() {
         setDeviceId(deviceId);
         setPlatformName(`${os} ${osVer}`);
         setHotkeyDiagnostics(hotkeyDiag);
+        setLastDiagnosticsCheckAt(new Date().toISOString());
       } catch (error) {
         console.error("Failed to get system info:", error);
       }
@@ -254,10 +328,10 @@ export function HelpSection() {
       issue: "Global hotkey doesn't trigger recording",
       solution:
         osPlatform === "windows"
-          ? "Use Run Check below. If it finds an issue, try another combination and allow VoiceTypr in your security or antivirus software."
+          ? "Use Test Hotkey to confirm Windows detects the shortcut. If it fails, try another combination and allow VoiceTypr in your security or antivirus software."
           : osPlatform === "macos"
-            ? "Use Run Check below. If it finds an issue, try another combination and check macOS Keyboard Shortcuts for conflicts."
-            : "Use Run Check below and check for system shortcut conflicts.",
+            ? "Use Test Hotkey to confirm macOS detects the shortcut. If it fails, try another combination and check macOS Keyboard Shortcuts for conflicts."
+            : "Use Test Hotkey to confirm shortcut input.",
       checkStatus: () =>
         hotkeyDiagnostics?.isRegistered === true ||
         hotkeyDiagnostics?.registrationStatus === "registered",
@@ -374,6 +448,8 @@ Actual behavior:
     const isCancelled = () => hotkeyTestRunRef.current !== runId;
 
     setTestingHotkey(true);
+    setHotkeyTestIssue(null);
+    setLastDiagnosticsCheckAt(new Date().toISOString());
     toast.info("Press your hotkey now");
 
     try {
@@ -393,10 +469,44 @@ Actual behavior:
         if (isCancelled()) return;
 
         setHotkeyDiagnostics(current);
+        setLastDiagnosticsCheckAt(new Date().toISOString());
 
         if (current.eventCount > startCount) {
-          await cancelRecordingStartedByHotkeyTest(baseline, current, isCancelled);
+          let latest = current;
+          const baselineState = baseline?.currentRecordingState;
+          const shouldVerifyRecordingStart = baselineState === "idle" || baselineState === "error";
+
+          if (shouldVerifyRecordingStart) {
+            const actionDeadline = Date.now() + HOTKEY_ACTION_TIMEOUT_MS;
+
+            while (
+              latest.currentRecordingState !== "error" &&
+              !shouldCancelRecordingAfterHotkeyTest(baseline, latest) &&
+              Date.now() < actionDeadline
+            ) {
+              await sleep(HOTKEY_TEST_POLL_MS);
+              if (isCancelled()) return;
+
+              latest = await invoke<HotkeyDiagnostics>("get_hotkey_diagnostics");
+              if (isCancelled()) return;
+
+              setHotkeyDiagnostics(latest);
+              setLastDiagnosticsCheckAt(new Date().toISOString());
+            }
+
+            if (!shouldCancelRecordingAfterHotkeyTest(baseline, latest)) {
+              if (!isCancelled()) {
+                setHotkeyTestIssue("Hotkey detected, but recording did not start");
+                setLastDiagnosticsCheckAt(new Date().toISOString());
+                toast.error("Hotkey detected, but recording did not start");
+              }
+              return;
+            }
+
+            await cancelRecordingStartedByHotkeyTest(baseline, latest, isCancelled);
+          }
           if (!isCancelled()) {
+            setHotkeyTestIssue(null);
             toast.success("Hotkey detected");
           }
           return;
@@ -404,11 +514,15 @@ Actual behavior:
       }
 
       if (!isCancelled()) {
+        setHotkeyTestIssue("Hotkey press was not detected");
+        setLastDiagnosticsCheckAt(new Date().toISOString());
         toast.error("No hotkey was detected");
       }
     } catch (error) {
       if (!isCancelled()) {
         console.error("Failed to test hotkey:", error);
+        setHotkeyTestIssue("Hotkey test failed to run");
+        setLastDiagnosticsCheckAt(new Date().toISOString());
         toast.error("Failed to test hotkey");
       }
     } finally {
@@ -430,7 +544,14 @@ Actual behavior:
     setShowReportBugDialog(true);
   };
 
-  const diagnosticsSummary = getDiagnosticsSummary(hotkeyDiagnostics);
+  const diagnosticsSummary = getDiagnosticsSummary({
+    canRecord,
+    canAutoInsert,
+    readiness: readinessState,
+    hotkeyDiag: hotkeyDiagnostics,
+    hotkeyTestIssue,
+    checkedAt: lastDiagnosticsCheckAt,
+  });
 
   const diagnostics = buildSystemDiagnostics({
     appVer: appVersion || "Unknown",
@@ -463,8 +584,8 @@ Actual behavior:
 
             <div className="rounded-lg border border-border/50 bg-card p-4 space-y-3">
               <div className="flex items-center gap-2">
-                <Keyboard className="h-4 w-4 text-muted-foreground" />
-                <h3 className="text-sm font-medium">System check</h3>
+                <Monitor className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium">Current status</h3>
               </div>
 
               <dl className="grid gap-2 text-xs">
@@ -482,7 +603,7 @@ Actual behavior:
                 </div>
               </dl>
 
-              <p className="text-xs text-muted-foreground">{getDiagnosticsGuidance(osPlatform)}</p>
+              <p className="text-xs text-muted-foreground">{getDiagnosticsGuidance()}</p>
 
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -492,7 +613,7 @@ Actual behavior:
                   onClick={() => void handleTestHotkey()}
                   disabled={testingHotkey}
                 >
-                  {testingHotkey ? "Testing…" : "Run Check"}
+                  {testingHotkey ? "Testing…" : "Test Hotkey"}
                 </Button>
                 <Button
                   type="button"

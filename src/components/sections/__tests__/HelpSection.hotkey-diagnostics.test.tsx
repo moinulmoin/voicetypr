@@ -7,6 +7,17 @@ import { toast } from 'sonner';
 
 const mockInvoke = vi.fn();
 const mockReportBugDialog = vi.fn();
+let mockCanRecord = true;
+let mockCanAutoInsert = true;
+let mockReadinessSnapshot = {
+  has_accessibility_permission: true as boolean | null,
+  has_microphone_permission: true as boolean | null,
+  has_models: true as boolean | null,
+  selected_model_available: true as boolean | null,
+};
+const mockCheckMicrophonePermission = vi.fn();
+const mockCheckAccessibilityPermission = vi.fn();
+const mockCheckModels = vi.fn();
 
 const baseHotkeyDiag = {
   configuredHotkey: 'CommandOrControl+Shift+Space',
@@ -49,8 +60,23 @@ vi.mock('@/contexts/SettingsContext', () => ({
 }));
 
 vi.mock('@/contexts/ReadinessContext', () => ({
-  useCanRecord: () => true,
-  useCanAutoInsert: () => true,
+  useReadiness: () => ({
+    canRecord: mockCanRecord,
+    canAutoInsert: mockCanAutoInsert,
+    hasAccessibilityPermission: mockReadinessSnapshot.has_accessibility_permission,
+    hasMicrophonePermission: mockReadinessSnapshot.has_microphone_permission,
+    hasModels: mockReadinessSnapshot.has_models,
+    selectedModelAvailable: mockReadinessSnapshot.selected_model_available,
+    licenseValid: true,
+    isFullyReady: mockCanRecord && mockCanAutoInsert,
+    isLoading: false,
+    checkAccessibilityPermission: mockCheckAccessibilityPermission,
+    checkMicrophonePermission: mockCheckMicrophonePermission,
+    checkModels: mockCheckModels,
+    checkLicense: vi.fn(),
+    requestAccessibilityPermission: vi.fn(),
+    requestMicrophonePermission: vi.fn(),
+  }),
 }));
 
 vi.mock('sonner', () => ({
@@ -137,6 +163,14 @@ function mockDefaultInvoke() {
 describe('HelpSection diagnostics flows', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCanRecord = true;
+    mockCanAutoInsert = true;
+    mockReadinessSnapshot = {
+      has_accessibility_permission: true,
+      has_microphone_permission: true,
+      has_models: true,
+      selected_model_available: true,
+    };
     mockDefaultInvoke();
   });
 
@@ -147,26 +181,45 @@ describe('HelpSection diagnostics flows', () => {
   async function renderHelpSection() {
     render(<HelpSection />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /run check/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /test hotkey/i })).toBeInTheDocument();
     });
   }
 
-  it('shows generic diagnostics labels and current hotkey-only issue summary', async () => {
+  it('shows generic diagnostics labels and pipeline summary', async () => {
     await renderHelpSection();
 
     expect(screen.getByRole('heading', { name: 'Diagnostics' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'System check' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Current status' })).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText('No issue found yet — run a check to verify input capture')).toBeInTheDocument();
+      expect(screen.getByText('No readiness issue detected')).toBeInTheDocument();
     });
     expect(screen.getByText('Status')).toBeInTheDocument();
-    expect(screen.getByText('Not tested yet')).toBeInTheDocument();
+    expect(screen.getByText('Ready')).toBeInTheDocument();
     expect(screen.getByText('Latest issue')).toBeInTheDocument();
     expect(screen.getByText('Last checked')).toBeInTheDocument();
     expect(screen.getByText('Just now')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /run check/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /test hotkey/i })).toBeInTheDocument();
     expect(screen.queryByText('Hotkey Diagnostics')).not.toBeInTheDocument();
     expect(screen.queryByText('Configured hotkey')).not.toBeInTheDocument();
     expect(screen.queryByText('Last event')).not.toBeInTheDocument();
+  });
+
+  it('shows microphone readiness issue before shortcut details', async () => {
+    mockCanRecord = false;
+    mockReadinessSnapshot = {
+      has_accessibility_permission: true,
+      has_microphone_permission: false,
+      has_models: true,
+      selected_model_available: true,
+    };
+
+    await renderHelpSection();
+
+    await waitFor(() => {
+      expect(screen.getByText('Needs attention')).toBeInTheDocument();
+      expect(screen.getByText('Microphone permission is missing')).toBeInTheDocument();
+    });
   });
 
   it('shows generic attention summary when registration failed', async () => {
@@ -216,28 +269,12 @@ describe('HelpSection diagnostics flows', () => {
     });
   });
 
-  it('shows all good summary when input capture has been observed', async () => {
-    mockInvoke.mockImplementation((cmd: string) => {
-      if (cmd === 'get_device_id') {
-        return Promise.resolve('device-1');
-      }
-      if (cmd === 'get_hotkey_diagnostics') {
-        return Promise.resolve({
-          ...baseHotkeyDiag,
-          lastEventAt: '2026-05-31T00:00:02Z',
-          lastEventKind: 'recording',
-          lastEventState: 'pressed',
-          eventCount: 1,
-        });
-      }
-      return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
-    });
-
+  it('shows ready summary when pipeline signals are healthy', async () => {
     await renderHelpSection();
 
     await waitFor(() => {
-      expect(screen.getByText('All good')).toBeInTheDocument();
-      expect(screen.getByText('None')).toBeInTheDocument();
+      expect(screen.getByText('Ready')).toBeInTheDocument();
+      expect(screen.getByText('No readiness issue detected')).toBeInTheDocument();
     });
   });
 
@@ -248,17 +285,24 @@ describe('HelpSection diagnostics flows', () => {
       if (cmd === 'get_device_id') {
         return Promise.resolve('device-1');
       }
+      if (cmd === 'cancel_recording') {
+        return Promise.resolve(undefined);
+      }
       if (cmd === 'get_hotkey_diagnostics') {
         hotkeyDiagCall += 1;
         const eventCount = hotkeyDiagCall >= 3 ? 1 : 0;
-        return Promise.resolve({ ...baseHotkeyDiag, eventCount });
+        return Promise.resolve({
+          ...baseHotkeyDiag,
+          eventCount,
+          currentRecordingState: eventCount > 0 ? 'recording' : 'idle',
+        });
       }
       return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
     });
 
     await renderHelpSection();
 
-    fireEvent.click(screen.getByRole('button', { name: /run check/i }));
+    fireEvent.click(screen.getByRole('button', { name: /test hotkey/i }));
 
     await waitFor(
       () => {
@@ -293,7 +337,7 @@ describe('HelpSection diagnostics flows', () => {
 
     await renderHelpSection();
 
-    fireEvent.click(screen.getByRole('button', { name: /run check/i }));
+    fireEvent.click(screen.getByRole('button', { name: /test hotkey/i }));
 
     await waitFor(
       () => {
@@ -304,6 +348,38 @@ describe('HelpSection diagnostics flows', () => {
     );
   });
 
+  it('reports when the shortcut event arrives but recording never starts', async () => {
+    let hotkeyDiagCall = 0;
+
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_device_id') {
+        return Promise.resolve('device-1');
+      }
+      if (cmd === 'get_hotkey_diagnostics') {
+        hotkeyDiagCall += 1;
+        const detected = hotkeyDiagCall >= 3;
+        return Promise.resolve({
+          ...baseHotkeyDiag,
+          eventCount: detected ? 1 : 0,
+          currentRecordingState: detected ? 'error' : 'idle',
+        });
+      }
+      return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
+    });
+
+    await renderHelpSection();
+
+    fireEvent.click(screen.getByRole('button', { name: /test hotkey/i }));
+
+    await waitFor(
+      () => {
+        expect(toast.error).toHaveBeenCalledWith('Hotkey detected, but recording did not start');
+      },
+      { timeout: 3000 }
+    );
+    expect(screen.getByText('Hotkey detected, but recording did not start')).toBeInTheDocument();
+
+  });
   it('shows timeout error when no hotkey event is detected', async () => {
     const dateNow = vi.spyOn(Date, 'now');
     let now = 1_000_000;
@@ -326,7 +402,7 @@ describe('HelpSection diagnostics flows', () => {
 
     await renderHelpSection();
 
-    fireEvent.click(screen.getByRole('button', { name: /run check/i }));
+    fireEvent.click(screen.getByRole('button', { name: /test hotkey/i }));
 
     await waitFor(
       () => {
@@ -373,11 +449,11 @@ describe('HelpSection diagnostics flows', () => {
 
     const { unmount } = render(<HelpSection />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /run check/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /test hotkey/i })).toBeInTheDocument();
     });
 
     vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
-    fireEvent.click(screen.getByRole('button', { name: /run check/i }));
+    fireEvent.click(screen.getByRole('button', { name: /test hotkey/i }));
 
     const callsWhenStarted = invokeCallsBeforeUnmount.count;
     unmount();
