@@ -683,7 +683,9 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
             if let Some(old) = old_shortcut {
                 match shortcuts.register(old) {
                     Ok(_) => {
-                        app_state.record_primary_registration_success();
+                        app_state.record_primary_registration_restored_after_failure(
+                            detailed_error.clone(),
+                        );
                         log::info!("Restored previous hotkey after failed update");
                     }
                     Err(restore_err) => {

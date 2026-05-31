@@ -6,7 +6,6 @@ import { ReportBugDialog } from './ReportBugDialog';
 import { gatherManualReportData, buildReportBody, submitManualReport } from '@/utils/crashReport';
 import { toast } from 'sonner';
 
-
 vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
@@ -180,8 +179,6 @@ describe('ReportBugDialog', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-
-
   it('shows an error and keeps the dialog open when submit fails', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
@@ -200,7 +197,6 @@ describe('ReportBugDialog', () => {
     expect(screen.getByText(/copy the prepared report/i)).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
-
 
   it('still submits when the latest log is unavailable', async () => {
     const user = userEvent.setup();

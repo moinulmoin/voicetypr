@@ -46,9 +46,6 @@ export function ReportBugDialog({
   const { settings } = useSettings();
   const actionIdRef = useRef(0);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const diagnosticContextRef = useRef(diagnosticContext);
-
-  diagnosticContextRef.current = diagnosticContext;
 
   useEffect(() => {
     return () => {
@@ -131,7 +128,7 @@ export function ReportBugDialog({
         email.trim() || undefined,
         message.trim(),
         settings?.current_model || null,
-        diagnosticContextRef.current
+        diagnosticContext
       );
 
       return actionId === actionIdRef.current ? data : null;

@@ -73,8 +73,6 @@ describe('buildReportBody', () => {
     expect(body).toContain('INFO redacted log line');
   });
 
-
-
   it('includes additional diagnostics when diagnostic context is provided', () => {
     const body = buildReportBody({
       ...baseReport,
@@ -99,7 +97,6 @@ describe('buildReportBody', () => {
   });
 });
 
-
 describe('report submission payloads', () => {
   it('builds the manual report endpoint payload', () => {
     expect(buildManualReportPayload(baseReport)).toEqual({
@@ -122,7 +119,6 @@ describe('report submission payloads', () => {
       },
     });
   });
-
 
   it('includes additional diagnostics in the manual payload', () => {
     expect(buildManualReportPayload({
