@@ -24,9 +24,16 @@ import { useSettings } from '@/contexts/SettingsContext';
 interface ReportBugDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  initialMessage?: string;
+  diagnosticContext?: string;
 }
 
-export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
+export function ReportBugDialog({
+  isOpen,
+  onClose,
+  initialMessage,
+  diagnosticContext,
+}: ReportBugDialogProps) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');
@@ -39,6 +46,9 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
   const { settings } = useSettings();
   const actionIdRef = useRef(0);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const diagnosticContextRef = useRef(diagnosticContext);
+
+  diagnosticContextRef.current = diagnosticContext;
 
   useEffect(() => {
     return () => {
@@ -106,8 +116,11 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
     if (isOpen) {
       actionIdRef.current += 1;
       resetForm();
+      if (initialMessage) {
+        setMessage(initialMessage);
+      }
     }
-  }, [isOpen, resetForm]);
+  }, [isOpen, resetForm, initialMessage]);
 
   const buildAndGather = async (actionId: number): Promise<ManualReportData | null> => {
     resetSubmitFallback();
@@ -117,7 +130,8 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
         name.trim() || undefined,
         email.trim() || undefined,
         message.trim(),
-        settings?.current_model || null
+        settings?.current_model || null,
+        diagnosticContextRef.current
       );
 
       return actionId === actionIdRef.current ? data : null;
@@ -276,6 +290,7 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
             <p className="text-xs text-muted-foreground">
               <strong>What is included:</strong> Your message, optional contact info,
               system info (app version, OS, architecture, model, anonymous device ID),
+              {diagnosticContext ? ' additional diagnostics,' : ''}
               and the latest app log excerpt.
             </p>
           </div>

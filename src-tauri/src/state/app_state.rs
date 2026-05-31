@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use chrono::Utc;
 use tauri::{Emitter, Manager};
 
 use crate::state::unified_state::UnifiedRecordingState;
@@ -25,6 +26,38 @@ pub enum RecordingState {
 pub enum RecordingMode {
     Toggle,
     PushToTalk,
+}
+
+/// Primary recording hotkey registration outcome tracked at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PrimaryHotkeyRegistrationStatus {
+    #[default]
+    Unknown,
+    Registered,
+    Failed,
+}
+
+impl PrimaryHotkeyRegistrationStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Registered => "registered",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Runtime diagnostics for the primary recording global shortcut.
+#[derive(Debug, Clone, Default)]
+pub struct PrimaryHotkeyDiagnostics {
+    pub registration_status: PrimaryHotkeyRegistrationStatus,
+    pub registration_error: Option<String>,
+    pub last_registration_attempt_at: Option<String>,
+    pub last_successful_registration_at: Option<String>,
+    pub last_event_at: Option<String>,
+    pub last_event_kind: Option<String>,
+    pub last_event_state: Option<String>,
+    pub event_count: u64,
 }
 
 /// Queued event for the pill window
@@ -53,6 +86,7 @@ pub struct AppState {
     pub license_cache: Arc<tokio::sync::RwLock<Option<crate::commands::license::CachedLicense>>>,
     pub pill_event_queue: Arc<Mutex<Vec<QueuedPillEvent>>>,
     pub last_toggle_press: Arc<Mutex<Option<Instant>>>,
+    pub primary_hotkey_diagnostics: Arc<Mutex<PrimaryHotkeyDiagnostics>>,
 }
 
 impl Default for AppState {
@@ -80,7 +114,48 @@ impl AppState {
             license_cache: Arc::new(tokio::sync::RwLock::new(None)),
             pill_event_queue: Arc::new(Mutex::new(Vec::new())),
             last_toggle_press: Arc::new(Mutex::new(None)),
+            primary_hotkey_diagnostics: Arc::new(Mutex::new(PrimaryHotkeyDiagnostics::default())),
         }
+    }
+
+    pub fn record_primary_registration_attempt(&self) {
+        let now = Utc::now().to_rfc3339();
+        if let Ok(mut diagnostics) = self.primary_hotkey_diagnostics.lock() {
+            diagnostics.last_registration_attempt_at = Some(now);
+        }
+    }
+
+    pub fn record_primary_registration_success(&self) {
+        let now = Utc::now().to_rfc3339();
+        if let Ok(mut diagnostics) = self.primary_hotkey_diagnostics.lock() {
+            diagnostics.registration_status = PrimaryHotkeyRegistrationStatus::Registered;
+            diagnostics.registration_error = None;
+            diagnostics.last_successful_registration_at = Some(now);
+        }
+    }
+
+    pub fn record_primary_registration_failure(&self, error: impl Into<String>) {
+        if let Ok(mut diagnostics) = self.primary_hotkey_diagnostics.lock() {
+            diagnostics.registration_status = PrimaryHotkeyRegistrationStatus::Failed;
+            diagnostics.registration_error = Some(error.into());
+        }
+    }
+
+    pub fn record_handled_hotkey_event(&self, kind: &str, state: &str) {
+        let now = Utc::now().to_rfc3339();
+        if let Ok(mut diagnostics) = self.primary_hotkey_diagnostics.lock() {
+            diagnostics.last_event_at = Some(now);
+            diagnostics.last_event_kind = Some(kind.to_string());
+            diagnostics.last_event_state = Some(state.to_string());
+            diagnostics.event_count = diagnostics.event_count.saturating_add(1);
+        }
+    }
+
+    pub fn primary_hotkey_diagnostics_snapshot(&self) -> PrimaryHotkeyDiagnostics {
+        self.primary_hotkey_diagnostics
+            .lock()
+            .map(|diagnostics| diagnostics.clone())
+            .unwrap_or_default()
     }
 
     pub fn set_window_manager(&self, manager: WindowManager) {
@@ -286,5 +361,42 @@ pub async fn flush_pill_event_queue(app: &tauri::AppHandle) {
                 e
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppState, PrimaryHotkeyRegistrationStatus};
+
+    #[test]
+    fn primary_hotkey_registration_success_clears_error() {
+        let state = AppState::new();
+
+        state.record_primary_registration_attempt();
+        state.record_primary_registration_failure("blocked by another app");
+        state.record_primary_registration_success();
+
+        let diagnostics = state.primary_hotkey_diagnostics_snapshot();
+        assert_eq!(
+            diagnostics.registration_status,
+            PrimaryHotkeyRegistrationStatus::Registered
+        );
+        assert!(diagnostics.registration_error.is_none());
+        assert!(diagnostics.last_registration_attempt_at.is_some());
+        assert!(diagnostics.last_successful_registration_at.is_some());
+    }
+
+    #[test]
+    fn handled_hotkey_events_update_latest_event_and_count() {
+        let state = AppState::new();
+
+        state.record_handled_hotkey_event("recording", "pressed");
+        state.record_handled_hotkey_event("ptt", "released");
+
+        let diagnostics = state.primary_hotkey_diagnostics_snapshot();
+        assert_eq!(diagnostics.event_count, 2);
+        assert_eq!(diagnostics.last_event_kind.as_deref(), Some("ptt"));
+        assert_eq!(diagnostics.last_event_state.as_deref(), Some("released"));
+        assert!(diagnostics.last_event_at.is_some());
     }
 }

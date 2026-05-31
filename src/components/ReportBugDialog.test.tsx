@@ -145,7 +145,8 @@ describe('ReportBugDialog', () => {
       'Moin',
       'moin@example.com',
       'The app broke',
-      'base.en'
+      'base.en',
+      undefined
     );
     expect(submitManualReport).toHaveBeenCalledWith(expect.objectContaining({
       message: 'The app broke',
@@ -231,4 +232,44 @@ describe('ReportBugDialog', () => {
       logStatusNote: 'No log file found.',
     }));
   });
+  it('prefills the message when initialMessage is provided', () => {
+    const { rerender } = render(
+      <ReportBugDialog isOpen initialMessage="Hotkey issue details" onClose={vi.fn()} />
+    );
+
+    expect(screen.getByLabelText(/message/i)).toHaveValue('Hotkey issue details');
+
+    rerender(<ReportBugDialog isOpen={false} onClose={vi.fn()} />);
+    rerender(
+      <ReportBugDialog isOpen initialMessage="Updated hotkey issue" onClose={vi.fn()} />
+    );
+
+    expect(screen.getByLabelText(/message/i)).toHaveValue('Updated hotkey issue');
+  });
+
+  it('passes diagnostic context when gathering report data', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ReportBugDialog
+        isOpen
+        diagnosticContext={'Configured Hotkey: Cmd+Shift+Space'}
+        onClose={vi.fn()}
+      />
+    );
+
+    await user.type(screen.getByLabelText(/message/i), 'Hotkey stopped working');
+    await user.click(screen.getByRole('button', { name: /submit/i }));
+
+    await waitFor(() => {
+      expect(gatherManualReportData).toHaveBeenCalledWith(
+        undefined,
+        undefined,
+        'Hotkey stopped working',
+        'base.en',
+        'Configured Hotkey: Cmd+Shift+Space'
+      );
+    });
+  });
+
 });
