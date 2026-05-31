@@ -34,6 +34,7 @@ pub enum PrimaryHotkeyRegistrationStatus {
     #[default]
     Unknown,
     Registered,
+    RestoredAfterFailure,
     Failed,
 }
 
@@ -42,6 +43,7 @@ impl PrimaryHotkeyRegistrationStatus {
         match self {
             Self::Unknown => "unknown",
             Self::Registered => "registered",
+            Self::RestoredAfterFailure => "restored_after_failure",
             Self::Failed => "failed",
         }
     }
@@ -130,6 +132,15 @@ impl AppState {
         if let Ok(mut diagnostics) = self.primary_hotkey_diagnostics.lock() {
             diagnostics.registration_status = PrimaryHotkeyRegistrationStatus::Registered;
             diagnostics.registration_error = None;
+            diagnostics.last_successful_registration_at = Some(now);
+        }
+    }
+
+    pub fn record_primary_registration_restored_after_failure(&self, error: impl Into<String>) {
+        let now = Utc::now().to_rfc3339();
+        if let Ok(mut diagnostics) = self.primary_hotkey_diagnostics.lock() {
+            diagnostics.registration_status = PrimaryHotkeyRegistrationStatus::RestoredAfterFailure;
+            diagnostics.registration_error = Some(error.into());
             diagnostics.last_successful_registration_at = Some(now);
         }
     }
@@ -383,6 +394,27 @@ mod tests {
         );
         assert!(diagnostics.registration_error.is_none());
         assert!(diagnostics.last_registration_attempt_at.is_some());
+        assert!(diagnostics.last_successful_registration_at.is_some());
+    }
+
+    #[test]
+    fn primary_hotkey_registration_restore_preserves_error() {
+        let state = AppState::new();
+
+        state.record_primary_registration_attempt();
+        state.record_primary_registration_restored_after_failure(
+            "new hotkey blocked; previous hotkey restored",
+        );
+
+        let diagnostics = state.primary_hotkey_diagnostics_snapshot();
+        assert_eq!(
+            diagnostics.registration_status,
+            PrimaryHotkeyRegistrationStatus::RestoredAfterFailure
+        );
+        assert_eq!(
+            diagnostics.registration_error.as_deref(),
+            Some("new hotkey blocked; previous hotkey restored")
+        );
         assert!(diagnostics.last_successful_registration_at.is_some());
     }
 

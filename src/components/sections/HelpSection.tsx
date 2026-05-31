@@ -25,7 +25,7 @@ import {
   Monitor,
 } from "lucide-react";
 import XIcon from "@/components/icons/XIcon";
-import { useState, useEffect, useCallback, type ComponentType } from "react";
+import { useState, useEffect, useCallback, useRef, type ComponentType } from "react";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
@@ -35,26 +35,13 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { useCanRecord, useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { ReportBugDialog } from "@/components/ReportBugDialog";
 import { formatHotkey } from "@/lib/hotkey-utils";
-
-interface HotkeyDiagnostics {
-  configuredHotkey: string;
-  normalizedHotkey: string;
-  recordingMode: string;
-  useDifferentPttKey: boolean;
-  pttHotkey: string | null;
-  normalizedPttHotkey: string | null;
-  registrationStatus: string;
-  registrationError?: string | null;
-  lastRegistrationAttemptAt?: string | null;
-  lastSuccessfulRegistrationAt?: string | null;
-  lastEventAt?: string | null;
-  lastEventKind?: string | null;
-  lastEventState?: string | null;
-  eventCount: number;
-  currentRecordingState?: string | null;
-  generatedAt: string;
-  isRegistered: boolean | null;
-}
+import {
+  formatRegistrationStatus,
+  formatHotkeyDiagnosticContext,
+  formatHotkeyDiagnosticLines,
+  formatLastEventSummary,
+  type HotkeyDiagnostics,
+} from "@/utils/hotkeyDiagnostics";
 
 interface QuickFix {
   id: string;
@@ -67,53 +54,6 @@ interface QuickFix {
 
 const HOTKEY_TEST_POLL_MS = 500;
 const HOTKEY_TEST_TIMEOUT_MS = 10_000;
-
-function formatDiagnosticValue(value: string | number | boolean | null | undefined): string {
-  if (value === null || value === undefined || value === "") {
-    return "—";
-  }
-  return String(value);
-}
-
-function formatHotkeyDiagnosticLines(diag: HotkeyDiagnostics | null): string[] {
-  if (!diag) {
-    return ["Hotkey Diagnostics: Unavailable"];
-  }
-
-  const lines = [
-    `Configured Hotkey: ${formatDiagnosticValue(diag.configuredHotkey)}`,
-    `Normalized Hotkey: ${formatDiagnosticValue(diag.normalizedHotkey)}`,
-    `Recording Mode: ${formatDiagnosticValue(diag.recordingMode)}`,
-    `Registration Status: ${formatDiagnosticValue(diag.registrationStatus)}`,
-  ];
-
-  if (diag.registrationError) {
-    lines.push(`Registration Error: ${diag.registrationError}`);
-  }
-  if (diag.isRegistered !== undefined) {
-    lines.push(`Is Registered: ${formatDiagnosticValue(diag.isRegistered)}`);
-  }
-  if (diag.useDifferentPttKey) {
-    lines.push(`PTT Hotkey: ${formatDiagnosticValue(diag.pttHotkey)}`);
-    lines.push(`Normalized PTT Hotkey: ${formatDiagnosticValue(diag.normalizedPttHotkey)}`);
-  }
-  if (diag.lastEventAt) {
-    lines.push(
-      `Last Event: ${formatDiagnosticValue(diag.lastEventKind)} (${formatDiagnosticValue(diag.lastEventState)}) at ${diag.lastEventAt}`
-    );
-  } else {
-    lines.push("Last Event: None detected");
-  }
-  lines.push(`Event Count: ${diag.eventCount ?? 0}`);
-  lines.push(`Current Recording State: ${formatDiagnosticValue(diag.currentRecordingState)}`);
-  lines.push(`Generated At: ${formatDiagnosticValue(diag.generatedAt)}`);
-
-  return lines;
-}
-
-export function formatHotkeyDiagnosticContext(diag: HotkeyDiagnostics): string {
-  return formatHotkeyDiagnosticLines(diag).join("\n");
-}
 
 function buildSystemDiagnostics(params: {
   appVer: string;
@@ -154,15 +94,6 @@ function getHotkeyGuidance(os: string): string {
   return "If your hotkey does not work, try a different combination and check system shortcut settings.";
 }
 
-function formatLastEventSummary(diag: HotkeyDiagnostics | null): string {
-  if (!diag?.lastEventAt) {
-    return "None detected";
-  }
-  const kind = formatDiagnosticValue(diag.lastEventKind);
-  const state = formatDiagnosticValue(diag.lastEventState);
-  return `${kind} (${state})`;
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -187,6 +118,13 @@ export function HelpSection() {
   const { settings } = useSettings();
   const canRecord = useCanRecord();
   const canAutoInsert = useCanAutoInsert();
+  const hotkeyTestRunRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      hotkeyTestRunRef.current += 1;
+    };
+  }, []);
 
   const loadHotkeyDiagnostics = useCallback(async (): Promise<HotkeyDiagnostics | null> => {
     try {
@@ -357,17 +295,29 @@ Actual behavior:
   const handleTestHotkey = async () => {
     if (testingHotkey) return;
 
+    const runId = hotkeyTestRunRef.current + 1;
+    hotkeyTestRunRef.current = runId;
+    const isCancelled = () => hotkeyTestRunRef.current !== runId;
+
     setTestingHotkey(true);
     toast.info("Press your hotkey now");
 
     try {
       const baseline = await loadHotkeyDiagnostics();
+      if (isCancelled()) return;
+
       const startCount = baseline?.eventCount ?? 0;
       const deadline = Date.now() + HOTKEY_TEST_TIMEOUT_MS;
 
       while (Date.now() < deadline) {
+        if (isCancelled()) return;
+
         await sleep(HOTKEY_TEST_POLL_MS);
+        if (isCancelled()) return;
+
         const current = await invoke<HotkeyDiagnostics>("get_hotkey_diagnostics");
+        if (isCancelled()) return;
+
         setHotkeyDiagnostics(current);
 
         if (current.eventCount > startCount) {
@@ -376,12 +326,18 @@ Actual behavior:
         }
       }
 
-      toast.error("No hotkey was detected");
+      if (!isCancelled()) {
+        toast.error("No hotkey was detected");
+      }
     } catch (error) {
-      console.error("Failed to test hotkey:", error);
-      toast.error("Failed to test hotkey");
+      if (!isCancelled()) {
+        console.error("Failed to test hotkey:", error);
+        toast.error("Failed to test hotkey");
+      }
     } finally {
-      setTestingHotkey(false);
+      if (!isCancelled()) {
+        setTestingHotkey(false);
+      }
     }
   };
 
@@ -534,7 +490,7 @@ Actual behavior:
                 <div className="flex justify-between gap-4">
                   <dt className="text-muted-foreground">Registration</dt>
                   <dd className="font-medium text-right">
-                    {formatDiagnosticValue(hotkeyDiagnostics?.registrationStatus)}
+                    {formatRegistrationStatus(hotkeyDiagnostics?.registrationStatus)}
                   </dd>
                 </div>
                 <div className="flex justify-between gap-4">
