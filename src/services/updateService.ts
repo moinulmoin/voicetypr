@@ -17,6 +17,7 @@ export class UpdateService {
   private isSessionActive = false;
   private pendingRelaunch = false;
   private pendingUpdateVersion: string | null = null;
+  private installUpdatesAutomatically = false;
 
   private constructor() {}
 
@@ -95,8 +96,9 @@ export class UpdateService {
    * - Never downloads or installs an update until the user confirms
    */
   async initialize(settings: AppSettings): Promise<void> {
-    // Check if automatic updates are enabled (default to true if not set)
+    // Check for updates automatically by default, but only install automatically after explicit opt-in.
     const autoUpdateEnabled = settings.check_updates_automatically ?? true;
+    this.installUpdatesAutomatically = settings.install_updates_automatically ?? false;
 
     if (!autoUpdateEnabled) {
       console.log('Automatic updates are disabled');
@@ -184,7 +186,7 @@ export class UpdateService {
       localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
       
       if (update?.available) {
-        await this.handleUpdateAvailable(update);
+        await this.handleBackgroundUpdateAvailable(update);
       }
     } catch (error) {
       console.error('Background update check failed:', error);
@@ -213,7 +215,7 @@ export class UpdateService {
       localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
       
       if (update?.available) {
-        await this.handleUpdateAvailable(update);
+        await this.showUpdateDialog(update);
       } else {
         toast.success("You're on the latest version!");
       }
@@ -226,10 +228,72 @@ export class UpdateService {
   }
 
   /**
-   * Handle when an update is available
+   * Handle updates found by automatic/background checks.
    */
-  private async handleUpdateAvailable(update: Update): Promise<void> {
+  private async handleBackgroundUpdateAvailable(update: Update): Promise<void> {
+    if (this.installUpdatesAutomatically) {
+      await this.autoInstallUpdate(update);
+      return;
+    }
+
     await this.showUpdateDialog(update);
+  }
+
+  /**
+   * Auto-install update with progress feedback after the user opted in.
+   */
+  private async autoInstallUpdate(update: Update, retryCount = 0): Promise<void> {
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 30000; // 30 seconds
+
+    // Defer auto-update if user is in active session (recording/transcribing)
+    if (this.isSessionActive) {
+      if (retryCount < MAX_RETRIES) {
+        console.log(`Deferring auto-update - session active (retry ${retryCount + 1}/${MAX_RETRIES} in 30s)`);
+        setTimeout(() => this.autoInstallUpdate(update, retryCount + 1), RETRY_DELAY);
+        return;
+      }
+      console.log('Skipping auto-update - session still active after max retries');
+      return;
+    }
+
+    const toastId = 'update-progress';
+
+    try {
+      await update.downloadAndInstall((event) => {
+        if (event.event === 'Started') {
+          toast.info(`Downloading update ${update.version}...`, {
+            id: toastId,
+            duration: Infinity,
+          });
+        } else if (event.event === 'Finished') {
+          toast.success('Update ready, restarting...', {
+            id: toastId,
+            duration: Infinity,
+          });
+        }
+      });
+    } catch (error) {
+      console.error('Auto-update failed:', error);
+      toast.error('Update failed. You can try again from Settings > About.', {
+        id: toastId,
+        duration: 5000,
+      });
+      return;
+    }
+
+    // Re-check session state before relaunch (user may have started recording during download)
+    if (this.isSessionActive) {
+      console.log('Update downloaded but session active - will relaunch when recording ends');
+      this.pendingRelaunch = true;
+      this.pendingUpdateVersion = update.version;
+      toast.dismiss(toastId);
+      await this.sendSystemNotification('Update Ready', 'VoiceTypr will restart when recording ends');
+      return;
+    }
+
+    this.pendingUpdateVersion = update.version;
+    await this.performRelaunch();
   }
 
   /**

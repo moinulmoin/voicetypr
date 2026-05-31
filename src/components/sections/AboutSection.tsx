@@ -1,6 +1,8 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
 import { open } from '@tauri-apps/plugin-shell';
 import { getVersion } from '@tauri-apps/api/app';
 import { 
@@ -13,10 +15,12 @@ import XIcon from "@/components/icons/XIcon";
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { updateService } from '@/services/updateService';
+import { useSettings } from '@/contexts/SettingsContext';
 
 export function AboutSection() {
   const [appVersion, setAppVersion] = useState<string>('');
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const { settings, updateSettings } = useSettings();
 
   useEffect(() => {
     const fetchVersion = async () => {
@@ -36,6 +40,20 @@ export function AboutSection() {
     setIsCheckingUpdate(true);
     await updateService.checkForUpdatesManually();
     setIsCheckingUpdate(false);
+  };
+
+  const handleAutoInstallToggle = async (checked: boolean) => {
+    try {
+      await updateSettings({ install_updates_automatically: checked });
+      toast.success(
+        checked
+          ? 'Automatic update install enabled'
+          : 'Automatic update install disabled'
+      );
+    } catch (error) {
+      console.error('Failed to update automatic install setting:', error);
+      toast.error('Failed to update update setting');
+    }
   };
 
   const openExternalLink = async (url: string) => {
@@ -88,6 +106,22 @@ export function AboutSection() {
                   <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
                   {isCheckingUpdate ? 'Checking...' : 'Check for Updates'}
                 </Button>
+              </div>
+
+              <div className="flex items-center justify-between gap-4 rounded-lg border border-border/40 bg-background/50 p-3">
+                <div className="space-y-0.5">
+                  <Label htmlFor="install-updates-automatically" className="text-sm font-medium">
+                    Download and install updates automatically
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    If off, VoiceTypr only shows an update prompt and waits for you to click Update.
+                  </p>
+                </div>
+                <Switch
+                  id="install-updates-automatically"
+                  checked={settings?.install_updates_automatically ?? false}
+                  onCheckedChange={handleAutoInstallToggle}
+                />
               </div>
             </div>
           </div>
