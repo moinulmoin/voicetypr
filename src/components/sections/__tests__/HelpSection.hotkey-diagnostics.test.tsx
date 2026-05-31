@@ -134,7 +134,7 @@ function mockDefaultInvoke() {
   });
 }
 
-describe('HelpSection hotkey flows', () => {
+describe('HelpSection diagnostics flows', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDefaultInvoke();
@@ -147,9 +147,99 @@ describe('HelpSection hotkey flows', () => {
   async function renderHelpSection() {
     render(<HelpSection />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /test hotkey/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /run check/i })).toBeInTheDocument();
     });
   }
+
+  it('shows generic diagnostics labels and current hotkey-only issue summary', async () => {
+    await renderHelpSection();
+
+    expect(screen.getByRole('heading', { name: 'Diagnostics' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'System check' })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('No issue found yet — run a check to verify input capture')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Status')).toBeInTheDocument();
+    expect(screen.getByText('Not tested yet')).toBeInTheDocument();
+    expect(screen.getByText('Latest issue')).toBeInTheDocument();
+    expect(screen.getByText('Last checked')).toBeInTheDocument();
+    expect(screen.getByText('Just now')).toBeInTheDocument();
+    expect(screen.queryByText('Hotkey Diagnostics')).not.toBeInTheDocument();
+    expect(screen.queryByText('Configured hotkey')).not.toBeInTheDocument();
+    expect(screen.queryByText('Last event')).not.toBeInTheDocument();
+  });
+
+  it('shows generic attention summary when registration failed', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_device_id') {
+        return Promise.resolve('device-1');
+      }
+      if (cmd === 'get_hotkey_diagnostics') {
+        return Promise.resolve({
+          ...baseHotkeyDiag,
+          registrationStatus: 'failed',
+          isRegistered: false,
+        });
+      }
+      return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
+    });
+
+    await renderHelpSection();
+
+    await waitFor(() => {
+      expect(screen.getByText('Needs attention')).toBeInTheDocument();
+      expect(screen.getByText('Global hotkey is not registered')).toBeInTheDocument();
+    });
+  });
+
+  it('shows restored-after-failure registration error as latest issue', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_device_id') {
+        return Promise.resolve('device-1');
+      }
+      if (cmd === 'get_hotkey_diagnostics') {
+        return Promise.resolve({
+          ...baseHotkeyDiag,
+          registrationStatus: 'restored_after_failure',
+          registrationError: 'Shortcut already registered by another app',
+          isRegistered: true,
+        });
+      }
+      return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
+    });
+
+    await renderHelpSection();
+
+    await waitFor(() => {
+      expect(screen.getByText('Needs attention')).toBeInTheDocument();
+      expect(screen.getByText('Shortcut already registered by another app')).toBeInTheDocument();
+    });
+  });
+
+  it('shows all good summary when input capture has been observed', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_device_id') {
+        return Promise.resolve('device-1');
+      }
+      if (cmd === 'get_hotkey_diagnostics') {
+        return Promise.resolve({
+          ...baseHotkeyDiag,
+          lastEventAt: '2026-05-31T00:00:02Z',
+          lastEventKind: 'recording',
+          lastEventState: 'pressed',
+          eventCount: 1,
+        });
+      }
+      return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
+    });
+
+    await renderHelpSection();
+
+    await waitFor(() => {
+      expect(screen.getByText('All good')).toBeInTheDocument();
+      expect(screen.getByText('None')).toBeInTheDocument();
+    });
+  });
 
   it('shows success when eventCount increases during hotkey test', async () => {
     let hotkeyDiagCall = 0;
@@ -168,7 +258,7 @@ describe('HelpSection hotkey flows', () => {
 
     await renderHelpSection();
 
-    fireEvent.click(screen.getByRole('button', { name: /test hotkey/i }));
+    fireEvent.click(screen.getByRole('button', { name: /run check/i }));
 
     await waitFor(
       () => {
@@ -203,7 +293,7 @@ describe('HelpSection hotkey flows', () => {
 
     await renderHelpSection();
 
-    fireEvent.click(screen.getByRole('button', { name: /test hotkey/i }));
+    fireEvent.click(screen.getByRole('button', { name: /run check/i }));
 
     await waitFor(
       () => {
@@ -236,7 +326,7 @@ describe('HelpSection hotkey flows', () => {
 
     await renderHelpSection();
 
-    fireEvent.click(screen.getByRole('button', { name: /test hotkey/i }));
+    fireEvent.click(screen.getByRole('button', { name: /run check/i }));
 
     await waitFor(
       () => {
@@ -254,7 +344,7 @@ describe('HelpSection hotkey flows', () => {
 
     await renderHelpSection();
 
-    await user.click(screen.getByRole('button', { name: /report hotkey issue/i }));
+    await user.click(screen.getByRole('button', { name: /report issue/i }));
 
     await waitFor(() => {
       expect(mockReportBugDialog).toHaveBeenCalled();
@@ -283,11 +373,11 @@ describe('HelpSection hotkey flows', () => {
 
     const { unmount } = render(<HelpSection />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /test hotkey/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /run check/i })).toBeInTheDocument();
     });
 
     vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
-    fireEvent.click(screen.getByRole('button', { name: /test hotkey/i }));
+    fireEvent.click(screen.getByRole('button', { name: /run check/i }));
 
     const callsWhenStarted = invokeCallsBeforeUnmount.count;
     unmount();
