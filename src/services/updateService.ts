@@ -17,6 +17,7 @@ export class UpdateService {
   private isSessionActive = false;
   private pendingRelaunch = false;
   private pendingUpdateVersion: string | null = null;
+  private installUpdatesAutomatically = false;
 
   private constructor() {}
 
@@ -92,12 +93,13 @@ export class UpdateService {
   /**
    * Initialize the update service
    * - Checks for updates on startup if enabled
-   * - Sets up daily update checks
+   * - Never downloads or installs an update until the user confirms
    */
   async initialize(settings: AppSettings): Promise<void> {
-    // Check if automatic updates are enabled (default to true if not set)
+    // Check for updates automatically by default, but only install automatically after explicit opt-in.
     const autoUpdateEnabled = settings.check_updates_automatically ?? true;
-    
+    this.installUpdatesAutomatically = settings.install_updates_automatically ?? false;
+
     if (!autoUpdateEnabled) {
       console.log('Automatic updates are disabled');
       return;
@@ -153,9 +155,9 @@ export class UpdateService {
   }
 
   /**
-   * Check for updates in the background and auto-install if available.
-   * Shows progress toasts during download/install, then relaunches the app.
-   * Runs on startup and daily when automatic updates are enabled.
+   * Check for updates in the background.
+   * If an update is available, ask the user before downloading or installing.
+   * Runs on startup and daily when automatic update checks are enabled.
    */
   async checkForUpdatesInBackground(): Promise<void> {
     if (this.checkInProgress) {
@@ -165,7 +167,6 @@ export class UpdateService {
 
     try {
       this.checkInProgress = true;
-      
       // Check if we should skip based on last check time
       const lastCheck = localStorage.getItem(LAST_UPDATE_CHECK_KEY);
       if (lastCheck) {
@@ -184,7 +185,7 @@ export class UpdateService {
       localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
       
       if (update?.available) {
-        await this.handleUpdateAvailable(update, true);
+        await this.handleBackgroundUpdateAvailable(update);
       }
     } catch (error) {
       console.error('Background update check failed:', error);
@@ -213,7 +214,7 @@ export class UpdateService {
       localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
       
       if (update?.available) {
-        await this.handleUpdateAvailable(update, false);
+        await this.showUpdateDialog(update);
       } else {
         toast.success("You're on the latest version!");
       }
@@ -226,20 +227,19 @@ export class UpdateService {
   }
 
   /**
-   * Handle when an update is available
+   * Handle updates found by automatic/background checks.
    */
-  private async handleUpdateAvailable(update: Update, isBackgroundCheck: boolean): Promise<void> {
-    if (isBackgroundCheck) {
-      // For background checks, auto-install silently
+  private async handleBackgroundUpdateAvailable(update: Update): Promise<void> {
+    if (this.installUpdatesAutomatically) {
       await this.autoInstallUpdate(update);
-    } else {
-      // For manual checks, show dialog to let user decide
-      await this.showUpdateDialog(update);
+      return;
     }
+
+    await this.showUpdateDialog(update);
   }
 
   /**
-   * Auto-install update silently with progress feedback
+   * Auto-install update with progress feedback after the user opted in.
    */
   private async autoInstallUpdate(update: Update, retryCount = 0): Promise<void> {
     const MAX_RETRIES = 3;
@@ -257,33 +257,33 @@ export class UpdateService {
     }
 
     const toastId = 'update-progress';
-    
+
     try {
       await update.downloadAndInstall((event) => {
         if (event.event === 'Started') {
-          toast.info(`Downloading update ${update.version}...`, { 
+          toast.info(`Downloading update ${update.version}...`, {
             id: toastId,
-            duration: Infinity 
+            duration: Infinity,
           });
         } else if (event.event === 'Finished') {
-          toast.success('Update ready, restarting...', { 
+          toast.success('Update ready, restarting...', {
             id: toastId,
-            duration: Infinity 
+            duration: Infinity,
           });
         }
       });
     } catch (error) {
       console.error('Auto-update failed:', error);
-      toast.error('Update failed. You can try again from Settings > About.', { 
+      toast.error('Update failed. You can try again from Settings > About.', {
         id: toastId,
-        duration: 5000 
+        duration: 5000,
       });
       return;
     }
 
     // Re-check session state before relaunch (user may have started recording during download)
     if (this.isSessionActive) {
-      console.log('Update downloaded but session active - will relaunch when session ends');
+      console.log('Update downloaded but session active - will relaunch when recording ends');
       this.pendingRelaunch = true;
       this.pendingUpdateVersion = update.version;
       toast.dismiss(toastId);

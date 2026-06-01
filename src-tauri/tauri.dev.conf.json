@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Voicetypr",
-  "version": "1.12.1",
   "identifier": "com.ideaplexa.voicetypr.dev",
   "build": {
     "beforeDevCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm dev",
@@ -70,7 +69,7 @@
       },
       "nsis": {
         "installMode": "currentUser",
-        "installerHooks": "./windows/smart-installer-hooks.nsh"
+        "installerHooks": "./windows/installer-hooks.nsh"
       }
     }
   },
@@ -82,7 +81,7 @@
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE2Q0M5NTZENjAwM0YyNDkKUldSSjhnTmdiWlhNRm0wdHQ1YmxNSzBWS2tiZlcyZ3FJZG5FajZ3MFBzTUZmRDgvZys5R1J6c2cK",
       "windows": {
-        "installMode": "passive"
+        "installMode": "basicUi"
       }
     }
   }

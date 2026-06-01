@@ -359,6 +359,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Cache size is 1: only the current model (1-3GB RAM)
             // When user switches models, old one is unloaded immediately
             app.manage(AsyncMutex::new(TranscriberCache::new()));
+            app.manage(whisper::gpu_sidecar::GpuSidecarClient::new());
+            log::info!("🎮 GPU sidecar client initialized");
 
             // Initialize unified application state
             app.manage(AppState::new());
@@ -714,6 +716,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(default_shortcut) => default_shortcut,
                         Err(e) => {
                             log::error!("Even default shortcut failed to parse: {}", e);
+                            let app_state = app.state::<AppState>();
+                            app_state.record_primary_registration_attempt();
+                            app_state.record_primary_registration_failure(format!(
+                                "Failed to parse default shortcut: {}",
+                                e
+                            ));
                             // Emit event to notify frontend that hotkey registration failed
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.emit("hotkey-registration-failed", ());
@@ -732,6 +740,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Try to register global shortcut with panic protection
+            app_state.record_primary_registration_attempt();
             let registration_start = Instant::now();
             let registration_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 app.global_shortcut().register(shortcut)
@@ -739,6 +748,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             match registration_result {
                 Ok(Ok(_)) => {
+                    app_state.record_primary_registration_success();
                     log_complete("HOTKEY_REGISTRATION", registration_start.elapsed().as_millis() as u64);
                     log_with_context(log::Level::Debug, "Hotkey registered", &[
                         ("hotkey", &hotkey_str),
@@ -747,6 +757,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     log::info!("✅ Successfully registered global hotkey: {}", hotkey_str);
                 }
                 Ok(Err(e)) => {
+                    app_state.record_primary_registration_failure(e.to_string());
                     log_failed("HOTKEY_REGISTRATION", &e.to_string());
                     log_with_context(log::Level::Debug, "Hotkey registration failed", &[
                         ("hotkey", &hotkey_str),
@@ -775,6 +786,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "Unknown panic during hotkey registration".to_string()
                     };
 
+                    app_state.record_primary_registration_failure(panic_msg.clone());
                     log::error!("💥 PANIC during hotkey registration: {}", panic_msg);
                     log::warn!("⚠️  Continuing without global hotkey due to panic");
 
@@ -1053,9 +1065,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             transcribe_audio_file,
             get_settings,
             save_settings,
+            get_transcription_acceleration_status,
+            test_transcription_acceleration,
             set_audio_device,
             validate_microphone_selection,
             set_global_shortcut,
+            get_hotkey_diagnostics,
             get_supported_languages,
             set_model_from_tray,
             update_tray_menu,

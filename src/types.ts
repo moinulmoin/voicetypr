@@ -40,6 +40,8 @@ export const isLocalModel = (model: ModelInfo): model is LocalModelInfo =>
 export type RecordingMode = 'toggle' | 'push_to_talk';
 export type PillIndicatorMode = 'never' | 'always' | 'when_recording';
 export type PillIndicatorPosition = 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
+export type TranscriptionAcceleration = 'auto' | 'cpu' | 'gpu';
+
 
 export interface AppSettings {
   hotkey: string;
@@ -51,6 +53,7 @@ export interface AppSettings {
   launch_at_startup?: boolean;
   onboarding_completed?: boolean;
   check_updates_automatically?: boolean;
+  install_updates_automatically?: boolean;
   selected_microphone?: string | null;
   // Push-to-talk support
   recording_mode?: RecordingMode;
@@ -70,6 +73,8 @@ export interface AppSettings {
   pill_indicator_offset?: number;
   // Pause system media during recording
   pause_media_during_recording?: boolean;
+  // Local Whisper acceleration mode
+  transcription_acceleration?: TranscriptionAcceleration;
 }
 
 export interface TranscriptionHistory {

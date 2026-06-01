@@ -34,6 +34,7 @@ vi.mock('@/contexts/ReadinessContext', () => ({
 
 vi.mock('@/lib/platform', () => ({
   isMacOS: false,
+  isWindows: false,
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({

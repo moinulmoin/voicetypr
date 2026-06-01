@@ -3,6 +3,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
 use crate::commands::license::{check_license_status_internal, CachedLicense};
+#[cfg(target_os = "windows")]
+use crate::commands::settings::normalize_transcription_acceleration;
 use crate::commands::settings::{get_settings, resolve_pill_indicator_mode, Settings};
 use crate::license::LicenseState;
 use crate::media::MediaPauseController;
@@ -89,7 +91,91 @@ fn should_hide_pill_when_idle(mode: &str) -> bool {
     mode != "always"
 }
 
-/// Check if pill should be hidden based on pill_indicator_mode setting.
+async fn transcribe_whisper_with_acceleration<F>(
+    app: &AppHandle,
+    model_path: &Path,
+    audio_path: &Path,
+    language: Option<&str>,
+    translate: bool,
+    should_cancel: F,
+) -> Result<String, String>
+where
+    F: Fn() -> bool,
+{
+    #[cfg(target_os = "windows")]
+    let mode = {
+        let settings = get_settings(app.clone()).await?;
+        normalize_transcription_acceleration(Some(&settings.transcription_acceleration))
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut preserve_gpu_status = false;
+
+    #[cfg(target_os = "windows")]
+    if mode != "cpu" {
+        if should_cancel() {
+            return Err("Transcription cancelled".to_string());
+        }
+
+        let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+        let status = gpu_client.status().await;
+        let should_try_gpu = mode == "gpu" || status.gpu_available != Some(false);
+
+        if should_try_gpu {
+            match gpu_client
+                .transcribe(app, model_path, audio_path, language, translate, &mode)
+                .await
+            {
+                Ok(text) => {
+                    log::info!("Whisper transcription completed with Vulkan sidecar");
+                    return Ok(text);
+                }
+                Err(error) => {
+                    preserve_gpu_status = true;
+                    log::warn!(
+                        "Whisper Vulkan sidecar unavailable in {} mode; falling back to CPU: {}",
+                        mode,
+                        error
+                    );
+                    if mode == "gpu" {
+                        pill_toast(
+                            app,
+                            "GPU acceleration is unavailable. Using CPU mode for this transcription.",
+                            4000,
+                        );
+                    }
+                }
+            }
+        } else {
+            preserve_gpu_status = true;
+            log::info!("Skipping Vulkan sidecar in auto mode after previous GPU failure");
+        }
+    }
+
+    let transcriber = {
+        let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
+        let mut cache = cache_state.lock().await;
+        cache.get_or_create(model_path)?
+    };
+
+    let result =
+        transcriber.transcribe_with_cancellation(audio_path, language, translate, should_cancel);
+
+    #[cfg(target_os = "windows")]
+    {
+        // If Vulkan failed or was skipped after a previous failure, keep that GPU status visible
+        // instead of overwriting it with "CPU" after fallback transcription succeeds.
+        if result.is_ok() && !preserve_gpu_status {
+            let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+            gpu_client
+                .set_cpu_status(&mode, "Last transcription used CPU mode.")
+                .await;
+        }
+    }
+
+    result
+}
+
 /// Returns true if pill should be hidden, false if it should stay visible.
 /// Called when transitioning to idle state (after recording ends).
 /// - "never" → always hide (return true)
@@ -1780,28 +1866,6 @@ pub async fn stop_recording(
 
         let transcription_result: Result<String, String> = match &engine_selection_for_task {
             ActiveEngineSelection::Whisper { model_path, .. } => {
-                let transcriber = {
-                    let cache_state = app_for_task.state::<AsyncMutex<TranscriberCache>>();
-                    let mut cache = cache_state.lock().await;
-                    match cache.get_or_create(model_path) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            update_recording_state(
-                                &app_for_task,
-                                RecordingState::Error,
-                                Some(e.clone()),
-                            );
-                            if should_hide_pill(&app_for_task).await {
-                                let _ =
-                                    crate::commands::window::hide_pill_widget(app_for_task.clone())
-                                        .await;
-                            }
-                            pill_toast(&app_for_task, &e, 1500);
-                            return;
-                        }
-                    }
-                };
-
                 const MAX_RETRIES: u32 = 3;
                 const RETRY_DELAY_MS: u64 = 500;
 
@@ -1814,12 +1878,15 @@ pub async fn stop_recording(
                         break;
                     }
 
-                    result = transcriber.transcribe_with_cancellation(
+                    result = transcribe_whisper_with_acceleration(
+                        &app_for_task,
+                        model_path,
                         &audio_path_clone,
                         language_for_task.as_deref(),
                         translate_to_english,
                         || app_state.is_cancellation_requested(),
-                    );
+                    )
+                    .await;
 
                     match &result {
                         Ok(_) => {
@@ -2496,17 +2563,15 @@ pub async fn transcribe_audio_file(
                 out_path
             };
             log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_path);
-            let transcriber = {
-                let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
-                let mut cache = cache_state.lock().await;
-                cache.get_or_create(&model_path)?
-            };
-
-            let result = transcriber.transcribe_with_translation(
+            let result = transcribe_whisper_with_acceleration(
+                &app,
+                &model_path,
                 &normalized_path,
                 Some(&language),
                 translate_to_english,
-            )?;
+                || false,
+            )
+            .await?;
             let _ = std::fs::remove_file(&normalized_path);
             result
         }
@@ -2621,17 +2686,15 @@ pub async fn transcribe_audio(
 
     let text = match engine_selection {
         ActiveEngineSelection::Whisper { model_path, .. } => {
-            let transcriber = {
-                let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
-                let mut cache = cache_state.lock().await;
-                cache.get_or_create(&model_path)?
-            };
-
-            transcriber.transcribe_with_translation(
+            transcribe_whisper_with_acceleration(
+                &app,
+                &model_path,
                 &temp_path,
                 Some(language.as_str()),
                 translate_to_english,
-            )?
+                || false,
+            )
+            .await?
         }
         ActiveEngineSelection::Parakeet { model_name } => {
             let parakeet_manager = app.state::<ParakeetManager>();

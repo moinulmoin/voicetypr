@@ -73,6 +73,16 @@ describe('buildReportBody', () => {
     expect(body).toContain('INFO redacted log line');
   });
 
+  it('includes additional diagnostics when diagnostic context is provided', () => {
+    const body = buildReportBody({
+      ...baseReport,
+      diagnosticContext: 'Configured Hotkey: Cmd+Shift+Space\nRegistration Status: registered',
+    });
+
+    expect(body).toContain('## Additional Diagnostics');
+    expect(body).toContain('Configured Hotkey: Cmd+Shift+Space');
+    expect(body).toContain('Registration Status: registered');
+  });
 
   it('labels latest log status notes without log content', () => {
     const body = buildReportBody({
@@ -86,7 +96,6 @@ describe('buildReportBody', () => {
     expect(body).toContain('> No log file found.');
   });
 });
-
 
 describe('report submission payloads', () => {
   it('builds the manual report endpoint payload', () => {
@@ -109,6 +118,23 @@ describe('report submission payloads', () => {
         statusNote: '',
       },
     });
+  });
+
+  it('preserves diagnostics in the manual message for the current support endpoint', () => {
+    const payload = buildManualReportPayload({
+      ...baseReport,
+      diagnosticContext: 'Configured Hotkey: Cmd+Shift+Space',
+    });
+
+    expect(payload).toMatchObject({
+      kind: 'manual',
+      message: expect.stringContaining('The app failed after recording.'),
+    });
+    expect(payload).not.toHaveProperty('additionalDiagnostics');
+    if (payload.kind === 'manual') {
+      expect(payload.message).toContain('## Additional Diagnostics');
+      expect(payload.message).toContain('Configured Hotkey: Cmd+Shift+Space');
+    }
   });
 
   it('builds the crash report endpoint payload', () => {

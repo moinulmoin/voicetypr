@@ -20,13 +20,21 @@ import {
   type ManualReportData,
 } from '@/utils/crashReport';
 import { useSettings } from '@/contexts/SettingsContext';
+import { cn } from '@/lib/utils';
 
 interface ReportBugDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  initialMessage?: string;
+  diagnosticContext?: string;
 }
 
-export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
+export function ReportBugDialog({
+  isOpen,
+  onClose,
+  initialMessage,
+  diagnosticContext,
+}: ReportBugDialogProps) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');
@@ -106,8 +114,11 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
     if (isOpen) {
       actionIdRef.current += 1;
       resetForm();
+      if (initialMessage) {
+        setMessage(initialMessage);
+      }
     }
-  }, [isOpen, resetForm]);
+  }, [isOpen, resetForm, initialMessage]);
 
   const buildAndGather = async (actionId: number): Promise<ManualReportData | null> => {
     resetSubmitFallback();
@@ -117,7 +128,8 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
         name.trim() || undefined,
         email.trim() || undefined,
         message.trim(),
-        settings?.current_model || null
+        settings?.current_model || null,
+        diagnosticContext
       );
 
       return actionId === actionIdRef.current ? data : null;
@@ -187,7 +199,7 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Bug className="h-5 w-5" />
@@ -263,7 +275,10 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
               aria-required="true"
               aria-invalid={Boolean(messageError)}
               aria-describedby={messageError ? 'report-message-error' : undefined}
-              className={messageError ? 'border-destructive' : ''}
+              className={cn(
+                'field-sizing-fixed max-h-48 overflow-y-auto',
+                messageError && 'border-destructive'
+              )}
             />
             {messageError && (
               <p id="report-message-error" role="alert" className="text-xs text-destructive">
@@ -276,6 +291,7 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
             <p className="text-xs text-muted-foreground">
               <strong>What is included:</strong> Your message, optional contact info,
               system info (app version, OS, architecture, model, anonymous device ID),
+              {diagnosticContext ? ' additional diagnostics,' : ''}
               and the latest app log excerpt.
             </p>
           </div>

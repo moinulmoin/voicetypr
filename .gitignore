@@ -16,6 +16,8 @@ node_modules
 dist
 dist-ssr
 *.local
+# Ignore Cargo build outputs at repo root and sidecar/*/target.
+target/
 .env
 .env.local
 .env.production
