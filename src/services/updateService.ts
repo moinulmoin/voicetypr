@@ -155,7 +155,6 @@ export class UpdateService {
   }
 
   /**
-  /**
    * Check for updates in the background.
    * If an update is available, ask the user before downloading or installing.
    * Runs on startup and daily when automatic update checks are enabled.

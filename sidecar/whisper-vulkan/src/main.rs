@@ -228,7 +228,7 @@ fn transcribe_with_context(
 
     let mut params = FullParams::new(SamplingStrategy::BeamSearch {
         beam_size: 5,
-        patience: -1.0,
+        patience: -1.0, // whisper.cpp sentinel: use the default beam-search patience.
     });
 
     let final_language = match language {
@@ -242,7 +242,7 @@ fn transcribe_with_context(
         .map(|n| n.get())
         .unwrap_or(4);
     params.set_n_threads(std::cmp::max(1, hw.saturating_sub(1)) as i32);
-    params.set_no_context(false);
+    params.set_no_context(false); // Match the main transcriber; each request creates a fresh WhisperState.
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);

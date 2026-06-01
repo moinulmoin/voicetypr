@@ -163,6 +163,8 @@ where
 
     #[cfg(target_os = "windows")]
     {
+        // If Vulkan failed or was skipped after a previous failure, keep that GPU status visible
+        // instead of overwriting it with "CPU" after fallback transcription succeeds.
         if result.is_ok() && !preserve_gpu_status {
             let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
             gpu_client

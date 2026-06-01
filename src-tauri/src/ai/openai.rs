@@ -21,10 +21,7 @@ pub(crate) fn model_uses_max_completion_tokens(model: &str) -> bool {
         || normalized.starts_with("o4")
 }
 
-pub(crate) fn is_unsupported_token_parameter_error(
-    error_text: &str,
-    parameter_name: &str,
-) -> bool {
+pub(crate) fn is_unsupported_token_parameter_error(error_text: &str, parameter_name: &str) -> bool {
     let haystack = error_text.to_ascii_lowercase();
     let parameter = parameter_name.to_ascii_lowercase();
     let unsupported_single = format!("unsupported parameter: '{}'", parameter);
@@ -391,7 +388,10 @@ mod tests {
     fn test_unsupported_token_parameter_error_detection() {
         let error = "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.";
         assert!(is_unsupported_token_parameter_error(error, "max_tokens"));
-        assert!(!is_unsupported_token_parameter_error(error, "max_completion_tokens"));
+        assert!(!is_unsupported_token_parameter_error(
+            error,
+            "max_completion_tokens"
+        ));
     }
 
     #[test]

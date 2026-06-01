@@ -97,6 +97,10 @@ if (-not $SkipBuild) {
     if ([string]::IsNullOrWhiteSpace($vulkanVersion)) {
         $vulkanVersion = Split-Path -Leaf $env:VULKAN_SDK
     }
+    if ([string]::IsNullOrWhiteSpace($vulkanVersion)) {
+        Write-Error "Cannot determine Vulkan version. Set VULKAN_RUNTIME_VERSION, VULKAN_VERSION, or VULKAN_SDK."
+        exit 1
+    }
     $vulkanRuntimeUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanRT-$vulkanVersion-Installer.exe"
     Invoke-WebRequest -Uri $vulkanRuntimeUrl -OutFile "$runtimeDir\VulkanRT-Installer.exe"
 
