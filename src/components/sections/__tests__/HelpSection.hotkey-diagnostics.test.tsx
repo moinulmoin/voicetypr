@@ -381,15 +381,18 @@ describe('HelpSection diagnostics flows', () => {
   });
 
   it('reports when the shortcut event arrives but recording never starts', async () => {
-    let hotkeyDiagCall = 0;
+    let testingStarted = false;
+    let diagnosticsAfterTestStart = 0;
 
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === 'get_device_id') {
         return Promise.resolve('device-1');
       }
       if (cmd === 'get_hotkey_diagnostics') {
-        hotkeyDiagCall += 1;
-        const detected = hotkeyDiagCall >= 3;
+        if (testingStarted) {
+          diagnosticsAfterTestStart += 1;
+        }
+        const detected = diagnosticsAfterTestStart >= 2;
         return Promise.resolve({
           ...baseHotkeyDiag,
           eventCount: detected ? 1 : 0,
@@ -401,6 +404,7 @@ describe('HelpSection diagnostics flows', () => {
 
     await renderHelpSection();
 
+    testingStarted = true;
     fireEvent.click(screen.getByRole('button', { name: /test hotkey/i }));
 
     await waitFor(
