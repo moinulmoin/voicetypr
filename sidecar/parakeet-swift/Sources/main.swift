@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import FluidAudio
 
 // Helper function to log to stderr (so it doesn't interfere with JSON on stdout)
@@ -19,6 +20,30 @@ func getArchitectureInfo() -> String {
 }
 
 // Log system information for debugging
+// FluidAudio/CoreML can write diagnostics directly to stdout from native code.
+// Stdout is our line-delimited JSON protocol, so run library calls with stdout
+// temporarily redirected to stderr and restore it before sending responses.
+func withLibraryStdoutRedirected<T>(_ operation: () async throws -> T) async throws -> T {
+    fflush(stdout)
+    let savedStdout = dup(STDOUT_FILENO)
+    guard savedStdout >= 0 else {
+        return try await operation()
+    }
+
+    if dup2(STDERR_FILENO, STDOUT_FILENO) < 0 {
+        close(savedStdout)
+        return try await operation()
+    }
+
+    defer {
+        fflush(stdout)
+        dup2(savedStdout, STDOUT_FILENO)
+        close(savedStdout)
+    }
+
+    return try await operation()
+}
+
 func logSystemInfo() {
     log("🦜 Parakeet sidecar started")
     log("   Architecture: \(getArchitectureInfo())")
@@ -221,13 +246,17 @@ struct ParakeetSidecar {
             if forceDownload {
                 log("📥 Force-downloading Parakeet \(version.rawValue.uppercased()) via FluidAudio...")
                 log("🌐 This will download ~500MB. Please wait...")
-                models = try await AsrModels.downloadAndLoad(version: version.asrVersion)
+                models = try await withLibraryStdoutRedirected {
+                    try await AsrModels.downloadAndLoad(version: version.asrVersion)
+                }
                 downloadedVersions.insert(version)
                 log("✅ Download complete for \(version.rawValue.uppercased())")
             } else {
                 log("🔍 Attempting to load Parakeet \(version.rawValue.uppercased()) from cache...")
                 do {
-                    models = try await AsrModels.loadFromCache(version: version.asrVersion)
+                    models = try await withLibraryStdoutRedirected {
+                        try await AsrModels.loadFromCache(version: version.asrVersion)
+                    }
                     downloadedVersions.insert(version)
                     log("✅ Loaded Parakeet \(version.rawValue.uppercased()) from cache")
                 } catch {
@@ -243,7 +272,9 @@ struct ParakeetSidecar {
             log("🔧 Initializing AsrManager...")
             let manager = AsrManager(config: .default)
             log("🔧 Calling manager.initialize(models:)...")
-            try await manager.initialize(models: models)
+            try await withLibraryStdoutRedirected {
+                try await manager.initialize(models: models)
+            }
             log("✅ AsrManager initialized successfully")
             asrManager = manager
 
@@ -345,7 +376,9 @@ struct ParakeetSidecar {
             let startTime = Date()
 
             // Transcribe the audio file (returns ASRResult)
-            let result = try await manager.transcribe(fileURL)
+            let result = try await withLibraryStdoutRedirected {
+                try await manager.transcribe(fileURL)
+            }
 
             let elapsed = Date().timeIntervalSince(startTime)
             log("✅ Transcription complete in \(String(format: "%.2f", elapsed))s")
