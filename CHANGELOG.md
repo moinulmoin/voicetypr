@@ -1,3 +1,19 @@
+## [1.12.4](https://github.com/moinulmoin/voicetypr/compare/v1.12.3...v1.12.4) (2026-06-01)
+
+### Features
+
+* **ai:** restore the native Anthropic provider with current model aliases and recommended-model metadata ([9c5e224](https://github.com/moinulmoin/voicetypr/commit/9c5e224), [38a9c19](https://github.com/moinulmoin/voicetypr/commit/38a9c19))
+
+### Bug Fixes
+
+* **windows:** isolate Vulkan Whisper acceleration in a sidecar so the main app stays CPU-safe on machines without Vulkan drivers ([e08b8c8](https://github.com/moinulmoin/voicetypr/commit/e08b8c8))
+* **updater:** require user confirmation or explicit automatic-update opt-in before downloading and installing updates ([e08b8c8](https://github.com/moinulmoin/voicetypr/commit/e08b8c8))
+* **windows:** use basic UI installer mode so updater elevation can show the UAC prompt correctly ([e08b8c8](https://github.com/moinulmoin/voicetypr/commit/e08b8c8))
+* **recording:** prevent duplicate push-to-talk press events from starting overlapping recording flows ([e08b8c8](https://github.com/moinulmoin/voicetypr/commit/e08b8c8))
+* **support:** add hotkey diagnostics and report context for shortcut-registration and event-delivery failures ([e08b8c8](https://github.com/moinulmoin/voicetypr/commit/e08b8c8), [a0c1688](https://github.com/moinulmoin/voicetypr/commit/a0c1688))
+* **macos:** keep Parakeet sidecar stdout reserved for JSON so CoreML diagnostics cannot break model autoload responses ([741f032](https://github.com/moinulmoin/voicetypr/commit/741f032))
+
+
 ## [1.12.3](https://github.com/moinulmoin/voicetypr/compare/v1.12.2...v1.12.3) (2026-04-29)
 
 ### Features
