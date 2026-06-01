@@ -222,6 +222,42 @@ describe('HelpSection diagnostics flows', () => {
     });
   });
 
+  it('shows accessibility readiness issue before shortcut details', async () => {
+    mockCanAutoInsert = false;
+    mockReadinessSnapshot = {
+      has_accessibility_permission: false,
+      has_microphone_permission: true,
+      has_models: true,
+      selected_model_available: true,
+    };
+
+    await renderHelpSection();
+
+    await waitFor(() => {
+      expect(screen.getByText('Needs attention')).toBeInTheDocument();
+      expect(screen.getByText('Accessibility permission is missing')).toBeInTheDocument();
+    });
+  });
+
+  it('shows shortcut diagnostics unavailable when initial hotkey diagnostics fail to load', async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'get_device_id') {
+        return Promise.resolve('device-1');
+      }
+      if (cmd === 'get_hotkey_diagnostics') {
+        return Promise.reject(new Error('diagnostics unavailable'));
+      }
+      return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
+    });
+
+    await renderHelpSection();
+
+    await waitFor(() => {
+      expect(screen.getByText('Needs attention')).toBeInTheDocument();
+      expect(screen.getByText('Shortcut diagnostics could not be loaded')).toBeInTheDocument();
+    });
+  });
+
   it('shows generic attention summary when registration failed', async () => {
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === 'get_device_id') {
