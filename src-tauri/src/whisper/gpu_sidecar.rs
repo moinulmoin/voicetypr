@@ -92,14 +92,14 @@ enum SidecarResponse {
         id: u64,
         ok: bool,
         backend: String,
-        load_time_ms: u128,
+        load_time_ms: u64,
     },
     Transcription {
         id: u64,
         ok: bool,
         backend: String,
         text: String,
-        inference_time_ms: u128,
+        inference_time_ms: u64,
     },
     Shutdown {
         id: u64,
@@ -556,7 +556,7 @@ fn dev_sidecar_cwd() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        sidecar_search_dirs, transcription_timeout_for_duration, SidecarRequest,
+        sidecar_search_dirs, transcription_timeout_for_duration, SidecarRequest, SidecarResponse,
         CONTROL_REQUEST_TIMEOUT, DEFAULT_TRANSCRIPTION_TIMEOUT, MAX_TRANSCRIPTION_TIMEOUT_SECS,
         MIN_TRANSCRIPTION_TIMEOUT_SECS,
     };
@@ -607,5 +607,34 @@ mod tests {
             transcription_timeout_for_duration(600.0),
             std::time::Duration::from_secs(MAX_TRANSCRIPTION_TIMEOUT_SECS)
         );
+    }
+
+    #[test]
+    fn sidecar_timing_responses_deserialize_from_json_numbers() {
+        let probe = serde_json::from_str::<SidecarResponse>(
+            r#"{"type":"probe","id":7,"ok":true,"backend":"vulkan","load_time_ms":123}"#,
+        )
+        .expect("probe response should parse");
+        assert!(matches!(
+            probe,
+            SidecarResponse::Probe {
+                id: 7,
+                load_time_ms: 123,
+                ..
+            }
+        ));
+
+        let transcription = serde_json::from_str::<SidecarResponse>(
+            r#"{"type":"transcription","id":8,"ok":true,"backend":"vulkan","text":"hello","inference_time_ms":456}"#,
+        )
+        .expect("transcription response should parse");
+        assert!(matches!(
+            transcription,
+            SidecarResponse::Transcription {
+                id: 8,
+                inference_time_ms: 456,
+                ..
+            }
+        ));
     }
 }

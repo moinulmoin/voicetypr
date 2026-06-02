@@ -43,14 +43,14 @@ enum Response<'a> {
         id: u64,
         ok: bool,
         backend: &'a str,
-        load_time_ms: u128,
+        load_time_ms: u64,
     },
     Transcription {
         id: u64,
         ok: bool,
         backend: &'a str,
         text: String,
-        inference_time_ms: u128,
+        inference_time_ms: u64,
     },
     Shutdown {
         id: u64,
@@ -134,7 +134,7 @@ fn handle_request<'a>(request: Request, cache: &'a mut Option<CachedContext>) ->
                     id,
                     ok: true,
                     backend: "vulkan",
-                    load_time_ms: started.elapsed().as_millis(),
+                    load_time_ms: elapsed_millis_u64(started),
                 },
                 Err(message) => Response::Error {
                     id,
@@ -170,7 +170,7 @@ fn handle_request<'a>(request: Request, cache: &'a mut Option<CachedContext>) ->
                         ok: true,
                         backend: "vulkan",
                         text,
-                        inference_time_ms: started.elapsed().as_millis(),
+                        inference_time_ms: elapsed_millis_u64(started),
                     },
                     Err(message) => Response::Error {
                         id,
@@ -351,6 +351,43 @@ fn resample_to_16khz(audio: &[f32], sample_rate: u32) -> Result<Vec<f32>, String
     output.truncate(output_frames);
 
     Ok(output)
+}
+
+fn elapsed_millis_u64(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Response;
+
+    #[test]
+    fn timing_responses_serialize_as_json_numbers() {
+        let probe = serde_json::to_string(&Response::Probe {
+            id: 7,
+            ok: true,
+            backend: "vulkan",
+            load_time_ms: 123,
+        })
+        .expect("probe response should serialize");
+        assert_eq!(
+            probe,
+            r#"{"type":"probe","id":7,"ok":true,"backend":"vulkan","load_time_ms":123}"#
+        );
+
+        let transcription = serde_json::to_string(&Response::Transcription {
+            id: 8,
+            ok: true,
+            backend: "vulkan",
+            text: "hello".to_string(),
+            inference_time_ms: 456,
+        })
+        .expect("transcription response should serialize");
+        assert_eq!(
+            transcription,
+            r#"{"type":"transcription","id":8,"ok":true,"backend":"vulkan","text":"hello","inference_time_ms":456}"#
+        );
+    }
 }
 
 fn write_response(stdout: &mut io::Stdout, response: &Response<'_>) -> io::Result<()> {
