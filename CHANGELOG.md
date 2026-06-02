@@ -1,3 +1,10 @@
+## [1.12.5](https://github.com/moinulmoin/voicetypr/compare/v1.12.4...v1.12.5) (2026-06-02)
+
+### Bug Fixes
+
+* **windows:** fix Vulkan sidecar timing fields so successful GPU responses parse instead of falling back to slow CPU mode ([fb83d1b](https://github.com/moinulmoin/voicetypr/commit/fb83d1b))
+
+
 ## [1.12.4](https://github.com/moinulmoin/voicetypr/compare/v1.12.3...v1.12.4) (2026-06-01)
 
 ### Features
