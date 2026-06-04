@@ -1,0 +1,91 @@
+name: Store MSIX
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/store-msix.yml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'scripts/build-msix-store.ps1'
+      - 'scripts/ensure-ffmpeg-sidecar.cjs'
+      - 'src-tauri/**'
+      - 'sidecar/ffmpeg/**'
+      - 'sidecar/whisper-vulkan/**'
+      - 'src/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-store-msix:
+    name: Build Store MSIX
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_TARGET_DIR: 'D:\cargo-target'
+      RUST_BACKTRACE: 1
+      VULKAN_RUNTIME_VERSION: 1.3.290.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10.13.1
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup WinApp CLI
+        uses: microsoft/setup-WinAppCli@v0.1
+
+      - name: Prepare cargo target dir
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path $env:CARGO_TARGET_DIR | Out-Null
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri
+            sidecar/whisper-vulkan
+
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.3.290.0
+          install_runtime: true
+          cache: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify WinApp CLI
+        shell: pwsh
+        run: winapp --help
+
+      - name: Build and pack Store MSIX
+        shell: pwsh
+        run: pnpm windows:store:msix
+
+      - name: Assert CPU build does not import vulkan-1.dll
+        shell: pwsh
+        run: |
+          & ./src-tauri/windows/assert-no-vulkan-import.ps1 -ExePath "$env:CARGO_TARGET_DIR\release\voicetypr.exe"
+
+      - name: Upload Store MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: store-msix-windows-x64
+          path: |
+            target/store-msix/*.msix
+            target/store-msix/stage/Package.appxmanifest
+          retention-days: 7

@@ -10,6 +10,12 @@ const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const LAST_UPDATE_CHECK_KEY = 'last_update_check';
 const JUST_UPDATED_KEY = 'just_updated_version';
 
+type DistributionInfo = {
+  channel: 'direct' | 'store_msix';
+  is_store_install: boolean;
+  package_family_name: string | null;
+};
+
 export class UpdateService {
   private static instance: UpdateService;
   private checkInProgress = false;
@@ -18,6 +24,7 @@ export class UpdateService {
   private pendingRelaunch = false;
   private pendingUpdateVersion: string | null = null;
   private installUpdatesAutomatically = false;
+  private distributionInfo: DistributionInfo | null = null;
 
   private constructor() {}
 
@@ -40,6 +47,11 @@ export class UpdateService {
    * Perform relaunch with backend verification and error handling
    */
   private async performRelaunch(): Promise<void> {
+    if (await this.usesStoreUpdates()) {
+      console.log('Skipping direct updater relaunch for Microsoft Store install');
+      return;
+    }
+
     // Final safety check: verify with backend that no session is active
     try {
       const currentState = await invoke<{ state: string }>('get_current_recording_state');
@@ -76,6 +88,13 @@ export class UpdateService {
    * Returns null if no marker exists.
    */
   getJustUpdatedVersion(): string | null {
+    const usesStoreUpdates = this.distributionInfo?.is_store_install
+      || this.distributionInfo?.channel === 'store_msix';
+    if (usesStoreUpdates) {
+      localStorage.removeItem(JUST_UPDATED_KEY);
+      return null;
+    }
+
     const version = localStorage.getItem(JUST_UPDATED_KEY);
     if (version) {
       localStorage.removeItem(JUST_UPDATED_KEY);
@@ -90,13 +109,40 @@ export class UpdateService {
     return UpdateService.instance;
   }
 
+  private async getDistributionInfo(): Promise<DistributionInfo> {
+    if (this.distributionInfo) {
+      return this.distributionInfo;
+    }
+
+    try {
+      this.distributionInfo = await invoke<DistributionInfo>('get_distribution_info');
+    } catch (error) {
+      console.error('Failed to read distribution info, assuming direct install:', error);
+      this.distributionInfo = {
+        channel: 'direct',
+        is_store_install: false,
+        package_family_name: null,
+      };
+    }
+
+    return this.distributionInfo;
+  }
+
+  private async usesStoreUpdates(): Promise<boolean> {
+    const info = await this.getDistributionInfo();
+    return info.is_store_install || info.channel === 'store_msix';
+  }
+
   /**
    * Initialize the update service
    * - Checks for updates on startup if enabled
    * - Never downloads or installs an update until the user confirms
    */
   async initialize(settings: AppSettings): Promise<void> {
-    // Check for updates automatically by default, but only install automatically after explicit opt-in.
+    if (await this.usesStoreUpdates()) {
+      console.log('Microsoft Store install detected; updates are handled by the Store');
+      return;
+    }
     const autoUpdateEnabled = settings.check_updates_automatically ?? true;
     this.installUpdatesAutomatically = settings.install_updates_automatically ?? false;
 
@@ -116,6 +162,10 @@ export class UpdateService {
    * Request notification permission (call after onboarding)
    */
   async requestNotificationPermission(): Promise<boolean> {
+    if (await this.usesStoreUpdates()) {
+      return false;
+    }
+
     try {
       let permitted = await isPermissionGranted();
       if (!permitted) {
@@ -164,7 +214,10 @@ export class UpdateService {
       console.log('Update check already in progress');
       return;
     }
-
+    if (await this.usesStoreUpdates()) {
+      console.log('Skipping direct update check for Microsoft Store install');
+      return;
+    }
     try {
       this.checkInProgress = true;
       // Check if we should skip based on last check time
@@ -203,7 +256,10 @@ export class UpdateService {
       toast.info('Update check already in progress');
       return;
     }
-
+    if (await this.usesStoreUpdates()) {
+      toast.info('Updates are handled by Microsoft Store');
+      return;
+    }
     try {
       this.checkInProgress = true;
       toast.info('Checking for updates...');

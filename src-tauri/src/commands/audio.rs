@@ -104,6 +104,8 @@ async fn transcribe_whisper_with_acceleration(
         let settings = get_settings(app.clone()).await?;
         normalize_transcription_acceleration(Some(&settings.transcription_acceleration))
     };
+    #[cfg(target_os = "windows")]
+    log::info!("Transcription acceleration mode: {}", mode);
 
     #[cfg(target_os = "windows")]
     let mut preserve_gpu_status = false;
@@ -117,6 +119,12 @@ async fn transcribe_whisper_with_acceleration(
         let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
         let status = gpu_client.status().await;
         let should_try_gpu = mode == "gpu" || status.gpu_available != Some(false);
+        log::info!(
+            "Transcription acceleration decision: mode={}, gpu_available={:?}, should_try_gpu={}",
+            mode,
+            status.gpu_available,
+            should_try_gpu
+        );
 
         if should_try_gpu {
             let gpu_result = tokio::select! {

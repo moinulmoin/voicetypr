@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { ask } from '@tauri-apps/plugin-dialog';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check, type Update } from '@tauri-apps/plugin-updater';
+import { toast } from 'sonner';
 
 // Mock Tauri plugins before importing the module under test
 vi.mock('@tauri-apps/plugin-updater', () => ({
@@ -55,12 +56,31 @@ function createAvailableUpdate(): TestUpdate {
     downloadAndInstall: vi.fn().mockResolvedValue(undefined),
   } as unknown as TestUpdate;
 }
+
+function mockDirectDistribution(): void {
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === 'get_distribution_info') {
+      return {
+        channel: 'direct',
+        is_store_install: false,
+        package_family_name: null,
+      };
+    }
+
+    if (command === 'get_current_recording_state') {
+      return { state: 'idle' };
+    }
+
+    return undefined;
+  });
+}
 describe('UpdateService version marker', () => {
   let service: UpdateService;
 
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    mockDirectDistribution();
     // Get a fresh instance per test to reset internal state
     // @ts-expect-error accessing private static for test isolation
     UpdateService.instance = undefined;
@@ -139,7 +159,6 @@ describe('UpdateService version marker', () => {
     const update = createAvailableUpdate();
     vi.mocked(check).mockResolvedValue(update);
     vi.mocked(ask).mockResolvedValue(true);
-    vi.mocked(invoke).mockResolvedValue({ state: 'idle' });
     vi.mocked(relaunch).mockResolvedValue(undefined);
 
     await service.checkForUpdatesInBackground();
@@ -158,6 +177,7 @@ describe('UpdateService update consent', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    mockDirectDistribution();
     // @ts-expect-error accessing private static for test isolation
     UpdateService.instance = undefined;
     service = UpdateService.getInstance();
@@ -173,7 +193,6 @@ describe('UpdateService update consent', () => {
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as Update;
     vi.mocked(check).mockResolvedValue(update);
-    vi.mocked(invoke).mockResolvedValue({ state: 'idle' });
   });
 
   it('prompts on startup but does not download when user declines', async () => {
@@ -221,5 +240,37 @@ describe('UpdateService update consent', () => {
     expect(ask).toHaveBeenCalled();
     expect(downloadAndInstall).toHaveBeenCalledOnce();
     expect(relaunch).toHaveBeenCalledOnce();
+  });
+
+  it('skips direct updater checks for Microsoft Store installs', async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'get_distribution_info') {
+        return {
+          channel: 'store_msix',
+          is_store_install: true,
+          package_family_name: 'Ideaplexa.VoiceTypr_12345',
+        };
+      }
+
+      return { state: 'idle' };
+    });
+
+    await service.initialize({
+      hotkey: 'CommandOrControl+Shift+Space',
+      current_model: 'base.en',
+      language: 'en',
+      theme: 'system',
+    });
+
+    expect(check).not.toHaveBeenCalled();
+
+    await service.checkForUpdatesManually();
+
+    expect(check).not.toHaveBeenCalled();
+    expect(toast.info).toHaveBeenCalledWith('Updates are handled by Microsoft Store');
+
+    localStorage.setItem(JUST_UPDATED_KEY, '1.12.5');
+    expect(service.getJustUpdatedVersion()).toBeNull();
+    expect(localStorage.getItem(JUST_UPDATED_KEY)).toBeNull();
   });
 });

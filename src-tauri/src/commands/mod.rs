@@ -3,6 +3,7 @@ pub mod audio;
 pub mod clipboard;
 pub mod debug;
 pub mod device;
+pub mod distribution;
 pub mod key_normalizer;
 pub mod keyring;
 pub mod license;
