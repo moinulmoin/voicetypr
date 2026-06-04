@@ -12,6 +12,11 @@ pub enum ParakeetError {
     SidecarError { code: String, message: String },
     #[error("sidecar terminated unexpectedly")]
     Terminated,
+    #[error("parakeet {operation} timed out after {timeout_secs}s")]
+    Timeout {
+        operation: String,
+        timeout_secs: u64,
+    },
     #[error("invalid transcription response payload")]
     InvalidResponse,
     #[error("{0}")]

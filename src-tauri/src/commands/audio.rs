@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
@@ -22,7 +22,7 @@ use once_cell::sync::Lazy;
 use serde_json;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -91,17 +91,14 @@ fn should_hide_pill_when_idle(mode: &str) -> bool {
     mode != "always"
 }
 
-async fn transcribe_whisper_with_acceleration<F>(
+async fn transcribe_whisper_with_acceleration(
     app: &AppHandle,
     model_path: &Path,
     audio_path: &Path,
     language: Option<&str>,
     translate: bool,
-    should_cancel: F,
-) -> Result<String, String>
-where
-    F: Fn() -> bool,
-{
+    cancel_flag: Arc<AtomicBool>,
+) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     let mode = {
         let settings = get_settings(app.clone()).await?;
@@ -113,7 +110,7 @@ where
 
     #[cfg(target_os = "windows")]
     if mode != "cpu" {
-        if should_cancel() {
+        if is_cancelled(&cancel_flag) {
             return Err("Transcription cancelled".to_string());
         }
 
@@ -122,13 +119,29 @@ where
         let should_try_gpu = mode == "gpu" || status.gpu_available != Some(false);
 
         if should_try_gpu {
-            match gpu_client
-                .transcribe(app, model_path, audio_path, language, translate, &mode)
-                .await
-            {
+            let gpu_result = tokio::select! {
+                result = gpu_client.transcribe(
+                    app,
+                    model_path,
+                    audio_path,
+                    language,
+                    translate,
+                    &mode,
+                ) => result,
+                _ = wait_for_cancellation(cancel_flag.clone()) => {
+                    Err("Transcription cancelled".to_string())
+                }
+            };
+
+            match gpu_result {
                 Ok(text) => {
                     log::info!("Whisper transcription completed with Vulkan sidecar");
                     return Ok(text);
+                }
+                Err(error) if error == "Transcription cancelled" => {
+                    log::info!("Cancelling in-flight Whisper Vulkan sidecar transcription");
+                    gpu_client.abort_active_process().await;
+                    return Err(error);
                 }
                 Err(error) => {
                     preserve_gpu_status = true;
@@ -159,7 +172,7 @@ where
     };
 
     let result =
-        transcriber.transcribe_with_cancellation(audio_path, language, translate, should_cancel);
+        transcriber.transcribe_with_cancellation(audio_path, language, translate, cancel_flag);
 
     #[cfg(target_os = "windows")]
     {
@@ -221,7 +234,10 @@ pub async fn should_hide_pill(app: &AppHandle) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::should_hide_pill_when_idle;
+    use super::{
+        is_likely_silence, select_best_fallback_model, should_hide_pill_when_idle,
+        NormalizedAudioStats,
+    };
 
     #[test]
     fn should_hide_pill_when_idle_for_never() {
@@ -236,6 +252,31 @@ mod tests {
     #[test]
     fn should_hide_pill_when_idle_for_always() {
         assert!(!should_hide_pill_when_idle("always"));
+    }
+
+    #[test]
+    fn select_best_fallback_uses_priority_within_requested_family() {
+        let available = vec!["large-v3".to_string(), "large-v3-q5_0".to_string()];
+        let priority = vec!["large-v3-q5_0".to_string(), "large-v3".to_string()];
+
+        assert_eq!(
+            select_best_fallback_model(&available, "large-v3-turbo", &priority),
+            "large-v3-q5_0"
+        );
+    }
+
+    #[test]
+    fn normalized_audio_silence_requires_low_rms_and_peak() {
+        assert!(is_likely_silence(NormalizedAudioStats {
+            duration_s: 2.0,
+            rms: 0.0,
+            peak: 0.0,
+        }));
+        assert!(!is_likely_silence(NormalizedAudioStats {
+            duration_s: 2.0,
+            rms: 0.01,
+            peak: 0.02,
+        }));
     }
 }
 
@@ -607,36 +648,135 @@ pub async fn get_recording_config(app: &AppHandle) -> Result<RecordingConfig, St
 // Global audio recorder state
 pub struct RecorderState(pub Mutex<AudioRecorder>);
 
-/// Select the best fallback model based on available models
-/// Prioritizes models by size (smaller to larger for better performance)
+/// Select the best fallback model based on the provided priority order.
 fn select_best_fallback_model(
     available_models: &[String],
     requested: &str,
     model_priority: &[String],
 ) -> String {
-    // First try to find a model similar to the requested one
     if !requested.is_empty() {
-        // If requested "large-v3", try other large variants first
-        for model in available_models {
-            if model.starts_with(requested.split('-').next().unwrap_or(requested)) {
-                return model.clone();
+        let requested_family = requested.split('-').next().unwrap_or(requested);
+        for priority_model in model_priority {
+            if available_models.contains(priority_model)
+                && priority_model.starts_with(requested_family)
+            {
+                return priority_model.clone();
             }
         }
     }
 
-    // Otherwise use priority order from WhisperManager
     for priority_model in model_priority {
         if available_models.contains(priority_model) {
             return priority_model.clone();
         }
     }
 
-    // If no priority model found, return first available
     available_models.first().cloned().unwrap_or_else(|| {
         log::error!("No models available for fallback selection");
-        // This should never happen as we check for empty models before calling this function
-        // But return a default to prevent panic
         "base.en".to_string()
+    })
+}
+
+async fn should_prefer_cpu_whisper_models(app: &AppHandle) -> bool {
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+    #[cfg(target_os = "windows")]
+    {
+        let mode = get_settings(app.clone())
+            .await
+            .map(|settings| {
+                normalize_transcription_acceleration(Some(&settings.transcription_acceleration))
+            })
+            .unwrap_or_else(|_| "auto".to_string());
+
+        if mode == "cpu" {
+            true
+        } else if mode == "gpu" {
+            false
+        } else {
+            let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+            gpu_client.status().await.gpu_available == Some(false)
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::env::consts::ARCH != "aarch64"
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        false
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NormalizedAudioStats {
+    duration_s: f32,
+    rms: f64,
+    peak: f64,
+}
+
+const SILENCE_RMS_THRESHOLD: f64 = 0.0005;
+const SILENCE_PEAK_THRESHOLD: f64 = 0.003;
+
+#[cfg(target_os = "windows")]
+fn is_cancelled(cancel_flag: &AtomicBool) -> bool {
+    cancel_flag.load(AtomicOrdering::SeqCst)
+}
+
+#[cfg(target_os = "windows")]
+async fn wait_for_cancellation(cancel_flag: Arc<AtomicBool>) {
+    while !is_cancelled(&cancel_flag) {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+fn is_likely_silence(stats: NormalizedAudioStats) -> bool {
+    stats.rms < SILENCE_RMS_THRESHOLD && stats.peak < SILENCE_PEAK_THRESHOLD
+}
+
+fn inspect_normalized_wav(path: &Path) -> Result<NormalizedAudioStats, String> {
+    let mut reader =
+        hound::WavReader::open(path).map_err(|e| format!("Failed to open normalized wav: {e}"))?;
+    let spec = reader.spec();
+    if spec.channels == 0 {
+        return Err("Normalized wav has zero channels".to_string());
+    }
+    if spec.sample_format != hound::SampleFormat::Int || spec.bits_per_sample != 16 {
+        return Err(format!(
+            "Normalized wav must be 16-bit PCM, got {:?}/{} bits",
+            spec.sample_format, spec.bits_per_sample
+        ));
+    }
+
+    let frames = reader.duration();
+    let duration_s = frames as f32 / spec.sample_rate as f32;
+    let mut sum_squares = 0.0f64;
+    let mut peak = 0.0f64;
+    let mut samples = 0u64;
+
+    for sample in reader.samples::<i16>() {
+        let value =
+            f64::from(sample.map_err(|e| format!("Failed to read normalized wav: {e}"))?) / 32768.0;
+        let abs = value.abs();
+        sum_squares += value * value;
+        if abs > peak {
+            peak = abs;
+        }
+        samples += 1;
+    }
+
+    let rms = if samples == 0 {
+        0.0
+    } else {
+        (sum_squares / samples as f64).sqrt()
+    };
+
+    Ok(NormalizedAudioStats {
+        duration_s,
+        rms,
+        peak,
     })
 }
 
@@ -1633,11 +1773,24 @@ pub async fn stop_recording(
                     );
                     configured_model
                 } else {
-                    let models_by_size = whisper_manager.read().await.get_models_by_size();
+                    let prefer_cpu_models = should_prefer_cpu_whisper_models(&app).await;
+                    let strategy = if prefer_cpu_models {
+                        "cpu_preference"
+                    } else {
+                        "quality_preference"
+                    };
+                    let model_priority = {
+                        let manager = whisper_manager.read().await;
+                        if prefer_cpu_models {
+                            manager.get_models_by_cpu_preference()
+                        } else {
+                            manager.get_models_by_quality_preference()
+                        }
+                    };
                     let fallback_model = select_best_fallback_model(
                         &downloaded_models,
                         &configured_model,
-                        &models_by_size,
+                        &model_priority,
                     );
 
                     log_model_operation(
@@ -1651,6 +1804,7 @@ pub async fn stop_recording(
                                 "reason".to_string(),
                                 "configured_not_available".to_string(),
                             );
+                            ctx.insert("strategy".to_string(), strategy.to_string());
                             ctx
                         }),
                     );
@@ -1668,9 +1822,22 @@ pub async fn stop_recording(
                     fallback_model
                 }
             } else {
-                let models_by_size = whisper_manager.read().await.get_models_by_size();
+                let prefer_cpu_models = should_prefer_cpu_whisper_models(&app).await;
+                let strategy = if prefer_cpu_models {
+                    "cpu_preference"
+                } else {
+                    "quality_preference"
+                };
+                let model_priority = {
+                    let manager = whisper_manager.read().await;
+                    if prefer_cpu_models {
+                        manager.get_models_by_cpu_preference()
+                    } else {
+                        manager.get_models_by_quality_preference()
+                    }
+                };
                 let best_model =
-                    select_best_fallback_model(&downloaded_models, "", &models_by_size);
+                    select_best_fallback_model(&downloaded_models, "", &model_priority);
 
                 log_model_operation(
                     "AUTO_SELECTION",
@@ -1679,7 +1846,7 @@ pub async fn stop_recording(
                     Some(&{
                         let mut ctx = std::collections::HashMap::new();
                         ctx.insert("reason".to_string(), "no_model_configured".to_string());
-                        ctx.insert("strategy".to_string(), "best_available".to_string());
+                        ctx.insert("strategy".to_string(), strategy.to_string());
                         ctx
                     }),
                 );
@@ -1751,29 +1918,43 @@ pub async fn stop_recording(
                 }
             };
 
-            // Duration gate (mode-specific) using normalized file
-            let too_short = (|| -> Result<bool, String> {
-                let reader = hound::WavReader::open(&normalized_path)
-                    .map_err(|e| format!("Failed to open normalized wav: {}", e))?;
-                let spec = reader.spec();
-                let frames = reader.duration() / spec.channels as u32; // mono expected
-                let duration = frames as f32 / spec.sample_rate as f32;
-                log_with_context(
-                    log::Level::Info,
-                    "NORMALIZED_AUDIO",
-                    &[
-                        ("path", format!("{:?}", normalized_path).as_str()),
-                        ("sample_rate", spec.sample_rate.to_string().as_str()),
-                        ("channels", spec.channels.to_string().as_str()),
-                        ("bits", spec.bits_per_sample.to_string().as_str()),
-                        ("duration_s", format!("{:.2}", duration).as_str()),
-                    ],
-                );
-                Ok(duration < min_duration_s_f32)
-            })();
+            let audio_stats = match inspect_normalized_wav(&normalized_path) {
+                Ok(stats) => stats,
+                Err(e) => {
+                    log::error!("Audio inspection failed: {}", e);
+                    update_recording_state(
+                        &app,
+                        RecordingState::Error,
+                        Some("Audio inspection failed".to_string()),
+                    );
+                    let _ = std::fs::remove_file(&normalized_path);
+                    return Err(e);
+                }
+            };
 
-            if let Ok(true) = too_short {
-                // Emit friendly feedback and stop here
+            log_with_context(
+                log::Level::Info,
+                "NORMALIZED_AUDIO",
+                &[
+                    ("path", format!("{:?}", normalized_path).as_str()),
+                    ("sample_rate", "16000"),
+                    ("channels", "1"),
+                    ("bits", "16"),
+                    (
+                        "duration_s",
+                        format!("{:.2}", audio_stats.duration_s).as_str(),
+                    ),
+                ],
+            );
+            log_audio_metrics(
+                "NORMALIZED_AUDIO",
+                audio_stats.rms,
+                audio_stats.peak,
+                audio_stats.duration_s,
+                None,
+            );
+
+            if audio_stats.duration_s < min_duration_s_f32 {
                 let _ = emit_to_window(
                     &app,
                     "pill",
@@ -1783,7 +1964,32 @@ pub async fn stop_recording(
                 if let Err(e) = std::fs::remove_file(&normalized_path) {
                     log::debug!("Failed to remove short normalized audio: {}", e);
                 }
-                // Frontend will hide pill after showing feedback
+                update_recording_state(&app, RecordingState::Idle, None);
+                return Ok("".to_string());
+            }
+
+            if is_likely_silence(audio_stats) {
+                log::info!(
+                    "Normalized audio is below speech threshold: rms={:.6}, peak={:.6}",
+                    audio_stats.rms,
+                    audio_stats.peak
+                );
+                pill_toast(
+                    &app,
+                    "No speech detected - try speaking closer to the microphone",
+                    1500,
+                );
+                let _ = app.emit(
+                    "no-speech-detected",
+                    serde_json::json!({
+                        "severity": "warning",
+                        "title": "No Speech Detected",
+                        "message": "No speech was detected in the recording. Try speaking closer to the microphone.",
+                    }),
+                );
+                if let Err(e) = std::fs::remove_file(&normalized_path) {
+                    log::debug!("Failed to remove silent normalized audio: {}", e);
+                }
                 update_recording_state(&app, RecordingState::Idle, None);
                 return Ok("".to_string());
             }
@@ -1848,6 +2054,7 @@ pub async fn stop_recording(
 
         // Check for cancellation before loading model
         let app_state = app_for_task.state::<AppState>();
+        let cancel_flag = app_state.should_cancel_recording.clone();
         if app_state.is_cancellation_requested() {
             log::info!("Transcription cancelled before model loading");
 
@@ -1884,7 +2091,7 @@ pub async fn stop_recording(
                         &audio_path_clone,
                         language_for_task.as_deref(),
                         translate_to_english,
-                        || app_state.is_cancellation_requested(),
+                        cancel_flag.clone(),
                     )
                     .await;
 
@@ -2569,7 +2776,7 @@ pub async fn transcribe_audio_file(
                 &normalized_path,
                 Some(&language),
                 translate_to_english,
-                || false,
+                Arc::new(AtomicBool::new(false)),
             )
             .await?;
             let _ = std::fs::remove_file(&normalized_path);
@@ -2692,7 +2899,7 @@ pub async fn transcribe_audio(
                 &temp_path,
                 Some(language.as_str()),
                 translate_to_english,
-                || false,
+                Arc::new(AtomicBool::new(false)),
             )
             .await?
         }
@@ -2916,6 +3123,12 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
             log::info!("Aborting transcription task");
             task.abort();
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    if matches!(current_state, RecordingState::Transcribing) {
+        let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+        gpu_client.abort_active_process().await;
     }
 
     // Stop recording if active

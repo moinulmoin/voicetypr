@@ -71,6 +71,8 @@ mod tests {
         // Should have all the default models
         assert!(models.contains_key("base.en"));
         assert!(models.contains_key("large-v3"));
+        assert!(models.contains_key("large-v3-q5_0"));
+        assert!(models.contains_key("large-v3-turbo"));
 
         // All models should initially be not downloaded
         for (_, model) in models.iter() {
@@ -114,34 +116,25 @@ mod tests {
     }
 
     #[test]
-    fn test_list_downloaded_files() {
+    fn test_list_downloaded_files_only_returns_exact_catalog_matches() {
         let temp_dir = TempDir::new().unwrap();
         let models_dir = temp_dir.path().join("models");
         std::fs::create_dir_all(&models_dir).unwrap();
 
-        // Create a WhisperManager with known models
-        let manager = WhisperManager::new(models_dir.clone());
+        let mut manager = WhisperManager::new_for_test(models_dir.clone());
 
-        // Create model files for known models only (current catalog)
-        for model_name in ["base.en", "large-v3", "large-v3-turbo"] {
-            let file_path = models_dir.join(format!("{}.bin", model_name));
-            std::fs::write(&file_path, b"dummy model data").unwrap();
-        }
-
-        // Create a non-model file that should be ignored
-        std::fs::write(models_dir.join("readme.txt"), b"not a model").unwrap();
-
-        // Also create a .bin file that's not a known model - should be ignored
+        std::fs::write(models_dir.join("base.en.bin"), vec![0u8; 1024]).unwrap();
+        std::fs::write(models_dir.join("large-v3.bin"), vec![0u8; 2048]).unwrap();
+        std::fs::write(models_dir.join("large-v3-q5_0.bin"), b"wrong size").unwrap();
         std::fs::write(models_dir.join("unknown.bin"), b"unknown model").unwrap();
 
+        manager.refresh_downloaded_status();
         let downloaded = manager.list_downloaded_files();
 
-        // Should only list known models that have .bin files
-        assert_eq!(downloaded.len(), 3);
+        assert_eq!(downloaded.len(), 2);
         assert!(downloaded.contains(&"base.en".to_string()));
         assert!(downloaded.contains(&"large-v3".to_string()));
-        assert!(downloaded.contains(&"large-v3-turbo".to_string()));
-        assert!(!downloaded.contains(&"readme".to_string()));
+        assert!(!downloaded.contains(&"large-v3-q5_0".to_string()));
         assert!(!downloaded.contains(&"unknown".to_string()));
     }
 
@@ -205,17 +198,25 @@ mod tests {
 
     #[test]
     fn test_model_validation() {
-        // Test valid model names
-        let valid_models = vec!["base.en", "large-v3", "large-v3-q5_0", "large-v3-turbo"];
+        let temp_dir = TempDir::new().unwrap();
+        let manager = WhisperManager::new(temp_dir.path().to_path_buf());
+        let models = manager.get_models_status();
 
-        for model in &valid_models {
-            assert!(valid_models.contains(&model));
+        for name in [
+            "base.en",
+            "large-v3",
+            "large-v3-q5_0",
+            "large-v3-turbo",
+            "small.en",
+        ] {
+            assert!(models.contains_key(name), "missing catalog model: {name}");
         }
 
-        // Test invalid model names
-        let invalid_models = vec!["invalid", "large-v2", "tiny.en", "custom"];
-        for model in &invalid_models {
-            assert!(!valid_models.contains(model));
+        for name in ["invalid", "large-v2", "tiny.en", "custom"] {
+            assert!(
+                !models.contains_key(name),
+                "unexpected catalog model: {name}"
+            );
         }
     }
 
@@ -245,6 +246,18 @@ mod tests {
         let status = manager.get_models_status();
         assert!(status.get("base.en").unwrap().downloaded);
         assert!(!status.get("large-v3").unwrap().downloaded);
+
+        // Wrong-size files must not count as downloaded
+        std::fs::write(models_dir.join("large-v3.bin"), vec![0u8; 512]).unwrap();
+        manager.refresh_downloaded_status();
+        let status = manager.get_models_status();
+        assert!(!status.get("large-v3").unwrap().downloaded);
+
+        // Exact-size files must count as downloaded
+        std::fs::write(models_dir.join("large-v3.bin"), vec![0u8; 2048]).unwrap();
+        manager.refresh_downloaded_status();
+        let status = manager.get_models_status();
+        assert!(status.get("large-v3").unwrap().downloaded);
     }
 
     #[test]
@@ -261,6 +274,14 @@ mod tests {
         let large = models.get("large-v3").unwrap();
         assert!(large.speed_score < base_en.speed_score); // Slower
         assert!(large.accuracy_score > base_en.accuracy_score); // More accurate
+
+        let q5 = models.get("large-v3-q5_0").unwrap();
+        let turbo = models.get("large-v3-turbo").unwrap();
+        assert!(q5.speed_score > large.speed_score);
+        assert!(q5.speed_score < turbo.speed_score);
+        assert!(q5.accuracy_score < large.accuracy_score);
+        assert!(q5.accuracy_score >= turbo.accuracy_score - 1);
+        assert!(q5.recommended);
 
         // Verify all scores are in valid range (1-10)
         for (_, model) in &models {
@@ -280,11 +301,18 @@ mod tests {
         assert!(base_en.size > 100 * 1024 * 1024); // > 100MB
         assert!(base_en.size < 200 * 1024 * 1024); // < 200MB
 
-        // Note: large-v3 is actually 2.9GB, well within our 3.5GB limit
         let large = models.get("large-v3").unwrap();
-        assert!(large.size > base_en.size); // Large should be larger than base
-        assert!(large.size > 2 * 1024 * 1024 * 1024); // > 2GB
-        assert!(large.size < 3584 * 1024 * 1024); // < 3.5GB
+        assert_eq!(large.size, 3_095_033_483);
+
+        let q5 = models.get("large-v3-q5_0").unwrap();
+        assert_eq!(q5.size, 1_081_140_203);
+        assert!(q5.size > base_en.size);
+        assert!(q5.size < large.size);
+
+        let turbo = models.get("large-v3-turbo").unwrap();
+        assert_eq!(turbo.size, 1_624_555_275);
+        assert!(turbo.size > q5.size);
+        assert!(turbo.size < large.size);
     }
 
     #[test]
@@ -297,10 +325,14 @@ mod tests {
         for (name, model) in &models {
             assert!(model.url.starts_with("https://huggingface.co/"));
             assert!(model.url.contains("whisper.cpp"));
-            assert!(model.url.ends_with(&format!("{}.bin", name)));
+            assert!(model.url.ends_with(&format!("ggml-{name}.bin")));
 
             // Verify SHA256 field (actually contains SHA1) is 40 characters
             assert_eq!(model.sha256.len(), 40);
         }
+
+        let q5 = models.get("large-v3-q5_0").unwrap();
+        assert_eq!(q5.display_name, "Large v3 (Q5)");
+        assert_eq!(q5.sha256, "e6e2ed78495d403bef4b7cff42ef4aaadcfea8de");
     }
 }

@@ -262,6 +262,15 @@ impl GpuSidecarClient {
         self.status.read().await.clone()
     }
 
+    pub async fn abort_active_process(&self) {
+        let mut guard = self.process.lock().await;
+        if let Some(process) = guard.as_mut() {
+            log::info!("Aborting active Whisper Vulkan sidecar process");
+            process.kill_and_wait().await;
+        }
+        guard.take();
+    }
+
     pub async fn set_cpu_status(&self, mode: &str, message: impl Into<String>) {
         *self.status.write().await = AccelerationRuntimeStatus {
             mode: mode.to_string(),
@@ -474,7 +483,7 @@ fn wav_duration_seconds(audio_path: &Path) -> Option<f64> {
         return None;
     }
 
-    let frames = reader.duration() as f64 / f64::from(spec.channels);
+    let frames = reader.duration() as f64;
     Some(frames / f64::from(spec.sample_rate))
 }
 
