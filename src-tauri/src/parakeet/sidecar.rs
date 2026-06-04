@@ -3,6 +3,7 @@
 use super::error::ParakeetError;
 use super::messages::{ParakeetCommand, ParakeetResponse};
 use log::{error, warn};
+use std::time::Duration;
 use tauri::async_runtime::{Receiver, RwLock};
 use tauri::AppHandle;
 use tauri_plugin_shell::{
@@ -37,6 +38,23 @@ fn parse_response_line(raw: &str) -> Result<ParakeetResponse, ParakeetError> {
                 }
             }
         }
+    }
+}
+
+async fn timed_request(
+    sidecar: &mut ParakeetSidecar,
+    command: &ParakeetCommand,
+) -> Result<ParakeetResponse, ParakeetError> {
+    let operation = command.operation_name().to_string();
+    let timeout_secs = command.request_timeout_secs();
+    let timeout = Duration::from_secs(timeout_secs);
+
+    match tokio::time::timeout(timeout, sidecar.request(command)).await {
+        Ok(result) => result,
+        Err(_) => Err(ParakeetError::Timeout {
+            operation,
+            timeout_secs,
+        }),
     }
 }
 
@@ -154,6 +172,12 @@ impl ParakeetClient {
         Ok(guard)
     }
 
+    fn clear_sidecar(guard: &mut RwLockWriteGuard<'_, Option<ParakeetSidecar>>) {
+        if let Some(sidecar) = guard.take() {
+            sidecar.kill();
+        }
+    }
+
     pub async fn send(
         &self,
         app: &AppHandle,
@@ -161,23 +185,27 @@ impl ParakeetClient {
     ) -> Result<ParakeetResponse, ParakeetError> {
         let mut guard = self.ensure(app).await?;
         let response = match guard.as_mut() {
-            Some(sidecar) => sidecar.request(command).await,
+            Some(sidecar) => timed_request(sidecar, command).await,
             None => return Err(ParakeetError::Terminated),
         };
 
         match response {
+            Err(ParakeetError::Timeout { .. }) => {
+                Self::clear_sidecar(&mut guard);
+                response
+            }
             Err(ParakeetError::Terminated) => {
-                let old = guard.take();
+                Self::clear_sidecar(&mut guard);
                 drop(guard);
-                if let Some(sidecar) = old {
-                    sidecar.kill();
-                }
                 let mut guard = self.ensure(app).await?;
-                if let Some(sidecar) = guard.as_mut() {
-                    sidecar.request(command).await
-                } else {
-                    Err(ParakeetError::Terminated)
+                let response = match guard.as_mut() {
+                    Some(sidecar) => timed_request(sidecar, command).await,
+                    None => Err(ParakeetError::Terminated),
+                };
+                if matches!(response, Err(ParakeetError::Timeout { .. })) {
+                    Self::clear_sidecar(&mut guard);
                 }
+                response
             }
             other => other,
         }

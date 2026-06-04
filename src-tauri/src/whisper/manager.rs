@@ -122,7 +122,7 @@ impl WhisperManager {
             ModelInfo {
                 name: "large-v3".to_string(),
                 display_name: "Large v3".to_string(),
-                size: 3_117_854_720, // 2.9 GiB = 2.9 * 1024 * 1024 * 1024 bytes
+                size: 3_095_033_483,
                 url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"
                     .to_string(),
                 sha256: "ad82bf6a9043ceed055076d0fd39f5f186ff8062".to_string(), // SHA1 (correct)
@@ -133,12 +133,26 @@ impl WhisperManager {
             },
         );
 
-        // Removed: large-v3-q5_0 to simplify model list
+        models.insert(
+            "large-v3-q5_0".to_string(),
+            ModelInfo {
+                name: "large-v3-q5_0".to_string(),
+                display_name: "Large v3 (Q5)".to_string(),
+                size: 1_081_140_203,
+                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin"
+                    .to_string(),
+                sha256: "e6e2ed78495d403bef4b7cff42ef4aaadcfea8de".to_string(), // SHA1 (correct)
+                downloaded: false,
+                speed_score: 4,    // Faster than full large-v3, slower than turbo
+                accuracy_score: 8, // Comparable but below full large-v3
+                recommended: true, // CPU-friendly fallback
+            },
+        );
 
         models.insert("large-v3-turbo".to_string(), ModelInfo {
             name: "large-v3-turbo".to_string(),
             display_name: "Large v3 Turbo".to_string(),
-            size: 1_610_612_736, // 1.5 GiB = 1.5 * 1024 * 1024 * 1024 bytes
+            size: 1_624_555_275,
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".to_string(),
             sha256: "4af2b29d7ec73d781377bfd1758ca957a807e941".to_string(), // SHA1 (correct)
             downloaded: false,
@@ -187,17 +201,15 @@ impl WhisperManager {
                     let file_size = metadata.len();
                     let expected_size = model_info.size;
 
-                    // Allow 5% tolerance for size differences
-                    let size_tolerance = (expected_size as f64 * 0.05) as u64;
-                    let min_size = expected_size.saturating_sub(size_tolerance);
-
-                    if file_size >= min_size {
+                    if file_size == expected_size {
                         log::info!("[check_downloaded_models] Model '{}' found at {:?} (size: {} bytes, expected: {} bytes)",
                             model_name, model_path, file_size, expected_size);
                         model_info.downloaded = true;
                     } else if file_size > 0 {
-                        log::warn!("[check_downloaded_models] Model '{}' exists but appears incomplete: {} bytes (expected: {} bytes)", 
-                            model_name, file_size, expected_size);
+                        log::warn!(
+                            "[check_downloaded_models] Model '{}' exists but size mismatch: {} bytes (expected exactly {} bytes)",
+                            model_name, file_size, expected_size
+                        );
                         model_info.downloaded = false;
                     } else {
                         log::warn!(
@@ -289,35 +301,34 @@ impl WhisperManager {
             .await
             .map_err(|e| format!("Failed to create models directory: {}", e))?;
 
-        // Check if the file already exists and is corrupted
+        // Check if the file already exists. A model is usable only when its byte
+        // size matches the catalog exactly; anything else is stale, partial, or
+        // from an older catalog entry and must be replaced before download.
         if output_path.exists() {
             if let Ok(metadata) = fs::metadata(&output_path).await {
                 let file_size = metadata.len();
                 let expected_size = model_info.size;
 
-                // Allow 5% tolerance for size differences
-                let size_tolerance = (expected_size as f64 * 0.05) as u64;
-                let min_size = expected_size.saturating_sub(size_tolerance);
-
-                if file_size < min_size {
-                    log::warn!(
-                        "Found incomplete/corrupted model file for '{}': {} bytes (expected: {} bytes). Removing...",
-                        model_info.name, file_size, expected_size
-                    );
-
-                    // Delete the corrupted file
-                    if let Err(e) = fs::remove_file(&output_path).await {
-                        log::error!("Failed to remove corrupted model file: {}", e);
-                        return Err(format!("Failed to remove corrupted model file: {}", e));
-                    }
-
-                    log::info!("Corrupted model file removed successfully");
-                } else {
+                if file_size == expected_size {
                     return Err(format!(
                         "Model '{}' already exists with correct size. Delete it manually if you want to re-download.",
                         model_info.name
                     ));
                 }
+
+                log::warn!(
+                    "Found model file for '{}' with size mismatch: {} bytes (expected exactly {} bytes). Removing before re-download...",
+                    model_info.name,
+                    file_size,
+                    expected_size
+                );
+
+                if let Err(e) = fs::remove_file(&output_path).await {
+                    log::error!("Failed to remove mismatched model file: {}", e);
+                    return Err(format!("Failed to remove mismatched model file: {}", e));
+                }
+
+                log::info!("Mismatched model file removed successfully");
             }
         }
 
@@ -614,17 +625,9 @@ impl WhisperManager {
     }
 
     /// Returns the names of downloaded model files that are recognized by the manager
-    /// This prevents exposing arbitrary .bin files that may exist in the models directory
+    /// and match the current catalog exactly.
     pub fn list_downloaded_files(&self) -> Vec<String> {
-        // Only return files that correspond to known models
-        self.models
-            .iter()
-            .filter(|(name, _)| {
-                let path = self.models_dir.join(format!("{}.bin", name));
-                path.exists()
-            })
-            .map(|(name, _)| name.clone())
-            .collect()
+        self.get_downloaded_model_names()
     }
 
     /// Delete a model file from disk and refresh the downloaded status map.
@@ -657,13 +660,30 @@ impl WhisperManager {
         (speed as f32 * 0.4 + accuracy as f32 * 0.6) / 10.0 * 100.0
     }
 
-    /// Get model names ordered by size (smallest to largest)
-    pub fn get_models_by_size(&self) -> Vec<String> {
+    /// Get model names ordered for CPU-only transcription latency.
+    pub fn get_models_by_cpu_preference(&self) -> Vec<String> {
         let mut models: Vec<(&String, &ModelInfo)> = self.models.iter().collect();
-        models.sort_by_key(|(_, info)| info.size);
+        models.sort_by(|a, b| {
+            b.1.recommended
+                .cmp(&a.1.recommended)
+                .then(b.1.speed_score.cmp(&a.1.speed_score))
+                .then(b.1.accuracy_score.cmp(&a.1.accuracy_score))
+                .then(a.1.size.cmp(&b.1.size))
+        });
         models.into_iter().map(|(name, _)| name.clone()).collect()
     }
 
+    /// Get model names ordered for quality-first transcription.
+    pub fn get_models_by_quality_preference(&self) -> Vec<String> {
+        let mut models: Vec<(&String, &ModelInfo)> = self.models.iter().collect();
+        models.sort_by(|a, b| {
+            b.1.recommended
+                .cmp(&a.1.recommended)
+                .then(b.1.accuracy_score.cmp(&a.1.accuracy_score))
+                .then(a.1.size.cmp(&b.1.size))
+        });
+        models.into_iter().map(|(name, _)| name.clone()).collect()
+    }
     /// Get models sorted by a specific metric
     #[allow(dead_code)]
     pub fn get_models_sorted(&self, sort_by: &str) -> Vec<(String, ModelInfo)> {
@@ -757,14 +777,14 @@ impl WhisperManager {
             "large-v3-q5_0".to_string(),
             ModelInfo {
                 name: "large-v3-q5_0".to_string(),
-                display_name: "Large v3 Q5".to_string(),
+                display_name: "Large v3 (Q5)".to_string(),
                 size: 1536, // 1.5KB for tests
                 url: "https://test.example.com/large-v3-q5_0.bin".to_string(),
                 sha256: "test_hash_q5".to_string(),
                 downloaded: false,
                 speed_score: 4,
                 accuracy_score: 8,
-                recommended: false,
+                recommended: true,
             },
         );
 

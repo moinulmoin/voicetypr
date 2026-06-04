@@ -80,7 +80,44 @@ fn pick_best_parakeet_model(models: Vec<parakeet::ParakeetModelStatus>) -> Optio
     downloaded.first().map(|m| m.name.clone())
 }
 
+async fn should_prefer_cpu_whisper_models(app: &tauri::AppHandle) -> bool {
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+    #[cfg(target_os = "windows")]
+    {
+        let mode = app
+            .store("settings")
+            .ok()
+            .and_then(|store| {
+                store
+                    .get("transcription_acceleration")
+                    .and_then(|value| value.as_str().map(str::to_owned))
+            })
+            .unwrap_or_else(|| "auto".to_string());
+        if mode == "cpu" {
+            true
+        } else if mode == "gpu" {
+            false
+        } else if let Some(client) = app.try_state::<whisper::gpu_sidecar::GpuSidecarClient>() {
+            client.status().await.gpu_available == Some(false)
+        } else {
+            false
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::env::consts::ARCH != "aarch64"
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        false
+    }
+}
+
 async fn pick_best_whisper_model(
+    app: &tauri::AppHandle,
     manager: &AsyncRwLock<whisper::manager::WhisperManager>,
 ) -> Option<String> {
     let manager = manager.read().await;
@@ -89,12 +126,22 @@ async fn pick_best_whisper_model(
         .into_iter()
         .filter(|(_, info)| info.downloaded)
         .collect();
-    downloaded.sort_by(|a, b| {
-        b.1.recommended
-            .cmp(&a.1.recommended)
-            .then(b.1.accuracy_score.cmp(&a.1.accuracy_score))
-            .then(a.1.size.cmp(&b.1.size))
-    });
+    if should_prefer_cpu_whisper_models(app).await {
+        downloaded.sort_by(|a, b| {
+            b.1.recommended
+                .cmp(&a.1.recommended)
+                .then(b.1.speed_score.cmp(&a.1.speed_score))
+                .then(b.1.accuracy_score.cmp(&a.1.accuracy_score))
+                .then(a.1.size.cmp(&b.1.size))
+        });
+    } else {
+        downloaded.sort_by(|a, b| {
+            b.1.recommended
+                .cmp(&a.1.recommended)
+                .then(b.1.accuracy_score.cmp(&a.1.accuracy_score))
+                .then(a.1.size.cmp(&b.1.size))
+        });
+    }
     downloaded.first().map(|(name, _)| name.clone())
 }
 
@@ -127,7 +174,7 @@ pub async fn auto_select_model_if_needed(
         if let Some(whisper_state) =
             app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
         {
-            if let Some(model) = pick_best_whisper_model(&whisper_state).await {
+            if let Some(model) = pick_best_whisper_model(app, &whisper_state).await {
                 selection = Some(("whisper".to_string(), model));
             }
         }

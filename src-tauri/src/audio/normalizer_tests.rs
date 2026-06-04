@@ -104,7 +104,7 @@ fn normalize_resamples_48k_to_16k() {
     assert_eq!(spec.channels, 1);
 
     // Duration should be roughly preserved (0.3s)
-    let frames = reader.duration() / spec.channels as u32;
+    let frames = reader.duration();
     let duration = frames as f32 / spec.sample_rate as f32;
     assert!(
         (duration - 0.3).abs() < 0.05,
