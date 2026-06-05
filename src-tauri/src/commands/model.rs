@@ -698,12 +698,19 @@ pub async fn preload_model(
             .ok_or(format!("Model '{}' not found", model_name))?
     };
 
-    // Load into cache
-    let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
-    let mut cache = cache_state.lock().await;
+    if crate::commands::audio::warm_whisper_gpu_sidecar_on_model_preload(&app, &model_path).await {
+        log::info!(
+            "Model '{}' preloaded successfully in Vulkan sidecar",
+            model_name
+        );
+        return Ok(());
+    }
 
-    // This will load the model and cache it
-    cache.get_or_create(&model_path)?;
+    {
+        let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
+        let mut cache = cache_state.lock().await;
+        cache.get_or_create(&model_path)?;
+    }
 
     log::info!("Model '{}' preloaded successfully", model_name);
 

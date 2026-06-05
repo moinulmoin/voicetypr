@@ -1160,6 +1160,20 @@ mod tests {
             DEFAULT_TRANSCRIPTION_ACCELERATION
         );
     }
+
+    #[test]
+    fn vulkan_preload_warm_follows_transcription_acceleration_mode() {
+        use crate::whisper::gpu_sidecar::should_attempt_vulkan_warm_on_preload;
+
+        let cpu = normalize_transcription_acceleration(Some("cpu"));
+        assert!(!should_attempt_vulkan_warm_on_preload(&cpu, None));
+
+        let auto = normalize_transcription_acceleration(Some("auto"));
+        assert!(should_attempt_vulkan_warm_on_preload(&auto, None));
+
+        let gpu = normalize_transcription_acceleration(Some("gpu"));
+        assert!(should_attempt_vulkan_warm_on_preload(&gpu, None));
+    }
     /// Verify the autostart command functions exist and compile.
     /// Compilation IS the test: if the functions don't exist or have
     /// wrong signatures, the imports and generate_handler! macro will fail.

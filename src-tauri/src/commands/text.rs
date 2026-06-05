@@ -18,13 +18,51 @@ use enigo::{
 // Global flag to prevent concurrent text insertions
 static IS_INSERTING: AtomicBool = AtomicBool::new(false);
 
-/// Ensure prose ending in sentence punctuation has exactly one trailing space.
+const CLOSING_PUNCTUATION: [char; 8] = ['"', '\'', '“', '”', '’', ')', ']', '}'];
+
+/// Last non-closing character, allowing quotes/brackets after sentence punctuation.
+fn last_meaningful_char(text: &str) -> Option<char> {
+    text.chars()
+        .rev()
+        .find(|c| !CLOSING_PUNCTUATION.contains(c))
+}
+
+/// Detect contexts where a trailing insertion space would be harmful.
+fn should_skip_trailing_insertion_space(text: &str) -> bool {
+    let semantic_end = text.trim_end_matches(|c| CLOSING_PUNCTUATION.contains(&c));
+    let before_period = semantic_end.strip_suffix('.').unwrap_or(semantic_end);
+    let looks_like_url = semantic_end.contains("://")
+        || before_period.ends_with(".com")
+        || before_period.ends_with(".org")
+        || before_period.ends_with(".net")
+        || before_period.ends_with(".io")
+        || before_period.ends_with(".dev")
+        || before_period.ends_with(".app");
+    // Email-like: contains @ with no spaces (even if followed by period)
+    let looks_like_email = before_period.contains('@') && !before_period.contains(' ');
+    let looks_like_code = semantic_end.contains('=')
+        || semantic_end.contains("->")
+        || semantic_end.contains("::")
+        || semantic_end.contains('{')
+        || semantic_end.contains('}')
+        || semantic_end.contains(';');
+
+    looks_like_url || looks_like_email || looks_like_code
+}
+
+/// Whether to append exactly one trailing space before the next insertion.
+fn should_add_trailing_insertion_space(text: &str) -> bool {
+    !should_skip_trailing_insertion_space(text) && last_meaningful_char(text).is_some()
+}
+
+/// Ensure insertable prose has exactly one trailing space at the insertion boundary.
 ///
 /// This is applied at the insertion boundary only, so stored transcription
 /// history remains clean. Rules:
 /// - `Hello world.` → `Hello world. `
 /// - `Hello world. ` → `Hello world. ` (normalize to one)
-/// - `Hello world` → `Hello world` (no sentence end, no space)
+/// - `Hello world` → `Hello world ` (fragment boundary for continuous dictation)
+/// - `Hello world,` → `Hello world, ` (fragment boundary for continuous dictation)
 /// - `https://example.com.` → `https://example.com.` (URL-like, skip)
 /// - `foo@bar.com.` → `foo@bar.com.` (email-like, skip)
 /// - `x = y.` → `x = y.` (code-like, skip)
@@ -46,44 +84,11 @@ fn ensure_trailing_sentence_space(text: &str) -> String {
         return text.to_string();
     }
 
-    let closing_punctuation = ['"', '\'', '“', '”', '’', ')', ']', '}'];
-    let sentence_end = without_trailing_spaces
-        .chars()
-        .rev()
-        .find(|c| !closing_punctuation.contains(c));
-
-    // Only add space after sentence-ending punctuation, allowing closing
-    // quotes/brackets after the punctuation.
-    if !matches!(sentence_end, Some('.' | '!' | '?')) {
-        return text.to_string();
+    if should_add_trailing_insertion_space(without_trailing_spaces) {
+        format!("{} ", without_trailing_spaces)
+    } else {
+        text.to_string()
     }
-
-    // Detect contexts where a trailing space would be harmful.
-    let semantic_end =
-        without_trailing_spaces.trim_end_matches(|c| closing_punctuation.contains(&c));
-    let before_period = semantic_end.strip_suffix('.').unwrap_or(semantic_end);
-    let looks_like_url = semantic_end.contains("://")
-        || before_period.ends_with(".com")
-        || before_period.ends_with(".org")
-        || before_period.ends_with(".net")
-        || before_period.ends_with(".io")
-        || before_period.ends_with(".dev")
-        || before_period.ends_with(".app");
-    // Email-like: contains @ with no spaces (even if followed by period)
-    let looks_like_email = before_period.contains('@') && !before_period.contains(' ');
-    let looks_like_code = semantic_end.contains('=')
-        || semantic_end.contains("->")
-        || semantic_end.contains("::")
-        || semantic_end.contains('{')
-        || semantic_end.contains('}')
-        || semantic_end.contains(';');
-
-    if looks_like_url || looks_like_email || looks_like_code {
-        return text.to_string();
-    }
-
-    // Preserve exactly one trailing space after the original closing punctuation.
-    format!("{} ", without_trailing_spaces)
 }
 
 #[tauri::command]
@@ -574,16 +579,47 @@ mod tests {
     }
 
     #[test]
-    fn no_sentence_end_no_space() {
-        assert_eq!(ensure_trailing_sentence_space("Hello world"), "Hello world");
+    fn prose_fragment_gets_trailing_space() {
+        assert_eq!(
+            ensure_trailing_sentence_space("Hello world"),
+            "Hello world "
+        );
     }
 
     #[test]
-    fn comma_no_space() {
+    fn repeated_prose_fragments_keep_single_space_boundary() {
+        let combined = format!(
+            "{}{}",
+            ensure_trailing_sentence_space("hello world"),
+            ensure_trailing_sentence_space("next phrase"),
+        );
+
+        assert_eq!(combined, "hello world next phrase ");
+    }
+
+    #[test]
+    fn repeated_fragments_do_not_duplicate_spaces() {
+        assert_eq!(
+            ensure_trailing_sentence_space("hello world   "),
+            "hello world "
+        );
+        assert_eq!(
+            ensure_trailing_sentence_space("already spaced "),
+            "already spaced "
+        );
+    }
+
+    #[test]
+    fn comma_gets_trailing_space() {
         assert_eq!(
             ensure_trailing_sentence_space("Hello world,"),
-            "Hello world,"
+            "Hello world, "
         );
+    }
+
+    #[test]
+    fn colon_gets_trailing_space() {
+        assert_eq!(ensure_trailing_sentence_space("Note:"), "Note: ");
     }
 
     #[test]
