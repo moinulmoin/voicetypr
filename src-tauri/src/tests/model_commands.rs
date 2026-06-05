@@ -70,6 +70,8 @@ mod tests {
 
         // Should have all the default models
         assert!(models.contains_key("base.en"));
+        assert!(models.contains_key("small.en"));
+        assert!(models.contains_key("medium"));
         assert!(models.contains_key("large-v3"));
         assert!(models.contains_key("large-v3-q5_0"));
         assert!(models.contains_key("large-v3-turbo"));
@@ -204,10 +206,11 @@ mod tests {
 
         for name in [
             "base.en",
+            "small.en",
+            "medium",
             "large-v3",
             "large-v3-q5_0",
             "large-v3-turbo",
-            "small.en",
         ] {
             assert!(models.contains_key(name), "missing catalog model: {name}");
         }
@@ -271,6 +274,11 @@ mod tests {
         assert_eq!(base_en.speed_score, 8); // Very fast
         assert_eq!(base_en.accuracy_score, 5); // Basic accuracy
 
+        let medium = models.get("medium").unwrap();
+        assert_eq!(medium.speed_score, 5);
+        assert_eq!(medium.accuracy_score, 7);
+        assert!(!medium.recommended);
+
         let large = models.get("large-v3").unwrap();
         assert!(large.speed_score < base_en.speed_score); // Slower
         assert!(large.accuracy_score > base_en.accuracy_score); // More accurate
@@ -296,17 +304,23 @@ mod tests {
         let manager = WhisperManager::new(temp_dir.path().to_path_buf());
         let models = manager.get_models_status();
 
-        // Verify model sizes are reasonable
         let base_en = models.get("base.en").unwrap();
-        assert!(base_en.size > 100 * 1024 * 1024); // > 100MB
-        assert!(base_en.size < 200 * 1024 * 1024); // < 200MB
+        assert_eq!(base_en.size, 147_964_211);
+
+        let small_en = models.get("small.en").unwrap();
+        assert_eq!(small_en.size, 487_614_201);
+        assert!(small_en.size > base_en.size);
+
+        let medium = models.get("medium").unwrap();
+        assert_eq!(medium.size, 1_533_763_059);
+        assert!(medium.size > small_en.size);
 
         let large = models.get("large-v3").unwrap();
         assert_eq!(large.size, 3_095_033_483);
 
         let q5 = models.get("large-v3-q5_0").unwrap();
         assert_eq!(q5.size, 1_081_140_203);
-        assert!(q5.size > base_en.size);
+        assert!(q5.size > small_en.size);
         assert!(q5.size < large.size);
 
         let turbo = models.get("large-v3-turbo").unwrap();
@@ -331,8 +345,55 @@ mod tests {
             assert_eq!(model.sha256.len(), 40);
         }
 
+        let base_en = models.get("base.en").unwrap();
+        assert_eq!(base_en.display_name, "Base (English)");
+        assert_eq!(base_en.sha256, "137c40403d78fd54d454da0f9bd998f78703390c");
+
+        let small_en = models.get("small.en").unwrap();
+        assert_eq!(small_en.display_name, "Small (English)");
+        assert_eq!(small_en.sha256, "db8a495a91d927739e50b3fc1cc4c6b8f6c2d022");
+
+        let medium = models.get("medium").unwrap();
+        assert_eq!(medium.display_name, "Medium");
+        assert_eq!(medium.sha256, "fd9727b6e1217c2f614f9b698455c4ffd82463b4");
+        assert!(medium.url.ends_with("ggml-medium.bin"));
+
         let q5 = models.get("large-v3-q5_0").unwrap();
         assert_eq!(q5.display_name, "Large v3 (Q5)");
         assert_eq!(q5.sha256, "e6e2ed78495d403bef4b7cff42ef4aaadcfea8de");
+    }
+
+    #[test]
+    fn test_production_catalog_sparse_file_size_regression() {
+        let temp_dir = TempDir::new().unwrap();
+        let models_dir = temp_dir.path().join("models");
+        std::fs::create_dir_all(&models_dir).unwrap();
+
+        let model_path = models_dir.join("base.en.bin");
+        {
+            let file = std::fs::File::create(&model_path).unwrap();
+            file.set_len(147_964_211).unwrap();
+        }
+
+        let mut manager = WhisperManager::new(models_dir.clone());
+        let status = manager.get_models_status();
+        assert!(status.get("base.en").unwrap().downloaded);
+
+        let path = manager.get_model_path("base.en");
+        assert!(path.is_some());
+        assert_eq!(path.unwrap(), model_path);
+
+        {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&model_path)
+                .unwrap();
+            file.set_len(148_897_792).unwrap();
+        }
+
+        manager.refresh_downloaded_status();
+        let status = manager.get_models_status();
+        assert!(!status.get("base.en").unwrap().downloaded);
+        assert!(manager.get_model_path("base.en").is_none());
     }
 }

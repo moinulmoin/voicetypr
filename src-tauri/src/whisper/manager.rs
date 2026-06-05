@@ -98,15 +98,15 @@ impl WhisperManager {
         // These are SHA1 hashes (40 characters) as used by the official download script
         // Note: The field is named 'sha256' for historical reasons but contains SHA1 values
 
-        // Multilingual models only (no .en variants)
-        // Removed tiny, small, and medium models - keeping only base and large variants
+        // English-only (.en) and multilingual models from official whisper.cpp metadata
+        // Tiny variants omitted; medium restored with official size and checksum
 
         models.insert(
             "base.en".to_string(),
             ModelInfo {
                 name: "base.en".to_string(),
                 display_name: "Base (English)".to_string(),
-                size: 148_897_792, // 142 MiB = 142 * 1024 * 1024 bytes
+                size: 147_964_211,
                 url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
                     .to_string(),
                 sha256: "137c40403d78fd54d454da0f9bd998f78703390c".to_string(), // SHA1 (correct)
@@ -166,13 +166,29 @@ impl WhisperManager {
             ModelInfo {
                 name: "small.en".to_string(),
                 display_name: "Small (English)".to_string(),
-                size: 488_505_344, // 466 MiB = 466 * 1024 * 1024 bytes
+                size: 487_614_201,
                 url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin"
                     .to_string(),
                 sha256: "db8a495a91d927739e50b3fc1cc4c6b8f6c2d022".to_string(), // SHA1 (correct)
                 downloaded: false,
                 speed_score: 7,    // Fast for English-only
                 accuracy_score: 6, // Good accuracy for English
+                recommended: false,
+            },
+        );
+
+        models.insert(
+            "medium".to_string(),
+            ModelInfo {
+                name: "medium".to_string(),
+                display_name: "Medium".to_string(),
+                size: 1_533_763_059,
+                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
+                    .to_string(),
+                sha256: "fd9727b6e1217c2f614f9b698455c4ffd82463b4".to_string(), // SHA1 (correct)
+                downloaded: false,
+                speed_score: 5,
+                accuracy_score: 7,
                 recommended: false,
             },
         );
@@ -785,6 +801,21 @@ impl WhisperManager {
                 speed_score: 4,
                 accuracy_score: 8,
                 recommended: true,
+            },
+        );
+
+        models.insert(
+            "medium".to_string(),
+            ModelInfo {
+                name: "medium".to_string(),
+                display_name: "Medium".to_string(),
+                size: 1792,
+                url: "https://test.example.com/medium.bin".to_string(),
+                sha256: "test_hash_medium".to_string(),
+                downloaded: false,
+                speed_score: 5,
+                accuracy_score: 7,
+                recommended: false,
             },
         );
 
