@@ -91,6 +91,40 @@ fn should_hide_pill_when_idle(mode: &str) -> bool {
     mode != "always"
 }
 
+/// Best-effort warm of the Windows Vulkan sidecar when a Whisper model is preloaded.
+/// No-op on non-Windows platforms and when CPU acceleration is selected.
+pub(crate) async fn warm_whisper_gpu_sidecar_on_model_preload(
+    app: &AppHandle,
+    model_path: &Path,
+) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let mode = get_settings(app.clone())
+            .await
+            .map(|settings| {
+                normalize_transcription_acceleration(Some(&settings.transcription_acceleration))
+            })
+            .unwrap_or_else(|error| {
+                log::warn!(
+                    "Failed to read settings for Vulkan sidecar preload warm; defaulting to auto: {error}"
+                );
+                crate::commands::settings::DEFAULT_TRANSCRIPTION_ACCELERATION.to_string()
+            });
+
+        let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+        let gpu_available = gpu_client.status().await.gpu_available;
+        gpu_client
+            .warm_on_preload(app, model_path, &mode, gpu_available)
+            .await
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, model_path);
+        false
+    }
+}
+
 async fn transcribe_whisper_with_acceleration(
     app: &AppHandle,
     model_path: &Path,

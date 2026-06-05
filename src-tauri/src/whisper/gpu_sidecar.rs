@@ -281,6 +281,40 @@ impl GpuSidecarClient {
         };
     }
 
+    /// Best-effort warm of the Vulkan sidecar and model during Whisper preload.
+    /// Returns true only when the sidecar accepted the model and kept it warm.
+    pub async fn warm_on_preload(
+        &self,
+        app: &AppHandle,
+        model_path: &Path,
+        mode: &str,
+        gpu_available: Option<bool>,
+    ) -> bool {
+        if !should_attempt_vulkan_warm_on_preload(mode, gpu_available) {
+            log::debug!(
+                "Skipping Vulkan sidecar warm on preload (mode={mode}, gpu_available={gpu_available:?})"
+            );
+            return false;
+        }
+
+        log::info!(
+            "Warming Whisper Vulkan sidecar for preloaded model: {}",
+            model_path.display()
+        );
+        match self.probe(app, model_path, mode).await {
+            Ok(()) => {
+                log::info!("Whisper Vulkan sidecar warmed successfully on preload");
+                true
+            }
+            Err(error) => {
+                log::warn!(
+                    "Whisper Vulkan sidecar warm on preload failed; CPU fallback remains available: {error}"
+                );
+                false
+            }
+        }
+    }
+
     pub async fn probe(
         &self,
         app: &AppHandle,
@@ -455,6 +489,20 @@ impl GpuSidecarClient {
     }
 }
 
+/// Whether preload should spawn/probe the Vulkan sidecar for the given acceleration mode.
+pub(crate) fn should_attempt_vulkan_warm_on_preload(
+    mode: &str,
+    gpu_available: Option<bool>,
+) -> bool {
+    if mode == "cpu" {
+        return false;
+    }
+    if mode == "auto" && gpu_available == Some(false) {
+        return false;
+    }
+    true
+}
+
 fn transcription_timeout(audio_path: &Path) -> Duration {
     wav_duration_seconds(audio_path)
         .map(transcription_timeout_for_duration)
@@ -565,7 +613,8 @@ fn dev_sidecar_cwd() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        sidecar_search_dirs, transcription_timeout_for_duration, SidecarRequest, SidecarResponse,
+        should_attempt_vulkan_warm_on_preload, sidecar_search_dirs,
+        transcription_timeout_for_duration, SidecarRequest, SidecarResponse,
         CONTROL_REQUEST_TIMEOUT, DEFAULT_TRANSCRIPTION_TIMEOUT, MAX_TRANSCRIPTION_TIMEOUT_SECS,
         MIN_TRANSCRIPTION_TIMEOUT_SECS,
     };
@@ -616,6 +665,17 @@ mod tests {
             transcription_timeout_for_duration(600.0),
             std::time::Duration::from_secs(MAX_TRANSCRIPTION_TIMEOUT_SECS)
         );
+    }
+
+    #[test]
+    fn should_attempt_vulkan_warm_on_preload_respects_mode_and_prior_failure() {
+        assert!(!should_attempt_vulkan_warm_on_preload("cpu", None));
+        assert!(!should_attempt_vulkan_warm_on_preload("cpu", Some(true)));
+        assert!(should_attempt_vulkan_warm_on_preload("gpu", None));
+        assert!(should_attempt_vulkan_warm_on_preload("gpu", Some(false)));
+        assert!(should_attempt_vulkan_warm_on_preload("auto", None));
+        assert!(should_attempt_vulkan_warm_on_preload("auto", Some(true)));
+        assert!(!should_attempt_vulkan_warm_on_preload("auto", Some(false)));
     }
 
     #[test]
