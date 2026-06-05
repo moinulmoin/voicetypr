@@ -1,6 +1,7 @@
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use log::{info, warn};
 use reqwest::Client;
@@ -36,6 +37,12 @@ pub struct ParakeetManager {
 const PARAKEET_UNAVAILABLE_EVENT: &str = "parakeet-unavailable";
 
 impl ParakeetManager {
+    async fn wait_for_cancel(cancel_flag: Arc<AtomicBool>) {
+        while !cancel_flag.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
     pub fn new(root_dir: PathBuf) -> Self {
         Self {
             client: ParakeetClient::new("parakeet-sidecar"),
@@ -140,7 +147,7 @@ impl ParakeetManager {
         &self,
         app: &AppHandle,
         model_name: &str,
-        _cancel_flag: Option<Arc<AtomicBool>>,
+        cancel_flag: Option<Arc<AtomicBool>>,
         progress_callback: impl Fn(u64, u64) + Send + 'static,
     ) -> Result<(), String> {
         let Some(definition) = self.get_model_definition(model_name) else {
@@ -165,8 +172,29 @@ impl ParakeetManager {
             eager_unload: Some(false),
         };
 
-        // Send to sidecar and let it handle the download
-        match self.send_command(app, &command).await {
+        if let Some(flag) = cancel_flag.as_ref() {
+            if flag.load(Ordering::Relaxed) {
+                return Err("Download cancelled by user".to_string());
+            }
+        }
+
+        // Send to sidecar and let it handle the download. FluidAudio does not
+        // expose per-download cancellation, so cancellation terminates the
+        // sidecar request instead of letting a cancelled download later emit
+        // success.
+        let response = if let Some(flag) = cancel_flag {
+            tokio::select! {
+                response = self.send_command(app, &command) => response,
+                () = Self::wait_for_cancel(flag) => {
+                    self.shutdown().await;
+                    return Err("Download cancelled by user".to_string());
+                }
+            }
+        } else {
+            self.send_command(app, &command).await
+        };
+
+        match response {
             Ok(ParakeetResponse::Status {
                 loaded_model: Some(id),
                 ..

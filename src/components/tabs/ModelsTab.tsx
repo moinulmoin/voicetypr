@@ -1,13 +1,11 @@
-import { useCallback, useEffect } from "react";
+import { useCallback } from "react";
 import { toast } from "sonner";
 import { ModelsSection } from "../sections/ModelsSection";
 import { useSettings } from "@/contexts/SettingsContext";
-import { useEventCoordinator } from "@/hooks/useEventCoordinator";
 import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { AppSettings } from "@/types";
 
 export function ModelsTab() {
-  const { registerEvent } = useEventCoordinator("main");
   const { settings, updateSettings } = useSettings();
 
   // Use the model management context
@@ -18,7 +16,8 @@ export function ModelsTab() {
     cancelDownload,
     deleteModel,
     loadModels,
-    sortedModels
+    sortedModels,
+    isLoading,
   } = useModelManagementContext();
 
   // Save settings
@@ -36,44 +35,23 @@ export function ModelsTab() {
   // Handle deleting a model with settings update
   const handleDeleteModel = useCallback(
     async (modelName: string) => {
-      await deleteModel(modelName);
+      try {
+        const deleted = await deleteModel(modelName);
+        if (!deleted) {
+          return;
+        }
 
-      // If deleted model was the current one, clear selection in settings
-      if (settings?.current_model === modelName) {
-        await saveSettings({ current_model: "", current_model_engine: 'whisper' });
+        // If deleted model was the current one, clear selection in settings
+        if (settings?.current_model === modelName) {
+          await saveSettings({ current_model: "", current_model_engine: 'whisper' });
+        }
+      } catch {
+        // deleteModel shows a toast and rethrows; keep current selection on failure
       }
     },
     [deleteModel, settings, saveSettings]
   );
 
-  // Initialize models tab
-  useEffect(() => {
-    const init = async () => {
-      try {
-        // Listen for download error events (when download fails)
-        registerEvent<{ model: string; engine?: string; error: string }>(
-          "download-error",
-          (errorData) => {
-            const { model, error } = errorData;
-            console.error("Download error:", errorData);
-
-            // Don't show error toast if it was cancelled - cancellation has its own toast
-            if (!error.toLowerCase().includes('cancel')) {
-              // Show user-friendly error message
-              toast.error(`Download Failed`, {
-                description: `Failed to download ${model}. Please try again.`,
-                duration: 5000
-              });
-            }
-          }
-        );
-      } catch (error) {
-        console.error("Failed to initialize models tab:", error);
-      }
-    };
-
-    init();
-  }, [registerEvent]);
 
   return (
     <ModelsSection
@@ -101,6 +79,7 @@ export function ModelsTab() {
       refreshModels={async () => {
         await loadModels();
       }}
+      isLoading={isLoading}
     />
   );
 }
