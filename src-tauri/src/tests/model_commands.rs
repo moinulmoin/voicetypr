@@ -111,10 +111,52 @@ mod tests {
         // Create the models directory
         std::fs::create_dir_all(&models_dir).unwrap();
 
-        let _manager = WhisperManager::new(models_dir.clone());
+        let manager = WhisperManager::new(models_dir.clone());
 
-        // The manager should be created with the correct directory
         assert!(models_dir.exists());
+        assert_eq!(manager.models_dir(), models_dir);
+    }
+
+    #[test]
+    fn test_get_model_info_for_download_prep() {
+        let temp_dir = TempDir::new().unwrap();
+        let models_dir = temp_dir.path().join("models");
+        std::fs::create_dir_all(&models_dir).unwrap();
+
+        let manager = WhisperManager::new(models_dir.clone());
+        let (model_info, output_path) = manager.get_model_info("base.en").unwrap();
+
+        assert_eq!(model_info.name, "base.en");
+        assert_eq!(output_path, models_dir.join("base.en.bin"));
+        assert_eq!(manager.models_dir(), models_dir);
+    }
+
+    #[test]
+    fn test_active_download_guard_rejects_duplicate_operations() {
+        use crate::commands::model::register_active_download;
+        use std::collections::HashMap;
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex as StdMutex};
+
+        let active_downloads = Arc::new(StdMutex::new(HashMap::<String, Arc<AtomicBool>>::new()));
+        let first_flag = Arc::new(AtomicBool::new(false));
+        let second_flag = Arc::new(AtomicBool::new(false));
+
+        register_active_download(&active_downloads, "base.en", first_flag.clone()).unwrap();
+
+        let err = register_active_download(&active_downloads, "base.en", second_flag.clone())
+            .unwrap_err();
+        assert!(err.contains("already in progress"));
+
+        let downloads = active_downloads.lock().unwrap();
+        assert!(std::ptr::eq(
+            downloads.get("base.en").unwrap().as_ref(),
+            first_flag.as_ref()
+        ));
+        assert!(!std::ptr::eq(
+            downloads.get("base.en").unwrap().as_ref(),
+            second_flag.as_ref()
+        ));
     }
 
     #[test]

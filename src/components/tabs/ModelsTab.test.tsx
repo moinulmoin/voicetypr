@@ -1,16 +1,11 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ModelsTab } from './ModelsTab';
 
-// Mock sonner
-vi.mock('sonner', () => ({
-  toast: {
-    info: vi.fn(),
-    warning: vi.fn(),
-    error: vi.fn(),
-    success: vi.fn()
-  }
-}));
+
+const mockUpdateSettings = vi.fn();
+const mockDeleteModel = vi.fn();
+
 
 // Mock contexts
 vi.mock('@/contexts/SettingsContext', () => ({
@@ -18,7 +13,8 @@ vi.mock('@/contexts/SettingsContext', () => ({
     settings: {
       current_model: 'base.en',
       current_model_engine: 'whisper'
-    }
+    },
+    updateSettings: mockUpdateSettings
   })
 }));
 
@@ -62,7 +58,7 @@ vi.mock('@/contexts/ModelManagementContext', () => ({
     verifyingModels: new Set(),
     sortedModels: Object.entries(mockModels),
     downloadModel: vi.fn(),
-    deleteModel: vi.fn(),
+    deleteModel: mockDeleteModel,
     cancelDownload: vi.fn(),
     retryDownload: vi.fn(),
     refreshModels: vi.fn(),
@@ -72,22 +68,14 @@ vi.mock('@/contexts/ModelManagementContext', () => ({
   })
 }));
 
-vi.mock('@/hooks/useEventCoordinator', () => ({
-  useEventCoordinator: () => ({
-    registerEvent: vi.fn((event: string, callback: any) => {
-      (window as any).__testEventCallbacks = (window as any).__testEventCallbacks || {};
-      (window as any).__testEventCallbacks[event] = callback;
-      return vi.fn();
-    })
-  })
-}));
 
 // Mock ModelsSection component
 vi.mock('@/components/sections/ModelsSection', () => ({
-  ModelsSection: ({ models, currentModel }: any) => (
+  ModelsSection: ({ models, currentModel, onDelete }: any) => (
     <div data-testid="models-section">
       <div>Current Model: {currentModel}</div>
       <div>Models Count: {models.length}</div>
+      <button onClick={() => onDelete(currentModel)}>Delete Current</button>
     </div>
   )
 }));
@@ -95,7 +83,8 @@ vi.mock('@/components/sections/ModelsSection', () => ({
 describe('ModelsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (window as any).__testEventCallbacks = {};
+    mockDeleteModel.mockResolvedValue(true);
+    mockUpdateSettings.mockResolvedValue(undefined);
   });
 
   it('displays current model and available models', () => {
@@ -104,18 +93,28 @@ describe('ModelsTab', () => {
     expect(screen.getByText('Models Count: 2')).toBeInTheDocument();
   });
 
-  it('shows error toast on download failure', async () => {
-    const { toast } = await import('sonner');
+  it('keeps current model when delete confirmation is cancelled', async () => {
+    mockDeleteModel.mockResolvedValue(false);
+
     render(<ModelsTab />);
+    fireEvent.click(screen.getByRole('button', { name: /delete current/i }));
 
-    const callback = (window as any).__testEventCallbacks['download-error'];
-    callback({ model: 'small.en', error: 'Network error' });
-
-    expect(toast.error).toHaveBeenCalledWith(
-      'Download Failed',
-      expect.objectContaining({
-        description: expect.stringContaining('small.en')
-      })
-    );
+    await waitFor(() => {
+      expect(mockDeleteModel).toHaveBeenCalledWith('base.en');
+    });
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
   });
+
+  it('clears current model only after successful deletion', async () => {
+    render(<ModelsTab />);
+    fireEvent.click(screen.getByRole('button', { name: /delete current/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateSettings).toHaveBeenCalledWith({
+        current_model: '',
+        current_model_engine: 'whisper'
+      });
+    });
+  });
+
 });

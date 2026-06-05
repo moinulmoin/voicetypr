@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Sparkles } from "lucide-react";
 import { AppErrorBoundary } from "./ErrorBoundary";
@@ -22,7 +22,71 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
 import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { updateService } from "@/services/updateService";
-// Type for error event payloads from backend
+const ACTIVE_SECTION_STORAGE_KEY = "voicetypr:activeSection";
+
+const VALID_SECTIONS = new Set([
+  "overview",
+  "recordings",
+  "audio",
+  "general",
+  "models",
+  "formatting",
+  "advanced",
+  "license",
+  "about",
+  "help",
+]);
+
+function readStoredActiveSection(): string {
+  try {
+    const stored = sessionStorage.getItem(ACTIVE_SECTION_STORAGE_KEY);
+    if (stored && VALID_SECTIONS.has(stored)) {
+      return stored;
+    }
+  } catch {
+    // sessionStorage may be unavailable
+  }
+  return "overview";
+}
+
+function isEditableContextTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  if (target.isContentEditable) {
+    return true;
+  }
+
+  const editable = target.closest(
+    'input, textarea, select, [contenteditable=""], [contenteditable="true"]'
+  );
+  if (!editable) {
+    return false;
+  }
+
+  if (editable instanceof HTMLInputElement) {
+    switch (editable.type) {
+      case "button":
+      case "checkbox":
+      case "color":
+      case "file":
+      case "hidden":
+      case "image":
+      case "radio":
+      case "range":
+      case "reset":
+      case "submit":
+        return false;
+      default:
+        return true;
+    }
+  }
+
+  return true;
+}
+
+
 interface ErrorEventPayload {
   title?: string;
   message: string;
@@ -36,7 +100,15 @@ interface ErrorEventPayload {
 
 export function AppContainer() {
   const { registerEvent } = useEventCoordinator("main");
-  const [activeSection, setActiveSection] = useState<string>("overview");
+  const [activeSection, setActiveSectionState] = useState(readStoredActiveSection);
+  const setActiveSection = useCallback((section: string) => {
+    setActiveSectionState(section);
+    try {
+      sessionStorage.setItem(ACTIVE_SECTION_STORAGE_KEY, section);
+    } catch {
+      // sessionStorage may be unavailable
+    }
+  }, []);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [justUpdatedVersion, setJustUpdatedVersion] = useState<string | null>(null);
   const { settings, refreshSettings } = useSettings();
@@ -138,7 +210,7 @@ export function AppContainer() {
         unlisten();
       }
     };
-  }, [registerEvent]);
+  }, [registerEvent, setActiveSection]);
 
   // Settings-dependent initialization (onboarding check, cleanup, update service)
   useEffect(() => {
@@ -228,37 +300,46 @@ export function AppContainer() {
 
   // Main App Layout
   return (
-    <SidebarProvider>
-      <Sidebar
-        activeSection={activeSection}
-        onSectionChange={setActiveSection}
-      />
-      <SidebarInset>
-        <TabContainer activeSection={activeSection} />
-      </SidebarInset>
+    <div
+      className="h-full w-full"
+      onContextMenu={(event) => {
+        if (!isEditableContextTarget(event.target)) {
+          event.preventDefault();
+        }
+      }}
+    >
+      <SidebarProvider>
+        <Sidebar
+          activeSection={activeSection}
+          onSectionChange={setActiveSection}
+        />
+        <SidebarInset>
+          <TabContainer activeSection={activeSection} />
+        </SidebarInset>
 
-      {/* Post-update notification dialog */}
-      <Dialog
-        open={!!justUpdatedVersion}
-        onOpenChange={(open) => { if (!open) setJustUpdatedVersion(null); }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-              VoiceTypr Updated
-            </DialogTitle>
-            <DialogDescription>
-              Successfully updated to version {justUpdatedVersion}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button onClick={() => setJustUpdatedVersion(null)}>
-              Dismiss
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </SidebarProvider>
+        {/* Post-update notification dialog */}
+        <Dialog
+          open={!!justUpdatedVersion}
+          onOpenChange={(open) => { if (!open) setJustUpdatedVersion(null); }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-primary" />
+                VoiceTypr Updated
+              </DialogTitle>
+              <DialogDescription>
+                Successfully updated to version {justUpdatedVersion}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button onClick={() => setJustUpdatedVersion(null)}>
+                Dismiss
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </SidebarProvider>
+    </div>
   );
 }
