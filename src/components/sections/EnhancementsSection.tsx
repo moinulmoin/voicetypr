@@ -23,7 +23,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import type { EnhancementOptions, EnhancementPreset } from "@/types/ai";
-import { fromBackendOptions, toBackendOptions } from "@/types/ai";
+import {
+  fromBackendOptions,
+  presetRequiresAiFormatting,
+  toBackendOptions,
+} from "@/types/ai";
 import type { WritingSettings } from "@/types/writing";
 import { defaultWritingSettings } from "@/types/writing";
 import { AI_PROVIDERS } from "@/types/providers";
@@ -71,17 +75,21 @@ export function EnhancementsSection() {
   const [enhancementOptions, setEnhancementOptions] = useState<{
     preset: EnhancementPreset;
   }>({
-    preset: "Default",
+    preset: "PersonalDictation",
   });
   const [writingSettings, setWritingSettings] =
     useState<WritingSettings>(defaultWritingSettings);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const writingSaveGeneration = useRef(0);
 
-  const loadEnhancementOptions = async () => {
+  const loadEnhancementOptions = async (aiEnabled: boolean) => {
     try {
       const options = await invoke<EnhancementOptions>("get_enhancement_options");
-      setEnhancementOptions(fromBackendOptions(options));
+      let nextOptions = fromBackendOptions(options, aiEnabled);
+      if (!aiEnabled && presetRequiresAiFormatting(nextOptions.preset)) {
+        nextOptions = { preset: "PersonalDictation" };
+      }
+      setEnhancementOptions(nextOptions);
     } catch (error) {
       console.error("Failed to load enhancement options:", error);
     }
@@ -165,17 +173,25 @@ export function EnhancementsSection() {
       providersWithKeys.forEach((providerId) => {
         fetchModels(providerId);
       });
+
+      return loadedAISettings;
     } catch (error) {
       console.error("Failed to load AI settings:", error);
+      return null;
     }
   }, [readiness, fetchModels]);
 
   useEffect(() => {
     if (!settingsLoaded) {
-      loadAISettings();
-      loadEnhancementOptions();
-      loadWritingSettings();
-      setSettingsLoaded(true);
+      (async () => {
+        const loadedAISettings = await loadAISettings();
+        await loadEnhancementOptions(loadedAISettings?.enabled ?? false);
+        await loadWritingSettings();
+        setSettingsLoaded(true);
+      })().catch((error) => {
+        console.error("Failed to load formatting settings:", error);
+        setSettingsLoaded(true);
+      });
     }
   }, [settingsLoaded, loadAISettings]);
 
@@ -250,6 +266,15 @@ export function EnhancementsSection() {
             provider: "",
             model: "",
           });
+          setEnhancementOptions({ preset: "PersonalDictation" });
+          try {
+            await updateSettings({
+              final_text_language: "same_as_transcript",
+              transcription_task: "transcribe",
+            });
+          } catch (error) {
+            console.error("Failed to refresh language settings after API key removal:", error);
+          }
         }
       },
     );
@@ -269,10 +294,9 @@ export function EnhancementsSection() {
         fns.forEach((fn) => fn());
       });
     };
-  }, [settingsLoaded, aiSettings.provider, clearModels]);
+  }, [settingsLoaded, aiSettings.provider, clearModels, updateSettings]);
 
-  const handlePresetChange = async (preset: typeof enhancementOptions.preset) => {
-    const nextOptions = { preset };
+  const persistEnhancementOptions = async (nextOptions: { preset: EnhancementPreset }) => {
     setEnhancementOptions(nextOptions);
     try {
       await invoke("update_enhancement_options", {
@@ -282,6 +306,20 @@ export function EnhancementsSection() {
       const message = getErrorMessage(error, "Failed to save enhancement options");
       toast.error(message);
     }
+  };
+
+  const handlePresetChange = async (preset: typeof enhancementOptions.preset) => {
+    if (presetRequiresAiFormatting(preset) && !aiSettings.enabled) {
+      return;
+    }
+    if (
+      preset === "PersonalDictation" &&
+      settings?.final_text_language &&
+      settings.final_text_language !== "same_as_transcript"
+    ) {
+      await handleFinalTextLanguageChange("same_as_transcript");
+    }
+    await persistEnhancementOptions({ preset });
   };
 
   const handleWritingSettingsChange = async (nextSettings: WritingSettings) => {
@@ -330,6 +368,26 @@ export function EnhancementsSection() {
       });
 
       setAISettings((prev) => ({ ...prev, enabled }));
+
+      let nextPreset = enhancementOptions.preset;
+      if (!enabled && presetRequiresAiFormatting(enhancementOptions.preset)) {
+        nextPreset = "PersonalDictation";
+      } else if (enabled && enhancementOptions.preset === "PersonalDictation") {
+        nextPreset = "CleanDictation";
+      }
+
+      if (
+        nextPreset === "PersonalDictation" &&
+        settings?.final_text_language &&
+        settings.final_text_language !== "same_as_transcript"
+      ) {
+        await handleFinalTextLanguageChange("same_as_transcript");
+      }
+
+      if (nextPreset !== enhancementOptions.preset) {
+        await persistEnhancementOptions({ preset: nextPreset });
+      }
+
       toast.success(enabled ? "AI formatting enabled" : "AI formatting disabled");
     } catch (error) {
       const message = getErrorMessage(error, "Failed to update AI settings");
@@ -419,6 +477,12 @@ export function EnhancementsSection() {
       (isUsingCustomProvider || providerApiKeys[aiSettings.provider]),
   );
 
+  const storedFinalTextLanguage = settings?.final_text_language ?? "same_as_transcript";
+  const effectiveFinalTextLanguage =
+    enhancementOptions.preset === "PersonalDictation"
+      ? "same_as_transcript"
+      : storedFinalTextLanguage;
+
   const activeModelName = isUsingCustomProvider
     ? customModelName
     : getModels(aiSettings.provider).find((model) => model.id === aiSettings.model)?.name ||
@@ -443,17 +507,18 @@ export function EnhancementsSection() {
                   <DialogHeader>
                     <DialogTitle>Formatting guide</DialogTitle>
                     <DialogDescription>
-                      Use presets for the shape of the final text. Deterministic replacements,
-                      dictionary words, snippets, and language rules still apply before optional AI cleanup.
+                      Use modes for the shape of the final text. Corrections, words & names, text
+                      shortcuts, and language rules still apply before optional AI cleanup.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-3 text-sm leading-6 text-muted-foreground">
                     <p><strong className="text-foreground">Setup</strong> works in order: set up one provider, save its API key, select a model, then turn on AI formatting when you want language conversion or heavier cleanup.</p>
-                    <p><strong className="text-foreground">Default</strong> fixes punctuation and grammar without changing intent.</p>
+                    <p><strong className="text-foreground">Personal Dictation</strong> transcribes with local mechanical cleanup and Personal Library rules, without semantic AI rewriting.</p>
+                    <p><strong className="text-foreground">Clean Dictation</strong> fixes punctuation and grammar without changing intent.</p>
                     <p><strong className="text-foreground">Writing</strong> polishes dictated text into clear prose.</p>
                     <p><strong className="text-foreground">Notes</strong> organizes speech into concise structured notes.</p>
                     <p><strong className="text-foreground">Message</strong> formats a concise message for chat or email.</p>
-                    <p><strong className="text-foreground">Coding</strong> creates conventional commits and code annotations.</p>
+                    <p><strong className="text-foreground">Code</strong> creates conventional commits and code annotations.</p>
                   </div>
                 </DialogContent>
               </Dialog>
@@ -466,6 +531,7 @@ export function EnhancementsSection() {
             <FieldTitle className="text-sm">AI formatting</FieldTitle>
             <Switch
               id="ai-formatting"
+              aria-label="AI formatting"
               checked={aiSettings.enabled}
               onCheckedChange={handleToggleEnabled}
               disabled={!hasAnyValidConfig || !hasSelectedModel}
@@ -542,8 +608,7 @@ export function EnhancementsSection() {
             </FieldDescription>
 
             {!aiSettings.enabled &&
-              settings?.final_text_language &&
-              settings.final_text_language !== "same_as_transcript" && (
+              effectiveFinalTextLanguage !== "same_as_transcript" && (
                 <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
                   Final text language changes beyond the raw transcript require AI formatting to be enabled.
                 </div>
@@ -551,8 +616,9 @@ export function EnhancementsSection() {
 
             <EnhancementSettings
               preset={enhancementOptions.preset}
-              finalTextLanguage={settings?.final_text_language ?? "same_as_transcript"}
+              finalTextLanguage={effectiveFinalTextLanguage}
               writingSettings={writingSettings}
+              aiFormattingEnabled={aiSettings.enabled}
               onPresetChange={handlePresetChange}
               onFinalTextLanguageChange={handleFinalTextLanguageChange}
               onWritingSettingsChange={handleWritingSettingsChange}
@@ -605,6 +671,10 @@ export function EnhancementsSection() {
               hasApiKey: true,
             }));
             setProviderApiKeys((prev) => ({ ...prev, custom: true }));
+
+            if (nextEnabled && enhancementOptions.preset === "PersonalDictation") {
+              await persistEnhancementOptions({ preset: "CleanDictation" });
+            }
 
             toast.success("Custom provider configured");
             setShowOpenAIConfig(false);

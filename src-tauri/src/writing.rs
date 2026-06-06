@@ -27,21 +27,30 @@ fn default_preserve_literal() -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WritingMode {
+    PersonalDictation,
     CleanDictation,
     Writing,
     Notes,
     Message,
-    Coding,
+    #[serde(alias = "coding")]
+    Code,
+}
+
+impl WritingMode {
+    pub fn requires_ai_formatting(self) -> bool {
+        !matches!(self, Self::PersonalDictation)
+    }
 }
 
 impl From<EnhancementPreset> for WritingMode {
     fn from(value: EnhancementPreset) -> Self {
         match value {
-            EnhancementPreset::Default => Self::CleanDictation,
+            EnhancementPreset::PersonalDictation => Self::PersonalDictation,
+            EnhancementPreset::CleanDictation => Self::CleanDictation,
             EnhancementPreset::Writing => Self::Writing,
             EnhancementPreset::Notes => Self::Notes,
             EnhancementPreset::Message => Self::Message,
-            EnhancementPreset::Coding => Self::Coding,
+            EnhancementPreset::Code => Self::Code,
         }
     }
 }
@@ -238,10 +247,11 @@ pub fn save_writing_settings(app: &AppHandle, settings: &WritingSettings) -> Res
         .map_err(|e| format!("Failed to save writing settings: {}", e))
 }
 
-async fn load_writing_profile(app: &AppHandle) -> Result<WritingProfile, String> {
-    let options = crate::commands::ai::get_enhancement_options(app.clone())
-        .await
-        .unwrap_or_default();
+async fn load_writing_profile(app: &AppHandle, ai_enabled: bool) -> Result<WritingProfile, String> {
+    let options =
+        crate::commands::ai::get_enhancement_options_for_ai_enabled(app.clone(), ai_enabled)
+            .await
+            .unwrap_or_default();
     let store = app.store("settings").map_err(|e| e.to_string())?;
     let legacy_translate_to_english = store
         .get("translate_to_english")
@@ -258,12 +268,16 @@ async fn load_writing_profile(app: &AppHandle) -> Result<WritingProfile, String>
         .get("final_text_language")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
 
+    let mode = options.preset.into();
+    let mut final_text_language =
+        normalize_final_text_language(stored_final_text_language.as_deref(), &transcription_task);
+    if mode == WritingMode::PersonalDictation {
+        final_text_language = FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string();
+    }
+
     Ok(WritingProfile {
-        mode: options.preset.into(),
-        final_text_language: normalize_final_text_language(
-            stored_final_text_language.as_deref(),
-            &transcription_task,
-        ),
+        mode,
+        final_text_language,
     })
 }
 
@@ -1448,16 +1462,6 @@ async fn run_smart_formatting(request: SmartFormattingRequest<'_>) -> Result<Str
 
             Ok(enhanced)
         }
-        Err(error) if !request.needs_output_language_transform => {
-            request.warnings.push(WritingWarning {
-                code: "ai_cleanup_failed".to_string(),
-                message: format!(
-                    "AI cleanup failed; deterministic writing result was used: {}",
-                    error
-                ),
-            });
-            Ok(request.text.to_string())
-        }
         Err(error) => Err(error),
     }
 }
@@ -1467,7 +1471,7 @@ pub async fn process_transcription(
     transcription: TranscriptionResult,
     ai_enabled: bool,
 ) -> Result<WritingResult, String> {
-    let profile = load_writing_profile(&app).await?;
+    let profile = load_writing_profile(&app, ai_enabled).await?;
     let settings = load_writing_settings(&app)?;
     let transcript_language = transcription.transcript_language.clone().or_else(|| {
         transcription
@@ -1503,11 +1507,21 @@ pub async fn process_transcription(
         .map(|language| language != output_language)
         .unwrap_or(false);
 
-    if needs_output_language_transform && !ai_enabled && !library_result.literal_locked {
+    let can_run_ai_formatting = ai_enabled && profile.mode != WritingMode::PersonalDictation;
+
+    if needs_output_language_transform && !can_run_ai_formatting && !library_result.literal_locked {
         return Err(
             "Final output language requires AI enhancement or native translation".to_string(),
         );
     }
+
+    if profile.mode.requires_ai_formatting() && !ai_enabled && !library_result.literal_locked {
+        return Err(
+            "This writing mode requires AI formatting. Enable AI formatting in settings or switch to Personal Dictation.".to_string(),
+        );
+    }
+
+    let should_run_ai = can_run_ai_formatting && !library_result.literal_locked;
 
     let mut final_text = if library_result.literal_locked {
         if needs_output_language_transform {
@@ -1520,7 +1534,7 @@ pub async fn process_transcription(
             );
         }
         library_result.text.clone()
-    } else if ai_enabled {
+    } else if should_run_ai {
         run_smart_formatting(SmartFormattingRequest {
             app,
             text: &library_result.text,
@@ -1549,7 +1563,7 @@ pub async fn process_transcription(
 
     Ok(WritingResult {
         raw_text: transcription.raw_text.clone(),
-        ai_applied: ai_enabled && final_text != library_result.text,
+        ai_applied: should_run_ai && final_text != library_result.text,
         final_text,
         output_language,
         mode: profile.mode,
@@ -1584,7 +1598,11 @@ mod tests {
     #[test]
     fn test_writing_mode_maps_from_presets() {
         assert_eq!(
-            WritingMode::from(EnhancementPreset::Default),
+            WritingMode::from(EnhancementPreset::PersonalDictation),
+            WritingMode::PersonalDictation
+        );
+        assert_eq!(
+            WritingMode::from(EnhancementPreset::CleanDictation),
             WritingMode::CleanDictation
         );
         assert_eq!(
@@ -1600,9 +1618,16 @@ mod tests {
             WritingMode::Message
         );
         assert_eq!(
-            WritingMode::from(EnhancementPreset::Coding),
-            WritingMode::Coding
+            WritingMode::from(EnhancementPreset::Code),
+            WritingMode::Code
         );
+    }
+
+    #[test]
+    fn test_writing_mode_requires_ai_formatting() {
+        assert!(!WritingMode::PersonalDictation.requires_ai_formatting());
+        assert!(WritingMode::CleanDictation.requires_ai_formatting());
+        assert!(WritingMode::Code.requires_ai_formatting());
     }
 
     #[test]

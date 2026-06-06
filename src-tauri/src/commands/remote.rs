@@ -1262,6 +1262,10 @@ pub async fn transcribe_remote(
     let timeout_ms = timeout_ms_for_wav_file(&audio_path, TranscriptionSource::Upload);
 
     let store = app.store("settings").map_err(|e| e.to_string())?;
+    let ai_enabled = store
+        .get("ai_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let legacy_speech_language = store
         .get("language")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
@@ -1276,10 +1280,24 @@ pub async fn transcribe_remote(
     let stored_transcription_task = store
         .get("transcription_task")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
-    let transcription_task = crate::commands::settings::normalize_transcription_task(
-        stored_transcription_task.as_deref(),
-        legacy_translate_to_english,
-    );
+    drop(store);
+
+    let uses_personal_dictation = if !ai_enabled {
+        true
+    } else {
+        crate::commands::ai::get_enhancement_options_for_ai_enabled(app.clone(), ai_enabled)
+            .await
+            .map(|options| !options.preset.requires_ai_formatting())
+            .unwrap_or(false)
+    };
+    let transcription_task = if uses_personal_dictation {
+        crate::commands::settings::TRANSCRIPTION_TASK_TRANSCRIBE.to_string()
+    } else {
+        crate::commands::settings::normalize_transcription_task(
+            stored_transcription_task.as_deref(),
+            legacy_translate_to_english,
+        )
+    };
 
     // Create HTTP client connection
     let server_conn =
@@ -1310,10 +1328,6 @@ pub async fn transcribe_remote(
     let transcription = crate::transcription::TranscriptionResult::new(&job, response.text)
         .with_transcript_language(response.transcript_language)
         .with_processing_duration_ms(Some(response.duration_ms));
-    let ai_enabled = store
-        .get("ai_enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let writing_result =
         crate::writing::process_transcription(app.clone(), transcription, ai_enabled).await?;
     Ok(writing_result.final_text)

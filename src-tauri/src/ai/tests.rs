@@ -34,34 +34,49 @@ mod tests {
 
         let text = "um hello world";
 
-        // Test Default preset
-        let default_options = EnhancementOptions::default();
-        let default_prompt = build_enhancement_prompt(text, None, &default_options, None);
-        assert!(default_prompt.contains("post-processor for voice transcripts"));
+        // Test Clean Dictation preset
+        let clean_options = EnhancementOptions {
+            preset: EnhancementPreset::CleanDictation,
+        };
+        let clean_prompt = build_enhancement_prompt(text, None, &clean_options, None);
+        assert!(clean_prompt.contains("post-processor for voice transcripts"));
+        assert!(!clean_prompt.contains("Now refine"));
+
+        // Test Personal Dictation uses base cleanup prompt when invoked
+        let personal_options = EnhancementOptions {
+            preset: EnhancementPreset::PersonalDictation,
+        };
+        let personal_prompt = build_enhancement_prompt(text, None, &personal_options, None);
+        assert!(personal_prompt.contains("post-processor for voice transcripts"));
+        assert!(!personal_prompt.contains("Now refine"));
 
         // Test Writing preset
-        let mut writing_options = EnhancementOptions::default();
-        writing_options.preset = EnhancementPreset::Writing;
+        let writing_options = EnhancementOptions {
+            preset: EnhancementPreset::Writing,
+        };
         let writing_prompt = build_enhancement_prompt(text, None, &writing_options, None);
         assert!(writing_prompt.contains("refine the cleaned text for polished prose"));
 
         // Test Notes preset
-        let mut notes_options = EnhancementOptions::default();
-        notes_options.preset = EnhancementPreset::Notes;
+        let notes_options = EnhancementOptions {
+            preset: EnhancementPreset::Notes,
+        };
         let notes_prompt = build_enhancement_prompt(text, None, &notes_options, None);
         assert!(notes_prompt.contains("organize the cleaned text into structured notes"));
 
         // Test Message preset
-        let mut message_options = EnhancementOptions::default();
-        message_options.preset = EnhancementPreset::Message;
+        let message_options = EnhancementOptions {
+            preset: EnhancementPreset::Message,
+        };
         let message_prompt = build_enhancement_prompt(text, None, &message_options, None);
         assert!(message_prompt.contains("format the cleaned text as a concise message"));
 
-        // Test Coding preset
-        let mut coding_options = EnhancementOptions::default();
-        coding_options.preset = EnhancementPreset::Coding;
-        let coding_prompt = build_enhancement_prompt(text, None, &coding_options, None);
-        assert!(coding_prompt.contains("convert the cleaned text for a coding context"));
+        // Test Code preset
+        let code_options = EnhancementOptions {
+            preset: EnhancementPreset::Code,
+        };
+        let code_prompt = build_enhancement_prompt(text, None, &code_options, None);
+        assert!(code_prompt.contains("convert the cleaned text for a coding context"));
     }
 
     #[test]
@@ -72,16 +87,16 @@ mod tests {
 
         // Test that ALL presets include self-correction rules
         let presets = vec![
-            EnhancementPreset::Default,
+            EnhancementPreset::PersonalDictation,
+            EnhancementPreset::CleanDictation,
             EnhancementPreset::Writing,
             EnhancementPreset::Notes,
             EnhancementPreset::Message,
-            EnhancementPreset::Coding,
+            EnhancementPreset::Code,
         ];
 
         for preset in presets {
-            let mut options = EnhancementOptions::default();
-            options.preset = preset.clone();
+            let options = EnhancementOptions { preset };
             let prompt = build_enhancement_prompt(test_text, None, &options, None);
 
             // All prompts should include self-correction rules
@@ -101,16 +116,16 @@ mod tests {
 
         // Test that all presets include base processing
         let presets = vec![
-            EnhancementPreset::Default,
+            EnhancementPreset::PersonalDictation,
+            EnhancementPreset::CleanDictation,
             EnhancementPreset::Writing,
             EnhancementPreset::Notes,
             EnhancementPreset::Message,
-            EnhancementPreset::Coding,
+            EnhancementPreset::Code,
         ];
 
         for preset in presets {
-            let mut options = EnhancementOptions::default();
-            options.preset = preset.clone();
+            let options = EnhancementOptions { preset };
             let prompt = build_enhancement_prompt(test_text, None, &options, None);
 
             // All should include self-correction rules
@@ -127,8 +142,14 @@ mod tests {
                 preset
             );
 
-            // Non-default presets should have transformation instruction
-            if !matches!(preset, EnhancementPreset::Default) {
+            // AI transform presets should have transformation instruction
+            if matches!(
+                preset,
+                EnhancementPreset::Writing
+                    | EnhancementPreset::Notes
+                    | EnhancementPreset::Message
+                    | EnhancementPreset::Code
+            ) {
                 assert!(
                     prompt.contains("Now"),
                     "Preset {:?} should have transformation",
@@ -140,13 +161,15 @@ mod tests {
 
     #[test]
     fn test_default_prompt_comprehensive_features() {
-        use crate::ai::prompts::{build_enhancement_prompt, EnhancementOptions};
+        use crate::ai::prompts::{build_enhancement_prompt, EnhancementOptions, EnhancementPreset};
 
         let test_text = "test transcription";
-        let options = EnhancementOptions::default();
+        let options = EnhancementOptions {
+            preset: EnhancementPreset::CleanDictation,
+        };
         let prompt = build_enhancement_prompt(test_text, None, &options, None);
 
-        // Test that Default prompt includes all comprehensive features
+        // Test that Clean Dictation prompt includes all comprehensive features
 
         // 1. Self-correction handling
         assert!(
@@ -204,9 +227,11 @@ mod tests {
 
     #[test]
     fn test_language_aware_prompts() {
-        use crate::ai::prompts::{build_enhancement_prompt, EnhancementOptions};
+        use crate::ai::prompts::{build_enhancement_prompt, EnhancementOptions, EnhancementPreset};
 
-        let options = EnhancementOptions::default();
+        let options = EnhancementOptions {
+            preset: EnhancementPreset::CleanDictation,
+        };
         let text = "test text";
 
         // English (default)
@@ -227,41 +252,84 @@ mod tests {
     }
 
     #[test]
+    fn test_preset_migration() {
+        use crate::ai::prompts::{migrate_preset_str, EnhancementPreset};
+
+        assert_eq!(
+            migrate_preset_str("Default", false),
+            EnhancementPreset::PersonalDictation
+        );
+        assert_eq!(
+            migrate_preset_str("Default", true),
+            EnhancementPreset::CleanDictation
+        );
+        assert_eq!(migrate_preset_str("Coding", false), EnhancementPreset::Code);
+        assert_eq!(
+            migrate_preset_str("Prompts", false),
+            EnhancementPreset::Code
+        );
+        assert_eq!(migrate_preset_str("Commit", false), EnhancementPreset::Code);
+        assert_eq!(
+            migrate_preset_str("Email", false),
+            EnhancementPreset::Writing
+        );
+        assert_eq!(
+            migrate_preset_str("Unknown", false),
+            EnhancementPreset::PersonalDictation
+        );
+    }
+
+    #[test]
+    fn test_default_options_respect_ai_enabled() {
+        use crate::ai::prompts::{EnhancementOptions, EnhancementPreset};
+
+        assert_eq!(
+            EnhancementOptions::default_for_ai_enabled(false).preset,
+            EnhancementPreset::PersonalDictation
+        );
+        assert_eq!(
+            EnhancementOptions::default_for_ai_enabled(true).preset,
+            EnhancementPreset::CleanDictation
+        );
+    }
+
+    #[test]
     fn test_legacy_preset_deserialization() {
         use crate::ai::prompts::EnhancementPreset;
 
-        // Legacy "Prompts" deserializes to Coding
         let preset: EnhancementPreset = serde_json::from_str("\"Prompts\"").unwrap();
-        assert!(matches!(preset, EnhancementPreset::Coding));
+        assert!(matches!(preset, EnhancementPreset::Code));
 
-        // Legacy "Email" deserializes to Writing
         let preset: EnhancementPreset = serde_json::from_str("\"Email\"").unwrap();
         assert!(matches!(preset, EnhancementPreset::Writing));
 
-        // Legacy "Commit" deserializes to Coding
         let preset: EnhancementPreset = serde_json::from_str("\"Commit\"").unwrap();
-        assert!(matches!(preset, EnhancementPreset::Coding));
+        assert!(matches!(preset, EnhancementPreset::Code));
 
-        // Unknown values fall back to Default
+        let preset: EnhancementPreset = serde_json::from_str("\"Default\"").unwrap();
+        assert!(matches!(preset, EnhancementPreset::PersonalDictation));
+
         let preset: EnhancementPreset = serde_json::from_str("\"Unknown\"").unwrap();
-        assert!(matches!(preset, EnhancementPreset::Default));
+        assert!(matches!(preset, EnhancementPreset::PersonalDictation));
 
-        // New presets deserialize correctly
         for (json, expected) in [
-            ("\"Default\"", EnhancementPreset::Default),
+            (
+                "\"PersonalDictation\"",
+                EnhancementPreset::PersonalDictation,
+            ),
+            ("\"CleanDictation\"", EnhancementPreset::CleanDictation),
             ("\"Writing\"", EnhancementPreset::Writing),
             ("\"Notes\"", EnhancementPreset::Notes),
             ("\"Message\"", EnhancementPreset::Message),
-            ("\"Coding\"", EnhancementPreset::Coding),
+            ("\"Code\"", EnhancementPreset::Code),
         ] {
             let preset: EnhancementPreset = serde_json::from_str(json).unwrap();
             assert_eq!(preset, expected, "Failed for {}", json);
         }
 
-        // Serialization always outputs new names (never legacy)
         assert_eq!(
-            serde_json::to_string(&EnhancementPreset::Coding).unwrap(),
-            "\"Coding\""
+            serde_json::to_string(&EnhancementPreset::Code).unwrap(),
+            "\"Code\""
         );
         assert_eq!(
             serde_json::to_string(&EnhancementPreset::Message).unwrap(),
@@ -270,21 +338,38 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_enhancement_options_from_value() {
+        use crate::ai::prompts::{parse_enhancement_options_from_value, EnhancementPreset};
+
+        let value = serde_json::json!({"preset": "Default"});
+        let options = parse_enhancement_options_from_value(&value, true).unwrap();
+        assert_eq!(options.preset, EnhancementPreset::CleanDictation);
+
+        let options = parse_enhancement_options_from_value(&value, false).unwrap();
+        assert_eq!(options.preset, EnhancementPreset::PersonalDictation);
+    }
+
+    #[test]
     fn test_legacy_options_deserialization() {
         use crate::ai::prompts::EnhancementOptions;
 
-        // Legacy JSON with "Commit" preset stored in settings should load without error
         let json = r#"{"preset":"Commit"}"#;
         let opts: EnhancementOptions = serde_json::from_str(json).unwrap();
-        // Commit maps to Coding, so the prompt builder should work
         let prompt =
             crate::ai::prompts::build_enhancement_prompt("fix login bug", None, &opts, None);
         assert!(prompt.contains("coding context"));
 
-        // Legacy "Email" options
         let json = r#"{"preset":"Email"}"#;
         let opts: EnhancementOptions = serde_json::from_str(json).unwrap();
         let prompt = crate::ai::prompts::build_enhancement_prompt("hello team", None, &opts, None);
         assert!(prompt.contains("polished prose"));
+    }
+
+    #[test]
+    fn test_personal_dictation_does_not_require_ai() {
+        use crate::ai::prompts::EnhancementPreset;
+
+        assert!(!EnhancementPreset::PersonalDictation.requires_ai_formatting());
+        assert!(EnhancementPreset::CleanDictation.requires_ai_formatting());
     }
 }

@@ -25,7 +25,7 @@ import {
   InputGroupTextarea,
 } from "@/components/ui/input-group";
 import { Switch } from "@/components/ui/switch";
-import type { EnhancementPreset } from "@/types/ai";
+import { presetRequiresAiFormatting, type EnhancementPreset } from "@/types/ai";
 import type {
   CustomWord,
   Snippet,
@@ -33,6 +33,7 @@ import type {
   WritingSettings,
 } from "@/types/writing";
 import {
+  AudioLines,
   Code,
   FileText,
   Globe,
@@ -47,6 +48,7 @@ interface EnhancementSettingsProps {
   preset: EnhancementPreset;
   finalTextLanguage: string;
   writingSettings: WritingSettings;
+  aiFormattingEnabled: boolean;
   onPresetChange: (preset: EnhancementPreset) => void;
   onFinalTextLanguageChange: (value: string) => void;
   onWritingSettingsChange: (settings: WritingSettings) => void;
@@ -74,7 +76,7 @@ function ReplacementEditor({
     <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <FieldLegend className="mb-1">Text replacements</FieldLegend>
+          <FieldLegend className="mb-1">Corrections</FieldLegend>
           <FieldDescription>
             Deterministic corrections applied before optional AI cleanup.
           </FieldDescription>
@@ -218,7 +220,7 @@ function CustomWordEditor({
     <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <FieldLegend className="mb-1">Personal dictionary words</FieldLegend>
+          <FieldLegend className="mb-1">Words & Names</FieldLegend>
           <FieldDescription>
             Preserve names and domain terms with canonical spellings and optional spoken forms.
           </FieldDescription>
@@ -243,7 +245,7 @@ function CustomWordEditor({
       {customWords.length === 0 ? (
         <Empty className="mt-3 border-border/60 bg-muted/20 p-6">
           <EmptyHeader className="max-w-none gap-1">
-            <EmptyTitle className="text-sm">No personal dictionary words yet</EmptyTitle>
+            <EmptyTitle className="text-sm">No words or names yet</EmptyTitle>
             <EmptyDescription className="text-xs">
               Example: canonical <span className="font-mono">VoiceTypr</span>, spoken form{" "}
               <span className="font-mono">voice typer</span>
@@ -363,9 +365,9 @@ function SnippetEditor({
     <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <FieldLegend className="mb-1">Snippets</FieldLegend>
+          <FieldLegend className="mb-1">Text Shortcuts</FieldLegend>
           <FieldDescription>
-            Whole-utterance template expansions. Literal snippets skip cleanup unless disabled.
+            Whole-utterance template expansions. Literal shortcuts skip cleanup unless disabled.
           </FieldDescription>
         </div>
         <Button
@@ -387,14 +389,14 @@ function SnippetEditor({
           }
         >
           <Plus className="mr-2 h-4 w-4" />
-          Add snippet
+          Add shortcut
         </Button>
       </div>
 
       {snippets.length === 0 ? (
         <Empty className="mt-3 border-border/60 bg-muted/20 p-6">
           <EmptyHeader className="max-w-none gap-1">
-            <EmptyTitle className="text-sm">No snippets yet</EmptyTitle>
+            <EmptyTitle className="text-sm">No text shortcuts yet</EmptyTitle>
             <EmptyDescription className="text-xs">
               Example trigger: <span className="font-mono">insert bug report template</span>
             </EmptyDescription>
@@ -408,7 +410,7 @@ function SnippetEditor({
               className="rounded-lg border border-border/60 bg-background/60 p-3"
             >
               <div className="mb-3 flex items-center justify-between gap-3">
-                <FieldTitle>Snippet {index + 1}</FieldTitle>
+                <FieldTitle>Shortcut {index + 1}</FieldTitle>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">Enabled</span>
                   <Switch
@@ -527,57 +529,77 @@ export function EnhancementSettings({
   preset,
   finalTextLanguage,
   writingSettings,
+  aiFormattingEnabled,
   onPresetChange,
   onFinalTextLanguageChange,
   onWritingSettingsChange,
   disabled = false,
 }: EnhancementSettingsProps) {
-  const presets = [
-    { id: "Default", label: "Default", icon: FileText },
+  const modes = [
+    { id: "PersonalDictation", label: "Personal Dictation", icon: AudioLines },
+    { id: "CleanDictation", label: "Clean Dictation", icon: FileText },
     { id: "Writing", label: "Writing", icon: PenLine },
     { id: "Notes", label: "Notes", icon: StickyNote },
     { id: "Message", label: "Message", icon: MessageSquare },
-    { id: "Coding", label: "Coding", icon: Code },
+    { id: "Code", label: "Code", icon: Code },
   ] as const;
 
-  const usingSpecificLanguage = finalTextLanguage !== "same_as_transcript";
-
+  const allowsSpecificFinalLanguage = preset !== "PersonalDictation";
+  const usingSpecificLanguage =
+    allowsSpecificFinalLanguage && finalTextLanguage !== "same_as_transcript";
+  const selectedRequiresAi = presetRequiresAiFormatting(preset);
   return (
     <div className={`space-y-4 ${disabled ? "opacity-60" : ""}`}>
       <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
-        <FieldLegend className="mb-1">Formatting preset</FieldLegend>
+        <FieldLegend className="mb-1">Formatting mode</FieldLegend>
         <FieldDescription className="mb-3">
           Choose how VoiceTypr structures your final text.
         </FieldDescription>
+        {!aiFormattingEnabled && (
+          <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            AI modes require AI formatting to be enabled and configured above.
+          </div>
+        )}
+        {!aiFormattingEnabled && selectedRequiresAi && (
+          <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            The selected mode requires AI formatting. Turn on AI formatting above or switch to
+            Personal Dictation.
+          </div>
+        )}
         <ButtonGroup className="w-full flex-wrap md:w-fit">
-          {presets.map((presetOption) => {
-            const Icon = presetOption.icon;
-            const isSelected = preset === presetOption.id;
+          {modes.map((modeOption) => {
+            const Icon = modeOption.icon;
+            const isSelected = preset === modeOption.id;
+            const requiresAi = presetRequiresAiFormatting(modeOption.id);
+            const isModeDisabled =
+              disabled || (requiresAi && !aiFormattingEnabled && !isSelected);
             return (
               <Button
-                key={presetOption.id}
+                key={modeOption.id}
                 type="button"
                 variant={isSelected ? "default" : "outline"}
                 size="sm"
-                disabled={disabled}
-                onClick={() => !disabled && onPresetChange(presetOption.id)}
+                disabled={isModeDisabled}
+                onClick={() => !isModeDisabled && onPresetChange(modeOption.id)}
               >
                 <Icon className="h-4 w-4" />
-                {presetOption.label}
+                {modeOption.label}
               </Button>
             );
           })}
         </ButtonGroup>
         <FieldDescription className="mt-3">
-          {preset === "Default" &&
-            "Clean dictation with grammar, punctuation, and intent cleanup."}
+          {preset === "PersonalDictation" &&
+            "Transcription plus local mechanical cleanup and Personal Library rules. No semantic AI rewriting."}
+          {preset === "CleanDictation" &&
+            "Clean dictation with grammar, punctuation, and intent cleanup via AI."}
           {preset === "Writing" &&
             "Polish text into clear, well-structured prose."}
           {preset === "Notes" &&
             "Organize dictation into concise, structured notes."}
           {preset === "Message" &&
             "Format as a clear, well-phrased message."}
-          {preset === "Coding" &&
+          {preset === "Code" &&
             "Create conventional commit messages and code annotations."}
         </FieldDescription>
       </FieldSet>
@@ -604,7 +626,7 @@ export function EnhancementSettings({
             type="button"
             variant={usingSpecificLanguage ? "default" : "outline"}
             size="sm"
-            disabled={disabled}
+            disabled={disabled || !allowsSpecificFinalLanguage}
             onClick={() =>
               onFinalTextLanguageChange(usingSpecificLanguage ? finalTextLanguage : "en")
             }
@@ -648,7 +670,7 @@ export function EnhancementSettings({
 
       <p className="text-xs text-muted-foreground">
         When Soniox or cloud transcription is selected, VoiceTypr may send Personal Library words,
-        names, and corrections as transcription context to improve recognition. Snippets are not
+        names, and corrections as transcription context to improve recognition. Text Shortcuts are not
         sent.
       </p>
 

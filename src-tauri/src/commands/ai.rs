@@ -4,7 +4,7 @@ use crate::commands::audio::pill_toast;
 use crate::commands::settings::{
     normalize_final_text_language, normalize_speech_language_for_model,
     normalize_transcription_task, task_uses_translate_to_english,
-    FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+    FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT, TRANSCRIPTION_TASK_TRANSCRIBE,
 };
 use crate::formatting::messages::{FormattingCommand, FormattingResponse, PROTOCOL_VERSION};
 use crate::formatting::FormattingClient;
@@ -283,8 +283,6 @@ async fn run_openai_probe_request(
 
     Err("OpenAI-compatible probe failed after token parameter fallback".to_string())
 }
-
-// removed unused validate_api_key helper
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AISettings {
@@ -708,6 +706,20 @@ pub async fn update_ai_settings(
     store.set("ai_enabled", json!(enabled));
     store.set("ai_provider", json!(provider));
     store.set("ai_model", json!(model));
+    if !enabled {
+        store.set(
+            "enhancement_options",
+            serde_json::to_value(EnhancementOptions {
+                preset: crate::ai::prompts::EnhancementPreset::PersonalDictation,
+            })
+            .map_err(|e| format!("Failed to serialize enhancement options: {}", e))?,
+        );
+        store.set(
+            "final_text_language",
+            json!(FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT),
+        );
+        store.set("transcription_task", json!(TRANSCRIPTION_TASK_TRANSCRIBE));
+    }
 
     store
         .save()
@@ -731,6 +743,18 @@ pub async fn disable_ai_enhancement(app: tauri::AppHandle) -> Result<(), String>
     let store = app.store("settings").map_err(|e| e.to_string())?;
 
     store.set("ai_enabled", json!(false));
+    store.set(
+        "enhancement_options",
+        serde_json::to_value(EnhancementOptions {
+            preset: crate::ai::prompts::EnhancementPreset::PersonalDictation,
+        })
+        .map_err(|e| format!("Failed to serialize enhancement options: {}", e))?,
+    );
+    store.set(
+        "final_text_language",
+        json!(FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT),
+    );
+    store.set("transcription_task", json!(TRANSCRIPTION_TASK_TRANSCRIBE));
 
     store
         .save()
@@ -744,17 +768,34 @@ pub async fn disable_ai_enhancement(app: tauri::AppHandle) -> Result<(), String>
     Ok(())
 }
 
+pub async fn get_enhancement_options_for_ai_enabled(
+    app: tauri::AppHandle,
+    ai_enabled: bool,
+) -> Result<EnhancementOptions, String> {
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    let mut options = if let Some(options_value) = store.get("enhancement_options") {
+        crate::ai::prompts::parse_enhancement_options_from_value(&options_value, ai_enabled)?
+    } else {
+        EnhancementOptions::default_for_ai_enabled(ai_enabled)
+    };
+
+    if !ai_enabled && options.preset.requires_ai_formatting() {
+        options.preset = crate::ai::prompts::EnhancementPreset::PersonalDictation;
+    }
+
+    Ok(options)
+}
+
 #[tauri::command]
 pub async fn get_enhancement_options(app: tauri::AppHandle) -> Result<EnhancementOptions, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
+    let ai_enabled = store
+        .get("ai_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
-    // Load from store or return defaults
-    if let Some(options_value) = store.get("enhancement_options") {
-        serde_json::from_value(options_value.clone())
-            .map_err(|e| format!("Failed to parse enhancement options: {}", e))
-    } else {
-        Ok(EnhancementOptions::default())
-    }
+    drop(store);
+    get_enhancement_options_for_ai_enabled(app, ai_enabled).await
 }
 
 #[tauri::command]
@@ -773,6 +814,8 @@ pub async fn update_enhancement_options(
     store
         .save()
         .map_err(|e| format!("Failed to save enhancement options: {}", e))?;
+
+    crate::commands::audio::invalidate_recording_config_cache(&app).await;
 
     log::info!("Enhancement options updated: preset={:?}", options.preset);
 
@@ -807,20 +850,35 @@ pub async fn enhance_transcription(
         return Ok(text);
     }
 
-    let store = app.store("settings").map_err(|e| e.to_string())?;
-
-    let enabled = ai_enabled_override.unwrap_or_else(|| {
-        store
-            .get("ai_enabled")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-    });
+    let force_formatting = ai_enabled_override == Some(true);
+    let enabled = {
+        let store = app.store("settings").map_err(|e| e.to_string())?;
+        ai_enabled_override.unwrap_or_else(|| {
+            store
+                .get("ai_enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        })
+    };
 
     if !enabled {
         log::debug!("AI enhancement is disabled");
-        return Ok(text); // Return original text if AI is not enabled
+        return Ok(text);
     }
 
+    let enhancement_options = get_enhancement_options_for_ai_enabled(app.clone(), enabled)
+        .await
+        .unwrap_or_else(|_| EnhancementOptions::default_for_ai_enabled(enabled));
+
+    if !enhancement_options.preset.requires_ai_formatting() {
+        if force_formatting {
+            return Err("Personal Dictation does not use AI formatting".to_string());
+        }
+        log::debug!("Skipping AI formatting for Personal Dictation");
+        return Ok(text);
+    }
+
+    let store = app.store("settings").map_err(|e| e.to_string())?;
     let provider = store
         .get("ai_provider")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -831,12 +889,14 @@ pub async fn enhance_transcription(
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "".to_string()); // Empty by default
 
-    // Don't enhance if no model or provider selected
     if model.is_empty() || provider.is_empty() {
         log::warn!(
             "AI enhancement enabled but no model/provider selected. Provider: {}",
             provider
         );
+        if force_formatting {
+            return Err("AI formatting requires a selected provider and model".to_string());
+        }
         return Ok(text);
     }
 
@@ -943,9 +1003,6 @@ pub async fn enhance_transcription(
 
     drop(store); // Release lock before async operation
 
-    // Load enhancement options
-    let enhancement_options = get_enhancement_options(app.clone()).await.ok();
-
     let language = if let Some(output_language) = output_language_override {
         Some(output_language)
     } else {
@@ -1015,7 +1072,7 @@ pub async fn enhance_transcription(
     let prompt = crate::ai::prompts::build_enhancement_prompt(
         &text,
         context_override.as_deref(),
-        &enhancement_options.unwrap_or_default(),
+        &enhancement_options,
         language.as_deref(),
     );
 
@@ -1068,12 +1125,20 @@ pub async fn enhance_transcription(
         Ok(other) => {
             log::error!("Unexpected formatting sidecar response: {:?}", other);
             pill_toast(&app, "Formatting failed", 1500);
-            Ok(text)
+            if force_formatting {
+                Err("Unexpected formatting response".to_string())
+            } else {
+                Ok(text)
+            }
         }
         Err(e) => {
             log::error!("AI formatting failed: {}", e);
             pill_toast(&app, "Formatting failed", 1500);
-            Ok(text)
+            if force_formatting {
+                Err(e.to_string())
+            } else {
+                Ok(text)
+            }
         }
     }
 }

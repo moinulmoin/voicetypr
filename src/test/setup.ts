@@ -112,7 +112,7 @@ const defaultIpcHandler = (cmd: string) => {
       return { enabled: false, provider: '', model: '', hasApiKey: false };
 
     case 'get_enhancement_options':
-      return { preset: 'Default' };
+      return { preset: 'PersonalDictation' };
 
     case 'init_cleanup_schedule':
       return true;

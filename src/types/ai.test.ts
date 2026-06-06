@@ -1,33 +1,73 @@
 import { describe, expect, it } from 'vitest';
 
-import { fromBackendOptions, migratePreset, type EnhancementPreset } from './ai';
+import {
+  defaultPresetForAiEnabled,
+  fromBackendOptions,
+  migratePreset,
+  presetRequiresAiFormatting,
+  type EnhancementPreset,
+} from './ai';
 
-const CURRENT_PRESETS: EnhancementPreset[] = ['Default', 'Writing', 'Notes', 'Message', 'Coding'];
+const CURRENT_MODES: EnhancementPreset[] = [
+  'PersonalDictation',
+  'CleanDictation',
+  'Writing',
+  'Notes',
+  'Message',
+  'Code',
+];
 
-describe('AI enhancement preset migration', () => {
-  it('preserves current preset values', () => {
-    for (const preset of CURRENT_PRESETS) {
-      expect(migratePreset(preset)).toBe(preset);
+describe('AI enhancement mode migration', () => {
+  it('preserves current mode values', () => {
+    for (const mode of CURRENT_MODES) {
+      expect(migratePreset(mode)).toBe(mode);
     }
   });
 
-  it('maps legacy presets to product profiles', () => {
-    expect(migratePreset('Prompts')).toBe('Coding');
+  it('maps legacy modes to the V2 contract', () => {
+    expect(migratePreset('Default', false)).toBe('PersonalDictation');
+    expect(migratePreset('Default', true)).toBe('CleanDictation');
+    expect(migratePreset('Prompts')).toBe('Code');
     expect(migratePreset('Email')).toBe('Writing');
-    expect(migratePreset('Commit')).toBe('Coding');
+    expect(migratePreset('Commit')).toBe('Code');
+    expect(migratePreset('Coding')).toBe('Code');
   });
 
-  it('falls back to Default for unknown presets', () => {
-    expect(migratePreset('CustomLegacyPreset')).toBe('Default');
+  it('falls back to PersonalDictation for unknown modes', () => {
+    expect(migratePreset('CustomLegacyPreset')).toBe('PersonalDictation');
   });
 
-  it('migrates backend options without changing current presets', () => {
+  it('identifies AI formatting requirements', () => {
+    expect(presetRequiresAiFormatting('PersonalDictation')).toBe(false);
+    expect(presetRequiresAiFormatting('CleanDictation')).toBe(true);
+    expect(presetRequiresAiFormatting('Code')).toBe(true);
+  });
+
+  it('selects defaults based on AI formatting state', () => {
+    expect(defaultPresetForAiEnabled(false)).toBe('PersonalDictation');
+    expect(defaultPresetForAiEnabled(true)).toBe('CleanDictation');
+  });
+
+  it('migrates backend options without changing current modes', () => {
     expect(
       fromBackendOptions({
         preset: 'Message',
       }),
     ).toEqual({
       preset: 'Message',
+    });
+  });
+
+  it('migrates legacy backend options using AI context', () => {
+    expect(
+      fromBackendOptions(
+        {
+          preset: 'Default' as EnhancementPreset,
+        },
+        true,
+      ),
+    ).toEqual({
+      preset: 'CleanDictation',
     });
   });
 });

@@ -1,22 +1,54 @@
 // AI Enhancement Types that match Rust structures
 
-export type EnhancementPreset = 'Default' | 'Writing' | 'Notes' | 'Message' | 'Coding';
+export type EnhancementPreset =
+  | 'PersonalDictation'
+  | 'CleanDictation'
+  | 'Writing'
+  | 'Notes'
+  | 'Message'
+  | 'Code';
 
-/** Mapping from current and legacy backend preset names to current frontend names. */
-const PRESET_MIGRATION: Record<string, EnhancementPreset> = {
-  Default: 'Default',
-  Writing: 'Writing',
-  Notes: 'Notes',
-  Message: 'Message',
-  Coding: 'Coding',
-  Prompts: 'Coding',
-  Email: 'Writing',
-  Commit: 'Coding',
+export const AI_FORMATTING_PRESETS: EnhancementPreset[] = [
+  'CleanDictation',
+  'Writing',
+  'Notes',
+  'Message',
+  'Code',
+];
+
+export const presetRequiresAiFormatting = (preset: EnhancementPreset): boolean =>
+  preset !== 'PersonalDictation';
+
+export const defaultPresetForAiEnabled = (aiEnabled: boolean): EnhancementPreset =>
+  aiEnabled ? 'CleanDictation' : 'PersonalDictation';
+
+/** Migrate a backend preset value (possibly legacy) to the V2 contract. */
+export const migratePreset = (raw: string, aiEnabled = false): EnhancementPreset => {
+  switch (raw) {
+    case 'PersonalDictation':
+      return 'PersonalDictation';
+    case 'CleanDictation':
+      return 'CleanDictation';
+    case 'Writing':
+      return 'Writing';
+    case 'Notes':
+      return 'Notes';
+    case 'Message':
+      return 'Message';
+    case 'Code':
+      return 'Code';
+    case 'Coding':
+    case 'Prompts':
+    case 'Commit':
+      return 'Code';
+    case 'Email':
+      return 'Writing';
+    case 'Default':
+      return aiEnabled ? 'CleanDictation' : 'PersonalDictation';
+    default:
+      return 'PersonalDictation';
+  }
 };
-
-/** Migrate a backend preset value (possibly legacy) to the current type. */
-export const migratePreset = (raw: string): EnhancementPreset =>
-  PRESET_MIGRATION[raw] ?? 'Default';
 
 export interface EnhancementOptions {
   preset: EnhancementPreset;
@@ -44,8 +76,11 @@ export const toBackendOptions = (options: {
   preset: options.preset,
 });
 
-export const fromBackendOptions = (options: EnhancementOptions): {
+export const fromBackendOptions = (
+  options: EnhancementOptions,
+  aiEnabled = false,
+): {
   preset: EnhancementPreset;
 } => ({
-  preset: migratePreset(options.preset as string),
+  preset: migratePreset(options.preset as string, aiEnabled),
 });

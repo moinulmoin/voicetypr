@@ -99,13 +99,41 @@ fn build_base_prompt(language: Option<&str>) -> String {
     BASE_PROMPT_TEMPLATE.replace("{language}", lang_name)
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum EnhancementPreset {
-    Default,
+    PersonalDictation,
+    CleanDictation,
     Writing,
     Notes,
     Message,
-    Coding,
+    Code,
+}
+
+impl EnhancementPreset {
+    pub fn requires_ai_formatting(self) -> bool {
+        !matches!(self, Self::PersonalDictation)
+    }
+}
+
+pub fn migrate_preset_str(raw: &str, ai_enabled: bool) -> EnhancementPreset {
+    match raw {
+        "PersonalDictation" => EnhancementPreset::PersonalDictation,
+        "CleanDictation" => EnhancementPreset::CleanDictation,
+        "Writing" => EnhancementPreset::Writing,
+        "Notes" => EnhancementPreset::Notes,
+        "Message" => EnhancementPreset::Message,
+        "Code" => EnhancementPreset::Code,
+        "Coding" | "Prompts" | "Commit" => EnhancementPreset::Code,
+        "Email" => EnhancementPreset::Writing,
+        "Default" => {
+            if ai_enabled {
+                EnhancementPreset::CleanDictation
+            } else {
+                EnhancementPreset::PersonalDictation
+            }
+        }
+        _ => EnhancementPreset::PersonalDictation,
+    }
 }
 
 impl<'de> Deserialize<'de> for EnhancementPreset {
@@ -114,18 +142,7 @@ impl<'de> Deserialize<'de> for EnhancementPreset {
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        match s.as_str() {
-            "Default" => Ok(EnhancementPreset::Default),
-            "Writing" => Ok(EnhancementPreset::Writing),
-            "Notes" => Ok(EnhancementPreset::Notes),
-            "Message" => Ok(EnhancementPreset::Message),
-            "Coding" => Ok(EnhancementPreset::Coding),
-            // Legacy compatibility — old presets silently map to nearest new profile
-            "Prompts" => Ok(EnhancementPreset::Coding),
-            "Email" => Ok(EnhancementPreset::Writing),
-            "Commit" => Ok(EnhancementPreset::Coding),
-            _ => Ok(EnhancementPreset::Default),
-        }
+        Ok(migrate_preset_str(&s, false))
     }
 }
 
@@ -134,12 +151,36 @@ pub struct EnhancementOptions {
     pub preset: EnhancementPreset,
 }
 
-impl Default for EnhancementOptions {
-    fn default() -> Self {
+impl EnhancementOptions {
+    pub fn default_for_ai_enabled(ai_enabled: bool) -> Self {
         Self {
-            preset: EnhancementPreset::Default,
+            preset: if ai_enabled {
+                EnhancementPreset::CleanDictation
+            } else {
+                EnhancementPreset::PersonalDictation
+            },
         }
     }
+}
+
+impl Default for EnhancementOptions {
+    fn default() -> Self {
+        Self::default_for_ai_enabled(false)
+    }
+}
+
+pub fn parse_enhancement_options_from_value(
+    value: &serde_json::Value,
+    ai_enabled: bool,
+) -> Result<EnhancementOptions, String> {
+    let preset_raw = value
+        .get("preset")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Default");
+
+    Ok(EnhancementOptions {
+        preset: migrate_preset_str(preset_raw, ai_enabled),
+    })
 }
 
 pub fn build_enhancement_prompt(
@@ -148,23 +189,19 @@ pub fn build_enhancement_prompt(
     options: &EnhancementOptions,
     language: Option<&str>,
 ) -> String {
-    // Base processing applies to ALL presets, with language-aware output
     let base_prompt = build_base_prompt(language);
 
     let mode_transform = match options.preset {
-        EnhancementPreset::Default => "",
+        EnhancementPreset::PersonalDictation | EnhancementPreset::CleanDictation => "",
         EnhancementPreset::Writing => WRITING_TRANSFORM,
         EnhancementPreset::Notes => NOTES_TRANSFORM,
         EnhancementPreset::Message => MESSAGE_TRANSFORM,
-        EnhancementPreset::Coding => CODING_TRANSFORM,
+        EnhancementPreset::Code => CODE_TRANSFORM,
     };
 
-    // Build the complete prompt
     let mut prompt = if mode_transform.is_empty() {
-        // Default preset: just base processing
         format!("{}\n\nTranscribed text:\n{}", base_prompt, text.trim())
     } else {
-        // Other presets: base + transform
         format!(
             "{}\n\n{}\n\nTranscribed text:\n{}",
             base_prompt,
@@ -173,7 +210,6 @@ pub fn build_enhancement_prompt(
         )
     };
 
-    // Add context if provided
     if let Some(ctx) = context {
         prompt.push_str(&format!("\n\nContext: {}", ctx));
     }
@@ -181,7 +217,6 @@ pub fn build_enhancement_prompt(
     prompt
 }
 
-// Transformation layer for Writing profile
 const WRITING_TRANSFORM: &str = r#"Now refine the cleaned text for polished prose:
   - Improve flow and readability with smooth transitions.
   - Vary sentence structure; avoid repetition.
@@ -190,7 +225,6 @@ const WRITING_TRANSFORM: &str = r#"Now refine the cleaned text for polished pros
   - Ensure consistent tense and point of view.
 Return only the polished text."#;
 
-// Transformation layer for Notes profile
 const NOTES_TRANSFORM: &str = r#"Now organize the cleaned text into structured notes:
   - Extract key points as concise bullet items.
   - Group related ideas under clear headings.
@@ -199,7 +233,6 @@ const NOTES_TRANSFORM: &str = r#"Now organize the cleaned text into structured n
   - Include action items or decisions explicitly stated.
 Return only the structured notes."#;
 
-// Transformation layer for Message profile
 const MESSAGE_TRANSFORM: &str = r#"Now format the cleaned text as a concise message:
   - Lead with the key point or ask.
   - Keep it brief and scannable.
@@ -208,8 +241,7 @@ const MESSAGE_TRANSFORM: &str = r#"Now format the cleaned text as a concise mess
   - Preserve all names, links, and specifics verbatim.
 Return only the formatted message."#;
 
-// Transformation layer for Coding profile
-const CODING_TRANSFORM: &str = r#"Now convert the cleaned text for a coding context:
+const CODE_TRANSFORM: &str = r#"Now convert the cleaned text for a coding context:
   - For commit messages: use conventional format type(scope): description, present tense, no period, ≤72 chars.
   - For comments: be concise, use proper technical terminology.
   - For documentation: include purpose, parameters, and return values if applicable.

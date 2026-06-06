@@ -5,7 +5,8 @@ use crate::audio::recorder::AudioRecorder;
 use crate::commands::settings::{
     get_settings, normalize_final_text_language, normalize_speech_language_for_model,
     normalize_transcription_task, recording_retention_days_from_store, resolve_pill_indicator_mode,
-    task_uses_translate_to_english, Settings,
+    task_uses_translate_to_english, Settings, FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+    TRANSCRIPTION_TASK_TRANSCRIBE,
 };
 use crate::license::LicenseState;
 use crate::media::MediaPauseController;
@@ -519,6 +520,23 @@ fn load_ai_enabled(app: &AppHandle) -> Result<bool, String> {
         .get("ai_enabled")
         .and_then(|value| value.as_bool())
         .unwrap_or(false))
+}
+
+fn store_uses_personal_dictation(
+    store: &tauri_plugin_store::Store<tauri::Wry>,
+    ai_enabled: bool,
+) -> bool {
+    if !ai_enabled {
+        return true;
+    }
+    store
+        .get("enhancement_options")
+        .map(|value| {
+            crate::ai::prompts::parse_enhancement_options_from_value(&value, ai_enabled)
+                .map(|options| !options.preset.requires_ai_formatting())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
 }
 
 fn compile_whisper_initial_prompt(app: &AppHandle, language: Option<&str>) -> Option<String> {
@@ -1227,28 +1245,34 @@ impl RecordingConfig {
             .get("speech_language")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or(legacy_speech_language);
+        let ai_enabled = store
+            .get("ai_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let uses_personal_dictation = store_uses_personal_dictation(&store, ai_enabled);
         let stored_transcription_task = store
             .get("transcription_task")
             .and_then(|v| v.as_str().map(|s| s.to_string()));
-        let transcription_task = normalize_transcription_task(
+        let mut transcription_task = normalize_transcription_task(
             stored_transcription_task.as_deref(),
             legacy_translate_to_english,
         );
         let stored_final_text_language = store
             .get("final_text_language")
             .and_then(|v| v.as_str().map(|s| s.to_string()));
-        let final_text_language = normalize_final_text_language(
+        let mut final_text_language = normalize_final_text_language(
             stored_final_text_language.as_deref(),
             &transcription_task,
         );
+        if uses_personal_dictation {
+            transcription_task = TRANSCRIPTION_TASK_TRANSCRIBE.to_string();
+            final_text_language = FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string();
+        }
 
         let config = Self {
             show_pill_widget,
             pill_indicator_mode,
-            ai_enabled: store
-                .get("ai_enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
+            ai_enabled,
             ai_provider: store
                 .get("ai_provider")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -3385,11 +3409,20 @@ pub async fn stop_recording(
                     return;
                 }
 
-                // Check if AI enhancement is enabled from cached config
                 let ai_enabled = config.ai_enabled;
+                let should_emit_enhancing = if ai_enabled {
+                    crate::commands::ai::get_enhancement_options_for_ai_enabled(
+                        app_for_task.clone(),
+                        ai_enabled,
+                    )
+                    .await
+                    .map(|options| options.preset.requires_ai_formatting())
+                    .unwrap_or(false)
+                } else {
+                    false
+                };
 
-                // If AI is enabled, emit enhancing event NOW while pill is still visible
-                if ai_enabled {
+                if should_emit_enhancing {
                     let _ = app_for_task.emit("enhancing-started", ());
                 }
 
@@ -3398,12 +3431,13 @@ pub async fn stop_recording(
                 let text_for_process = transcription.raw_text.clone();
                 let model_for_process = transcription.model.clone();
                 let transcription_for_process = transcription.clone();
-                let ai_enabled_for_task = ai_enabled; // Capture from cached config
-                let recording_file_for_task = recording_file.clone(); // Capture recording file
+                let ai_enabled_for_task = ai_enabled;
+                let should_emit_enhancing_for_task = should_emit_enhancing;
+                let recording_file_for_task = recording_file.clone();
 
                 tokio::spawn(async move {
                     // 1. Process the transcription and enhancement
-                    let (final_text, writing_metadata) =
+                    let (final_text, writing_metadata, should_deliver) =
                         match crate::writing::process_transcription(
                             app_for_process.clone(),
                             transcription_for_process.clone(),
@@ -3412,8 +3446,7 @@ pub async fn stop_recording(
                         .await
                         {
                             Ok(writing_result) => {
-                                if ai_enabled_for_task {
-                                    // Emit enhancing completed event (global)
+                                if should_emit_enhancing_for_task {
                                     let _ = app_for_process.emit("enhancing-completed", ());
                                 }
 
@@ -3428,18 +3461,19 @@ pub async fn stop_recording(
                                         &transcription_for_process,
                                         &writing_result,
                                     )),
+                                    true,
                                 )
                             }
                             Err(e) => {
-                                log::warn!("Formatting failed, using original text: {}", e);
+                                log::warn!("Formatting failed: {}", e);
 
-                                if ai_enabled_for_task {
-                                    // Emit enhancing failed to reset pill state
+                                if should_emit_enhancing_for_task {
                                     let _ = app_for_process.emit("enhancing-failed", ());
                                 }
 
                                 // Check error type and create appropriate message
                                 let error_message = e.to_string();
+                                let should_deliver = false;
                                 let user_message =
                                     if error_message.contains("Final output language") {
                                         "Final output language requires AI enhancement"
@@ -3479,7 +3513,7 @@ pub async fn stop_recording(
                                     );
                                 }
 
-                                (text_for_process.clone(), None)
+                                (text_for_process.clone(), None, should_deliver)
                             }
                         };
 
@@ -3499,6 +3533,11 @@ pub async fn stop_recording(
 
                     // Reduced delay to ensure UI is stable (was 100ms, now 50ms)
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+                    if !should_deliver {
+                        update_recording_state(&app_for_process, RecordingState::Idle, None);
+                        return;
+                    }
 
                     // Now handle text insertion or clipboard copy based on auto_paste_transcription.
                     // Missing setting keys default inside get_settings; actual settings-read failures fail closed
@@ -4103,13 +4142,22 @@ async fn transcribe_audio_file_impl(
         .get("speech_language")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or(legacy_speech_language);
+    let ai_enabled = store
+        .get("ai_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let uses_personal_dictation = store_uses_personal_dictation(&store, ai_enabled);
     let stored_transcription_task = store
         .get("transcription_task")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
-    let transcription_task = normalize_transcription_task(
-        stored_transcription_task.as_deref(),
-        legacy_translate_to_english,
-    );
+    let transcription_task = if uses_personal_dictation {
+        TRANSCRIPTION_TASK_TRANSCRIBE.to_string()
+    } else {
+        normalize_transcription_task(
+            stored_transcription_task.as_deref(),
+            legacy_translate_to_english,
+        )
+    };
     let translate_to_english = task_uses_translate_to_english(&transcription_task);
 
     let language = normalize_speech_language_for_model(
@@ -4379,13 +4427,22 @@ pub async fn transcribe_audio(
         .get("speech_language")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or(legacy_speech_language);
+    let ai_enabled = store
+        .get("ai_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let uses_personal_dictation = store_uses_personal_dictation(&store, ai_enabled);
     let stored_transcription_task = store
         .get("transcription_task")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
-    let transcription_task = normalize_transcription_task(
-        stored_transcription_task.as_deref(),
-        legacy_translate_to_english,
-    );
+    let transcription_task = if uses_personal_dictation {
+        TRANSCRIPTION_TASK_TRANSCRIBE.to_string()
+    } else {
+        normalize_transcription_task(
+            stored_transcription_task.as_deref(),
+            legacy_translate_to_english,
+        )
+    };
     let translate_to_english = task_uses_translate_to_english(&transcription_task);
 
     let language = normalize_speech_language_for_model(
