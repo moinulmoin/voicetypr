@@ -58,3 +58,5 @@ opencodetmp
 # bv (beads viewer) local config and caches
 .bv/
 pi-session-*.html
+# Whisper Vulkan sidecar build artifacts
+sidecar/whisper-vulkan/target/

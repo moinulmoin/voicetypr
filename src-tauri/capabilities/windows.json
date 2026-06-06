@@ -32,7 +32,8 @@
     { "identifier": "shell:allow-spawn", "allow": [
       { "name": "ffmpeg.exe", "sidecar": true },
       { "name": "ffprobe.exe", "sidecar": true },
-      { "name": "formatting-sidecar", "sidecar": true }
+      { "name": "formatting-sidecar", "sidecar": true },
+      { "name": "whisper-vulkan-sidecar", "sidecar": true }
     ] },
     { "identifier": "shell:allow-stdin-write", "allow": [
       { "name": "formatting-sidecar", "sidecar": true }

@@ -24,6 +24,7 @@ use crate::utils::logger::*;
 use crate::utils::system_monitor;
 use crate::whisper::cache::TranscriberCache;
 use crate::whisper::manager::WhisperManager;
+use crate::whisper::transcriber::WhisperTranscriptionOutput;
 use crate::{
     emit_to_all, emit_to_window, update_recording_state, AppState, RecordingMode, RecordingState,
 };
@@ -529,6 +530,139 @@ fn compile_whisper_initial_prompt(app: &AppHandle, language: Option<&str>) -> Op
         crate::writing::ProviderContextTarget::WhisperInitialPrompt,
     )
 }
+
+#[cfg(target_os = "windows")]
+const DEFAULT_TRANSCRIPTION_ACCELERATION: &str = "auto";
+#[cfg(target_os = "windows")]
+fn normalize_transcription_acceleration(value: Option<&str>) -> String {
+    match value {
+        Some("cpu") => "cpu".to_string(),
+        Some("gpu") => "gpu".to_string(),
+        _ => DEFAULT_TRANSCRIPTION_ACCELERATION.to_string(),
+    }
+}
+#[cfg(target_os = "windows")]
+async fn transcription_acceleration_mode(app: &AppHandle) -> String {
+    if let Ok(store) = app.store("settings") {
+        let value = store
+            .get("transcription_acceleration")
+            .and_then(|v| v.as_str().map(str::to_owned));
+        return normalize_transcription_acceleration(value.as_deref());
+    }
+    DEFAULT_TRANSCRIPTION_ACCELERATION.to_string()
+}
+
+/// Best-effort warm of the Windows Vulkan sidecar when a Whisper model is preloaded.
+/// No-op on non-Windows platforms and when CPU acceleration is selected.
+pub(crate) async fn warm_whisper_gpu_sidecar_on_model_preload(
+    app: &AppHandle,
+    model_path: &Path,
+) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let mode = transcription_acceleration_mode(app).await;
+        let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+        let gpu_available = gpu_client.status().await.gpu_available;
+        gpu_client
+            .warm_on_preload(app, model_path, &mode, gpu_available)
+            .await
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, model_path);
+        false
+    }
+}
+
+async fn transcribe_whisper_with_acceleration<F>(
+    app: &AppHandle,
+    model_path: &Path,
+    audio_path: &Path,
+    language: Option<&str>,
+    translate: bool,
+    initial_prompt: Option<&str>,
+    should_cancel: F,
+) -> Result<WhisperTranscriptionOutput, String>
+where
+    F: Fn() -> bool,
+{
+    #[cfg(target_os = "windows")]
+    let mode = transcription_acceleration_mode(app).await;
+
+    #[cfg(target_os = "windows")]
+    let mut preserve_gpu_status = false;
+
+    #[cfg(target_os = "windows")]
+    if mode != "cpu" {
+        if should_cancel() {
+            return Err("Transcription cancelled".to_string());
+        }
+
+        let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+        let status = gpu_client.status().await;
+        let should_try_gpu = mode == "gpu" || status.gpu_available != Some(false);
+
+        if should_try_gpu {
+            let gpu_result = gpu_client
+                .transcribe(
+                    app,
+                    model_path,
+                    audio_path,
+                    language,
+                    translate,
+                    initial_prompt,
+                    &mode,
+                )
+                .await;
+
+            match gpu_result {
+                Ok(output) => return Ok(output),
+                Err(error) if error == "Transcription cancelled" => {
+                    gpu_client.abort_active_process().await;
+                    return Err(error);
+                }
+                Err(error) => {
+                    preserve_gpu_status = true;
+                    log::warn!("GPU sidecar failed, falling back to CPU: {error}");
+                    if mode == "gpu" {
+                        pill_toast(app, "GPU unavailable, using CPU", 4000);
+                    }
+                }
+            }
+        } else {
+            preserve_gpu_status = true;
+            log::info!("Skipping Vulkan sidecar in auto mode after previous GPU failure");
+        }
+    }
+
+    let transcriber = {
+        let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
+        let mut cache = cache_state.lock().await;
+        cache.get_or_create(model_path)?
+    };
+
+    let result = transcriber.transcribe_with_metadata_with_prompt(
+        audio_path,
+        language,
+        translate,
+        initial_prompt,
+        should_cancel,
+    );
+
+    #[cfg(target_os = "windows")]
+    {
+        if result.is_ok() && !preserve_gpu_status {
+            let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+            gpu_client
+                .set_cpu_status(&mode, "Last transcription used CPU mode.")
+                .await;
+        }
+    }
+
+    result
+}
+
 
 fn build_remote_upload_transcription_request(
     audio_path: &Path,
@@ -2922,29 +3056,6 @@ pub async fn stop_recording(
         let transcription_result: Result<TranscriptionResult, TranscriptionFailure> =
             match &engine_selection_for_task {
                 ActiveEngineSelection::Whisper { model_path, .. } => {
-                    let transcriber = {
-                        let cache_state = app_for_task.state::<AsyncMutex<TranscriberCache>>();
-                        let mut cache = cache_state.lock().await;
-                        match cache.get_or_create(model_path) {
-                            Ok(t) => t,
-                            Err(e) => {
-                                update_recording_state(
-                                    &app_for_task,
-                                    RecordingState::Error,
-                                    Some(e.clone()),
-                                );
-                                if should_hide_pill(&app_for_task).await {
-                                    let _ = crate::commands::window::hide_pill_widget(
-                                        app_for_task.clone(),
-                                    )
-                                    .await;
-                                }
-                                pill_toast(&app_for_task, &e, 1500);
-                                return;
-                            }
-                        }
-                    };
-
                     let initial_prompt = compile_whisper_initial_prompt(
                         &app_for_task,
                         language_for_task.as_deref(),
@@ -2962,13 +3073,16 @@ pub async fn stop_recording(
                             break;
                         }
 
-                        result = transcriber.transcribe_with_metadata_with_prompt(
+                        result = transcribe_whisper_with_acceleration(
+                            &app_for_task,
+                            model_path,
                             &audio_path_clone,
                             language_for_task.as_deref(),
                             translate_to_english,
                             initial_prompt.as_deref(),
                             || app_state.is_cancellation_requested(),
-                        );
+                        )
+                        .await;
 
                         match &result {
                             Ok(_) => {
@@ -2978,6 +3092,9 @@ pub async fn stop_recording(
                                 break;
                             }
                             Err(e) => {
+                                if e == "Transcription cancelled" {
+                                    break;
+                                }
                                 if attempt < MAX_RETRIES {
                                     log::warn!(
                                         "Transcription attempt {} failed: {}. Retrying in {}ms...",
@@ -3980,20 +4097,17 @@ async fn transcribe_audio_file_impl(
                 out_path
             });
             log::info!("[UPLOAD] Normalized WAV at {:?}", normalized_file.path());
-            let transcriber = {
-                let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
-                let mut cache = cache_state.lock().await;
-                cache.get_or_create(&model_path)?
-            };
-
             let initial_prompt = compile_whisper_initial_prompt(&app, Some(&language));
-            let output = transcriber.transcribe_with_metadata_with_prompt(
+            let output = transcribe_whisper_with_acceleration(
+                &app,
+                &model_path,
                 normalized_file.path(),
                 Some(&language),
                 translate_to_english,
                 initial_prompt.as_deref(),
                 || false,
-            )?;
+            )
+            .await?;
             TranscriptionResult::new(&transcription_job, output.raw_text)
                 .with_transcript_language(output.transcript_language)
                 .with_segments(output.segments)
@@ -4247,20 +4361,17 @@ pub async fn transcribe_audio(
 
     let transcription_result = match engine_selection {
         ActiveEngineSelection::Whisper { model_path, .. } => {
-            let transcriber = {
-                let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
-                let mut cache = cache_state.lock().await;
-                cache.get_or_create(&model_path)?
-            };
-
             let initial_prompt = compile_whisper_initial_prompt(&app, Some(language.as_str()));
-            let output = transcriber.transcribe_with_metadata_with_prompt(
+            let output = transcribe_whisper_with_acceleration(
+                &app,
+                &model_path,
                 &temp_path,
                 Some(language.as_str()),
                 translate_to_english,
                 initial_prompt.as_deref(),
                 || false,
-            )?;
+            )
+            .await?;
             TranscriptionResult::new(&transcription_job, output.raw_text)
                 .with_transcript_language(output.transcript_language)
                 .with_segments(output.segments)
@@ -4572,6 +4683,12 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
             log::info!("Aborting transcription task");
             task.abort();
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    if matches!(current_state, RecordingState::Transcribing) {
+        let gpu_client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+        gpu_client.abort_active_process().await;
     }
 
     // Stop recording if active

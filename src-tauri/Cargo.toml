@@ -81,7 +81,7 @@ core-graphics = "0.24"
 media-remote = "0.3"
 
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
-whisper-rs = { version = "0.16.0", features = ["vulkan"] }
+whisper-rs = { version = "0.16.0" }
 
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
 whisper-rs = { version = "0.16.0" }

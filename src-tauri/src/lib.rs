@@ -376,6 +376,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Cache size is 1: only the current model (1-3GB RAM)
             // When user switches models, old one is unloaded immediately
             app.manage(AsyncMutex::new(TranscriberCache::new()));
+            app.manage(crate::whisper::gpu_sidecar::GpuSidecarClient::new());
+            log::info!("GPU sidecar client initialized");
             app.manage(formatting::FormattingClient::new("formatting-sidecar"));
 
             // Initialize remote transcription state
@@ -1014,17 +1016,31 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         };
 
                         if let Some(model_path) = model_path {
-                            // Load model into cache
-                            let cache_state = app_handle.state::<AsyncMutex<TranscriberCache>>();
-                            let mut cache = cache_state.lock().await;
+                            if crate::commands::audio::warm_whisper_gpu_sidecar_on_model_preload(
+                                &app_handle,
+                                &model_path,
+                            )
+                            .await
+                            {
+                                log::info!(
+                                    "Successfully preloaded model '{}' in Vulkan sidecar",
+                                    current_model
+                                );
+                            } else {
+                                let preload_result = {
+                                    let cache_state = app_handle.state::<AsyncMutex<TranscriberCache>>();
+                                    let mut cache = cache_state.lock().await;
+                                    cache.get_or_create(&model_path).map(|_| ())
+                                };
 
-                            match cache.get_or_create(&model_path) {
-                                Ok(_) => {
-                                    log::info!("Successfully preloaded model '{}' into cache", current_model);
-                                }
-                                Err(e) => {
-                                    log::warn!("Failed to preload model '{}': {}. App will continue without preloading.",
-                                             current_model, e);
+                                match preload_result {
+                                    Ok(()) => {
+                                        log::info!("Successfully preloaded model '{}' into cache", current_model);
+                                    }
+                                    Err(e) => {
+                                        log::warn!("Failed to preload model '{}': {}. App will continue without preloading.",
+                                                 current_model, e);
+                                    }
                                 }
                             }
                         } else {
