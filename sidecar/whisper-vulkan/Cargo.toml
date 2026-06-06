@@ -1,0 +1,17 @@
+[package]
+name = "voicetypr-whisper-vulkan-sidecar"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "whisper-vulkan-sidecar"
+path = "src/main.rs"
+
+[dependencies]
+audioadapter-buffers = "3.0"
+hound = "3.5.1"
+rubato = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+whisper-rs = { version = "0.16.0", features = ["vulkan"] }
