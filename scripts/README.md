@@ -4,7 +4,7 @@
 
 ### Main Release Scripts
 - `release-separate.sh` - macOS release script (creates version, builds both architectures, creates GitHub release)
-- `release-windows.ps1` - Windows release script (builds MSI, updates existing release)
+- `release-windows.ps1` - Windows release script (builds NSIS installer, updates existing release)
 - `release-windows.bat` - Batch wrapper for the PowerShell script
 
 ### Supporting Scripts
@@ -37,10 +37,10 @@ The recommended release process is:
    ```
    - Reads version from package.json (or uses provided version)
    - Verifies the GitHub release exists
-   - Builds Windows MSI installer
-   - Creates Tauri update artifacts (.msi.zip and signatures)
-   - Downloads and updates latest.json to add Windows platform
-   - Uploads all Windows artifacts to the existing release
+   - Builds the Windows NSIS installer (CPU-safe main app + optional Vulkan sidecar)
+   - Bundles VC++ and Vulkan Runtime installers as best-effort post-install steps
+   - Signs the installer and updates latest.json with the Windows platform
+   - Uploads the installer, signature, and latest.json to the existing release
 
 ### Environment Variables
 
@@ -51,7 +51,8 @@ The recommended release process is:
 - `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` - Tauri update signing
 
 **Windows (release-windows.ps1)**:
-- `VULKAN_SDK` - Path to Vulkan SDK (required for GPU acceleration)
+- `VULKAN_SDK` - Path to Vulkan SDK (required to build the optional GPU sidecar)
+- `VULKAN_RUNTIME_VERSION` or `VULKAN_VERSION` - Vulkan Runtime version for bundling (defaults to SDK folder name)
 - `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` - Tauri update signing
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` - Password for signing key (if needed)
 - `GITHUB_TOKEN` - GitHub authentication (usually handled by gh CLI)

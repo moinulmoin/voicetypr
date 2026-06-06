@@ -1,4 +1,4 @@
-# Windows Release Script - Single smart build with GPU support
+# Windows Release Script - one CPU-safe installer with optional Vulkan GPU sidecar
 
 param(
     [string]$Version,
@@ -7,7 +7,6 @@ param(
     [switch]$SkipPublish
 )
 
-# Colors
 function Write-Success($Message) { Write-Host "[OK] $Message" -ForegroundColor Green }
 function Write-Error($Message) { Write-Host "[ERROR] $Message" -ForegroundColor Red }
 function Write-Info($Message) { Write-Host "[INFO] $Message" -ForegroundColor Cyan }
@@ -31,22 +30,24 @@ if ($Help) {
     Write-Host @"
 Windows Release Script
 
-Builds a single smart installer that:
-- Detects GPU capability
-- Informs users about GPU acceleration
-- Falls back to CPU if needed
-- Always works!
+Builds one Windows NSIS installer:
+- voicetypr.exe is CPU-safe and must not import vulkan-1.dll
+- optional Vulkan acceleration ships as a sidecar process
+- VC++ Runtime and Vulkan Runtime installers are bundled as resources
+- updater/latest.json points to this single installer
 
 Usage:
-  .\scripts\release-windows.ps1                    # Build and upload
+  .\scripts\release-windows.ps1                    # Build and upload installer
   .\scripts\release-windows.ps1 -SkipBuild         # Upload existing build
   .\scripts\release-windows.ps1 -SkipPublish       # Build only, don't upload
   .\scripts\release-windows.ps1 -Help              # Show this help
+
+Requirements for building:
+  - Vulkan SDK in VULKAN_SDK, used only to build/package the GPU sidecar
 "@
     exit 0
 }
 
-# Get version
 if (-not $Version) {
     $packageJson = Get-Content "package.json" | ConvertFrom-Json
     $Version = $packageJson.version
@@ -56,18 +57,10 @@ Write-Step "VoiceTypr Windows Release v$Version"
 
 $ReleaseTag = "v$Version"
 $OutputDir = "release-windows-$Version"
+$InstallerName = "VoiceTypr_${Version}_x64-setup.exe"
 
-# Create output directory
 if (-not (Test-Path $OutputDir)) {
-    Write-Info "Creating output directory: $OutputDir"
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-    if (-not (Test-Path $OutputDir)) {
-        Write-Error "Failed to create output directory: $OutputDir"
-        exit 1
-    }
-    Write-Success "Output directory created"
-} else {
-    Write-Info "Output directory already exists: $OutputDir"
 }
 
 Require-Command cargo
@@ -78,41 +71,61 @@ if (-not $SkipPublish) {
     Require-Command gh
 }
 
-# Build single smart installer
 if (-not $SkipBuild) {
-    Write-Step "Building VoiceTypr with GPU support..."
-    
-    # Check for Vulkan SDK
-    if (-not $env:VULKAN_SDK) {
-        Write-Error "VULKAN_SDK not set! Build requires Vulkan SDK."
+    Write-Step "Building CPU-safe app with bundled Vulkan sidecar"
+
+    if ([string]::IsNullOrEmpty($env:VULKAN_SDK) -or -not (Test-Path $env:VULKAN_SDK)) {
+        Write-Error "VULKAN_SDK not set. Install Vulkan SDK to build the optional GPU sidecar."
         Write-Info "Download from: https://vulkan.lunarg.com/sdk/home"
         exit 1
     }
-    
-    # Clean to ensure fresh build
-    cargo clean --manifest-path src-tauri\Cargo.toml
 
-    # Bundle VC++ runtime installer for fresh Windows machines
-    $vcRedistDir = "src-tauri\windows\resources"
-    $vcRedistPath = "$vcRedistDir\vc_redist.x64.exe"
-    if (-not (Test-Path $vcRedistDir)) {
-        New-Item -ItemType Directory -Path $vcRedistDir -Force | Out-Null
-    }
+    cargo clean --manifest-path src-tauri\Cargo.toml
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    $runtimeDir = "src-tauri\windows\resources"
+    New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
+
     Write-Info "Downloading Visual C++ Runtime installer..."
-    Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $vcRedistPath
-    
-    # Build with Vulkan enabled by default
-    Write-Info "Building with Vulkan support enabled..."
-    $env:RUSTFLAGS = "-C target-feature=+crt-static"
-    # Version comes from Cargo.toml, no override needed
-    pnpm tauri build --ci --config src-tauri/tauri.windows.conf.json
-    
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Build failed!"
+    Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "$runtimeDir\vc_redist.x64.exe"
+
+    Write-Info "Downloading Vulkan Runtime installer..."
+    $vulkanVersion = $env:VULKAN_RUNTIME_VERSION
+    if ([string]::IsNullOrWhiteSpace($vulkanVersion)) {
+        $vulkanVersion = $env:VULKAN_VERSION
+    }
+    if ([string]::IsNullOrWhiteSpace($vulkanVersion)) {
+        $vulkanVersion = Split-Path -Leaf $env:VULKAN_SDK
+    }
+    if ([string]::IsNullOrWhiteSpace($vulkanVersion)) {
+        Write-Error "Cannot determine Vulkan version. Set VULKAN_RUNTIME_VERSION, VULKAN_VERSION, or VULKAN_SDK."
         exit 1
     }
-    
-    # Copy installer
+    $vulkanRuntimeUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanRT-$vulkanVersion-Installer.exe"
+    Invoke-WebRequest -Uri $vulkanRuntimeUrl -OutFile "$runtimeDir\VulkanRT-Installer.exe"
+
+    Write-Info "Building Whisper Vulkan sidecar..."
+    $env:RUSTFLAGS = "-C target-feature=+crt-static"
+    cargo build --manifest-path sidecar\whisper-vulkan\Cargo.toml --release
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Vulkan sidecar build failed"
+        exit $LASTEXITCODE
+    }
+
+    New-Item -ItemType Directory -Path "sidecar\whisper-vulkan\dist" -Force | Out-Null
+    Copy-Item "sidecar\whisper-vulkan\target\release\whisper-vulkan-sidecar.exe" `
+        "sidecar\whisper-vulkan\dist\whisper-vulkan-sidecar-x86_64-pc-windows-msvc.exe" -Force
+
+    Write-Info "Building Tauri installer..."
+    pnpm tauri build --ci --config src-tauri/tauri.windows.conf.json
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Build failed"
+        exit $LASTEXITCODE
+    }
+
+    powershell -ExecutionPolicy Bypass -File .\src-tauri\windows\assert-no-vulkan-import.ps1 -ExePath "src-tauri\target\release\voicetypr.exe"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
     $installer = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
@@ -120,49 +133,25 @@ if (-not $SkipBuild) {
         Write-Error "No installer found in src-tauri\target\release\bundle\nsis\"
         exit 1
     }
-    Write-Info "Found installer: $($installer.FullName)"
-    
-    # Ensure output directory exists before copying
-    if (-not (Test-Path $OutputDir)) {
-        Write-Info "Re-creating output directory: $OutputDir"
-        New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-    }
-    
-    $installerPath = "$OutputDir\VoiceTypr_${Version}_x64-setup.exe"
-    Write-Info "Copying to: $installerPath"
+
+    $installerPath = "$OutputDir\$InstallerName"
     Copy-Item $installer.FullName $installerPath -Force
-    
-    if (Test-Path $installerPath) {
-        Write-Success "Smart installer built successfully!"
-    } else {
-        Write-Error "Failed to copy installer to output directory"
-        exit 1
-    }
-    
-    # Sign installer directly if key available
+    Write-Success "Installer built: $installerPath"
+
     $keyPath = "$env:USERPROFILE\.tauri\voicetypr.key"
     $signature = ""
     if (Test-Path $keyPath) {
         Write-Info "Signing installer for updates..."
-        $env:TAURI_SIGNING_PRIVATE_KEY_PATH = $keyPath
-        
-        # NOTE: PowerShell may drop empty-string arguments when invoking native executables,
-        # which would shift args and make the installer path get treated as the password.
         if (-not [string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
             & pnpm tauri signer sign -f $keyPath -p $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD $installerPath
         } else {
-            # Force a non-interactive run (avoid prompting for password) while still passing an
-            # explicit empty value in a single token that PowerShell won't drop.
             & pnpm tauri signer sign -f $keyPath --password= $installerPath
         }
-        
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
         if (Test-Path "$installerPath.sig") {
+            $signature = (Get-Content "$installerPath.sig" -Raw).Trim() -replace "`r`n", "" -replace "`n", ""
             Write-Success "Installer signed"
-            # Read signature for latest.json - ensure proper formatting
-            $signature = (Get-Content "$installerPath.sig" -Raw).Trim()
-            # Remove any potential line breaks within the signature
-            $signature = $signature -replace "`r`n", "" -replace "`n", ""
-            Write-Info "Signature captured: $($signature.Substring(0, [Math]::Min(50, $signature.Length)))..."
         } else {
             Write-Error "Failed to sign installer (missing .sig file)"
             exit 1
@@ -171,43 +160,28 @@ if (-not $SkipBuild) {
         Write-Error "No signing key found at $keyPath (required for auto-updates)"
         exit 1
     }
-    
-    # Update latest.json with Windows platform
+
     Write-Info "Updating latest.json with Windows platform..."
-    
     $latestJsonPath = "$OutputDir\latest.json"
-    
-    # Try to download existing latest.json from GitHub release
-    Write-Info "Checking for existing latest.json in release..."
     try {
         gh release download $ReleaseTag -p "latest.json" -D $OutputDir --clobber 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0 -and (Test-Path $latestJsonPath)) { Write-Success "Downloaded existing latest.json" }
     } catch {
-        Write-Info "Error checking for latest.json: $_"
+        Write-Info "No existing latest.json downloaded: $_"
     }
-    
+
     if (Test-Path $latestJsonPath) {
-        # Read existing latest.json
         $latestJson = Get-Content $latestJsonPath -Raw | ConvertFrom-Json
-        
-        # Add Windows platform
         if (-not $latestJson.platforms) {
             $latestJson | Add-Member -NotePropertyName "platforms" -NotePropertyValue @{} -Force
         }
-        
-        # Use Add-Member to safely add the windows platform
         $windowsPlatform = @{
             signature = $signature
-            url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/VoiceTypr_${Version}_x64-setup.exe"
+            url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/$InstallerName"
         }
         $latestJson.platforms | Add-Member -NotePropertyName "windows-x86_64" -NotePropertyValue $windowsPlatform -Force
-        
-        # Save updated latest.json
         $latestJson | ConvertTo-Json -Depth 10 | Set-Content $latestJsonPath
-        Write-Success "Updated latest.json with Windows platform"
     } else {
-        # Create new latest.json if it doesn't exist (Windows-only release)
-        Write-Info "Creating new latest.json for Windows..."
         $latestJson = @{
             version = "v$Version"
             notes = "See the release notes for v$Version"
@@ -215,69 +189,41 @@ if (-not $SkipBuild) {
             platforms = @{
                 "windows-x86_64" = @{
                     signature = $signature
-                    url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/VoiceTypr_${Version}_x64-setup.exe"
+                    url = "https://github.com/moinulmoin/voicetypr/releases/download/$ReleaseTag/$InstallerName"
                 }
             }
         }
-        
         $latestJson | ConvertTo-Json -Depth 10 | Set-Content $latestJsonPath
-        Write-Success "Created latest.json for Windows"
     }
 }
 
-# If we skipped build, try to read signature from existing .sig file
 if ($SkipBuild) {
     if (-not (Test-Path $OutputDir)) {
         Write-Error "Output directory not found: $OutputDir"
         exit 1
     }
-    $sigPath = "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.sig"
-    if (Test-Path $sigPath) {
-        Write-Info "Reading signature from existing .sig file..."
-        $signature = (Get-Content $sigPath -Raw).Trim()
-        $signature = $signature -replace "`r`n", "" -replace "`n", ""
-        Write-Success "Signature loaded from file"
-    } else {
-        Write-Error "No signature file found at $sigPath (required for auto-updates)"
+    if (-not (Test-Path "$OutputDir\$InstallerName.sig")) {
+        Write-Error "No signature file found at $OutputDir\$InstallerName.sig"
         exit 1
     }
 }
 
-# Upload to GitHub
 if (-not $SkipPublish) {
-    Write-Step "Uploading to GitHub..."
-    
-    # Check if release exists
+    Write-Step "Uploading to GitHub"
     gh release view $ReleaseTag 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Release $ReleaseTag not found. Run macOS release first to create the draft."
         exit 1
     }
-    
-    # Upload installer
-    Write-Info "Uploading installer..."
-    gh release upload $ReleaseTag "$OutputDir\VoiceTypr_${Version}_x64-setup.exe" --clobber
-    
-    # Upload signature if it exists
-    if (Test-Path "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.sig") {
-        Write-Info "Uploading signature..."
-        gh release upload $ReleaseTag "$OutputDir\VoiceTypr_${Version}_x64-setup.exe.sig" --clobber
-    }
-    
-    # Upload latest.json
+
+    gh release upload $ReleaseTag "$OutputDir\$InstallerName" --clobber
+    gh release upload $ReleaseTag "$OutputDir\$InstallerName.sig" --clobber
     if (Test-Path "$OutputDir\latest.json") {
-        Write-Info "Uploading latest.json..."
         gh release upload $ReleaseTag "$OutputDir\latest.json" --clobber
     }
-    
-    Write-Success "Installer uploaded successfully!"
+    Write-Success "Installer uploaded successfully"
 }
 
-Write-Step "Done!"
-Write-Info "Smart installer: VoiceTypr_${Version}_x64-setup.exe"
-Write-Info "Direct downloads enabled - no ZIP required!"
-Write-Info "Features:"
-Write-Info "  • Auto-detects GPU capability"
-Write-Info "  • Informs about GPU acceleration options"
-Write-Info "  • Falls back to CPU if needed"
-Write-Info "  • Single installer for all users!"
+Write-Step "Done"
+Write-Info "Installer: $InstallerName"
+Write-Info "Main app is CPU-safe; optional GPU acceleration is isolated in the bundled sidecar."
