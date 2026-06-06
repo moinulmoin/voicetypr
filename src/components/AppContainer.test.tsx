@@ -92,6 +92,7 @@ vi.mock('./tabs/TabContainer', () => ({
   TabContainer: ({ activeSection }: any) => (
     <div data-testid="tab-container">
       Current Tab: {activeSection}
+      <input aria-label="Editable model setting" />
     </div>
   )
 }));
@@ -114,6 +115,7 @@ describe('AppContainer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSettings.onboarding_completed = true;
+    window.sessionStorage.clear();
     mockUnlisteners.length = 0;
     mockRegisterEvent.mockImplementation(() => {
       const unlisten = vi.fn();
@@ -178,6 +180,31 @@ describe('AppContainer', () => {
     act(() => handler());
 
     expect(screen.getByTestId('tab-container')).not.toHaveTextContent('Current Tab: overview');
+  });
+
+  it('restores the active section after a WebView refresh', () => {
+    window.sessionStorage.setItem('voicetypr:activeSection', 'models');
+
+    render(<AppContainer />);
+
+    expect(screen.getByTestId('tab-container')).toHaveTextContent('Current Tab: models');
+  });
+
+  it('persists section changes, blocks shell refresh, and preserves edit menus', () => {
+    render(<AppContainer />);
+
+    const settingsCall = mockRegisterEvent.mock.calls.find(
+      (call: any[]) => call[0] === 'navigate-to-settings'
+    );
+    expect(settingsCall).toBeDefined();
+
+    act(() => settingsCall![1]());
+    expect(window.sessionStorage.getItem('voicetypr:activeSection')).toBe('general');
+
+    const appShell = screen.getByTestId('sidebar').parentElement?.parentElement;
+    expect(appShell).toBeTruthy();
+    expect(fireEvent.contextMenu(appShell!)).toBe(false);
+    expect(fireEvent.contextMenu(screen.getByLabelText('Editable model setting'))).toBe(true);
   });
 
   it('registerEvent is called once per event type on mount', () => {

@@ -66,7 +66,23 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   const [verifyingModels, setVerifyingModels] = useState<Set<string>>(new Set());
 
   // Removed selectedModel state - now using settings.current_model directly
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const clearDownloadState = useCallback((modelName: string) => {
+    activeDownloads.current.delete(modelName);
+
+    setDownloadProgress((prev) => {
+      const newProgress = { ...prev };
+      delete newProgress[modelName];
+      return newProgress;
+    });
+
+    setVerifyingModels((prev) => {
+      const newSet = new Set(prev);
+      newSet.delete(modelName);
+      return newSet;
+    });
+  }, []);
 
   // Load models from backend
   const loadModels = useCallback(async () => {
@@ -128,42 +144,25 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       // Don't await - let it run async so progress events can update UI
       invoke("download_model", { modelName }).catch((error) => {
         console.error("[useModelManagement.downloadModel] Failed to download model:", error);
-        if (showToasts) {
-          toast.error(`Failed to download model: ${error}`);
+        const message = String(error);
+        if (showToasts && !message.toLowerCase().includes("cancel")) {
+          toast.error(`Failed to download model: ${message}`);
         }
-        // Remove from progress on error
-        setDownloadProgress((prev) => {
-          const newProgress = { ...prev };
-          delete newProgress[modelName];
-          return newProgress;
-        });
-        // Remove from active downloads
-        activeDownloads.current.delete(modelName);
+        clearDownloadState(modelName);
       });
     } catch (error) {
       console.error("[useModelManagement.downloadModel] Failed to start download:", error);
       if (showToasts) {
         toast.error(`Failed to start download: ${error}`);
       }
-      // Remove from active downloads
-      activeDownloads.current.delete(modelName);
+      clearDownloadState(modelName);
     }
-  }, [models, showToasts]);
+  }, [clearDownloadState, models, showToasts]);
 
   // Cancel download
   const cancelDownload = useCallback(async (modelName: string) => {
     try {
       await invoke("cancel_download", { modelName });
-
-      // Immediately remove from active downloads to allow retry
-      activeDownloads.current.delete(modelName);
-
-      // Remove from progress tracking
-      setDownloadProgress((prev) => {
-        const newProgress = { ...prev };
-        delete newProgress[modelName];
-        return newProgress;
-      });
     } catch (error) {
       console.error("Failed to cancel download:", error);
       if (showToasts) {
@@ -179,7 +178,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       if (showToasts) {
         toast.info(`${target.display_name} is a cloud model and cannot be deleted locally.`);
       }
-      return;
+      return false;
     }
 
     try {
@@ -189,7 +188,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       });
 
       if (!confirmed) {
-        return;
+        return false;
       }
 
       await invoke("delete_model", { modelName });
@@ -197,12 +196,13 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       // Refresh model status
       await loadModels();
 
-      // Model selection clearing is handled by the component via settings
+      return true;
     } catch (error) {
       console.error("Failed to delete model:", error);
       if (showToasts) {
         toast.error(`Failed to delete model: ${error}`);
       }
+      throw error;
     }
   }, [loadModels, models, showToasts]);
 
@@ -212,25 +212,9 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     let unregisterVerifying: (() => void) | undefined;
     let unregisterComplete: (() => void) | undefined;
     let unregisterCancelled: (() => void) | undefined;
+    let unregisterError: (() => void) | undefined;
 
     const setupListeners = async () => {
-      // DEBUG: Add direct listener to verify events are reaching frontend
-      if (typeof window !== 'undefined') {
-        const { listen } = await import('@tauri-apps/api/event');
-
-        // Direct debug listener bypassing EventCoordinator
-        const debugUnlisten = await listen('download-progress', (event) => {
-          console.log('[DEBUG] Direct download-progress event received:', event);
-        });
-
-        // Clean up debug listener on unmount
-        const originalCleanup = () => {
-          debugUnlisten();
-        };
-
-        // Store for cleanup
-        (window as any).__debugUnlisten = originalCleanup;
-      }
       // Progress updates
       unregisterProgress = await registerEvent<{ model: string; engine?: string; downloaded: number; total: number; progress: number }>(
         "download-progress",
@@ -274,22 +258,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       unregisterComplete = await registerEvent<{ model: string; engine?: string }>("model-downloaded", async (event) => {
         const modelName = event.model;
 
-        // Remove from active downloads
-        activeDownloads.current.delete(modelName);
-
-        // Remove from progress tracking and verifying
-        setDownloadProgress((prev) => {
-          const newProgress = { ...prev };
-          delete newProgress[modelName];
-          return newProgress;
-        });
-        
-        // Remove from verifying set
-        setVerifyingModels((prev) => {
-          const newSet = new Set(prev);
-          newSet.delete(modelName);
-          return newSet;
-        });
+        clearDownloadState(modelName);
 
         // Refresh model list
         await loadModels();
@@ -302,19 +271,17 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       // Download cancelled
       unregisterCancelled = await registerEvent<{ model: string; engine?: string }>("download-cancelled", (payload) => {
         const modelName = typeof payload === 'string' ? payload : payload.model;
-        // Remove from active downloads
-        activeDownloads.current.delete(modelName);
-
-        // Remove from progress tracking
-        setDownloadProgress((prev) => {
-          const newProgress = { ...prev };
-          delete newProgress[modelName];
-          return newProgress;
-        });
+        clearDownloadState(modelName);
 
         if (showToasts) {
           toast.info(`Download cancelled for ${modelName}`);
         }
+      });
+
+      // Download error
+      unregisterError = await registerEvent<{ model: string; engine?: string; error?: string }>("download-error", (payload) => {
+        const modelName = payload.model;
+        clearDownloadState(modelName);
       });
     };
 
@@ -322,17 +289,13 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
     // Cleanup
     return () => {
-      // Clean up debug listener
-      if ((window as any).__debugUnlisten) {
-        (window as any).__debugUnlisten();
-        delete (window as any).__debugUnlisten;
-      }
       unregisterProgress?.();
       unregisterVerifying?.();
       unregisterComplete?.();
       unregisterCancelled?.();
+      unregisterError?.();
     };
-  }, [registerEvent, loadModels, showToasts]);
+  }, [registerEvent, loadModels, showToasts, clearDownloadState]);
 
   // Load models on mount
   useEffect(() => {

@@ -8,7 +8,7 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { getCloudProviderByModel } from "@/lib/cloudProviders";
 import { cn } from "@/lib/utils";
 import { ModelInfo, isCloudModel, isLocalModel } from "@/types";
-import { Bot, CheckCircle, Download, HardDrive, Star, Zap } from "lucide-react";
+import { Bot, CheckCircle, HardDrive, Loader2, Star, Zap } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Label } from "../ui/label";
@@ -24,6 +24,7 @@ interface ModelsSectionProps {
   onCancelDownload: (modelName: string) => Promise<void> | void;
   onSelect: (modelName: string) => Promise<void> | void;
   refreshModels: () => Promise<void>;
+  isLoading?: boolean;
 }
 
 type CloudModalMode = "connect" | "update";
@@ -43,6 +44,7 @@ export function ModelsSection({
   onCancelDownload,
   onSelect,
   refreshModels,
+  isLoading = false,
 }: ModelsSectionProps) {
   const { settings, updateSettings } = useSettings();
   const [cloudModal, setCloudModal] = useState<CloudModalState | null>(null);
@@ -120,12 +122,6 @@ export function ModelsSection({
       });
     }
   }, [isEnglishOnlyModel, settings, updateSettings]);
-
-  const hasDownloading = useMemo(
-    () => Object.keys(downloadProgress).length > 0,
-    [downloadProgress],
-  );
-  const hasVerifying = verifyingModels.size > 0;
 
   const openCloudModal = useCallback(
     (providerId: string, mode: CloudModalMode) => {
@@ -284,12 +280,6 @@ export function ModelsSection({
             </p>
           </div>
           <div className="flex items-center gap-3">
-            {(hasDownloading || hasVerifying) && (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-500/10 text-sm font-medium">
-                <Download className="h-3.5 w-3.5 text-blue-500" />
-                {hasDownloading ? "Downloading..." : "Verifying..."}
-              </div>
-            )}
             {activeModelLabel ? (
               <span className="text-sm text-muted-foreground">
                 Active:{" "}
@@ -414,17 +404,24 @@ export function ModelsSection({
             )}
 
             {availableToUse.length === 0 && availableToSetup.length === 0 && (
-              <div className="flex-1 flex items-center justify-center py-12">
-                <div className="text-center">
-                  <Bot className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
-                  <p className="text-sm text-muted-foreground">
-                    No models available
-                  </p>
-                  <p className="text-xs text-muted-foreground/70 mt-2">
-                    Models will appear here when they become available.
-                  </p>
+              isLoading && models.length === 0 ? (
+                <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Loading models...
                 </div>
-              </div>
+              ) : !isLoading ? (
+                <div className="flex-1 flex items-center justify-center py-12">
+                  <div className="text-center">
+                    <Bot className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
+                    <p className="text-sm text-muted-foreground">
+                      No models available
+                    </p>
+                    <p className="text-xs text-muted-foreground/70 mt-2">
+                      Models will appear here when they become available.
+                    </p>
+                  </div>
+                </div>
+              ) : null
             )}
           </div>
         </ScrollArea>

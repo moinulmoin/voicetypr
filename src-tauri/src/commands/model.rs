@@ -16,6 +16,40 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 type ActiveDownloadsState<'a> = State<'a, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>;
 
+/// Register an in-flight download, rejecting duplicates so the original cancel flag is preserved.
+pub(crate) fn register_active_download(
+    active_downloads: &Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>,
+    model_name: &str,
+    cancel_flag: Arc<AtomicBool>,
+) -> Result<(), String> {
+    let mut downloads = active_downloads.lock().map_err(|e| {
+        log::error!("Failed to lock active downloads for inserting: {}", e);
+        "Failed to initialize download tracking".to_string()
+    })?;
+    if downloads.contains_key(model_name) {
+        return Err(format!(
+            "Download already in progress for model '{}'",
+            model_name
+        ));
+    }
+    downloads.insert(model_name.to_string(), cancel_flag);
+    Ok(())
+}
+
+fn clear_active_download(
+    active_downloads: &Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>,
+    model_name: &str,
+) {
+    match active_downloads.lock() {
+        Ok(mut downloads) => {
+            downloads.remove(model_name);
+        }
+        Err(e) => {
+            log::warn!("Failed to lock active downloads for cleanup: {}", e);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ModelEngine {
     Whisper,
@@ -47,10 +81,21 @@ pub async fn download_model(
 ) -> Result<(), String> {
     let download_start = Instant::now();
 
-    let download_target =
-        identify_download_target(&model_name, &whisper_state, &parakeet_manager).await?;
-
     log::info!("Starting download for model: {}", model_name);
+
+    // Register before the first await so cancellation/delete cannot race the
+    // download startup path.
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    register_active_download(&active_downloads, &model_name, cancel_flag.clone())?;
+
+    let download_target =
+        match identify_download_target(&model_name, &whisper_state, &parakeet_manager).await {
+            Ok(target) => target,
+            Err(err) => {
+                clear_active_download(&active_downloads, &model_name);
+                return Err(err);
+            }
+        };
 
     // Monitor system resources at download start
     #[cfg(debug_assertions)]
@@ -63,20 +108,6 @@ pub async fn download_model(
     });
 
     let app_handle = app.clone();
-
-    // Create cancellation flag for this download
-    let cancel_flag = Arc::new(AtomicBool::new(false));
-    {
-        match active_downloads.lock() {
-            Ok(mut downloads) => {
-                downloads.insert(model_name.clone(), cancel_flag.clone());
-            }
-            Err(e) => {
-                log::error!("Failed to lock active downloads for inserting: {}", e);
-                return Err("Failed to initialize download tracking".to_string());
-            }
-        }
-    }
 
     let model_name_clone = model_name.clone();
 
@@ -147,18 +178,29 @@ pub async fn download_model(
         let progress_tx_clone = progress_tx.clone();
         let result = match download_target.engine {
             ModelEngine::Whisper => {
-                let manager = whisper_state.read().await;
-                let res = manager
-                    .download_model(
-                        &model_name,
-                        Some(cancel_flag.clone()),
-                        move |downloaded, total| {
-                            let _ = progress_tx_clone.send((downloaded, total));
-                        },
-                    )
-                    .await;
-                drop(manager);
-                res
+                let download_prep = {
+                    let manager = whisper_state.read().await;
+                    manager
+                        .get_model_info(&model_name)
+                        .map(|(model_info, output_path)| {
+                            (model_info, output_path, manager.models_dir())
+                        })
+                };
+                match download_prep {
+                    Err(e) => Err(e),
+                    Ok((model_info, output_path, models_dir)) => {
+                        WhisperManager::download_model_file(
+                            &model_info,
+                            &output_path,
+                            &models_dir,
+                            Some(cancel_flag.clone()),
+                            move |downloaded, total| {
+                                let _ = progress_tx_clone.send((downloaded, total));
+                            },
+                        )
+                        .await
+                    }
+                }
             }
             ModelEngine::Parakeet => {
                 parakeet_manager
@@ -201,21 +243,12 @@ pub async fn download_model(
     // Ensure progress handler completes
     let _ = progress_handle.await;
 
-    // Clean up the cancellation flag
-    {
-        match active_downloads.lock() {
-            Ok(mut downloads) => {
-                downloads.remove(&model_name);
-            }
-            Err(e) => {
-                log::warn!("Failed to lock active downloads for cleanup: {}", e);
-                // Continue despite cleanup failure
-            }
-        }
-    }
+    // Keep the active-download guard through verification and event emission so
+    // delete_model cannot remove the file while the downloader is still
+    // finalizing it.
 
     log::info!("Processing download result for model: {}", model_name);
-    match download_result {
+    let final_result = match download_result {
         Err(ref e) if e.contains("cancelled") => {
             log::info!("Download was cancelled");
             // Emit download-cancelled event
@@ -223,7 +256,7 @@ pub async fn download_model(
                 &app,
                 "download-cancelled",
                 serde_json::json!({
-                    "model": model_name,
+                    "model": &model_name,
                     "engine": download_target.engine.as_str()
                 }),
             ) {
@@ -247,11 +280,24 @@ pub async fn download_model(
                 logger.log_model_download_complete(&model_name, 0); // TODO: track actual duration
             });
 
-            // Refresh/verify downloaded status
-            match download_target.engine {
+            // Refresh/verify downloaded status before emitting success.
+            let verification_result = match download_target.engine {
                 ModelEngine::Whisper => {
                     let mut manager = whisper_state.write().await;
                     manager.refresh_downloaded_status();
+                    let verified = manager
+                        .get_models_status()
+                        .get(&model_name)
+                        .map(|info| info.downloaded)
+                        .unwrap_or(false);
+                    if verified {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "Whisper manager did not confirm '{}' as downloaded. Please try again.",
+                            model_name
+                        ))
+                    }
                 }
                 ModelEngine::Parakeet => {
                     // Verify Parakeet reports the requested model as downloaded
@@ -260,48 +306,52 @@ pub async fn download_model(
                         .into_iter()
                         .any(|m| m.name == model_name && m.downloaded);
 
-                    if !verified {
-                        let msg = format!(
+                    if verified {
+                        Ok(())
+                    } else {
+                        Err(format!(
                             "Parakeet sidecar did not confirm '{}' as downloaded. Please try again.",
                             model_name
-                        );
-                        log::warn!("{}", msg);
-                        // Emit download-error event and return Err
-                        if let Err(emit_err) = emit_to_all(
-                            &app,
-                            "download-error",
-                            serde_json::json!({
-                                "model": model_name,
-                                "engine": download_target.engine.as_str(),
-                                "error": msg
-                            }),
-                        ) {
-                            log::warn!("Failed to emit download-error event: {}", emit_err);
-                        }
-                        return Err("verification_failed".to_string());
+                        ))
                     }
                 }
-            }
+            };
 
-            // Emit success event after verification
-            log::info!("Emitting model-downloaded event for {}", model_name);
-            if let Err(e) = emit_to_all(
-                &app,
-                "model-downloaded",
-                serde_json::json!({
-                    "model": model_name,
-                    "engine": download_target.engine.as_str()
-                }),
-            ) {
-                log::warn!("Failed to emit model-downloaded event: {}", e);
-            }
+            if let Err(msg) = verification_result {
+                log::warn!("{}", msg);
+                if let Err(emit_err) = emit_to_all(
+                    &app,
+                    "download-error",
+                    serde_json::json!({
+                        "model": &model_name,
+                        "engine": download_target.engine.as_str(),
+                        "error": msg
+                    }),
+                ) {
+                    log::warn!("Failed to emit download-error event: {}", emit_err);
+                }
+                Err("verification_failed".to_string())
+            } else {
+                // Emit success event after verification
+                log::info!("Emitting model-downloaded event for {}", model_name);
+                if let Err(e) = emit_to_all(
+                    &app,
+                    "model-downloaded",
+                    serde_json::json!({
+                        "model": &model_name,
+                        "engine": download_target.engine.as_str()
+                    }),
+                ) {
+                    log::warn!("Failed to emit model-downloaded event: {}", e);
+                }
 
-            // Refresh tray menu so the new model appears in the tray immediately
-            if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
-                log::warn!("Failed to update tray menu after model download: {}", e);
-            }
+                // Refresh tray menu so the new model appears in the tray immediately
+                if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+                    log::warn!("Failed to update tray menu after model download: {}", e);
+                }
 
-            Ok(())
+                Ok(())
+            }
         }
         Err(e) => {
             log::error!("Download failed for model {}: {}", model_name, e);
@@ -316,7 +366,7 @@ pub async fn download_model(
                 &app,
                 "download-error",
                 serde_json::json!({
-                    "model": model_name,
+                    "model": &model_name,
                     "engine": download_target.engine.as_str(),
                     "error": e.to_string()
                 }),
@@ -328,7 +378,11 @@ pub async fn download_model(
 
             Err(e)
         }
-    }
+    };
+
+    clear_active_download(&active_downloads, &model_name);
+
+    final_result
 }
 
 #[derive(serde::Serialize)]
@@ -403,35 +457,44 @@ pub async fn delete_model(
     model_name: String,
     whisper_state: State<'_, RwLock<WhisperManager>>,
     parakeet_manager: State<'_, ParakeetManager>,
+    active_downloads: ActiveDownloadsState<'_>,
 ) -> Result<(), String> {
-    let engine = determine_model_engine(&model_name, &whisper_state, &parakeet_manager).await?;
+    let delete_guard = Arc::new(AtomicBool::new(false));
+    register_active_download(&active_downloads, &model_name, delete_guard)?;
 
-    match engine {
-        ModelEngine::Whisper => {
-            let mut manager = whisper_state.write().await;
-            manager.delete_model_file(&model_name)?;
+    let result = async {
+        let engine = determine_model_engine(&model_name, &whisper_state, &parakeet_manager).await?;
+
+        match engine {
+            ModelEngine::Whisper => {
+                let mut manager = whisper_state.write().await;
+                manager.delete_model_file(&model_name)?;
+            }
+            ModelEngine::Parakeet => {
+                parakeet_manager.delete_model(&app, &model_name).await?;
+            }
         }
-        ModelEngine::Parakeet => {
-            parakeet_manager.delete_model(&app, &model_name).await?;
+
+        // Emit model-deleted event
+        let _ = app.emit(
+            "model-deleted",
+            serde_json::json!({
+                "model": model_name.clone(),
+                "engine": engine.as_str()
+            }),
+        );
+
+        // Refresh tray menu so the deleted model is removed from tray selection
+        if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
+            log::warn!("Failed to update tray menu after model deletion: {}", e);
         }
+
+        Ok(())
     }
+    .await;
 
-    // Emit model-deleted event
-    use tauri::Emitter;
-    let _ = app.emit(
-        "model-deleted",
-        serde_json::json!({
-            "model": model_name.clone(),
-            "engine": engine.as_str()
-        }),
-    );
-
-    // Refresh tray menu so the deleted model is removed from tray selection
-    if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
-        log::warn!("Failed to update tray menu after model deletion: {}", e);
-    }
-
-    Ok(())
+    clear_active_download(&active_downloads, &model_name);
+    result
 }
 
 #[tauri::command]
@@ -566,23 +629,16 @@ pub async fn cancel_download(
 ) -> Result<(), String> {
     log::info!("Cancelling download for model: {}", model_name);
 
-    // Set the cancellation flag
-    {
-        match active_downloads.lock() {
-            Ok(downloads) => {
-                if let Some(cancel_flag) = downloads.get(&model_name) {
-                    cancel_flag.store(true, Ordering::Relaxed);
-                    log::info!("Set cancellation flag for model: {}", model_name);
-                } else {
-                    log::warn!("No active download found for model: {}", model_name);
-                    return Ok(()); // Not an error if download doesn't exist
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to lock active downloads for cancellation: {}", e);
-                return Err("Failed to access download tracking".to_string());
-            }
-        }
+    let downloads = active_downloads.lock().map_err(|e| {
+        log::error!("Failed to lock active downloads for cancellation: {}", e);
+        "Failed to access download tracking".to_string()
+    })?;
+
+    if let Some(cancel_flag) = downloads.get(&model_name) {
+        cancel_flag.store(true, Ordering::Relaxed);
+        log::info!("Set cancellation flag for model: {}", model_name);
+    } else {
+        log::warn!("No active download found for model: {}", model_name);
     }
 
     Ok(())
@@ -698,12 +754,19 @@ pub async fn preload_model(
             .ok_or(format!("Model '{}' not found", model_name))?
     };
 
-    // Load into cache
-    let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
-    let mut cache = cache_state.lock().await;
+    if crate::commands::audio::warm_whisper_gpu_sidecar_on_model_preload(&app, &model_path).await {
+        log::info!(
+            "Model '{}' preloaded successfully in Vulkan sidecar",
+            model_name
+        );
+        return Ok(());
+    }
 
-    // This will load the model and cache it
-    cache.get_or_create(&model_path)?;
+    {
+        let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
+        let mut cache = cache_state.lock().await;
+        cache.get_or_create(&model_path)?;
+    }
 
     log::info!("Model '{}' preloaded successfully", model_name);
 
