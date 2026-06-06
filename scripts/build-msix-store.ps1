@@ -138,7 +138,8 @@ $ManifestSource = Join-Path $RepoRoot "src-tauri\msix\Package.appxmanifest"
 $ManifestDest = Join-Path $StageDir "Package.appxmanifest"
 $Manifest = Get-Content $ManifestSource -Raw
 $Manifest = [regex]::Replace($Manifest, 'Version="[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+"', ('Version="' + $PackageVersion + '"'))
-Set-Content -Path $ManifestDest -Value $Manifest -Encoding utf8NoBOM
+$Utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
+[System.IO.File]::WriteAllText($ManifestDest, $Manifest, $Utf8NoBom)
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $RepoRoot "target\store-msix\VoiceTypr_${PackageVersion}_x64.msix"
