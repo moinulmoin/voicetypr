@@ -663,7 +663,6 @@ where
     result
 }
 
-
 fn build_remote_upload_transcription_request(
     audio_path: &Path,
     audio_data: Vec<u8>,
@@ -694,16 +693,17 @@ mod tests {
     use super::{
         build_failed_transcription_row, build_remote_server_error_payload,
         build_remote_transcription_result, build_remote_upload_transcription_request,
-        build_transcription_job, build_writing_history_metadata, recording_license_state,
-        remote_server_error_pill_message, should_hide_pill_when_idle, should_use_active_remote,
-        sync_retranscription_failure_metadata, NormalizedTempFile, RecordingLicenseState,
-        TranscriptionFailure, TranscriptionStatus,
+        build_soniox_create_payload, build_transcription_job, build_writing_history_metadata,
+        recording_license_state, remote_server_error_pill_message, should_hide_pill_when_idle,
+        should_use_active_remote, sync_retranscription_failure_metadata, NormalizedTempFile,
+        RecordingLicenseState, TranscriptionFailure, TranscriptionStatus,
     };
     use crate::commands::license::CachedLicense;
     use crate::license::{LicenseState, LicenseStatus};
     use crate::remote::client::{
         calculate_timeout_ms, RemoteClientError, RemoteEndpoint, TranscriptionSource,
     };
+    use crate::writing::{SonioxContext, SonioxContextField};
     use reqwest::StatusCode;
     use std::fs;
 
@@ -715,6 +715,57 @@ mod tests {
             license_key: None,
             expires_at: None,
         })
+    }
+
+    #[test]
+    fn soniox_create_payload_includes_language_and_structured_context() {
+        let payload = build_soniox_create_payload(
+            "file_123",
+            Some(" en "),
+            Some(SonioxContext {
+                general: vec![SonioxContextField {
+                    key: "domain".to_string(),
+                    value: "Software".to_string(),
+                }],
+                terms: vec!["VoiceTypr".to_string(), "Tauri".to_string()],
+                text: Some(
+                    "Spoken forms map to canonical spellings: voice typer -> VoiceTypr."
+                        .to_string(),
+                ),
+            }),
+        );
+
+        assert_eq!(payload["model"].as_str(), Some("stt-async-v3"));
+        assert_eq!(payload["file_id"].as_str(), Some("file_123"));
+        assert_eq!(
+            payload["language_hints"].as_array().unwrap()[0].as_str(),
+            Some("en")
+        );
+        assert_eq!(
+            payload["context"]["terms"].as_array().unwrap()[0].as_str(),
+            Some("VoiceTypr")
+        );
+        assert_eq!(
+            payload["context"]["text"].as_str(),
+            Some("Spoken forms map to canonical spellings: voice typer -> VoiceTypr.")
+        );
+    }
+
+    #[test]
+    fn soniox_create_payload_omits_empty_optional_fields() {
+        let payload = build_soniox_create_payload(
+            "file_123",
+            Some(" "),
+            Some(SonioxContext {
+                general: Vec::new(),
+                terms: Vec::new(),
+                text: None,
+            }),
+        );
+
+        assert_eq!(payload["model"].as_str(), Some("stt-async-v3"));
+        assert!(payload.get("language_hints").is_none());
+        assert!(payload.get("context").is_none());
     }
 
     #[test]
@@ -3056,10 +3107,8 @@ pub async fn stop_recording(
         let transcription_result: Result<TranscriptionResult, TranscriptionFailure> =
             match &engine_selection_for_task {
                 ActiveEngineSelection::Whisper { model_path, .. } => {
-                    let initial_prompt = compile_whisper_initial_prompt(
-                        &app_for_task,
-                        language_for_task.as_deref(),
-                    );
+                    let initial_prompt =
+                        compile_whisper_initial_prompt(&app_for_task, language_for_task.as_deref());
 
                     const MAX_RETRIES: u32 = 3;
                     const RETRY_DELAY_MS: u64 = 500;
@@ -4499,6 +4548,34 @@ pub async fn transcribe_audio(
     Ok(writing_result.final_text)
 }
 
+fn build_soniox_create_payload(
+    file_id: &str,
+    language: Option<&str>,
+    context: Option<crate::writing::SonioxContext>,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "model": "stt-async-v3",
+        "file_id": file_id,
+    });
+
+    if let Some(lang) = language.map(str::trim).filter(|lang| !lang.is_empty()) {
+        payload["language_hints"] = serde_json::json!([lang]);
+    }
+
+    if let Some(context) = context {
+        if let Ok(context_value) = serde_json::to_value(context) {
+            if context_value
+                .as_object()
+                .is_some_and(|object| !object.is_empty())
+            {
+                payload["context"] = context_value;
+            }
+        }
+    }
+
+    payload
+}
+
 // Soniox async transcription via v1 Files + Transcriptions flow
 async fn soniox_transcribe_async(
     app: &AppHandle,
@@ -4551,13 +4628,16 @@ async fn soniox_transcribe_async(
         .to_string();
 
     // 2) Create transcription -> transcription_id
-    let mut payload = serde_json::json!({
-        "model": "stt-async-v3",
-        "file_id": file_id,
-    });
-    if let Some(lang) = language {
-        payload["language_hints"] = serde_json::json!([lang]);
-    }
+    let soniox_context = match crate::writing::load_writing_settings(app) {
+        Ok(settings) => crate::writing::compile_soniox_context(&settings, language),
+        Err(err) => {
+            log::warn!(
+                "Failed to load writing settings for Soniox context; continuing without context: {err}"
+            );
+            None
+        }
+    };
+    let payload = build_soniox_create_payload(&file_id, language, soniox_context);
 
     let create_url = format!("{}/transcriptions", base);
     let create_resp = client

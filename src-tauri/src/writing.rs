@@ -772,7 +772,11 @@ fn apply_voice_commands_with_map(
         );
         operations.push(AppliedWritingOperation {
             kind: WritingOperationKind::VoiceCommand,
-            detail: format!("{} → {}", candidate.definition.phrase, replacement.escape_debug()),
+            detail: format!(
+                "{} → {}",
+                candidate.definition.phrase,
+                replacement.escape_debug()
+            ),
         });
         last = candidate.end;
     }
@@ -835,11 +839,8 @@ fn apply_voice_command_stage(
         .iter()
         .map(|application| (application.target_start, application.target_end))
         .collect();
-    let result = apply_voice_commands_with_map(
-        &library_result.text,
-        transcript_language,
-        &protected_spans,
-    );
+    let result =
+        apply_voice_commands_with_map(&library_result.text, transcript_language, &protected_spans);
     library_result.text = result.text;
     remap_provenance_target_spans(&result.index_map, &mut library_result.provenance);
     applied_operations.extend(result.operations);
@@ -924,6 +925,24 @@ impl ProviderContextTarget {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SonioxContextField {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SonioxContext {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub general: Vec<SonioxContextField>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub terms: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+const SONIOX_CONTEXT_MAX_BYTES: usize = 10_000;
+
 fn push_unique_term(terms: &mut Vec<String>, value: &str) {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -997,9 +1016,7 @@ pub fn compile_context_for_target(
                     && language_scope_matches(rule.language.as_deref(), transcript_language)
             }) {
                 push_unique_term(&mut spellings, &rule.to);
-                if capabilities.includes_spoken_forms
-                    && !rule.from.eq_ignore_ascii_case(&rule.to)
-                {
+                if capabilities.includes_spoken_forms && !rule.from.eq_ignore_ascii_case(&rule.to) {
                     push_unique_term(&mut spoken_forms, &rule.from);
                 }
             }
@@ -1008,7 +1025,10 @@ pub fn compile_context_for_target(
                 sections.push(format!("Preferred spellings: {}.", spellings.join(", ")));
             }
             if !spoken_forms.is_empty() {
-                sections.push(format!("Possible spoken forms: {}.", spoken_forms.join(", ")));
+                sections.push(format!(
+                    "Possible spoken forms: {}.",
+                    spoken_forms.join(", ")
+                ));
             }
         }
     }
@@ -1038,6 +1058,128 @@ pub fn compile_context_for_target(
     }
     let context = truncate_at_char_boundary(context, capabilities.max_bytes);
     (!context.is_empty()).then_some(context)
+}
+
+fn strip_nul_bytes(value: &str) -> String {
+    value.chars().filter(|ch| *ch != '\0').collect()
+}
+
+fn soniox_context_byte_len(context: &SonioxContext) -> usize {
+    serde_json::to_vec(context)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX)
+}
+
+fn is_soniox_context_empty(context: &SonioxContext) -> bool {
+    context.general.is_empty() && context.terms.is_empty() && context.text.is_none()
+}
+
+fn collect_soniox_terms(
+    settings: &WritingSettings,
+    transcript_language: Option<&str>,
+) -> Vec<String> {
+    let mut terms = Vec::new();
+
+    for word in settings.custom_words.iter().filter(|word| {
+        word.enabled && language_scope_matches(word.language.as_deref(), transcript_language)
+    }) {
+        push_unique_term(&mut terms, &strip_nul_bytes(&word.phrase));
+    }
+
+    for rule in settings.replacements.iter().filter(|rule| {
+        rule.enabled && language_scope_matches(rule.language.as_deref(), transcript_language)
+    }) {
+        push_unique_term(&mut terms, &strip_nul_bytes(&rule.to));
+    }
+
+    terms
+}
+
+fn build_soniox_text_section(
+    settings: &WritingSettings,
+    transcript_language: Option<&str>,
+) -> Option<String> {
+    let mut mappings = Vec::new();
+
+    for word in settings.custom_words.iter().filter(|word| {
+        word.enabled && language_scope_matches(word.language.as_deref(), transcript_language)
+    }) {
+        if let Some(spoken_form) = word.spoken_form.as_deref() {
+            let spoken = strip_nul_bytes(spoken_form).trim().to_string();
+            let phrase = strip_nul_bytes(&word.phrase).trim().to_string();
+            if !spoken.is_empty() && !phrase.is_empty() {
+                mappings.push(format!("{spoken} -> {phrase}"));
+            }
+        }
+    }
+
+    for rule in settings.replacements.iter().filter(|rule| {
+        rule.enabled && language_scope_matches(rule.language.as_deref(), transcript_language)
+    }) {
+        if !rule.from.eq_ignore_ascii_case(&rule.to) {
+            let from = strip_nul_bytes(&rule.from).trim().to_string();
+            let to = strip_nul_bytes(&rule.to).trim().to_string();
+            if !from.is_empty() && !to.is_empty() {
+                mappings.push(format!("{from} -> {to}"));
+            }
+        }
+    }
+
+    if mappings.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "Spoken forms map to canonical spellings: {}.",
+            mappings.join("; ")
+        ))
+    }
+}
+
+fn prune_soniox_context(mut context: SonioxContext) -> Option<SonioxContext> {
+    if is_soniox_context_empty(&context) {
+        return None;
+    }
+
+    if soniox_context_byte_len(&context) <= SONIOX_CONTEXT_MAX_BYTES {
+        return Some(context);
+    }
+
+    context.text = None;
+    if is_soniox_context_empty(&context) {
+        return None;
+    }
+    if soniox_context_byte_len(&context) <= SONIOX_CONTEXT_MAX_BYTES {
+        return Some(context);
+    }
+
+    while !context.terms.is_empty() && soniox_context_byte_len(&context) > SONIOX_CONTEXT_MAX_BYTES
+    {
+        context.terms.pop();
+    }
+
+    if is_soniox_context_empty(&context) {
+        None
+    } else {
+        Some(context)
+    }
+}
+
+pub fn compile_soniox_context(
+    settings: &WritingSettings,
+    transcript_language: Option<&str>,
+) -> Option<SonioxContext> {
+    let terms = collect_soniox_terms(settings, transcript_language);
+    let text = build_soniox_text_section(settings, transcript_language);
+
+    if terms.is_empty() && text.is_none() {
+        return None;
+    }
+
+    prune_soniox_context(SonioxContext {
+        general: Vec::new(),
+        terms,
+        text,
+    })
 }
 
 #[cfg(test)]
@@ -2123,19 +2265,19 @@ mod tests {
             ..WritingSettings::default()
         };
         let mut ops = Vec::new();
-        let mut result =
-            apply_library_rules("hello insert comma voice typer", &settings, Some("en"), &mut ops);
+        let mut result = apply_library_rules(
+            "hello insert comma voice typer",
+            &settings,
+            Some("en"),
+            &mut ops,
+        );
 
         apply_voice_command_stage(&mut result, Some("en"), &mut ops);
 
         assert_eq!(result.text, "hello, VoiceTypr");
         assert_eq!(result.provenance[0].target_start, 7);
-        let (guarded, guard_ops) = apply_final_restoration_guard(
-            "hello, voice typer",
-            &result.provenance,
-            false,
-            false,
-        );
+        let (guarded, guard_ops) =
+            apply_final_restoration_guard("hello, voice typer", &result.provenance, false, false);
         assert_eq!(guarded, "hello, VoiceTypr");
         assert_eq!(guard_ops.len(), 1);
     }
@@ -2147,5 +2289,186 @@ mod tests {
 
         assert_eq!(text, "um I mean send it to Bob no Alice");
         assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn test_compile_soniox_context_includes_only_enabled_language_matching_terms() {
+        let settings = WritingSettings {
+            custom_words: vec![
+                CustomWord {
+                    phrase: "VoiceTypr".to_string(),
+                    spoken_form: Some("voice typer".to_string()),
+                    language: Some("en".to_string()),
+                    enabled: true,
+                },
+                CustomWord {
+                    phrase: "DisabledTerm".to_string(),
+                    spoken_form: None,
+                    language: Some("en".to_string()),
+                    enabled: false,
+                },
+                CustomWord {
+                    phrase: "TermeFrançais".to_string(),
+                    spoken_form: None,
+                    language: Some("fr".to_string()),
+                    enabled: true,
+                },
+            ],
+            replacements: vec![TextReplacementRule {
+                from: "react".to_string(),
+                to: "React".to_string(),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+
+        let context = compile_soniox_context(&settings, Some("en")).unwrap();
+
+        assert_eq!(
+            context.terms,
+            vec!["VoiceTypr".to_string(), "React".to_string()]
+        );
+        assert!(!context.terms.iter().any(|term| term == "DisabledTerm"));
+        assert!(!context.terms.iter().any(|term| term == "TermeFrançais"));
+        assert!(!context.terms.iter().any(|term| term == "voice typer"));
+    }
+
+    #[test]
+    fn test_compile_soniox_context_puts_spoken_forms_and_sources_in_text() {
+        let settings = WritingSettings {
+            custom_words: vec![CustomWord {
+                phrase: "VoiceTypr".to_string(),
+                spoken_form: Some("voice typer".to_string()),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            replacements: vec![TextReplacementRule {
+                from: "voice type her".to_string(),
+                to: "VoiceTypr".to_string(),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+
+        let context = compile_soniox_context(&settings, Some("en")).unwrap();
+        let text = context.text.unwrap();
+
+        assert!(text.contains("voice typer -> VoiceTypr"));
+        assert!(text.contains("voice type her -> VoiceTypr"));
+        assert!(!context.terms.contains(&"voice typer".to_string()));
+        assert!(!context.terms.contains(&"voice type her".to_string()));
+    }
+
+    #[test]
+    fn test_compile_soniox_context_excludes_snippets() {
+        let settings = WritingSettings {
+            custom_words: vec![CustomWord {
+                phrase: "VoiceTypr".to_string(),
+                spoken_form: None,
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            snippets: vec![Snippet {
+                trigger: "insert secret".to_string(),
+                body: "private snippet body".to_string(),
+                language: Some("en".to_string()),
+                enabled: true,
+                preserve_literal: true,
+            }],
+            ..WritingSettings::default()
+        };
+
+        let context = compile_soniox_context(&settings, Some("en")).unwrap();
+        let serialized = serde_json::to_string(&context).unwrap();
+
+        assert!(!serialized.contains("insert secret"));
+        assert!(!serialized.contains("private snippet body"));
+    }
+
+    #[test]
+    fn test_compile_soniox_context_strips_nul_bytes() {
+        let settings = WritingSettings {
+            custom_words: vec![CustomWord {
+                phrase: "Voice\0Typr".to_string(),
+                spoken_form: Some("voice \0typer".to_string()),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            replacements: vec![TextReplacementRule {
+                from: "voice type\0 her".to_string(),
+                to: "Voice\0Typr".to_string(),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+
+        let context = compile_soniox_context(&settings, Some("en")).unwrap();
+        let serialized = serde_json::to_string(&context).unwrap();
+
+        assert!(!serialized.contains('\0'));
+        assert!(context.terms.contains(&"VoiceTypr".to_string()));
+        assert!(context.text.unwrap().contains("voice typer -> VoiceTypr"));
+    }
+
+    #[test]
+    fn test_compile_soniox_context_returns_none_for_empty_or_mismatched_language() {
+        let settings = WritingSettings {
+            custom_words: vec![CustomWord {
+                phrase: "TermeFrançais".to_string(),
+                spoken_form: None,
+                language: Some("fr".to_string()),
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+
+        assert!(compile_soniox_context(&settings, Some("en")).is_none());
+        assert!(compile_soniox_context(&WritingSettings::default(), Some("en")).is_none());
+    }
+
+    #[test]
+    fn test_compile_soniox_context_prunes_oversized_context_safely() {
+        let long_term = "x".repeat(500);
+        let mut custom_words = Vec::new();
+        for index in 0..30 {
+            custom_words.push(CustomWord {
+                phrase: format!("{long_term}_{index}"),
+                spoken_form: Some(format!("spoken {index}")),
+                language: Some("en".to_string()),
+                enabled: true,
+            });
+        }
+
+        let settings = WritingSettings {
+            custom_words,
+            replacements: vec![TextReplacementRule {
+                from: "voice type her".to_string(),
+                to: "VoiceTypr".to_string(),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+
+        let unpruned_terms = collect_soniox_terms(&settings, Some("en"));
+        let unpruned_text = build_soniox_text_section(&settings, Some("en")).unwrap();
+        let unpruned = SonioxContext {
+            general: Vec::new(),
+            terms: unpruned_terms,
+            text: Some(unpruned_text),
+        };
+        assert!(soniox_context_byte_len(&unpruned) > SONIOX_CONTEXT_MAX_BYTES);
+
+        let context = compile_soniox_context(&settings, Some("en")).unwrap();
+        let serialized = serde_json::to_vec(&context).unwrap();
+
+        assert!(serialized.len() <= SONIOX_CONTEXT_MAX_BYTES);
+        let parsed: serde_json::Value = serde_json::from_slice(&serialized).unwrap();
+        assert!(parsed.is_object());
+        assert!(context.text.is_none());
+        assert!(context.terms.len() < unpruned.terms.len());
     }
 }

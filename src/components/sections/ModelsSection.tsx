@@ -749,7 +749,9 @@ export function ModelsSection({
                     Cloud transcription ({readyCloudModels.length})
                   </h2>
                   <p className="text-xs text-muted-foreground">
-                    Connected providers that can transcribe without a local model.
+                    Connected providers that can transcribe without a local model. When selected,
+                    VoiceTypr may send Personal Library words, names, and corrections as
+                    transcription context to improve recognition; snippets are not sent.
                   </p>
                 </div>
                 <div className="grid gap-3">

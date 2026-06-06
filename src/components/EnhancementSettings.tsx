@@ -646,6 +646,12 @@ export function EnhancementSettings({
         </Field>
       </FieldSet>
 
+      <p className="text-xs text-muted-foreground">
+        When Soniox or cloud transcription is selected, VoiceTypr may send Personal Library words,
+        names, and corrections as transcription context to improve recognition. Snippets are not
+        sent.
+      </p>
+
       <ReplacementEditor
         replacements={writingSettings.replacements}
         disabled={disabled}
