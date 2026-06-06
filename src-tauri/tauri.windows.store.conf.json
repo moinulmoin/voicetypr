@@ -6,6 +6,7 @@
     }
   },
   "bundle": {
+    "resources": [],
     "windows": {
       "webviewInstallMode": {
         "type": "offlineInstaller",
