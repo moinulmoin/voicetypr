@@ -62,6 +62,19 @@ interface AddServerModalProps {
 
 type TestStatus = "idle" | "testing" | "success" | "error";
 
+const MIN_REMOTE_SERVER_PORT = 1;
+const MAX_REMOTE_SERVER_PORT = 65535;
+
+function parseRemoteServerPort(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return null;
+  const port = Number(trimmed);
+  if (!Number.isInteger(port) || port < MIN_REMOTE_SERVER_PORT || port > MAX_REMOTE_SERVER_PORT) {
+    return null;
+  }
+  return port;
+}
+
 export function AddServerModal({
   open,
   onOpenChange,
@@ -153,13 +166,18 @@ export function AddServerModal({
     setTestResult(null);
     setIsSelfConnection(false);
 
-    try {
-      const portNum = parseInt(port, 10) || 47842;
+    const validatedPort = parseRemoteServerPort(port);
+    if (!validatedPort) {
+      toast.error(`Enter a valid port between ${MIN_REMOTE_SERVER_PORT} and ${MAX_REMOTE_SERVER_PORT}`);
+      setTestStatus("idle");
+      return;
+    }
 
+    try {
       // Use Tauri command for proper error differentiation
       const data = await invoke<StatusResponse>("test_remote_connection", {
         host: host.trim(),
-        port: portNum,
+        port: validatedPort,
         password: password || null,
       });
 
@@ -227,10 +245,14 @@ export function AddServerModal({
       return;
     }
 
+    const validatedPort = parseRemoteServerPort(port);
+    if (!validatedPort) {
+      toast.error(`Enter a valid port between ${MIN_REMOTE_SERVER_PORT} and ${MAX_REMOTE_SERVER_PORT}`);
+      return;
+    }
+
     setSaving(true);
     try {
-      const portNum = parseInt(port, 10) || 47842;
-
       let server: SavedConnection;
       if (isEditMode && editServer) {
         const preservePassword = !!editServer.has_password && !password && !clearSavedPassword;
@@ -238,7 +260,7 @@ export function AddServerModal({
         server = await invoke<SavedConnection>("update_remote_server", {
           serverId: editServer.id,
           host: host.trim(),
-          port: portNum,
+          port: validatedPort,
           password: preservePassword ? null : password || null,
           preservePassword,
           name: name.trim() || null,
@@ -248,7 +270,7 @@ export function AddServerModal({
         // Add new server
         server = await invoke<SavedConnection>("add_remote_server", {
           host: host.trim(),
-          port: portNum,
+          port: validatedPort,
           password: password || null,
           name: name.trim() || null,
         });

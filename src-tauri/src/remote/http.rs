@@ -4,7 +4,7 @@
 
 use log::{info, warn};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 use super::server::{
@@ -49,8 +49,9 @@ pub trait ServerContext: Send + Sync {
 pub fn create_routes<T: ServerContext + 'static>(
     ctx: Arc<RwLock<T>>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let transcription_guard = Arc::new(Semaphore::new(1));
     let status_route = status_endpoint(ctx.clone());
-    let transcribe_route = transcribe_endpoint(ctx.clone());
+    let transcribe_route = transcribe_endpoint(ctx.clone(), transcription_guard);
     let control_models_route = control_models_endpoint(ctx);
 
     status_route.or(transcribe_route).or(control_models_route)
@@ -70,6 +71,7 @@ fn status_endpoint<T: ServerContext + 'static>(
 /// POST /api/v1/transcribe - Accepts audio and returns transcription
 fn transcribe_endpoint<T: ServerContext + 'static>(
     ctx: Arc<RwLock<T>>,
+    transcription_guard: Arc<Semaphore>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     warp::path!("api" / "v1" / "transcribe")
         .and(warp::post())
@@ -84,6 +86,7 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
         .and(warp::body::content_length_limit(MAX_AUDIO_BODY_BYTES))
         .and(warp::body::bytes())
         .and(with_context(ctx))
+        .and(with_transcription_guard(transcription_guard))
         .and_then(handle_transcribe)
 }
 
@@ -120,6 +123,13 @@ fn with_context<T: ServerContext + 'static>(
     ctx: Arc<RwLock<T>>,
 ) -> impl Filter<Extract = (Arc<RwLock<T>>,), Error = std::convert::Infallible> + Clone {
     warp::any().map(move || ctx.clone())
+}
+
+/// Helper to inject transcription concurrency guard into the transcribe handler
+fn with_transcription_guard(
+    guard: Arc<Semaphore>,
+) -> impl Filter<Extract = (Arc<Semaphore>,), Error = std::convert::Infallible> + Clone {
+    warp::any().map(move || guard.clone())
 }
 
 async fn require_control_auth<T: ServerContext + 'static>(
@@ -309,11 +319,17 @@ async fn handle_transcribe<T: ServerContext + 'static>(
     transcription_task: Option<String>,
     body: bytes::Bytes,
     ctx: Arc<RwLock<T>>,
+    transcription_guard: Arc<Semaphore>,
 ) -> Result<impl Reply, Rejection> {
-    let ctx = ctx.read().await;
-    let server_name = ctx.get_server_name();
-    let model_name = ctx.get_model_name();
     let audio_size_kb = body.len() as f64 / 1024.0;
+    let (server_name, model_name, required_password) = {
+        let ctx = ctx.read().await;
+        (
+            ctx.get_server_name(),
+            ctx.get_model_name(),
+            ctx.get_password(),
+        )
+    };
 
     info!(
         "🎙️ [Remote Server] Transcription request received on '{}': {:.1} KB audio, content-type='{}'",
@@ -321,7 +337,7 @@ async fn handle_transcribe<T: ServerContext + 'static>(
     );
 
     // Check authentication
-    if let Some(required_password) = ctx.get_password() {
+    if let Some(required_password) = required_password {
         match auth_key {
             Some(provided) if provided == required_password => {
                 info!("[Remote Server] Transcription request authenticated successfully");
@@ -360,7 +376,14 @@ async fn handle_transcribe<T: ServerContext + 'static>(
         model_name, audio_size_kb
     );
 
+    // Serialize transcription work on the sharing host.
+    let _permit = transcription_guard
+        .acquire()
+        .await
+        .expect("transcription semaphore closed");
+
     // Perform transcription
+    let ctx = ctx.read().await;
     match ctx.transcribe(
         &body,
         spoken_language.as_deref(),
@@ -478,6 +501,8 @@ mod tests {
     struct DelayedMockContext {
         delay_ms: u64,
         request_counter: AtomicU32,
+        active_transcriptions: AtomicU32,
+        max_concurrent: AtomicU32,
     }
 
     impl DelayedMockContext {
@@ -485,7 +510,13 @@ mod tests {
             Self {
                 delay_ms,
                 request_counter: AtomicU32::new(0),
+                active_transcriptions: AtomicU32::new(0),
+                max_concurrent: AtomicU32::new(0),
             }
+        }
+
+        fn max_concurrent_transcriptions(&self) -> u32 {
+            self.max_concurrent.load(Ordering::SeqCst)
         }
     }
 
@@ -508,8 +539,24 @@ mod tests {
             // Increment request counter
             let request_num = self.request_counter.fetch_add(1, Ordering::SeqCst) + 1;
 
+            let current = self.active_transcriptions.fetch_add(1, Ordering::SeqCst) + 1;
+            let mut max = self.max_concurrent.load(Ordering::SeqCst);
+            while current > max {
+                match self.max_concurrent.compare_exchange(
+                    max,
+                    current,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => break,
+                    Err(actual) => max = actual,
+                }
+            }
+
             // Simulate transcription delay (blocking, as real transcription would be)
             std::thread::sleep(std::time::Duration::from_millis(self.delay_ms));
+
+            self.active_transcriptions.fetch_sub(1, Ordering::SeqCst);
 
             let job = crate::transcription::TranscriptionJob::from_legacy_settings(
                 crate::transcription::TranscriptionSource::RemoteServer,
@@ -773,6 +820,85 @@ mod tests {
             .expect("Transcribe task panicked")
             .expect("Transcribe request failed");
         assert!(transcribe_response.status().is_success());
+
+        let _ = shutdown_tx.send(());
+        let _ = tokio::time::timeout(Duration::from_secs(5), server_handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_transcribe_requests_serialize() {
+        let context = Arc::new(RwLock::new(DelayedMockContext::new(100)));
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
+
+        let server_context = context.clone();
+        let server_handle = tokio::spawn(async move {
+            let addr = ([127, 0, 0, 1], 0u16);
+            let routes = create_routes(server_context);
+
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
+
+            let _ = addr_tx.send(addr);
+            server.await;
+        });
+
+        let addr = addr_rx.await.expect("Server failed to start");
+        sleep(Duration::from_millis(50)).await;
+
+        let client = reqwest::Client::new();
+        let transcribe_url = format!("http://{}/api/v1/transcribe", addr);
+        let audio_data = b"audio".to_vec();
+
+        let req1 = {
+            let client = client.clone();
+            let url = transcribe_url.clone();
+            let audio_data = audio_data.clone();
+            tokio::spawn(async move {
+                client
+                    .post(&url)
+                    .header("Content-Type", "audio/wav")
+                    .body(audio_data)
+                    .timeout(Duration::from_secs(10))
+                    .send()
+                    .await
+            })
+        };
+        let req2 = {
+            let client = client.clone();
+            let url = transcribe_url.clone();
+            let audio_data = audio_data.clone();
+            tokio::spawn(async move {
+                client
+                    .post(&url)
+                    .header("Content-Type", "audio/wav")
+                    .body(audio_data)
+                    .timeout(Duration::from_secs(10))
+                    .send()
+                    .await
+            })
+        };
+
+        let start = std::time::Instant::now();
+        let (result1, result2) = tokio::join!(req1, req2);
+        let elapsed = start.elapsed();
+
+        assert!(result1.expect("task 1 panicked").expect("request 1 failed").status().is_success());
+        assert!(result2.expect("task 2 panicked").expect("request 2 failed").status().is_success());
+        assert!(
+            elapsed >= Duration::from_millis(180),
+            "Concurrent transcribe requests should serialize; elapsed {:?}",
+            elapsed
+        );
+
+        let ctx = context.read().await;
+        assert_eq!(
+            ctx.max_concurrent_transcriptions(),
+            1,
+            "Only one transcription should run at a time"
+        );
 
         let _ = shutdown_tx.send(());
         let _ = tokio::time::timeout(Duration::from_secs(5), server_handle).await;

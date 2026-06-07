@@ -240,6 +240,61 @@ describe("AddServerModal", () => {
     });
   });
 
+
+  describe("Port validation", () => {
+    it("rejects invalid ports before testing connection", async () => {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const { toast } = await import("sonner");
+      const invokeMock = invoke as unknown as Mock;
+      const user = userEvent.setup();
+
+      render(
+        <AddServerModal
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onServerAdded={mockOnServerAdded}
+        />
+      );
+
+      await user.type(screen.getByLabelText("Host Address"), "192.168.1.100");
+      const portInput = screen.getByLabelText("Port");
+      await user.clear(portInput);
+      fireEvent.change(portInput, { target: { value: "47842abc" } });
+      fireEvent.click(screen.getByText("Test Connection"));
+
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalledWith("Enter a valid port between 1 and 65535");
+      });
+      expect(invokeMock).not.toHaveBeenCalledWith("test_remote_connection", expect.anything());
+    });
+
+    it("rejects invalid ports before saving server", async () => {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const { toast } = await import("sonner");
+      const invokeMock = invoke as unknown as Mock;
+      const user = userEvent.setup();
+
+      render(
+        <AddServerModal
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onServerAdded={mockOnServerAdded}
+        />
+      );
+
+      await user.type(screen.getByLabelText("Host Address"), "192.168.1.100");
+      const portInput = screen.getByLabelText("Port");
+      await user.clear(portInput);
+      fireEvent.change(portInput, { target: { value: "1e3" } });
+      fireEvent.click(screen.getByText("Add Server"));
+
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalledWith("Enter a valid port between 1 and 65535");
+      });
+      expect(invokeMock).not.toHaveBeenCalledWith("add_remote_server", expect.anything());
+    });
+  });
+
   // ============================================================================
   // Password Visibility Toggle
   // ============================================================================

@@ -1596,6 +1596,31 @@ async fn run_smart_formatting(request: SmartFormattingRequest<'_>) -> Result<Str
     }
 }
 
+
+fn resolve_smart_formatting_outcome(
+    result: Result<String, String>,
+    library_text: &str,
+    needs_output_language_transform: bool,
+    warnings: &mut Vec<WritingWarning>,
+) -> Result<String, String> {
+    match result {
+        Ok(text) => Ok(text),
+        Err(error) => {
+            if needs_output_language_transform {
+                Err(error)
+            } else {
+                warnings.push(WritingWarning {
+                    code: "ai_formatting_failed".to_string(),
+                    message: format!(
+                        "AI formatting failed ({error}); used deterministic text instead"
+                    ),
+                });
+                Ok(library_text.to_string())
+            }
+        }
+    }
+}
+
 pub async fn process_transcription(
     app: AppHandle,
     transcription: TranscriptionResult,
@@ -1667,19 +1692,24 @@ pub async fn process_transcription(
         }
         library_result.text.clone()
     } else if should_run_ai {
-        run_smart_formatting(SmartFormattingRequest {
-            app,
-            text: &library_result.text,
-            transcript_language: transcript_language.clone(),
-            output_language: &mut output_language,
-            profile: &profile,
-            settings: &settings,
-            context_hint: context_hint.as_ref(),
+        resolve_smart_formatting_outcome(
+            run_smart_formatting(SmartFormattingRequest {
+                app,
+                text: &library_result.text,
+                transcript_language: transcript_language.clone(),
+                output_language: &mut output_language,
+                profile: &profile,
+                settings: &settings,
+                context_hint: context_hint.as_ref(),
+                needs_output_language_transform,
+                applied_operations: &mut applied_operations,
+                warnings: &mut warnings,
+            })
+            .await,
+            &library_result.text,
             needs_output_language_transform,
-            applied_operations: &mut applied_operations,
-            warnings: &mut warnings,
-        })
-        .await?
+            &mut warnings,
+        )?
     } else {
         library_result.text.clone()
     };
@@ -1725,6 +1755,53 @@ mod tests {
         };
         TranscriptionResult::new(&job, raw_text.to_string())
             .with_transcript_language(transcript_language.map(str::to_string))
+    }
+
+
+    #[test]
+    fn test_resolve_smart_formatting_outcome_preserves_success() {
+        let mut warnings = Vec::new();
+        let out = resolve_smart_formatting_outcome(
+            Ok("formatted".to_string()),
+            "library",
+            false,
+            &mut warnings,
+        )
+        .unwrap();
+
+        assert_eq!(out, "formatted");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_smart_formatting_outcome_errors_when_translation_required() {
+        let mut warnings = Vec::new();
+        let err = resolve_smart_formatting_outcome(
+            Err("api down".to_string()),
+            "library",
+            true,
+            &mut warnings,
+        );
+
+        assert_eq!(err, Err("api down".to_string()));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_smart_formatting_outcome_falls_back_without_translation() {
+        let mut warnings = Vec::new();
+        let out = resolve_smart_formatting_outcome(
+            Err("api down".to_string()),
+            "library text",
+            false,
+            &mut warnings,
+        )
+        .unwrap();
+
+        assert_eq!(out, "library text");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].code, "ai_formatting_failed");
+        assert!(warnings[0].message.contains("api down"));
     }
 
     #[test]

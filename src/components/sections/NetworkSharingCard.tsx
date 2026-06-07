@@ -64,8 +64,8 @@ function isShareableModel(model: ModelInfo): boolean {
 
 function parseSharingPort(value: string): number | null {
   const trimmed = value.trim();
-  if (!trimmed) return null;
-  const port = Number.parseInt(trimmed, 10);
+  if (!trimmed || !/^\d+$/.test(trimmed)) return null;
+  const port = Number(trimmed);
   if (!Number.isInteger(port) || port < MIN_SHARING_PORT || port > MAX_SHARING_PORT) {
     return null;
   }
@@ -360,6 +360,19 @@ export function NetworkSharingCard() {
     }
   };
 
+  const restorePreviousSharing = async (): Promise<boolean> => {
+    const previousPort = parseSharingPort(savedPort);
+    if (!previousPort) return false;
+
+    await invoke("start_sharing", {
+      port: previousPort,
+      password: savedPassword || null,
+      preservePassword: !savedPassword,
+      serverName: null,
+    });
+    return true;
+  };
+
   // Save port and restart server
   const handleSavePort = async () => {
     if (!status.enabled) return;
@@ -385,8 +398,14 @@ export function NetworkSharingCard() {
       toast.success(`Port changed to ${port}`);
     } catch (error) {
       console.error("Failed to update port:", error);
-      toast.error("Failed to update port");
       setPort(savedPort);
+      try {
+        await restorePreviousSharing();
+        toast.error("Failed to update port; sharing restored");
+      } catch (restoreError) {
+        console.error("Failed to restore sharing after port change:", restoreError);
+        toast.error("Failed to update port and could not restore sharing");
+      }
       await fetchStatus();
     } finally {
       setSavingPort(false);
@@ -403,8 +422,14 @@ export function NetworkSharingCard() {
       return;
     }
 
+    let disabledModelControl = false;
+
     setSavingPassword(true);
     try {
+      if (!password && status.allow_model_control) {
+        await invoke("update_remote_model_control_enabled", { enabled: false });
+        disabledModelControl = true;
+      }
       await invoke("stop_sharing");
       await invoke("start_sharing", {
         port: validatedPort,
@@ -412,8 +437,7 @@ export function NetworkSharingCard() {
         preservePassword: false,
         serverName: null,
       });
-      if (!password && status.allow_model_control) {
-        await invoke("update_remote_model_control_enabled", { enabled: false });
+      if (disabledModelControl) {
         setStatus((current) => ({ ...current, allow_model_control: false }));
       }
       setSavedPassword(password);
@@ -421,8 +445,29 @@ export function NetworkSharingCard() {
       toast.success(password ? "Password updated" : "Password removed");
     } catch (error) {
       console.error("Failed to update password:", error);
-      toast.error("Failed to update password");
       setPassword(savedPassword);
+      try {
+        await restorePreviousSharing();
+      } catch (restoreError) {
+        console.error("Failed to restore sharing after password change:", restoreError);
+        toast.error("Failed to update password and could not restore sharing");
+        await fetchStatus();
+        return;
+      }
+
+      if (disabledModelControl) {
+        try {
+          await invoke("update_remote_model_control_enabled", { enabled: true });
+          setStatus((current) => ({ ...current, allow_model_control: true }));
+        } catch (restoreModelControlError) {
+          console.error("Failed to restore remote model control:", restoreModelControlError);
+          toast.error("Failed to update password; sharing restored without remote model changes");
+          await fetchStatus();
+          return;
+        }
+      }
+
+      toast.error("Failed to update password; sharing restored");
       await fetchStatus();
     } finally {
       setSavingPassword(false);
