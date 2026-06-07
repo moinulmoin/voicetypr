@@ -7,13 +7,17 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
-use super::server::{ErrorResponse, StatusResponse, TranscribeResponse};
+use super::server::{
+    ErrorResponse, RemoteModelControlSnapshot, RemoteModelControlUpdate, StatusResponse,
+    TranscribeResponse,
+};
 use crate::transcription::TranscriptionResult;
 
 /// Auth header name
 const AUTH_HEADER: &str = "X-VoiceTypr-Key";
 
 const MAX_AUDIO_BODY_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
+const MAX_CONTROL_BODY_BYTES: u64 = 4 * 1024;
 
 /// Trait for server context (allows mocking in tests)
 pub trait ServerContext: Send + Sync {
@@ -26,6 +30,16 @@ pub trait ServerContext: Send + Sync {
         spoken_language: Option<&str>,
         transcription_task: Option<&str>,
     ) -> Result<TranscriptionResult, String>;
+    fn get_model_control_snapshot(&self) -> Result<RemoteModelControlSnapshot, String> {
+        Err("Remote model control is unavailable for this host".to_string())
+    }
+    fn update_shared_model(
+        &self,
+        _model_id: &str,
+        _engine: &str,
+    ) -> Result<RemoteModelControlSnapshot, String> {
+        Err("Remote model control is unavailable for this host".to_string())
+    }
 }
 
 /// Create all warp routes for the remote transcription API
@@ -33,9 +47,10 @@ pub fn create_routes<T: ServerContext + 'static>(
     ctx: Arc<RwLock<T>>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let status_route = status_endpoint(ctx.clone());
-    let transcribe_route = transcribe_endpoint(ctx);
+    let transcribe_route = transcribe_endpoint(ctx.clone());
+    let control_models_route = control_models_endpoint(ctx);
 
-    status_route.or(transcribe_route)
+    status_route.or(transcribe_route).or(control_models_route)
 }
 
 /// GET /api/v1/status - Returns server status and model info
@@ -69,11 +84,142 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
         .and_then(handle_transcribe)
 }
 
+/// GET/PATCH /api/v1/control/models - Password-gated remote model control
+fn control_models_endpoint<T: ServerContext + 'static>(
+    ctx: Arc<RwLock<T>>,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let get_route = warp::path!("api" / "v1" / "control" / "models")
+        .and(warp::get())
+        .and(warp::header::optional::<String>(AUTH_HEADER))
+        .and(with_context(ctx.clone()))
+        .and_then(handle_get_model_control);
+
+    let patch_auth_error_route = warp::path!("api" / "v1" / "control" / "models")
+        .and(warp::patch())
+        .and(warp::header::optional::<String>(AUTH_HEADER))
+        .and(with_context(ctx.clone()))
+        .and_then(handle_patch_control_preflight);
+
+    let patch_route = warp::path!("api" / "v1" / "control" / "models")
+        .and(warp::patch())
+        .and(warp::header::optional::<String>(AUTH_HEADER))
+        .and(with_context(ctx))
+        .and_then(require_control_auth)
+        .and(warp::body::content_length_limit(MAX_CONTROL_BODY_BYTES))
+        .and(warp::body::json())
+        .and_then(handle_patch_model_control);
+
+    get_route.or(patch_auth_error_route).or(patch_route)
+}
+
 /// Helper to inject context into handlers
 fn with_context<T: ServerContext + 'static>(
     ctx: Arc<RwLock<T>>,
 ) -> impl Filter<Extract = (Arc<RwLock<T>>,), Error = std::convert::Infallible> + Clone {
     warp::any().map(move || ctx.clone())
+}
+
+async fn require_control_auth<T: ServerContext + 'static>(
+    auth_key: Option<String>,
+    ctx: Arc<RwLock<T>>,
+) -> Result<Arc<RwLock<T>>, Rejection> {
+    let password = {
+        let ctx = ctx.read().await;
+        ctx.get_password()
+    };
+
+    check_control_auth(&password, auth_key).map_err(|_| warp::reject::not_found())?;
+
+    Ok(ctx)
+}
+
+async fn handle_patch_control_preflight<T: ServerContext + 'static>(
+    auth_key: Option<String>,
+    ctx: Arc<RwLock<T>>,
+) -> Result<Box<dyn Reply>, Rejection> {
+    let password = {
+        let ctx = ctx.read().await;
+        ctx.get_password()
+    };
+
+    match check_control_auth(&password, auth_key) {
+        Ok(()) => Err(warp::reject::not_found()),
+        Err(status) => Ok(control_auth_error(status)),
+    }
+}
+
+fn control_requires_password(password: &Option<String>) -> bool {
+    password.as_ref().is_some_and(|value| !value.is_empty())
+}
+
+fn check_control_auth(
+    password: &Option<String>,
+    auth_key: Option<String>,
+) -> Result<(), StatusCode> {
+    if !control_requires_password(password) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let required = password.as_ref().expect("password checked above");
+    match auth_key {
+        Some(provided) if provided == *required => Ok(()),
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
+fn control_auth_error(status: StatusCode) -> Box<dyn Reply> {
+    let error = match status {
+        StatusCode::FORBIDDEN => "control_requires_password",
+        StatusCode::UNAUTHORIZED => "unauthorized",
+        _ => "forbidden",
+    };
+    Box::new(warp::reply::with_status(
+        warp::reply::json(&ErrorResponse {
+            error: error.to_string(),
+        }),
+        status,
+    ))
+}
+
+/// Handle GET /api/v1/control/models
+async fn handle_get_model_control<T: ServerContext + 'static>(
+    auth_key: Option<String>,
+    ctx: Arc<RwLock<T>>,
+) -> Result<Box<dyn Reply>, Rejection> {
+    let ctx = ctx.read().await;
+    if let Err(status) = check_control_auth(&ctx.get_password(), auth_key) {
+        return Ok(control_auth_error(status));
+    }
+
+    match ctx.get_model_control_snapshot() {
+        Ok(snapshot) => Ok(Box::new(warp::reply::with_status(
+            warp::reply::json(&snapshot),
+            StatusCode::OK,
+        ))),
+        Err(error) => Ok(Box::new(warp::reply::with_status(
+            warp::reply::json(&ErrorResponse { error }),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))),
+    }
+}
+
+/// Handle PATCH /api/v1/control/models
+async fn handle_patch_model_control<T: ServerContext + 'static>(
+    ctx: Arc<RwLock<T>>,
+    update: RemoteModelControlUpdate,
+) -> Result<Box<dyn Reply>, Rejection> {
+    let ctx = ctx.write().await;
+
+    match ctx.update_shared_model(&update.model, &update.engine) {
+        Ok(snapshot) => Ok(Box::new(warp::reply::with_status(
+            warp::reply::json(&snapshot),
+            StatusCode::OK,
+        ))),
+        Err(error) => Ok(Box::new(warp::reply::with_status(
+            warp::reply::json(&ErrorResponse { error }),
+            StatusCode::BAD_REQUEST,
+        ))),
+    }
 }
 
 /// Handle GET /api/v1/status
@@ -233,6 +379,29 @@ async fn handle_transcribe<T: ServerContext + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote::server::ShareableRemoteModelInfo;
+
+    fn mock_model_control_snapshot(model_name: &str) -> RemoteModelControlSnapshot {
+        RemoteModelControlSnapshot {
+            current: ShareableRemoteModelInfo {
+                id: model_name.to_string(),
+                display_name: format!("{model_name} display"),
+                engine: "whisper".to_string(),
+                recommended: Some(true),
+                speed_score: Some(8),
+                accuracy_score: Some(7),
+            },
+            available: vec![ShareableRemoteModelInfo {
+                id: model_name.to_string(),
+                display_name: format!("{model_name} display"),
+                engine: "whisper".to_string(),
+                recommended: Some(true),
+                speed_score: Some(8),
+                accuracy_score: Some(7),
+            }],
+        }
+    }
+
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
     use tokio::time::sleep;
@@ -266,6 +435,20 @@ mod tests {
                 crate::transcription::TranscriptionResult::new(&job, "mock transcription")
                     .with_processing_duration_ms(Some(100)),
             )
+        }
+
+        fn get_model_control_snapshot(&self) -> Result<RemoteModelControlSnapshot, String> {
+            Ok(mock_model_control_snapshot("mock-model"))
+        }
+        fn update_shared_model(
+            &self,
+            model_id: &str,
+            engine: &str,
+        ) -> Result<RemoteModelControlSnapshot, String> {
+            if engine != "whisper" && engine != "parakeet" {
+                return Err(format!("Unsupported sharing engine '{engine}'"));
+            }
+            Ok(mock_model_control_snapshot(model_id))
         }
     }
 
@@ -320,6 +503,20 @@ mod tests {
             )
             .with_processing_duration_ms(Some(self.delay_ms)))
         }
+
+        fn get_model_control_snapshot(&self) -> Result<RemoteModelControlSnapshot, String> {
+            Ok(mock_model_control_snapshot("delayed-mock-model"))
+        }
+        fn update_shared_model(
+            &self,
+            model_id: &str,
+            engine: &str,
+        ) -> Result<RemoteModelControlSnapshot, String> {
+            if engine != "whisper" && engine != "parakeet" {
+                return Err(format!("Unsupported sharing engine '{engine}'"));
+            }
+            Ok(mock_model_control_snapshot(model_id))
+        }
     }
 
     /// Mock context that fails on specific request numbers
@@ -372,6 +569,20 @@ mod tests {
                 format!("success-{}", request_num),
             )
             .with_processing_duration_ms(Some(10)))
+        }
+
+        fn get_model_control_snapshot(&self) -> Result<RemoteModelControlSnapshot, String> {
+            Ok(mock_model_control_snapshot("failing-mock-model"))
+        }
+        fn update_shared_model(
+            &self,
+            model_id: &str,
+            engine: &str,
+        ) -> Result<RemoteModelControlSnapshot, String> {
+            if engine != "whisper" && engine != "parakeet" {
+                return Err(format!("Unsupported sharing engine '{engine}'"));
+            }
+            Ok(mock_model_control_snapshot(model_id))
         }
     }
 
@@ -440,6 +651,20 @@ mod tests {
                 )
                 .with_processing_duration_ms(Some(1)),
             )
+        }
+
+        fn get_model_control_snapshot(&self) -> Result<RemoteModelControlSnapshot, String> {
+            Ok(mock_model_control_snapshot("utf8-preview-model"))
+        }
+        fn update_shared_model(
+            &self,
+            model_id: &str,
+            engine: &str,
+        ) -> Result<RemoteModelControlSnapshot, String> {
+            if engine != "whisper" && engine != "parakeet" {
+                return Err(format!("Unsupported sharing engine '{engine}'"));
+            }
+            Ok(mock_model_control_snapshot(model_id))
         }
     }
 
@@ -959,5 +1184,170 @@ mod tests {
 
         let _ = shutdown_tx.send(());
         let _ = tokio::time::timeout(Duration::from_secs(5), server_handle).await;
+    }
+
+    struct PasswordedControlContext {
+        password: String,
+        model_name: String,
+    }
+
+    impl ServerContext for PasswordedControlContext {
+        fn get_model_name(&self) -> String {
+            self.model_name.clone()
+        }
+        fn get_server_name(&self) -> String {
+            "passworded-server".to_string()
+        }
+        fn get_password(&self) -> Option<String> {
+            Some(self.password.clone())
+        }
+        fn transcribe(
+            &self,
+            _audio_data: &[u8],
+            _spoken_language: Option<&str>,
+            _transcription_task: Option<&str>,
+        ) -> Result<TranscriptionResult, String> {
+            let job = crate::transcription::TranscriptionJob::from_legacy_settings(
+                crate::transcription::TranscriptionSource::RemoteServer,
+                "remote",
+                self.model_name.clone(),
+                None,
+                false,
+            );
+            Ok(crate::transcription::TranscriptionResult::new(&job, "ok"))
+        }
+        fn get_model_control_snapshot(&self) -> Result<RemoteModelControlSnapshot, String> {
+            Ok(mock_model_control_snapshot(&self.model_name))
+        }
+        fn update_shared_model(
+            &self,
+            model_id: &str,
+            engine: &str,
+        ) -> Result<RemoteModelControlSnapshot, String> {
+            if engine != "whisper" && engine != "parakeet" {
+                return Err(format!("Unsupported sharing engine '{engine}'"));
+            }
+            if model_id == "missing" {
+                return Err(format!("Model '{model_id}' not found or not downloaded"));
+            }
+            Ok(mock_model_control_snapshot(model_id))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_control_models_requires_password_when_unconfigured() {
+        let ctx = Arc::new(RwLock::new(MockContext));
+        let routes = create_routes(ctx);
+
+        let response = warp::test::request()
+            .method("GET")
+            .path("/api/v1/control/models")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 403);
+        let body: ErrorResponse = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.error, "control_requires_password");
+    }
+
+    #[tokio::test]
+    async fn test_control_models_rejects_missing_password() {
+        let ctx = Arc::new(RwLock::new(PasswordedControlContext {
+            password: "secret".to_string(),
+            model_name: "base.en".to_string(),
+        }));
+        let routes = create_routes(ctx);
+
+        let response = warp::test::request()
+            .method("GET")
+            .path("/api/v1/control/models")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn test_control_models_patch_rejects_missing_password_before_body() {
+        let ctx = Arc::new(RwLock::new(PasswordedControlContext {
+            password: "secret".to_string(),
+            model_name: "base.en".to_string(),
+        }));
+        let routes = create_routes(ctx);
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path("/api/v1/control/models")
+            .header("content-type", "application/json")
+            .body(vec![b'a'; MAX_CONTROL_BODY_BYTES as usize + 1])
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 401);
+        let body: ErrorResponse = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.error, "unauthorized");
+    }
+
+    #[tokio::test]
+    async fn test_control_models_get_returns_snapshot_with_auth() {
+        let ctx = Arc::new(RwLock::new(PasswordedControlContext {
+            password: "secret".to_string(),
+            model_name: "base.en".to_string(),
+        }));
+        let routes = create_routes(ctx);
+
+        let response = warp::test::request()
+            .method("GET")
+            .path("/api/v1/control/models")
+            .header(AUTH_HEADER, "secret")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: RemoteModelControlSnapshot = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.current.id, "base.en");
+        assert!(!body.available.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_control_models_patch_validates_unknown_model() {
+        let ctx = Arc::new(RwLock::new(PasswordedControlContext {
+            password: "secret".to_string(),
+            model_name: "base.en".to_string(),
+        }));
+        let routes = create_routes(ctx);
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path("/api/v1/control/models")
+            .header(AUTH_HEADER, "secret")
+            .header("content-type", "application/json")
+            .body(r#"{"model":"missing","engine":"whisper"}"#)
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_control_models_patch_updates_model_with_auth() {
+        let ctx = Arc::new(RwLock::new(PasswordedControlContext {
+            password: "secret".to_string(),
+            model_name: "base.en".to_string(),
+        }));
+        let routes = create_routes(ctx);
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path("/api/v1/control/models")
+            .header(AUTH_HEADER, "secret")
+            .header("content-type", "application/json")
+            .body(r#"{"model":"large-v3-turbo","engine":"whisper"}"#)
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        let body: RemoteModelControlSnapshot = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.current.id, "large-v3-turbo");
     }
 }

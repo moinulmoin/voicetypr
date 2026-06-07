@@ -32,6 +32,37 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
+/// Safe metadata for a shareable local transcription model exposed over remote control.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ShareableRemoteModelInfo {
+    /// Stable model identifier used for selection.
+    pub id: String,
+    /// Human-friendly label for UI display.
+    pub display_name: String,
+    /// Transcription engine backing this model (`whisper` or `parakeet`).
+    pub engine: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_score: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accuracy_score: Option<u8>,
+}
+
+/// Snapshot of the server's shared model and locally available shareable models.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoteModelControlSnapshot {
+    pub current: ShareableRemoteModelInfo,
+    pub available: Vec<ShareableRemoteModelInfo>,
+}
+
+/// Request body for switching the server's shared model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoteModelControlUpdate {
+    pub model: String,
+    pub engine: String,
+}
+
 /// Configuration for the remote transcription server
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct RemoteServerConfig {
@@ -151,5 +182,42 @@ mod tests {
         assert_eq!(value["duration_ms"], 42);
         assert_eq!(value["model"], "base.en");
         assert!(value.get("transcript_language").is_none());
+    }
+
+    #[test]
+    fn remote_model_control_snapshot_serializes_expected_shape() {
+        let snapshot = RemoteModelControlSnapshot {
+            current: ShareableRemoteModelInfo {
+                id: "large-v3-turbo".to_string(),
+                display_name: "Large v3 Turbo".to_string(),
+                engine: "whisper".to_string(),
+                recommended: Some(true),
+                speed_score: Some(7),
+                accuracy_score: Some(9),
+            },
+            available: vec![ShareableRemoteModelInfo {
+                id: "base.en".to_string(),
+                display_name: "Base (English)".to_string(),
+                engine: "whisper".to_string(),
+                recommended: Some(false),
+                speed_score: Some(8),
+                accuracy_score: Some(5),
+            }],
+        };
+
+        let value = serde_json::to_value(snapshot).unwrap();
+        assert_eq!(value["current"]["id"], "large-v3-turbo");
+        assert_eq!(value["current"]["display_name"], "Large v3 Turbo");
+        assert_eq!(value["current"]["engine"], "whisper");
+        assert_eq!(value["available"][0]["id"], "base.en");
+        assert!(value["current"].get("path").is_none());
+    }
+
+    #[test]
+    fn remote_model_control_update_deserializes() {
+        let update: RemoteModelControlUpdate =
+            serde_json::from_str(r#"{"model":"base.en","engine":"whisper"}"#).unwrap();
+        assert_eq!(update.model, "base.en");
+        assert_eq!(update.engine, "whisper");
     }
 }

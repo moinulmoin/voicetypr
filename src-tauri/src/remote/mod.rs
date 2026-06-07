@@ -7,6 +7,7 @@ pub mod client;
 pub mod discovery;
 pub mod http;
 pub mod lifecycle;
+pub mod model_control;
 pub mod server;
 pub mod settings;
 pub mod transcription;

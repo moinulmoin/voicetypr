@@ -7,6 +7,15 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
 }));
 
+const mockToastSuccess = vi.fn();
+const mockToastError = vi.fn();
+vi.mock("sonner", () => ({
+  toast: {
+    success: (...args: unknown[]) => mockToastSuccess(...args),
+    error: (...args: unknown[]) => mockToastError(...args),
+  },
+}));
+
 import { RemoteServerCard, SavedConnection, StatusResponse } from "./RemoteServerCard";
 
 // Test data factory
@@ -20,6 +29,30 @@ function createMockServer(overrides: Partial<SavedConnection> = {}): SavedConnec
     created_at: Date.now(),
     model: "large-v3-turbo",
     status: "Online",
+    ...overrides,
+  };
+}
+
+
+function createMockRemoteControl(overrides: Record<string, unknown> = {}) {
+  return {
+    current: {
+      id: "large-v3-turbo",
+      display_name: "Large V3 Turbo",
+      engine: "whisper",
+    },
+    available: [
+      {
+        id: "large-v3-turbo",
+        display_name: "Large V3 Turbo",
+        engine: "whisper",
+      },
+      {
+        id: "base.en",
+        display_name: "Base English",
+        engine: "whisper",
+      },
+    ],
     ...overrides,
   };
 }
@@ -50,6 +83,9 @@ describe("RemoteServerCard", () => {
       }
       if (command === "test_remote_server") {
         return Promise.resolve(createMockStatusResponse());
+      }
+      if (command === "get_remote_transcription_control") {
+        return Promise.resolve(createMockRemoteControl());
       }
       return Promise.reject(new Error(`Unknown command: ${command}`));
     });
@@ -517,4 +553,205 @@ describe("RemoteServerCard", () => {
       });
     });
   });
+  // ============================================================================
+  // Remote transcription model control
+  // ============================================================================
+
+  describe("remote transcription model control", () => {
+    const mockOnServerUpdated = vi.fn();
+
+    beforeEach(() => {
+      mockOnServerUpdated.mockReset();
+      mockToastSuccess.mockReset();
+      mockToastError.mockReset();
+      Element.prototype.scrollIntoView = vi.fn();
+    });
+
+    it("loads and shows host shared transcription model control for online servers", async () => {
+      mockInvoke.mockImplementation((command: string) => {
+        if (command === "get_remote_transcription_control") {
+          return Promise.resolve(createMockRemoteControl());
+        }
+        return Promise.reject(new Error(`Unknown command: ${command}`));
+      });
+
+      const server = createMockServer();
+
+      await act(async () => {
+        render(
+          <RemoteServerCard
+            server={server}
+            isActive={true}
+            onSelect={mockOnSelect}
+            onRemove={mockOnRemove}
+            onEdit={mockOnEdit}
+            onServerUpdated={mockOnServerUpdated}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        expect(mockInvoke).toHaveBeenCalledWith("get_remote_transcription_control", {
+          serverId: server.id,
+        });
+      });
+
+      expect(screen.getByText("Host shared transcription model")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Controls only the transcription model shared by this remote VoiceTypr host.",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("combobox", { name: "Remote host shared transcription model" }),
+      ).toBeInTheDocument();
+    });
+
+    it("shows locked message when remote control requires a password", async () => {
+      mockInvoke.mockImplementation((command: string) => {
+        if (command === "get_remote_transcription_control") {
+          return Promise.reject(
+            new Error("Remote model control requires a sharing password on the server."),
+          );
+        }
+        return Promise.reject(new Error(`Unknown command: ${command}`));
+      });
+
+      const server = createMockServer();
+
+      await act(async () => {
+        render(
+          <RemoteServerCard
+            server={server}
+            isActive={false}
+            onSelect={mockOnSelect}
+            onRemove={mockOnRemove}
+            onEdit={mockOnEdit}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getByText("Remote model control requires a sharing password on the server."),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it("shows unsupported locked message without breaking the card", async () => {
+      mockInvoke.mockImplementation((command: string) => {
+        if (command === "get_remote_transcription_control") {
+          return Promise.reject(new Error("Server error: 404 Not Found"));
+        }
+        return Promise.reject(new Error(`Unknown command: ${command}`));
+      });
+
+      const server = createMockServer();
+
+      await act(async () => {
+        render(
+          <RemoteServerCard
+            server={server}
+            isActive={false}
+            onSelect={mockOnSelect}
+            onRemove={mockOnRemove}
+            onEdit={mockOnEdit}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("Online")).toBeInTheDocument();
+        expect(screen.getByText("Server error: 404 Not Found")).toBeInTheDocument();
+      });
+    });
+
+    it("shows offline locked message without fetching remote control", async () => {
+      const server = createMockServer({ status: "Offline" });
+
+      await act(async () => {
+        render(
+          <RemoteServerCard
+            server={server}
+            isActive={false}
+            onSelect={mockOnSelect}
+            onRemove={mockOnRemove}
+            onEdit={mockOnEdit}
+          />
+        );
+      });
+
+      expect(
+        screen.getByText("Remote model control is unavailable while the host is offline."),
+      ).toBeInTheDocument();
+      expect(mockInvoke).not.toHaveBeenCalledWith(
+        "get_remote_transcription_control",
+        expect.anything(),
+      );
+    });
+
+    it("updates remote shared model and refreshes server state", async () => {
+      mockInvoke.mockImplementation((command: string) => {
+        if (command === "get_remote_transcription_control") {
+          return Promise.resolve(createMockRemoteControl());
+        }
+        if (command === "update_remote_transcription_control") {
+          return Promise.resolve(createMockRemoteControl({
+            current: {
+              id: "base.en",
+              display_name: "Base English",
+              engine: "whisper",
+            },
+          }));
+        }
+        return Promise.reject(new Error(`Unknown command: ${command}`));
+      });
+
+      const server = createMockServer();
+
+      await act(async () => {
+        render(
+          <RemoteServerCard
+            server={server}
+            isActive={true}
+            onSelect={mockOnSelect}
+            onRemove={mockOnRemove}
+            onEdit={mockOnEdit}
+            onServerUpdated={mockOnServerUpdated}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole("combobox", { name: "Remote host shared transcription model" }),
+        ).toBeInTheDocument();
+      });
+
+      const select = screen.getByRole("combobox", {
+        name: "Remote host shared transcription model",
+      });
+
+      await act(async () => {
+        fireEvent.click(select);
+      });
+
+      const nextModel = await screen.findByText("Base English");
+      await act(async () => {
+        fireEvent.click(nextModel);
+      });
+
+      await waitFor(() => {
+        expect(mockInvoke).toHaveBeenCalledWith("update_remote_transcription_control", {
+          serverId: server.id,
+          currentModel: "base.en",
+          currentModelEngine: "whisper",
+        });
+      });
+
+      expect(mockToastSuccess).toHaveBeenCalled();
+      expect(mockOnServerUpdated).toHaveBeenCalled();
+    });
+  });
+
 });

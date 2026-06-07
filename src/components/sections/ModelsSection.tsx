@@ -880,6 +880,7 @@ export function ModelsSection({
                       onRemove={handleRemoveRemoteServer}
                       onEdit={handleEditServer}
                       isRefreshing={isRefreshingServers}
+                      onServerUpdated={refreshRemoteServers}
                     />
                   ))}
                 </div>

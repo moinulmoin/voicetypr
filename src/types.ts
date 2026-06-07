@@ -1,6 +1,22 @@
 export type SpeechModelEngine = 'whisper' | 'parakeet' | 'soniox';
 export type ModelKind = 'local' | 'cloud';
 
+/** A downloaded shareable model exposed by a remote VoiceTypr host. */
+export interface RemoteShareableModel {
+  id: string;
+  display_name: string;
+  engine: Exclude<SpeechModelEngine, 'soniox'>;
+  recommended?: boolean | null;
+  speed_score?: number | null;
+  accuracy_score?: number | null;
+}
+
+/** Remote-control-lite snapshot for changing the host's shared transcription model. */
+export interface RemoteModelControlSnapshot {
+  current: RemoteShareableModel;
+  available: RemoteShareableModel[];
+}
+
 interface BaseModelInfo {
   name: string;
   display_name: string;

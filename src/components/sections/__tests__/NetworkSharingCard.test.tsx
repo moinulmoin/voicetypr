@@ -293,25 +293,41 @@ describe("NetworkSharingCard", () => {
   });
 
   describe("when model selection changes while sharing", () => {
+    let currentSettings: {
+      current_model: string;
+      current_model_engine?: string;
+      auto_insert: boolean;
+      launch_at_startup: boolean;
+    };
+    let sharingStatus: {
+      enabled: boolean;
+      port: number;
+      model_name: string;
+      server_name: string;
+      active_connections: number;
+    };
+
     beforeEach(() => {
+      currentSettings = {
+        current_model: "large-v3-turbo",
+        current_model_engine: "whisper",
+        auto_insert: true,
+        launch_at_startup: false,
+      };
+      sharingStatus = {
+        enabled: true,
+        port: 47842,
+        model_name: "large-v3-turbo",
+        server_name: "My-PC",
+        active_connections: 0,
+      };
+
       mockInvoke.mockImplementation((command: string) => {
         switch (command) {
           case "get_settings":
-            // User has selected a different model than what's being shared
-            return Promise.resolve({
-              current_model: "base.en",
-              auto_insert: true,
-              launch_at_startup: false,
-            });
+            return Promise.resolve(currentSettings);
           case "get_sharing_status":
-            // Server is sharing large-v3-turbo
-            return Promise.resolve({
-              enabled: true,
-              port: 47842,
-              model_name: "large-v3-turbo",
-              server_name: "My-PC",
-              active_connections: 0,
-            });
+            return Promise.resolve(sharingStatus);
           case "get_local_ips":
             return Promise.resolve(["192.168.1.100 (eth0)"]);
           case "get_model_status":
@@ -335,10 +351,43 @@ describe("NetworkSharingCard", () => {
       });
     });
 
-    it("automatically restarts sharing when model changes", async () => {
+    it("does not restart sharing just because refreshed shared model differs", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
-      // Wait for the auto-restart to be triggered
+      await waitFor(() => {
+        expect(screen.getByText("Ready for remote transcription")).toBeInTheDocument();
+      });
+
+      sharingStatus = {
+        ...sharingStatus,
+        model_name: "base.en",
+      };
+      for (const listener of eventListeners.get("sharing-status-changed") ?? []) {
+        listener();
+      }
+
+      await waitFor(() => {
+        expect(screen.getByText("Model: Base (English)")).toBeInTheDocument();
+      });
+      expect(mockInvoke).not.toHaveBeenCalledWith("stop_sharing");
+      expect(mockInvoke).not.toHaveBeenCalledWith("start_sharing", expect.any(Object));
+    });
+
+    it("automatically restarts sharing after the local model changes", async () => {
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Ready for remote transcription")).toBeInTheDocument();
+      });
+
+      currentSettings = {
+        ...currentSettings,
+        current_model: "base.en",
+      };
+      for (const listener of eventListeners.get("model-changed") ?? []) {
+        listener();
+      }
+
       await waitFor(() => {
         expect(mockInvoke).toHaveBeenCalledWith("stop_sharing");
         expect(mockInvoke).toHaveBeenCalledWith("start_sharing", expect.any(Object));
@@ -348,12 +397,10 @@ describe("NetworkSharingCard", () => {
     it("does not show manual Update button", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
-      // Wait for component to render
       await waitFor(() => {
         expect(screen.getByText("Ready for remote transcription")).toBeInTheDocument();
       });
 
-      // Should NOT show Update button - restart is automatic
       expect(screen.queryByRole("button", { name: /Update/i })).not.toBeInTheDocument();
     });
   });

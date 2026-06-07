@@ -52,6 +52,14 @@ impl RemoteServerConnection {
         )
     }
 
+    /// Get the URL for the remote model-control endpoint
+    pub fn model_control_url(&self) -> String {
+        format!(
+            "{}/api/v1/control/models",
+            format_base_url(&self.host, self.port)
+        )
+    }
+
     #[cfg(test)]
     pub fn display_name(&self) -> String {
         format!("{}:{}", self.host, self.port)
@@ -101,6 +109,7 @@ impl TranscriptionRequest {
 pub enum RemoteEndpoint {
     Status,
     Transcribe,
+    ModelControl,
 }
 
 impl fmt::Display for RemoteEndpoint {
@@ -108,6 +117,7 @@ impl fmt::Display for RemoteEndpoint {
         match self {
             RemoteEndpoint::Status => f.write_str("status"),
             RemoteEndpoint::Transcribe => f.write_str("transcription"),
+            RemoteEndpoint::ModelControl => f.write_str("remote model control"),
         }
     }
 }
@@ -384,6 +394,97 @@ pub async fn test_connection(
     })??;
 
     Ok(status)
+}
+
+pub async fn get_model_control(
+    connection: &RemoteServerConnection,
+) -> Result<crate::remote::server::RemoteModelControlSnapshot, RemoteClientError> {
+    const CONTROL_TIMEOUT_MS: u64 = 10_000;
+    let endpoint = RemoteEndpoint::ModelControl;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(CONTROL_TIMEOUT_MS))
+        .build()
+        .map_err(|e| RemoteClientError::RequestBuild {
+            endpoint,
+            detail: e.to_string(),
+        })?;
+
+    let mut request = client.get(connection.model_control_url());
+    if let Some(password) = connection.password.as_ref() {
+        request = request.header("X-VoiceTypr-Key", password);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| classify_reqwest_error(endpoint, e, CONTROL_TIMEOUT_MS))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| classify_reqwest_error(endpoint, e, CONTROL_TIMEOUT_MS))?;
+
+    if status == StatusCode::UNAUTHORIZED {
+        return Err(RemoteClientError::AuthFailed {
+            endpoint,
+            body: Some(lossy_body(body.as_ref())),
+        });
+    }
+    if !status.is_success() {
+        return Err(RemoteClientError::HttpStatus {
+            endpoint,
+            status,
+            body: Some(lossy_body(body.as_ref())),
+        });
+    }
+
+    parse_json_value(endpoint, body.as_ref())
+}
+
+pub async fn update_model_control(
+    connection: &RemoteServerConnection,
+    update: crate::remote::server::RemoteModelControlUpdate,
+) -> Result<crate::remote::server::RemoteModelControlSnapshot, RemoteClientError> {
+    const CONTROL_TIMEOUT_MS: u64 = 10_000;
+    let endpoint = RemoteEndpoint::ModelControl;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(CONTROL_TIMEOUT_MS))
+        .build()
+        .map_err(|e| RemoteClientError::RequestBuild {
+            endpoint,
+            detail: e.to_string(),
+        })?;
+
+    let mut request = client.patch(connection.model_control_url()).json(&update);
+    if let Some(password) = connection.password.as_ref() {
+        request = request.header("X-VoiceTypr-Key", password);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| classify_reqwest_error(endpoint, e, CONTROL_TIMEOUT_MS))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| classify_reqwest_error(endpoint, e, CONTROL_TIMEOUT_MS))?;
+
+    if status == StatusCode::UNAUTHORIZED {
+        return Err(RemoteClientError::AuthFailed {
+            endpoint,
+            body: Some(lossy_body(body.as_ref())),
+        });
+    }
+    if !status.is_success() {
+        return Err(RemoteClientError::HttpStatus {
+            endpoint,
+            status,
+            body: Some(lossy_body(body.as_ref())),
+        });
+    }
+
+    parse_json_value(endpoint, body.as_ref())
 }
 
 /// Submit a remote transcription request with a caller-provided timeout.

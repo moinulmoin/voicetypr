@@ -7,7 +7,7 @@ import { getModelDisplayName } from "@/lib/model-display";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AlertTriangle, Check, CheckCircle, Copy, Eye, EyeOff, ExternalLink, Network, Server, Shield, XCircle } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 interface BindingResult {
@@ -68,6 +68,15 @@ export function NetworkSharingCard() {
   const [firewallStatus, setFirewallStatus] = useState<FirewallStatus | null>(null);
 
   const currentModel = settings?.current_model;
+  const currentEngine = settings?.current_model_engine ?? "whisper";
+  const previousLocalSelectionRef = useRef<{
+    model?: string | null;
+    engine?: string | null;
+  } | null>(null);
+  const sharedModelDisplayName =
+    status.enabled && status.model_name
+      ? (getModelDisplayName(status.model_name) ?? status.model_name)
+      : modelDisplayName;
 
   // Fetch current sharing status
   const fetchStatus = useCallback(async () => {
@@ -199,14 +208,29 @@ export function NetworkSharingCard() {
     }
   }, [settings?.sharing_port]);
 
-  // Auto-restart sharing when model selection changes
+  // Auto-restart sharing only after the local model selection changes.
   useEffect(() => {
-    const autoRestartSharing = async () => {
-      // Only auto-restart if sharing is enabled and model has changed
-      if (!status.enabled || !status.model_name || !currentModel) return;
-      if (status.model_name === currentModel) return;
+    if (!settings) return;
+    const previousSelection = previousLocalSelectionRef.current;
+    const nextSelection = {
+      model: currentModel,
+      engine: currentEngine,
+    };
 
-      console.log(`[Remote Transcription] Model changed from ${status.model_name} to ${currentModel}, restarting...`);
+    previousLocalSelectionRef.current = nextSelection;
+
+    if (!previousSelection) return;
+    if (
+      previousSelection.model === nextSelection.model &&
+      previousSelection.engine === nextSelection.engine
+    ) {
+      return;
+    }
+    if (!status.enabled || !currentModel) return;
+    if (previousSelection.model !== currentModel && status.model_name === currentModel) return;
+
+    const autoRestartSharing = async () => {
+      console.log(`[Remote Transcription] Local model changed to ${currentModel}, restarting sharing...`);
 
       try {
         await invoke("stop_sharing");
@@ -225,7 +249,7 @@ export function NetworkSharingCard() {
     };
 
     autoRestartSharing();
-  }, [currentModel, status.enabled, status.model_name, port, password, fetchStatus, modelDisplayName]);
+  }, [settings, currentModel, currentEngine, status.enabled, status.model_name, port, fetchStatus, modelDisplayName]);
 
   const handleToggleSharing = async (checked: boolean) => {
     setLoading(true);
@@ -395,8 +419,8 @@ export function NetworkSharingCard() {
                   Ready for remote transcription
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {modelDisplayName
-                    ? `Model: ${modelDisplayName}`
+                  {sharedModelDisplayName
+                    ? `Model: ${sharedModelDisplayName}`
                     : "No model selected"}
                 </p>
               </div>

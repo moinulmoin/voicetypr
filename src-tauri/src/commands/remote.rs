@@ -17,7 +17,7 @@ use crate::remote::client::{
 };
 use crate::remote::discovery::DiscoveredRemoteServer;
 use crate::remote::lifecycle::{RemoteServerManager, SharingStatus};
-use crate::remote::server::StatusResponse;
+use crate::remote::server::{RemoteModelControlSnapshot, RemoteModelControlUpdate, StatusResponse};
 use crate::remote::settings::{ConnectionStatus, RemoteSettings, SavedConnection};
 use crate::whisper::manager::WhisperManager;
 
@@ -836,6 +836,98 @@ pub async fn refresh_remote_servers(
     log::info!("🔄 [REMOTE] refresh_remote_servers called (returning cached list)");
     let settings = remote_settings.lock().await;
     Ok(settings.saved_connections.clone())
+}
+fn connection_for_client(
+    app: &AppHandle,
+    connection: &SavedConnection,
+) -> Result<RemoteServerConnection, String> {
+    let password = get_connection_password(app, &connection.id)?.or(connection.password.clone());
+    Ok(RemoteServerConnection::new(
+        connection.host.clone(),
+        connection.port,
+        password,
+    ))
+}
+
+fn remote_control_error_message(error: RemoteClientError) -> String {
+    match &error {
+        RemoteClientError::HttpStatus { status, body, .. }
+            if *status == reqwest::StatusCode::FORBIDDEN
+                && body
+                    .as_deref()
+                    .is_some_and(|body| body.contains("control_requires_password")) =>
+        {
+            "Remote model control requires a sharing password on the server.".to_string()
+        }
+        RemoteClientError::AuthFailed { .. } => {
+            "Remote model control authentication failed.".to_string()
+        }
+        _ => error.to_string(),
+    }
+}
+
+#[tauri::command]
+pub async fn get_remote_transcription_control(
+    app: AppHandle,
+    server_id: String,
+    remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
+) -> Result<RemoteModelControlSnapshot, String> {
+    let connection = {
+        let settings = remote_settings.lock().await;
+        settings
+            .get_connection(&server_id)
+            .cloned()
+            .ok_or_else(|| format!("Server '{}' not found", server_id))?
+    };
+    let connection = connection_for_client(&app, &connection)?;
+
+    client::get_model_control(&connection)
+        .await
+        .map_err(remote_control_error_message)
+}
+
+#[tauri::command]
+pub async fn update_remote_transcription_control(
+    app: AppHandle,
+    server_id: String,
+    current_model: String,
+    current_model_engine: String,
+    remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
+) -> Result<RemoteModelControlSnapshot, String> {
+    let connection = {
+        let settings = remote_settings.lock().await;
+        settings
+            .get_connection(&server_id)
+            .cloned()
+            .ok_or_else(|| format!("Server '{}' not found", server_id))?
+    };
+    let client_connection = connection_for_client(&app, &connection)?;
+
+    let snapshot = client::update_model_control(
+        &client_connection,
+        RemoteModelControlUpdate {
+            model: current_model,
+            engine: current_model_engine,
+        },
+    )
+    .await
+    .map_err(remote_control_error_message)?;
+
+    {
+        let mut settings = remote_settings.lock().await;
+        settings.update_connection_status(
+            &server_id,
+            ConnectionStatus::Online,
+            Some(snapshot.current.id.clone()),
+        );
+        save_remote_settings(&app, &settings)?;
+    }
+
+    let _ = app.emit(
+        "remote-server-settings-changed",
+        serde_json::json!({ "serverId": server_id }),
+    );
+    Ok(snapshot)
 }
 
 /// Set the active remote server for transcription

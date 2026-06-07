@@ -2,20 +2,34 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Card } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { getModelDisplayName } from "@/lib/model-display";
 import {
+  RemoteModelControlSnapshot,
+  SpeechModelEngine,
+} from "@/types";
+import { invoke } from "@tauri-apps/api/core";
+import {
   AlertTriangle,
   CheckCircle2,
   KeyRound,
+  Lock,
   Pencil,
   Server,
   Trash2,
   Wifi,
   WifiOff,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 
 // Connection status enum matching backend
 export type ConnectionStatus = "Unknown" | "Online" | "Offline" | "AuthFailed" | "SelfConnection";
@@ -49,6 +63,267 @@ interface RemoteServerCardProps {
   onEdit: (server: SavedConnection) => void;
   /** Whether a global refresh is in progress */
   isRefreshing?: boolean;
+  /** Refresh saved remote server state after a successful model update */
+  onServerUpdated?: () => void | Promise<void>;
+}
+
+function modelOptionKey(name: string, engine: SpeechModelEngine) {
+  return `${name}::${engine}`;
+}
+
+function parseModelOptionKey(value: string): { name: string; engine: SpeechModelEngine } {
+  const separator = value.indexOf("::");
+  if (separator === -1) {
+    return { name: value, engine: "whisper" };
+  }
+
+  return {
+    name: value.slice(0, separator),
+    engine: value.slice(separator + 2) as SpeechModelEngine,
+  };
+}
+
+function remoteControlErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  return fallback;
+}
+
+function lockMessageForStatus(status: ConnectionStatus | undefined, fallback?: string) {
+  if (fallback?.trim()) {
+    return fallback;
+  }
+
+  switch (status) {
+    case "AuthFailed":
+      return "Remote model control is locked until authentication succeeds.";
+    case "Offline":
+      return "Remote model control is unavailable while the host is offline.";
+    default:
+      return "Remote model control is unavailable for this connection.";
+  }
+}
+
+function RemoteTranscriptionModelControl({
+  server,
+  onUpdated,
+}: {
+  server: SavedConnection;
+  onUpdated?: () => void | Promise<void>;
+}) {
+  const [control, setControl] = useState<RemoteModelControlSnapshot | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  const loadControl = useCallback(async () => {
+    setLoading(true);
+    setFetchError(null);
+
+    try {
+      const result = await invoke<RemoteModelControlSnapshot>(
+        "get_remote_transcription_control",
+        { serverId: server.id },
+      );
+      setControl(result);
+    } catch (error) {
+      console.error("Failed to load remote transcription control:", error);
+      setControl(null);
+      setFetchError(
+        remoteControlErrorMessage(
+          error,
+          "Could not load remote transcription model control.",
+        ),
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [server.id]);
+
+  useEffect(() => {
+    if (server.status !== "Online") {
+      setControl(null);
+      setFetchError(null);
+      return;
+    }
+
+    void loadControl();
+  }, [server.id, server.status, loadControl]);
+
+  const selectedValue = useMemo(() => {
+    return modelOptionKey(control?.current.id ?? "", control?.current.engine ?? "whisper");
+  }, [control?.current.id, control?.current.engine]);
+
+  const handleModelChange = async (value: string) => {
+    const { name, engine } = parseModelOptionKey(value);
+    if (control?.current.id === name && control.current.engine === engine) {
+      return;
+    }
+
+    setUpdating(true);
+    try {
+      await invoke("update_remote_transcription_control", {
+        serverId: server.id,
+        currentModel: name,
+        currentModelEngine: engine,
+      });
+      toast.success("Remote shared transcription model updated", {
+        description: "This device will use the host's updated shared model for remote dictation.",
+      });
+      await onUpdated?.();
+      await loadControl();
+    } catch (error) {
+      console.error("Failed to update remote transcription control:", error);
+      toast.error("Failed to update remote shared transcription model", {
+        description: remoteControlErrorMessage(
+          error,
+          "The host model could not be changed.",
+        ),
+      });
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  if (server.status === "AuthFailed") {
+    return (
+      <RemoteModelControlShell>
+        <LockedMessage
+          icon={KeyRound}
+          message={lockMessageForStatus("AuthFailed")}
+        />
+      </RemoteModelControlShell>
+    );
+  }
+
+  if (server.status === "Offline") {
+    return (
+      <RemoteModelControlShell>
+        <LockedMessage
+          icon={WifiOff}
+          message={lockMessageForStatus("Offline")}
+        />
+      </RemoteModelControlShell>
+    );
+  }
+
+  if (server.status !== "Online") {
+    return null;
+  }
+
+  if (loading && !control) {
+    return (
+      <RemoteModelControlShell>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Spinner className="size-3" />
+          Loading host transcription model...
+        </div>
+      </RemoteModelControlShell>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <RemoteModelControlShell>
+        <LockedMessage icon={Lock} message={fetchError} />
+      </RemoteModelControlShell>
+    );
+  }
+
+  if (!control) {
+    return null;
+  }
+
+  const models = control.available;
+  const currentLabel =
+    control.current.display_name ||
+    getModelDisplayName(control.current.id) ||
+    control.current.id;
+  const hasCurrentOption = models.some(
+    (model) => model.id === control.current.id && model.engine === control.current.engine,
+  );
+
+  const selectableModels = hasCurrentOption ? models : [control.current, ...models];
+  return (
+    <RemoteModelControlShell>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-foreground">Host shared transcription model</p>
+          <p className="text-[11px] text-muted-foreground">
+            Controls only the transcription model shared by this remote VoiceTypr host.
+          </p>
+        </div>
+        {selectableModels.length > 0 ? (
+          <Select
+            value={selectedValue}
+            onValueChange={(value) => {
+              void handleModelChange(value);
+            }}
+            disabled={updating}
+          >
+            <SelectTrigger
+              className="h-8 w-full sm:w-[220px]"
+              aria-label="Remote host shared transcription model"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <SelectValue placeholder={currentLabel} />
+            </SelectTrigger>
+            <SelectContent>
+              {selectableModels.map((model) => {
+                const value = modelOptionKey(model.id, model.engine);
+                return (
+                  <SelectItem key={value} value={value}>
+                    {model.display_name || getModelDisplayName(model.id) || model.id}
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
+        ) : (
+          <p className="text-xs text-muted-foreground">{currentLabel}</p>
+        )}
+      </div>
+      {updating && (
+        <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+          <Spinner className="size-3" />
+          Updating host shared transcription model...
+        </div>
+      )}
+    </RemoteModelControlShell>
+  );
+}
+
+function RemoteModelControlShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="mt-3 border-t border-border/60 pt-3"
+      onClick={(event) => event.stopPropagation()}
+    >
+      {children}
+    </div>
+  );
+}
+
+function LockedMessage({
+  icon: Icon,
+  message,
+}: {
+  icon: typeof Lock;
+  message: string;
+}) {
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+      <Icon className="mt-0.5 size-3.5 shrink-0" />
+      <div>
+        <p className="font-medium text-foreground">Host shared transcription model</p>
+        <p className="mt-0.5">{message}</p>
+      </div>
+    </div>
+  );
 }
 
 export function RemoteServerCard({
@@ -58,6 +333,7 @@ export function RemoteServerCard({
   onRemove,
   onEdit,
   isRefreshing = false,
+  onServerUpdated,
 }: RemoteServerCardProps) {
   const [removing, setRemoving] = useState(false);
 
@@ -95,6 +371,7 @@ export function RemoteServerCard({
   // All servers are selectable - status is informational only
   // (Per user request: don't block selection based on status)
   const isSelectable = status !== "self_connection";
+  const showRemoteModelControl = status !== "self_connection";
 
   return (
     <Card
@@ -234,6 +511,13 @@ export function RemoteServerCard({
           </Button>
         </ButtonGroup>
       </div>
+
+      {showRemoteModelControl && (
+        <RemoteTranscriptionModelControl
+          server={server}
+          onUpdated={onServerUpdated}
+        />
+      )}
     </Card>
   );
 }

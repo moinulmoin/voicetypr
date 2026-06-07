@@ -10,6 +10,7 @@ use tauri::AppHandle;
 use tempfile::NamedTempFile;
 
 use super::http::ServerContext;
+use super::server::RemoteModelControlSnapshot;
 use crate::parakeet::messages::{ParakeetResponse, ParakeetSegment};
 use crate::parakeet::ParakeetManager;
 use crate::transcription::{
@@ -157,10 +158,33 @@ impl RealTranscriptionContext {
         self.shared_state.get_model_path()
     }
 
-    /// Get the shared state (for external updates)
-    #[cfg(test)]
-    pub fn get_shared_state(&self) -> SharedServerState {
-        self.shared_state.clone()
+    async fn model_control_snapshot(&self) -> Result<RemoteModelControlSnapshot, String> {
+        let app = self
+            .app_handle
+            .as_ref()
+            .ok_or_else(|| "Remote control requires app context".to_string())?;
+
+        crate::remote::model_control::build_remote_model_control_snapshot(app, &self.shared_state)
+            .await
+    }
+
+    async fn set_shared_model(
+        &self,
+        model_id: String,
+        engine: String,
+    ) -> Result<RemoteModelControlSnapshot, String> {
+        let app = self
+            .app_handle
+            .as_ref()
+            .ok_or_else(|| "Remote control requires app context".to_string())?;
+
+        crate::remote::model_control::update_remote_shared_model(
+            app,
+            &self.shared_state,
+            &model_id,
+            &engine,
+        )
+        .await
     }
 }
 
@@ -275,6 +299,23 @@ impl ServerContext for RealTranscriptionContext {
         );
 
         Ok(result)
+    }
+
+    fn get_model_control_snapshot(&self) -> Result<RemoteModelControlSnapshot, String> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.model_control_snapshot())
+        })
+    }
+
+    fn update_shared_model(
+        &self,
+        model_id: &str,
+        engine: &str,
+    ) -> Result<RemoteModelControlSnapshot, String> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(self.set_shared_model(model_id.to_string(), engine.to_string()))
+        })
     }
 }
 
