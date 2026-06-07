@@ -16,7 +16,8 @@ use crate::remote::client::{
     TranscriptionSource,
 };
 use crate::remote::discovery::DiscoveredRemoteServer;
-use crate::remote::lifecycle::{RemoteServerManager, SharingStatus};
+use crate::remote::lifecycle::{BindingResult, RemoteServerManager, SharingStatus};
+use crate::remote::model_control;
 use crate::remote::server::{RemoteModelControlSnapshot, RemoteModelControlUpdate, StatusResponse};
 use crate::remote::settings::{ConnectionStatus, RemoteSettings, SavedConnection};
 use crate::whisper::manager::WhisperManager;
@@ -151,6 +152,34 @@ fn remote_settings_connection_password_markers(
         .collect()
 }
 
+/// Sharing status exposed to the frontend, including persisted host opt-in settings.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SharingStatusView {
+    pub enabled: bool,
+    pub port: Option<u16>,
+    pub model_name: Option<String>,
+    pub server_name: Option<String>,
+    pub active_connections: u32,
+    pub password_configured: bool,
+    pub binding_results: Vec<BindingResult>,
+    pub allow_model_control: bool,
+}
+
+impl SharingStatusView {
+    fn from_parts(status: SharingStatus, allow_model_control: bool) -> Self {
+        Self {
+            enabled: status.enabled,
+            port: status.port,
+            model_name: status.model_name,
+            server_name: status.server_name,
+            active_connections: status.active_connections,
+            password_configured: status.password_configured,
+            binding_results: status.binding_results,
+            allow_model_control,
+        }
+    }
+}
+
 // ============================================================================
 // Server Mode Commands
 // ============================================================================
@@ -174,6 +203,7 @@ pub async fn start_sharing(
     {
         let settings = remote_settings.lock().await;
         ensure_sharing_can_start(&settings)?;
+        model_control::set_model_control_enabled(settings.server_config.allow_model_control);
     }
 
     let previous_password = secure_get_optional(&app, SHARING_PASSWORD_KEY)?;
@@ -333,9 +363,33 @@ pub async fn stop_sharing(
 #[tauri::command]
 pub async fn get_sharing_status(
     server_manager: State<'_, AsyncMutex<RemoteServerManager>>,
-) -> Result<SharingStatus, String> {
-    let manager = server_manager.lock().await;
-    Ok(manager.get_status())
+    remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
+) -> Result<SharingStatusView, String> {
+    let status = {
+        let manager = server_manager.lock().await;
+        manager.get_status()
+    };
+    let allow_model_control = {
+        let settings = remote_settings.lock().await;
+        settings.server_config.allow_model_control
+    };
+    Ok(SharingStatusView::from_parts(status, allow_model_control))
+}
+
+/// Persist host opt-in for remote model control without restarting sharing.
+#[tauri::command]
+pub async fn update_remote_model_control_enabled(
+    app: AppHandle,
+    enabled: bool,
+    remote_settings: State<'_, AsyncMutex<RemoteSettings>>,
+) -> Result<(), String> {
+    {
+        let mut settings = remote_settings.lock().await;
+        settings.server_config.allow_model_control = enabled;
+        save_remote_settings(&app, &settings)?;
+    }
+    model_control::set_model_control_enabled(enabled);
+    Ok(())
 }
 
 /// Get local IP addresses for display in Network Sharing UI
@@ -366,11 +420,7 @@ pub fn get_local_ips() -> Result<Vec<String>, String> {
         })
         .collect();
 
-    if ips.is_empty() {
-        Ok(vec!["No network connection".to_string()])
-    } else {
-        Ok(ips)
-    }
+    Ok(ips)
 }
 
 // ============================================================================
@@ -851,6 +901,14 @@ fn connection_for_client(
 
 fn remote_control_error_message(error: RemoteClientError) -> String {
     match &error {
+        RemoteClientError::HttpStatus { status, body, .. }
+            if *status == reqwest::StatusCode::FORBIDDEN
+                && body
+                    .as_deref()
+                    .is_some_and(|body| body.contains("model_control_disabled")) =>
+        {
+            "Remote model control is disabled on this device.".to_string()
+        }
         RemoteClientError::HttpStatus { status, body, .. }
             if *status == reqwest::StatusCode::FORBIDDEN
                 && body
@@ -1374,14 +1432,8 @@ pub async fn transcribe_remote(
         .and_then(|v| v.as_str().map(|s| s.to_string()));
     drop(store);
 
-    let uses_personal_dictation = if !ai_enabled {
-        true
-    } else {
-        crate::commands::ai::get_enhancement_options_for_ai_enabled(app.clone(), ai_enabled)
-            .await
-            .map(|options| !options.preset.requires_ai_formatting())
-            .unwrap_or(false)
-    };
+    let uses_personal_dictation =
+        crate::writing::effective_personal_dictation_mode(&app, ai_enabled)?;
     let transcription_task = if uses_personal_dictation {
         crate::commands::settings::TRANSCRIPTION_TASK_TRANSCRIBE.to_string()
     } else {
@@ -1634,6 +1686,8 @@ pub fn load_remote_settings(app: &AppHandle) -> RemoteSettings {
         settings.saved_connections.len(),
         settings.active_connection_id
     );
+
+    model_control::set_model_control_enabled(settings.server_config.allow_model_control);
 
     settings
 }

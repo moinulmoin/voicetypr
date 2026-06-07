@@ -55,6 +55,19 @@ impl From<EnhancementPreset> for WritingMode {
     }
 }
 
+impl From<WritingMode> for EnhancementPreset {
+    fn from(value: WritingMode) -> Self {
+        match value {
+            WritingMode::PersonalDictation => Self::PersonalDictation,
+            WritingMode::CleanDictation => Self::CleanDictation,
+            WritingMode::Writing => Self::Writing,
+            WritingMode::Notes => Self::Notes,
+            WritingMode::Message => Self::Message,
+            WritingMode::Code => Self::Code,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextPolicy {
@@ -304,6 +317,47 @@ fn resolve_app_formatting_preset(
     }
 
     Some(matched_rule.preset)
+}
+
+fn resolve_effective_writing_preset(
+    settings: &WritingSettings,
+    ai_enabled: bool,
+    global_preset: EnhancementPreset,
+    active_app: Option<&ContextHint>,
+) -> EnhancementPreset {
+    if !ai_enabled {
+        return EnhancementPreset::PersonalDictation;
+    }
+
+    resolve_app_formatting_preset(settings, active_app, ai_enabled).unwrap_or(global_preset)
+}
+
+/// Resolves whether the effective writing mode is Personal Dictation for the current
+/// foreground app, using the same preset resolution as `process_transcription`.
+pub fn effective_personal_dictation_mode(
+    app: &AppHandle,
+    ai_enabled: bool,
+) -> Result<bool, String> {
+    if !ai_enabled {
+        return Ok(true);
+    }
+
+    let settings = load_writing_settings(app)?;
+    let should_capture_active_app = app_rules_need_active_app(&settings);
+    let active_app = capture_active_app_context(should_capture_active_app);
+
+    let store = app.store("settings").map_err(|e| e.to_string())?;
+    let global_preset = crate::ai::prompts::enhancement_options_for_ai_enabled(
+        store.get("enhancement_options").as_ref(),
+        ai_enabled,
+    )
+    .map(|options| options.preset)
+    .unwrap_or(EnhancementPreset::PersonalDictation);
+
+    Ok(
+        resolve_effective_writing_preset(&settings, ai_enabled, global_preset, active_app.as_ref())
+            == EnhancementPreset::PersonalDictation,
+    )
 }
 
 async fn load_writing_profile(
@@ -1485,12 +1539,13 @@ async fn run_smart_formatting(request: SmartFormattingRequest<'_>) -> Result<Str
         request.context_hint,
         ProviderContextTarget::SmartFormatting,
     );
-    match crate::commands::ai::enhance_transcription(
+    match crate::commands::ai::enhance_transcription_internal(
         request.text.to_string(),
         request.transcript_language.clone(),
         Some(true),
         Some(request.output_language.clone()),
         ai_context,
+        Some(request.profile.mode.into()),
         request.app,
     )
     .await
@@ -1698,6 +1753,41 @@ mod tests {
             WritingMode::from(EnhancementPreset::Code),
             WritingMode::Code
         );
+    }
+
+    #[test]
+    fn test_writing_mode_maps_to_enhancement_preset() {
+        assert_eq!(
+            EnhancementPreset::from(WritingMode::Message),
+            EnhancementPreset::Message
+        );
+        assert_eq!(
+            EnhancementPreset::from(WritingMode::PersonalDictation),
+            EnhancementPreset::PersonalDictation
+        );
+    }
+
+    #[test]
+    fn test_app_rule_message_overrides_global_personal_for_effective_mode() {
+        let settings = WritingSettings {
+            app_formatting_rules: vec![AppFormattingRule {
+                app_name: "slack".to_string(),
+                preset: EnhancementPreset::Message,
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            app_category: Some("chat".to_string()),
+        };
+        let global_preset = EnhancementPreset::PersonalDictation;
+        let effective_preset = resolve_app_formatting_preset(&settings, Some(&active_app), true)
+            .unwrap_or(global_preset);
+
+        assert_eq!(effective_preset, EnhancementPreset::Message);
+        assert_eq!(WritingMode::from(effective_preset), WritingMode::Message);
+        assert!(effective_preset.requires_ai_formatting());
     }
 
     #[test]
@@ -2702,5 +2792,114 @@ mod tests {
         assert!(parsed.is_object());
         assert!(context.text.is_none());
         assert!(context.terms.len() < unpruned.terms.len());
+    }
+
+    #[test]
+    fn test_resolve_effective_writing_preset_ai_disabled_is_personal_dictation() {
+        let settings = WritingSettings {
+            app_formatting_rules: vec![AppFormattingRule {
+                app_name: "slack".to_string(),
+                preset: EnhancementPreset::Message,
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            app_category: Some("chat".to_string()),
+        };
+
+        assert_eq!(
+            resolve_effective_writing_preset(
+                &settings,
+                false,
+                EnhancementPreset::Message,
+                Some(&active_app),
+            ),
+            EnhancementPreset::PersonalDictation
+        );
+    }
+
+    #[test]
+    fn test_resolve_effective_writing_preset_app_rule_personal_dictation() {
+        let settings = WritingSettings {
+            app_formatting_rules: vec![AppFormattingRule {
+                app_name: "notes".to_string(),
+                preset: EnhancementPreset::PersonalDictation,
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+        let active_app = ContextHint {
+            app_name: Some("Apple Notes".to_string()),
+            app_category: Some("notes".to_string()),
+        };
+
+        assert_eq!(
+            resolve_effective_writing_preset(
+                &settings,
+                true,
+                EnhancementPreset::Message,
+                Some(&active_app),
+            ),
+            EnhancementPreset::PersonalDictation
+        );
+    }
+
+    #[test]
+    fn test_resolve_effective_writing_preset_app_rule_message_overrides_global_personal() {
+        let settings = WritingSettings {
+            app_formatting_rules: vec![AppFormattingRule {
+                app_name: "slack".to_string(),
+                preset: EnhancementPreset::Message,
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            app_category: Some("chat".to_string()),
+        };
+
+        assert_eq!(
+            resolve_effective_writing_preset(
+                &settings,
+                true,
+                EnhancementPreset::PersonalDictation,
+                Some(&active_app),
+            ),
+            EnhancementPreset::Message
+        );
+        assert_ne!(
+            resolve_effective_writing_preset(
+                &settings,
+                true,
+                EnhancementPreset::PersonalDictation,
+                Some(&active_app),
+            ),
+            EnhancementPreset::PersonalDictation
+        );
+    }
+
+    #[test]
+    fn test_resolve_effective_writing_preset_falls_back_to_global_without_active_app() {
+        let settings = WritingSettings {
+            app_formatting_rules: vec![AppFormattingRule {
+                app_name: "slack".to_string(),
+                preset: EnhancementPreset::Message,
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+
+        assert_eq!(
+            resolve_effective_writing_preset(
+                &settings,
+                true,
+                EnhancementPreset::PersonalDictation,
+                None,
+            ),
+            EnhancementPreset::PersonalDictation
+        );
     }
 }

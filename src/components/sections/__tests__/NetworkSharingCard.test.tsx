@@ -52,6 +52,33 @@ function renderWithProviders(ui: React.ReactElement) {
   return render(ui, { wrapper: TestWrapper });
 }
 
+
+function sharingStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    enabled: true,
+    port: 47842,
+    model_name: "large-v3-turbo",
+    server_name: "My-PC",
+    active_connections: 0,
+    password_configured: true,
+    binding_results: [],
+    allow_model_control: false,
+    ...overrides,
+  };
+}
+
+function shareableModel(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "large-v3-turbo",
+    display_name: "Large v3 Turbo",
+    downloaded: true,
+    engine: "whisper",
+    kind: "local",
+    ...overrides,
+  };
+}
+
+
 describe("NetworkSharingCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -81,8 +108,8 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: false },
-                { name: "base.en", display_name: "Base (English)", downloaded: false },
+                shareableModel({ downloaded: false }),
+                shareableModel({ name: "base.en", display_name: "Base (English)", downloaded: false }),
               ],
             });
           case "get_active_remote_server":
@@ -95,19 +122,19 @@ describe("NetworkSharingCard", () => {
       });
     });
 
-    it("shows warning when no model is downloaded", async () => {
+    it("shows warning when no shareable local model is available", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByText("No model downloaded")).toBeInTheDocument();
+        expect(screen.getByText("No shareable local model")).toBeInTheDocument();
       });
 
       expect(
-        screen.getByText(/Download a transcription model in the Models tab/)
+        screen.getByText(/Remote sharing requires a downloaded Whisper or Parakeet model/)
       ).toBeInTheDocument();
     });
 
-    it("disables the toggle switch when no model is downloaded", async () => {
+    it("disables the toggle switch when no shareable local model is available", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
@@ -140,8 +167,8 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
-                { name: "base.en", display_name: "Base (English)", downloaded: false },
+                shareableModel(),
+                shareableModel({ name: "base.en", display_name: "Base (English)", downloaded: false }),
               ],
             });
           case "get_active_remote_server":
@@ -175,7 +202,7 @@ describe("NetworkSharingCard", () => {
       });
     });
 
-    it("does not show the no model warning", async () => {
+    it("does not show the no shareable model warning", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
@@ -207,7 +234,7 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                shareableModel(),
               ],
             });
           case "get_active_remote_server":
@@ -268,7 +295,7 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                shareableModel(),
               ],
             });
           case "get_active_remote_server":
@@ -333,8 +360,8 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
-                { name: "base.en", display_name: "Base (English)", downloaded: true },
+                shareableModel(),
+                shareableModel({ name: "base.en", display_name: "Base (English)" }),
               ],
             });
           case "get_active_remote_server":
@@ -428,7 +455,7 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                shareableModel(),
               ],
             });
           case "get_active_remote_server":
@@ -486,7 +513,7 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                shareableModel(),
               ],
             });
           case "get_active_remote_server":
@@ -538,7 +565,7 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                shareableModel(),
               ],
             });
           case "get_active_remote_server":
@@ -615,7 +642,7 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                shareableModel(),
               ],
             });
           case "get_active_remote_server":
@@ -694,7 +721,7 @@ describe("NetworkSharingCard", () => {
         if (command === "get_model_status") {
           return Promise.resolve({
             models: [
-              { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+              shareableModel(),
             ],
           });
         }
@@ -747,7 +774,7 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                shareableModel(),
               ],
             });
           case "get_active_remote_server":
@@ -815,7 +842,7 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                shareableModel(),
               ],
             });
           case "get_active_remote_server":
@@ -887,7 +914,7 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                shareableModel(),
               ],
             });
           case "get_active_remote_server":
@@ -963,6 +990,52 @@ describe("NetworkSharingCard", () => {
       });
     });
 
+
+    it("persists remote model control opt-in without restarting sharing", async () => {
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "large-v3-turbo",
+              auto_insert: true,
+              launch_at_startup: false,
+              sharing_port: 47842,
+            });
+          case "get_sharing_status":
+            return Promise.resolve(sharingStatus());
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({ models: [shareableModel()] });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          case "update_remote_model_control_enabled":
+            return Promise.resolve();
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+
+      const user = userEvent.setup();
+      renderWithProviders(<NetworkSharingCard />);
+
+      const toggle = await screen.findByLabelText("Allow trusted devices to change shared model");
+      expect(toggle).not.toBeChecked();
+
+      await user.click(toggle);
+
+      await waitFor(() => {
+        expect(mockInvoke).toHaveBeenCalledWith("update_remote_model_control_enabled", {
+          enabled: true,
+        });
+      });
+
+      expect(
+        screen.getByText("Devices with the password can switch only the model this device shares."),
+      ).toBeInTheDocument();
+    });
     it("allows removing a saved sharing password", async () => {
       mockInvoke.mockImplementation((command: string) => {
         switch (command) {
@@ -982,13 +1055,14 @@ describe("NetworkSharingCard", () => {
               active_connections: 0,
               password_configured: true,
               binding_results: [],
+              allow_model_control: false,
             });
           case "get_local_ips":
             return Promise.resolve(["192.168.1.100 (eth0)"]);
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                shareableModel(),
               ],
             });
           case "get_active_remote_server":
@@ -1044,7 +1118,7 @@ describe("NetworkSharingCard", () => {
           case "get_model_status":
             return Promise.resolve({
               models: [
-                { name: "large-v3-turbo", display_name: "Large v3 Turbo", downloaded: true },
+                shareableModel(),
               ],
             });
           case "get_active_remote_server":
@@ -1091,4 +1165,215 @@ describe("NetworkSharingCard", () => {
       });
     });
   });
+  describe("when Soniox or cloud is selected", () => {
+    beforeEach(() => {
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "soniox",
+              current_model_engine: "soniox",
+              auto_insert: true,
+              launch_at_startup: false,
+            });
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: false,
+              port: null,
+              model_name: null,
+              server_name: null,
+              active_connections: 0,
+            });
+          case "get_local_ips":
+            return Promise.resolve([]);
+          case "get_model_status":
+            return Promise.resolve({
+              models: [
+                shareableModel(),
+                {
+                  name: "soniox",
+                  display_name: "Soniox",
+                  downloaded: true,
+                  engine: "soniox",
+                  kind: "cloud",
+                },
+              ],
+            });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+    });
+
+    it("disables sharing when the current source cannot be shared", async () => {
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Current model cannot be shared")).toBeInTheDocument();
+      });
+
+      expect(screen.getByRole("switch")).toBeDisabled();
+      expect(
+        screen.getByText(/Soniox and cloud sources cannot be shared over the network/)
+      ).toBeInTheDocument();
+    });
+  });
+
+  describe("when sharing is enabled without a network address", () => {
+    beforeEach(() => {
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "large-v3-turbo",
+              current_model_engine: "whisper",
+              auto_insert: true,
+              launch_at_startup: false,
+            });
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: true,
+              port: 47842,
+              model_name: "large-v3-turbo",
+              server_name: "My-PC",
+              active_connections: 0,
+              binding_results: [],
+            });
+          case "get_local_ips":
+            return Promise.resolve([]);
+          case "get_model_status":
+            return Promise.resolve({ models: [shareableModel()] });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+    });
+
+    it("shows an empty state instead of a fake network address", async () => {
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByText("No network address available")).toBeInTheDocument();
+      });
+
+      expect(
+        screen.getByText(/Connect this device to Wi-Fi or Ethernet/)
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Starting server...")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("port validation", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "large-v3-turbo",
+              current_model_engine: "whisper",
+              auto_insert: true,
+              launch_at_startup: false,
+              sharing_port: 47842,
+            });
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: true,
+              port: 47842,
+              model_name: "large-v3-turbo",
+              server_name: "My-PC",
+              active_connections: 0,
+            });
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({ models: [shareableModel()] });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          case "start_sharing":
+            return Promise.resolve();
+          case "stop_sharing":
+            return Promise.resolve();
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+    });
+
+    it("rejects invalid ports before calling stop_sharing", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Port")).toBeInTheDocument();
+      });
+
+      const portInput = screen.getByLabelText("Port");
+      await user.clear(portInput);
+      await user.type(portInput, "70000");
+      fireEvent.click(screen.getByTitle("Save and restart server"));
+
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalledWith("Enter a valid port between 1 and 65535");
+      });
+      expect(mockInvoke).not.toHaveBeenCalledWith("stop_sharing");
+    });
+  });
+
+  describe("host password copy", () => {
+    beforeEach(() => {
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "large-v3-turbo",
+              current_model_engine: "whisper",
+              auto_insert: true,
+              launch_at_startup: false,
+              sharing_port: 47842,
+            });
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: true,
+              port: 47842,
+              model_name: "large-v3-turbo",
+              server_name: "My-PC",
+              active_connections: 0,
+              password_configured: false,
+            });
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({ models: [shareableModel()] });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+    });
+
+    it("explains that connecting devices need the host password", async () => {
+      renderWithProviders(<NetworkSharingCard />);
+
+      await waitFor(() => {
+        expect(
+          screen.getByText("Other devices need this password to connect to your shared transcription.")
+        ).toBeInTheDocument();
+      });
+    });
+  });
+
 });

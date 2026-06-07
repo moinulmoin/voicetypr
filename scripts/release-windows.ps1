@@ -1,4 +1,6 @@
-# Windows Release Script - one CPU-safe installer with optional Vulkan GPU sidecar
+# Windows x86_64 release script - one CPU-safe installer with optional Vulkan GPU sidecar.
+# Uses src-tauri/tauri.windows.conf.json, which bundles the x64 Vulkan sidecar only.
+# Windows ARM64 builds stay CPU-only and must not use this config or sidecar path.
 
 param(
     [string]$Version,
@@ -28,13 +30,16 @@ function Require-File($Path) {
 
 if ($Help) {
     Write-Host @"
-Windows Release Script
+Windows x86_64 Release Script
 
-Builds one Windows NSIS installer:
+Builds one Windows x64 NSIS installer:
 - voicetypr.exe is CPU-safe and must not import vulkan-1.dll
-- optional Vulkan acceleration ships as a sidecar process
+- optional Vulkan acceleration ships as an x86_64 sidecar process
 - VC++ Runtime and Vulkan Runtime installers are bundled as resources
 - updater/latest.json points to this single installer
+
+This script and src-tauri/tauri.windows.conf.json are for x86_64 Windows only.
+Windows ARM64 builds are CPU-only and must not require the x64 Vulkan sidecar.
 
 Usage:
   .\scripts\release-windows.ps1                    # Build and upload installer
@@ -43,7 +48,8 @@ Usage:
   .\scripts\release-windows.ps1 -Help              # Show this help
 
 Requirements for building:
-  - Vulkan SDK in VULKAN_SDK, used only to build/package the GPU sidecar
+  - Vulkan SDK in VULKAN_SDK, used only to build/package the x64 GPU sidecar
+  - Optional CARGO_TARGET_DIR for short build paths (honored for sidecar and main app)
 "@
     exit 0
 }
@@ -53,7 +59,7 @@ if (-not $Version) {
     $Version = $packageJson.version
 }
 
-Write-Step "VoiceTypr Windows Release v$Version"
+Write-Step "VoiceTypr Windows x86_64 Release v$Version"
 
 $ReleaseTag = "v$Version"
 $OutputDir = "release-windows-$Version"
@@ -72,7 +78,12 @@ if (-not $SkipPublish) {
 }
 
 if (-not $SkipBuild) {
-    Write-Step "Building CPU-safe app with bundled Vulkan sidecar"
+    Write-Step "Building x86_64 CPU-safe app with bundled Vulkan sidecar"
+
+    $AppTargetDir = $env:CARGO_TARGET_DIR
+    if ([string]::IsNullOrWhiteSpace($AppTargetDir)) {
+        $AppTargetDir = "src-tauri\target"
+    }
 
     if ([string]::IsNullOrEmpty($env:VULKAN_SDK) -or -not (Test-Path $env:VULKAN_SDK)) {
         Write-Error "VULKAN_SDK not set. Install Vulkan SDK to build the optional GPU sidecar."
@@ -104,7 +115,12 @@ if (-not $SkipBuild) {
     $vulkanRuntimeUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanRT-$vulkanVersion-Installer.exe"
     Invoke-WebRequest -Uri $vulkanRuntimeUrl -OutFile "$runtimeDir\VulkanRT-Installer.exe"
 
-    Write-Info "Building Whisper Vulkan sidecar..."
+    Write-Info "Building Whisper Vulkan sidecar (x86_64 only)..."
+    $SidecarTargetDir = $env:CARGO_TARGET_DIR
+    if ([string]::IsNullOrWhiteSpace($SidecarTargetDir)) {
+        $SidecarTargetDir = "sidecar\whisper-vulkan\target"
+    }
+
     $env:RUSTFLAGS = "-C target-feature=+crt-static"
     cargo build --manifest-path sidecar\whisper-vulkan\Cargo.toml --release
     if ($LASTEXITCODE -ne 0) {
@@ -112,25 +128,33 @@ if (-not $SkipBuild) {
         exit $LASTEXITCODE
     }
 
-    New-Item -ItemType Directory -Path "sidecar\whisper-vulkan\dist" -Force | Out-Null
-    Copy-Item "sidecar\whisper-vulkan\target\release\whisper-vulkan-sidecar.exe" `
-        "sidecar\whisper-vulkan\dist\whisper-vulkan-sidecar-x86_64-pc-windows-msvc.exe" -Force
+    $SidecarExe = Join-Path $SidecarTargetDir "release\whisper-vulkan-sidecar.exe"
+    if (-not (Test-Path $SidecarExe)) {
+        Write-Error "Whisper Vulkan sidecar binary not found after build: $SidecarExe"
+        exit 1
+    }
 
-    Write-Info "Building Tauri installer..."
+    $SidecarDist = "sidecar\whisper-vulkan\dist\whisper-vulkan-sidecar-x86_64-pc-windows-msvc.exe"
+    New-Item -ItemType Directory -Path "sidecar\whisper-vulkan\dist" -Force | Out-Null
+    Copy-Item $SidecarExe $SidecarDist -Force
+
+    Write-Info "Building Tauri x86_64 installer..."
     pnpm tauri build --ci --config src-tauri/tauri.windows.conf.json
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Build failed"
         exit $LASTEXITCODE
     }
 
-    powershell -ExecutionPolicy Bypass -File .\src-tauri\windows\assert-no-vulkan-import.ps1 -ExePath "src-tauri\target\release\voicetypr.exe"
+    $MainExe = Join-Path $AppTargetDir "release\voicetypr.exe"
+    powershell -ExecutionPolicy Bypass -File .\src-tauri\windows\assert-no-vulkan-import.ps1 -ExePath $MainExe
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    $installer = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" |
+    $InstallerDir = Join-Path $AppTargetDir "release\bundle\nsis"
+    $installer = Get-ChildItem "$InstallerDir\*.exe" |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
     if (-not $installer) {
-        Write-Error "No installer found in src-tauri\target\release\bundle\nsis\"
+        Write-Error "No installer found in $InstallerDir\"
         exit 1
     }
 
@@ -226,4 +250,4 @@ if (-not $SkipPublish) {
 
 Write-Step "Done"
 Write-Info "Installer: $InstallerName"
-Write-Info "Main app is CPU-safe; optional GPU acceleration is isolated in the bundled sidecar."
+Write-Info "Main app is CPU-safe; optional x86_64 GPU acceleration is isolated in the bundled sidecar."

@@ -163,6 +163,32 @@ impl EnhancementOptions {
     }
 }
 
+pub fn enhancement_options_for_ai_enabled(
+    options_value: Option<&serde_json::Value>,
+    ai_enabled: bool,
+) -> Result<EnhancementOptions, String> {
+    let mut options = if let Some(value) = options_value {
+        parse_enhancement_options_from_value(value, ai_enabled)?
+    } else {
+        EnhancementOptions::default_for_ai_enabled(ai_enabled)
+    };
+
+    if !ai_enabled && options.preset.requires_ai_formatting() {
+        options.preset = EnhancementPreset::PersonalDictation;
+    }
+
+    Ok(options)
+}
+
+pub fn effective_enhancement_options(
+    stored: &EnhancementOptions,
+    preset_override: Option<EnhancementPreset>,
+) -> EnhancementOptions {
+    preset_override
+        .map(|preset| EnhancementOptions { preset })
+        .unwrap_or_else(|| stored.clone())
+}
+
 impl Default for EnhancementOptions {
     fn default() -> Self {
         Self::default_for_ai_enabled(false)

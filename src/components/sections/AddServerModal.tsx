@@ -218,7 +218,7 @@ export function AddServerModal({
     }
 
     if (initialServerRequiresPassword && !password.trim()) {
-      toast.error("Enter the remote VoiceTypr password before adding this server");
+      toast.error("Enter the password from the sharing device before adding this server");
       return;
     }
 
@@ -326,10 +326,10 @@ export function AddServerModal({
                 type={showPassword ? "text" : "password"}
                 placeholder={
                   initialServerRequiresPassword
-                    ? "Enter remote VoiceTypr password"
+                    ? "Enter the password from the sharing device"
                     : isEditMode && editServer?.has_password
-                      ? "Leave empty to keep saved password"
-                      : "Leave empty if no password"
+                      ? "Enter the password from the sharing device"
+                      : "Enter the password from the sharing device (if required)"
                 }
                 value={password}
                 onChange={(e) => {
@@ -355,6 +355,9 @@ export function AddServerModal({
                 </InputGroupButton>
               </InputGroupAddon>
             </InputGroup>
+            <FieldDescription>
+              Enter the password shown on the device that is sharing transcription.
+            </FieldDescription>
             {isEditMode && editServer?.has_password && !password && (
               <div>
                 <Button

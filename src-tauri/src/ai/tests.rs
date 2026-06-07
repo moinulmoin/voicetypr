@@ -366,6 +366,69 @@ mod tests {
     }
 
     #[test]
+    fn test_effective_enhancement_options_prefers_override() {
+        use crate::ai::prompts::{
+            effective_enhancement_options, EnhancementOptions, EnhancementPreset,
+        };
+
+        let stored = EnhancementOptions {
+            preset: EnhancementPreset::PersonalDictation,
+        };
+        let effective = effective_enhancement_options(&stored, Some(EnhancementPreset::Message));
+
+        assert_eq!(effective.preset, EnhancementPreset::Message);
+        assert!(effective.preset.requires_ai_formatting());
+    }
+
+    #[test]
+    fn test_effective_enhancement_options_keeps_global_personal_without_override() {
+        use crate::ai::prompts::{
+            effective_enhancement_options, EnhancementOptions, EnhancementPreset,
+        };
+
+        let stored = EnhancementOptions {
+            preset: EnhancementPreset::PersonalDictation,
+        };
+        let effective = effective_enhancement_options(&stored, None);
+
+        assert_eq!(effective.preset, EnhancementPreset::PersonalDictation);
+        assert!(!effective.preset.requires_ai_formatting());
+    }
+
+    #[test]
+    fn test_forced_message_preset_uses_message_prompt_with_global_personal() {
+        use crate::ai::prompts::{
+            build_enhancement_prompt, effective_enhancement_options, EnhancementOptions,
+            EnhancementPreset,
+        };
+
+        let stored = EnhancementOptions {
+            preset: EnhancementPreset::PersonalDictation,
+        };
+        let effective = effective_enhancement_options(&stored, Some(EnhancementPreset::Message));
+        let prompt = build_enhancement_prompt("hello world", None, &effective, None);
+
+        assert!(prompt.contains("format the cleaned text as a concise message"));
+    }
+
+    #[test]
+    fn test_manual_personal_preset_skips_ai_formatting_prompt_transform() {
+        use crate::ai::prompts::{
+            build_enhancement_prompt, effective_enhancement_options, EnhancementOptions,
+            EnhancementPreset,
+        };
+
+        let stored = EnhancementOptions {
+            preset: EnhancementPreset::PersonalDictation,
+        };
+        let effective = effective_enhancement_options(&stored, None);
+        let prompt = build_enhancement_prompt("hello world", None, &effective, None);
+
+        assert!(!prompt.contains("format the cleaned text as a concise message"));
+        assert!(!effective.preset.requires_ai_formatting());
+    }
+
+    #[test]
     fn test_personal_dictation_does_not_require_ai() {
         use crate::ai::prompts::EnhancementPreset;
 

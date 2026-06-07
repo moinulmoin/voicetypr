@@ -73,6 +73,9 @@ pub struct RemoteServerConfig {
     pub password: Option<String>,
     /// Whether sharing is enabled
     pub enabled: bool,
+    /// Whether trusted remote clients may switch the shared model
+    #[serde(default)]
+    pub allow_model_control: bool,
 }
 
 impl Default for RemoteServerConfig {
@@ -81,6 +84,7 @@ impl Default for RemoteServerConfig {
             port: 47842,
             password: None,
             enabled: false,
+            allow_model_control: false,
         }
     }
 }
@@ -90,13 +94,14 @@ impl Serialize for RemoteServerConfig {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("RemoteServerConfig", 3)?;
+        let mut state = serializer.serialize_struct("RemoteServerConfig", 4)?;
         state.serialize_field("port", &self.port)?;
         state.serialize_field(
             "has_password",
             &self.password.as_ref().is_some_and(|p| !p.is_empty()),
         )?;
         state.serialize_field("enabled", &self.enabled)?;
+        state.serialize_field("allow_model_control", &self.allow_model_control)?;
         state.end()
     }
 }
@@ -147,6 +152,7 @@ mod tests {
         assert_eq!(config.port, 47842);
         assert!(config.password.is_none());
         assert!(!config.enabled);
+        assert!(!config.allow_model_control);
     }
 
     #[test]

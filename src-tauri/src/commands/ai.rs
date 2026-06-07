@@ -773,17 +773,10 @@ pub async fn get_enhancement_options_for_ai_enabled(
     ai_enabled: bool,
 ) -> Result<EnhancementOptions, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
-    let mut options = if let Some(options_value) = store.get("enhancement_options") {
-        crate::ai::prompts::parse_enhancement_options_from_value(&options_value, ai_enabled)?
-    } else {
-        EnhancementOptions::default_for_ai_enabled(ai_enabled)
-    };
-
-    if !ai_enabled && options.preset.requires_ai_formatting() {
-        options.preset = crate::ai::prompts::EnhancementPreset::PersonalDictation;
-    }
-
-    Ok(options)
+    crate::ai::prompts::enhancement_options_for_ai_enabled(
+        store.get("enhancement_options").as_ref(),
+        ai_enabled,
+    )
 }
 
 #[tauri::command]
@@ -837,13 +830,13 @@ pub async fn update_writing_settings(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn enhance_transcription(
+pub(crate) async fn enhance_transcription_internal(
     text: String,
     transcript_language: Option<String>,
     ai_enabled_override: Option<bool>,
     output_language_override: Option<String>,
     context_override: Option<String>,
+    preset_override: Option<crate::ai::prompts::EnhancementPreset>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     // Quick validation
@@ -868,9 +861,11 @@ pub async fn enhance_transcription(
         return Ok(text);
     }
 
-    let enhancement_options = get_enhancement_options_for_ai_enabled(app.clone(), enabled)
+    let stored_options = get_enhancement_options_for_ai_enabled(app.clone(), enabled)
         .await
         .unwrap_or_else(|_| EnhancementOptions::default_for_ai_enabled(enabled));
+    let enhancement_options =
+        crate::ai::prompts::effective_enhancement_options(&stored_options, preset_override);
 
     if !enhancement_options.preset.requires_ai_formatting() {
         if force_formatting {
@@ -1143,6 +1138,27 @@ pub async fn enhance_transcription(
             }
         }
     }
+}
+
+#[tauri::command]
+pub async fn enhance_transcription(
+    text: String,
+    transcript_language: Option<String>,
+    ai_enabled_override: Option<bool>,
+    output_language_override: Option<String>,
+    context_override: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    enhance_transcription_internal(
+        text,
+        transcript_language,
+        ai_enabled_override,
+        output_language_override,
+        context_override,
+        None,
+        app,
+    )
+    .await
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1521,6 +1537,21 @@ mod tests {
         assert!(custom_models.is_empty());
         let unknown_models = get_curated_models("unknown");
         assert!(unknown_models.is_empty());
+    }
+
+    #[test]
+    fn test_enhancement_options_for_ai_enabled_normalizes_disabled_ai() {
+        use crate::ai::prompts::{enhancement_options_for_ai_enabled, EnhancementPreset};
+
+        let value = serde_json::json!({ "preset": "Writing" });
+        let options = enhancement_options_for_ai_enabled(Some(&value), false).unwrap();
+        assert_eq!(options.preset, EnhancementPreset::PersonalDictation);
+
+        let enabled = enhancement_options_for_ai_enabled(Some(&value), true).unwrap();
+        assert_eq!(enabled.preset, EnhancementPreset::Writing);
+
+        let defaults = enhancement_options_for_ai_enabled(None, true).unwrap();
+        assert_eq!(defaults.preset, EnhancementPreset::CleanDictation);
     }
 
     #[test]

@@ -268,7 +268,7 @@ describe("RemoteServerCard", () => {
   // ============================================================================
 
   describe("active state", () => {
-    it("shows Active badge when isActive is true and server is online", async () => {
+    it("shows Routing to badge when isActive is true and server is online", async () => {
       const server = createMockServer();
 
       await act(async () => {
@@ -284,11 +284,11 @@ describe("RemoteServerCard", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText("Active")).toBeInTheDocument();
+        expect(screen.getByText(/Routing to/)).toBeInTheDocument();
       });
     });
 
-    it("does not show Active badge when isActive is false", async () => {
+    it("does not show Routing to badge when isActive is false", async () => {
       const server = createMockServer();
 
       await act(async () => {
@@ -307,7 +307,7 @@ describe("RemoteServerCard", () => {
         expect(screen.getByText("Online")).toBeInTheDocument();
       });
 
-      expect(screen.queryByText("Active")).not.toBeInTheDocument();
+      expect(screen.queryByText(/Routing to/)).not.toBeInTheDocument();
     });
   });
 
@@ -596,14 +596,12 @@ describe("RemoteServerCard", () => {
         });
       });
 
-      expect(screen.getByText("Host shared transcription model")).toBeInTheDocument();
+      expect(screen.getByText("Transcription model on 192.168.1.100:47842")).toBeInTheDocument();
       expect(
-        screen.getByText(
-          "Controls only the transcription model shared by this remote VoiceTypr host.",
-        ),
+        screen.getByText("Changes only affect dictation routed to that device."),
       ).toBeInTheDocument();
       expect(
-        screen.getByRole("combobox", { name: "Remote host shared transcription model" }),
+        screen.getByRole("combobox", { name: "Transcription model on 192.168.1.100:47842" }),
       ).toBeInTheDocument();
     });
 
@@ -633,7 +631,41 @@ describe("RemoteServerCard", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText("Remote model control requires a sharing password on the server."),
+          screen.getByText(
+            "Remote model changes are unavailable until the host adds a sharing password.",
+          ),
+        ).toBeInTheDocument();
+      });
+    });
+
+
+    it("shows quiet unavailable copy when host disabled remote model control", async () => {
+      mockInvoke.mockImplementation((command: string) => {
+        if (command === "get_remote_transcription_control") {
+          return Promise.reject(
+            new Error("Remote model control is disabled on this device."),
+          );
+        }
+        return Promise.reject(new Error(`Unknown command: ${command}`));
+      });
+
+      const server = createMockServer();
+
+      await act(async () => {
+        render(
+          <RemoteServerCard
+            server={server}
+            isActive={false}
+            onSelect={mockOnSelect}
+            onRemove={mockOnRemove}
+            onEdit={mockOnEdit}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getByText("This device has not enabled remote model changes."),
         ).toBeInTheDocument();
       });
     });
@@ -662,7 +694,9 @@ describe("RemoteServerCard", () => {
 
       await waitFor(() => {
         expect(screen.getByText("Online")).toBeInTheDocument();
-        expect(screen.getByText("Server error: 404 Not Found")).toBeInTheDocument();
+        expect(
+          screen.getByText("Remote model changes are not available for this connection."),
+        ).toBeInTheDocument();
       });
     });
 
@@ -724,12 +758,12 @@ describe("RemoteServerCard", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByRole("combobox", { name: "Remote host shared transcription model" }),
+          screen.getByRole("combobox", { name: "Transcription model on 192.168.1.100:47842" }),
         ).toBeInTheDocument();
       });
 
       const select = screen.getByRole("combobox", {
-        name: "Remote host shared transcription model",
+        name: "Transcription model on 192.168.1.100:47842",
       });
 
       await act(async () => {
@@ -751,6 +785,30 @@ describe("RemoteServerCard", () => {
 
       expect(mockToastSuccess).toHaveBeenCalled();
       expect(mockOnServerUpdated).toHaveBeenCalled();
+    });
+
+    it("shows edit password action when authentication fails", async () => {
+      const server = createMockServer({ status: "AuthFailed" });
+
+      await act(async () => {
+        render(
+          <RemoteServerCard
+            server={server}
+            isActive={false}
+            onSelect={mockOnSelect}
+            onRemove={mockOnRemove}
+            onEdit={mockOnEdit}
+          />
+        );
+      });
+
+      expect(screen.getAllByText("Edit password").length).toBeGreaterThan(0);
+      expect(
+        screen.getByText("Authentication failed. Tap edit to update the password."),
+      ).toBeInTheDocument();
+
+      fireEvent.click(screen.getAllByText("Edit password")[0]);
+      expect(mockOnEdit).toHaveBeenCalledWith(server);
     });
   });
 

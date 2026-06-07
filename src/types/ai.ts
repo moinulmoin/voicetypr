@@ -19,6 +19,25 @@ export const AI_FORMATTING_PRESETS: EnhancementPreset[] = [
 export const presetRequiresAiFormatting = (preset: EnhancementPreset): boolean =>
   preset !== 'PersonalDictation';
 
+
+/** UI label for a formatting preset. Persisted enum values stay unchanged. */
+export const presetDisplayLabel = (preset: EnhancementPreset): string => {
+  switch (preset) {
+    case 'PersonalDictation':
+      return 'Dictation (no AI)';
+    case 'CleanDictation':
+      return 'Clean Dictation';
+    case 'Writing':
+      return 'Writing';
+    case 'Notes':
+      return 'Notes';
+    case 'Message':
+      return 'Message';
+    case 'Code':
+      return 'Code';
+  }
+};
+
 export const defaultPresetForAiEnabled = (aiEnabled: boolean): EnhancementPreset =>
   aiEnabled ? 'CleanDictation' : 'PersonalDictation';
 

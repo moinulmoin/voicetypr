@@ -27,7 +27,7 @@ The recommended release process is:
    - Creates GitHub draft release with macOS artifacts
    - Generates initial latest.json with macOS platforms
 
-2. **Windows Release** (adds to existing release):
+2. **Windows x86_64 Release** (adds to existing release):
    ```powershell
    .\scripts\release-windows.ps1 [version]
    ```
@@ -37,7 +37,8 @@ The recommended release process is:
    ```
    - Reads version from package.json (or uses provided version)
    - Verifies the GitHub release exists
-   - Builds the Windows NSIS installer (CPU-safe main app + optional Vulkan sidecar)
+   - Builds the Windows x64 NSIS installer (CPU-safe main app + optional x86_64 Vulkan sidecar)
+   - Uses `src-tauri/tauri.windows.conf.json`, which is x86_64-only (Windows ARM64 stays CPU-only)
    - Bundles VC++ and Vulkan Runtime installers as best-effort post-install steps
    - Signs the installer and updates latest.json with the Windows platform
    - Uploads the installer, signature, and latest.json to the existing release
@@ -50,14 +51,18 @@ The recommended release process is:
 - OR `APPLE_ID` + `APPLE_PASSWORD` + `APPLE_TEAM_ID` - Apple ID authentication
 - `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` - Tauri update signing
 
-**Windows (release-windows.ps1)**:
-- `VULKAN_SDK` - Path to Vulkan SDK (required to build the optional GPU sidecar)
+**Windows x86_64 (release-windows.ps1)**:
+- `VULKAN_SDK` - Path to Vulkan SDK (required to build the optional x64 GPU sidecar)
 - `VULKAN_RUNTIME_VERSION` or `VULKAN_VERSION` - Vulkan Runtime version for bundling (defaults to SDK folder name)
+- `CARGO_TARGET_DIR` - Optional short build output path (honored for sidecar and main app builds)
 - `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` - Tauri update signing
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` - Password for signing key (if needed)
 - `GITHUB_TOKEN` - GitHub authentication (usually handled by gh CLI)
 
-### Windows Build Prerequisites
+### Windows x86_64 Build Prerequisites
+
+This release path builds an x64 installer with an optional x86_64 Vulkan sidecar.
+Windows ARM64 builds are CPU-only and must not use `src-tauri/tauri.windows.conf.json`.
 
 **1. Vulkan SDK**
 Download from https://vulkan.lunarg.com/sdk/home and ensure `VULKAN_SDK` is set.
@@ -71,10 +76,10 @@ Place the following files in `sidecar/ffmpeg/dist/`:
 These are not tracked in git due to their size (~100MB each).
 
 **3. Windows MAX_PATH Limitation**
-Windows has a 260-character path limit. When using git worktrees or long paths, use a short target directory:
+Windows has a 260-character path limit. When using git worktrees or long paths, set a short target directory for both the sidecar and main app builds:
 ```powershell
 $env:CARGO_TARGET_DIR = "C:\tmp\vt-target"
-cargo check
+.\scripts\release-windows.ps1 -SkipPublish
 ```
 This is especially important for worktrees where paths become very long.
 

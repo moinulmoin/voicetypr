@@ -1,5 +1,7 @@
 //! Remote model control helpers for password-gated sharing servers.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::async_runtime::RwLock as AsyncRwLock;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -10,6 +12,21 @@ use crate::commands::remote::resolve_shareable_model_config;
 use crate::parakeet::ParakeetManager;
 use crate::whisper::manager::WhisperManager;
 use tokio::sync::Mutex as AsyncMutex;
+
+static MODEL_CONTROL_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_model_control_enabled(enabled: bool) {
+    MODEL_CONTROL_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+pub fn is_model_control_enabled() -> bool {
+    MODEL_CONTROL_ENABLED.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+pub fn reset_model_control_enabled_for_tests() {
+    MODEL_CONTROL_ENABLED.store(false, Ordering::SeqCst);
+}
 
 pub async fn list_shareable_remote_models(app: &AppHandle) -> Vec<ShareableRemoteModelInfo> {
     let mut models = Vec::new();

@@ -211,14 +211,16 @@ fn main() {
         }
     }
 
-
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
         use std::path::PathBuf;
         let sidecar_dir = PathBuf::from("../sidecar/whisper-vulkan/dist");
         let sidecar_exe = sidecar_dir.join("whisper-vulkan-sidecar-x86_64-pc-windows-msvc.exe");
         if !sidecar_exe.exists() {
-            panic!("Whisper Vulkan sidecar not found: {}", sidecar_exe.display());
+            panic!(
+                "Whisper Vulkan sidecar not found: {}",
+                sidecar_exe.display()
+            );
         }
     }
 

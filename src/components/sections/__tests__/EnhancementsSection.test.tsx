@@ -144,8 +144,8 @@ describe('EnhancementsSection', () => {
       expect(screen.getByText('Corrections')).toBeInTheDocument()
       expect(screen.getByText('Words & Names')).toBeInTheDocument()
       expect(screen.getByText('Text Shortcuts')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Personal Dictation' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Code' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Dictation (no AI)' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Code \(requires AI formatting\)/i })).toBeInTheDocument()
     })
   })
 
@@ -153,13 +153,20 @@ describe('EnhancementsSection', () => {
     renderWithProviders()
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Writing' })).toBeDisabled()
-      expect(screen.getByRole('button', { name: 'Personal Dictation' })).toBeEnabled()
+      const writingButton = screen.getByRole('button', {
+        name: /Writing \(requires AI formatting\)/i,
+      })
+      expect(writingButton).toBeDisabled()
+      expect(writingButton).toHaveAttribute(
+        'title',
+        'Writing requires AI formatting. Turn on AI formatting above.',
+      )
+      expect(screen.getByRole('button', { name: 'Dictation (no AI)' })).toBeEnabled()
     })
 
     expect(
-      screen.getByText(/AI modes require AI formatting to be enabled and configured above/i),
-    ).toBeInTheDocument()
+      screen.queryByText(/requires AI formatting\. Turn on AI formatting above or/i),
+    ).not.toBeInTheDocument()
   })
 
   it('hides specific language selection when Personal Dictation is loaded', async () => {
@@ -283,6 +290,9 @@ describe('EnhancementsSection', () => {
           final_text_language: 'same_as_transcript',
         }),
       })
+      expect(toast.success).toHaveBeenCalledWith(
+        'AI formatting disabled. Switched to Dictation (no AI).',
+      )
     })
   })
 
@@ -305,7 +315,7 @@ describe('EnhancementsSection', () => {
     })
   })
 
-  it('switches to Clean Dictation when custom provider setup enables AI formatting', async () => {
+  it('saves custom provider setup without enabling AI formatting', async () => {
     aiSettingsResponse = { ...baseAISettings, provider: '', model: '' }
     const user = userEvent.setup()
     renderWithProviders()
@@ -322,13 +332,13 @@ describe('EnhancementsSection', () => {
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
-        enabled: true,
+        enabled: false,
         provider: 'custom',
         model: 'local-model',
       })
-      expect(invoke).toHaveBeenCalledWith('update_enhancement_options', {
-        options: { preset: 'CleanDictation' },
-      })
+    })
+    expect(invoke).not.toHaveBeenCalledWith('update_enhancement_options', {
+      options: { preset: 'CleanDictation' },
     })
   })
 
@@ -420,6 +430,93 @@ describe('EnhancementsSection', () => {
               enabled: true,
             }),
           ],
+        }),
+      })
+    })
+  })
+
+
+  it('coalesces rapid writing settings saves so the latest edit wins on disk', async () => {
+    const user = userEvent.setup()
+    let resolveFirstSave: (() => void) | undefined
+    const firstSaveGate = new Promise<void>((resolve) => {
+      resolveFirstSave = resolve
+    })
+    let firstSaveStarted = false
+
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === 'get_settings') {
+          return Promise.resolve(baseAppSettings)
+        }
+        if (cmd === 'save_settings') {
+          return Promise.resolve(undefined)
+        }
+        if (cmd === 'get_enhancement_options') {
+          return Promise.resolve({ preset: 'PersonalDictation' })
+        }
+        if (cmd === 'update_enhancement_options') {
+          return Promise.resolve(undefined)
+        }
+        if (cmd === 'get_writing_settings') {
+          return Promise.resolve(defaultWritingSettings)
+        }
+        if (cmd === 'update_writing_settings') {
+          if (!firstSaveStarted) {
+            firstSaveStarted = true
+            return firstSaveGate.then(() => Promise.resolve(undefined))
+          }
+          return Promise.resolve(undefined)
+        }
+        if (cmd === 'get_ai_settings') {
+          return Promise.resolve(aiSettingsResponse)
+        }
+        if (cmd === 'get_ai_settings_for_provider') {
+          const provider = (args as { provider?: string })?.provider || ''
+          return Promise.resolve({ ...aiSettingsResponse, provider })
+        }
+        if (cmd === 'get_openai_config') {
+          return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' })
+        }
+        if (cmd === 'update_ai_settings') {
+          aiSettingsResponse = {
+            ...aiSettingsResponse,
+            ...(args as typeof aiSettingsResponse),
+          }
+          return Promise.resolve(undefined)
+        }
+        if (cmd === 'cache_ai_api_key') {
+          return Promise.resolve(undefined)
+        }
+        return Promise.resolve(undefined)
+      },
+    )
+
+    renderWithProviders()
+
+    const replacementsHeading = await screen.findByText('Corrections')
+    const replacementsCard = replacementsHeading.parentElement?.parentElement
+    expect(replacementsCard).toBeTruthy()
+    const addRuleButton = within(replacementsCard as HTMLElement).getByRole('button', {
+      name: /add/i,
+    })
+
+    await user.click(addRuleButton)
+    await user.click(addRuleButton)
+
+    resolveFirstSave?.()
+
+    await waitFor(() => {
+      const updateCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([cmd]) => cmd === 'update_writing_settings',
+      )
+      expect(updateCalls).toHaveLength(2)
+      expect(updateCalls[1]?.[1]).toEqual({
+        settings: expect.objectContaining({
+          replacements: expect.arrayContaining([
+            expect.objectContaining({ enabled: true }),
+            expect.objectContaining({ enabled: true }),
+          ]),
         }),
       })
     })

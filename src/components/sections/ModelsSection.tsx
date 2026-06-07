@@ -535,7 +535,7 @@ export function ModelsSection({
       const provider =
         getCloudProviderByModel(name) ?? getCloudProviderByModel(model.engine);
       const requiresSetup = model.requires_setup;
-      const isActive = currentModel === name;
+      const isActive = currentModel === name && !activeRemoteServer;
 
       return (
         <Card
@@ -600,7 +600,7 @@ export function ModelsSection({
         </Card>
       );
     },
-    [currentModel, handleCloudDisconnect, onSelect, openCloudModal, clearActiveRemote],
+    [currentModel, activeRemoteServer, handleCloudDisconnect, onSelect, openCloudModal, clearActiveRemote],
   );
 
   return (
@@ -657,8 +657,14 @@ export function ModelsSection({
                     </Badge>
                   )}
                   {activeModelLabel ? (
-                    <Badge variant="secondary" className="max-w-[320px] justify-start truncate">
-                      Active: {activeModelLabel}
+                    <Badge
+                      variant={activeRemoteServer ? "outline" : "secondary"}
+                      className={cn(
+                        "max-w-[320px] justify-start truncate",
+                        activeRemoteServer && "border-sky-500/40 bg-sky-500/10 text-sky-800 dark:text-sky-300",
+                      )}
+                    >
+                      {activeRemoteServer ? "Routing to" : "Active"}: {activeModelLabel}
                     </Badge>
                   ) : (
                     availableToUse.length > 0 && (

@@ -5,8 +5,7 @@ use crate::audio::recorder::AudioRecorder;
 use crate::commands::settings::{
     get_settings, normalize_final_text_language, normalize_speech_language_for_model,
     normalize_transcription_task, recording_retention_days_from_store, resolve_pill_indicator_mode,
-    task_uses_translate_to_english, Settings, FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
-    TRANSCRIPTION_TASK_TRANSCRIBE,
+    task_uses_translate_to_english, Settings, TRANSCRIPTION_TASK_TRANSCRIBE,
 };
 use crate::license::LicenseState;
 use crate::media::MediaPauseController;
@@ -522,21 +521,20 @@ fn load_ai_enabled(app: &AppHandle) -> Result<bool, String> {
         .unwrap_or(false))
 }
 
-fn store_uses_personal_dictation(
-    store: &tauri_plugin_store::Store<tauri::Wry>,
+fn resolve_transcription_task_for_audio(
+    app: &AppHandle,
     ai_enabled: bool,
-) -> bool {
-    if !ai_enabled {
-        return true;
+    legacy_translate_to_english: bool,
+    stored_transcription_task: Option<&str>,
+) -> Result<String, String> {
+    if crate::writing::effective_personal_dictation_mode(app, ai_enabled)? {
+        Ok(TRANSCRIPTION_TASK_TRANSCRIBE.to_string())
+    } else {
+        Ok(normalize_transcription_task(
+            stored_transcription_task,
+            legacy_translate_to_english,
+        ))
     }
-    store
-        .get("enhancement_options")
-        .map(|value| {
-            crate::ai::prompts::parse_enhancement_options_from_value(&value, ai_enabled)
-                .map(|options| !options.preset.requires_ai_formatting())
-                .unwrap_or(false)
-        })
-        .unwrap_or(false)
 }
 
 fn compile_whisper_initial_prompt(app: &AppHandle, language: Option<&str>) -> Option<String> {
@@ -1249,25 +1247,20 @@ impl RecordingConfig {
             .get("ai_enabled")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let uses_personal_dictation = store_uses_personal_dictation(&store, ai_enabled);
         let stored_transcription_task = store
             .get("transcription_task")
             .and_then(|v| v.as_str().map(|s| s.to_string()));
-        let mut transcription_task = normalize_transcription_task(
+        let transcription_task = normalize_transcription_task(
             stored_transcription_task.as_deref(),
             legacy_translate_to_english,
         );
         let stored_final_text_language = store
             .get("final_text_language")
             .and_then(|v| v.as_str().map(|s| s.to_string()));
-        let mut final_text_language = normalize_final_text_language(
+        let final_text_language = normalize_final_text_language(
             stored_final_text_language.as_deref(),
             &transcription_task,
         );
-        if uses_personal_dictation {
-            transcription_task = TRANSCRIPTION_TASK_TRANSCRIBE.to_string();
-            final_text_language = FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string();
-        }
 
         let config = Self {
             show_pill_widget,
@@ -3070,7 +3063,13 @@ pub async fn stop_recording(
             &config.speech_language,
         ))
     };
-    let translate_to_english = task_uses_translate_to_english(&config.transcription_task);
+    let transcription_task = resolve_transcription_task_for_audio(
+        &app,
+        config.ai_enabled,
+        false,
+        Some(config.transcription_task.as_str()),
+    )?;
+    let translate_to_english = task_uses_translate_to_english(&transcription_task);
 
     let engine_label = engine_selection.engine_name().to_string();
     let selected_model_name = engine_selection.model_name().to_string();
@@ -3081,8 +3080,9 @@ pub async fn stop_recording(
         selected_model_name
     );
     log::info!(
-        "[LANGUAGE] stop_recording: language={:?}, translate={}",
+        "[LANGUAGE] stop_recording: language={:?}, transcription_task={}, translate={}",
         language.as_deref(),
+        transcription_task,
         translate_to_english
     );
 
@@ -4146,18 +4146,15 @@ async fn transcribe_audio_file_impl(
         .get("ai_enabled")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let uses_personal_dictation = store_uses_personal_dictation(&store, ai_enabled);
     let stored_transcription_task = store
         .get("transcription_task")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
-    let transcription_task = if uses_personal_dictation {
-        TRANSCRIPTION_TASK_TRANSCRIBE.to_string()
-    } else {
-        normalize_transcription_task(
-            stored_transcription_task.as_deref(),
-            legacy_translate_to_english,
-        )
-    };
+    let transcription_task = resolve_transcription_task_for_audio(
+        &app,
+        ai_enabled,
+        legacy_translate_to_english,
+        stored_transcription_task.as_deref(),
+    )?;
     let translate_to_english = task_uses_translate_to_english(&transcription_task);
 
     let language = normalize_speech_language_for_model(
@@ -4167,8 +4164,9 @@ async fn transcribe_audio_file_impl(
     );
 
     log::info!(
-        "[LANGUAGE] transcribe_audio_file using language: {}, translate: {}",
+        "[LANGUAGE] transcribe_audio_file using language: {}, transcription_task={}, translate: {}",
         language,
+        transcription_task,
         translate_to_english
     );
 
@@ -4431,18 +4429,15 @@ pub async fn transcribe_audio(
         .get("ai_enabled")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let uses_personal_dictation = store_uses_personal_dictation(&store, ai_enabled);
     let stored_transcription_task = store
         .get("transcription_task")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
-    let transcription_task = if uses_personal_dictation {
-        TRANSCRIPTION_TASK_TRANSCRIBE.to_string()
-    } else {
-        normalize_transcription_task(
-            stored_transcription_task.as_deref(),
-            legacy_translate_to_english,
-        )
-    };
+    let transcription_task = resolve_transcription_task_for_audio(
+        &app,
+        ai_enabled,
+        legacy_translate_to_english,
+        stored_transcription_task.as_deref(),
+    )?;
     let translate_to_english = task_uses_translate_to_english(&transcription_task);
 
     let language = normalize_speech_language_for_model(
@@ -4452,8 +4447,9 @@ pub async fn transcribe_audio(
     );
 
     log::info!(
-        "[LANGUAGE] transcribe_audio using language: {}, translate: {}",
+        "[LANGUAGE] transcribe_audio using language: {}, transcription_task={}, translate: {}",
         language,
+        transcription_task,
         translate_to_english
     );
 

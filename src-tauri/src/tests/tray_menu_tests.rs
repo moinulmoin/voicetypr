@@ -84,7 +84,7 @@ fn test_format_label_when_model_empty() {
 #[test]
 fn test_format_label_with_model_no_display_name() {
     let result = format_tray_model_label(true, "base.en", None);
-    assert_eq!(result, "Model: base.en");
+    assert_eq!(result, "Model: Base English");
 }
 
 #[test]

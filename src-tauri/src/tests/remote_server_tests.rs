@@ -92,11 +92,13 @@ fn test_server_config_custom() {
         port: 8080,
         password: Some("secret123".to_string()),
         enabled: true,
+        allow_model_control: true,
     };
 
     assert_eq!(config.port, 8080);
     assert_eq!(config.password, Some("secret123".to_string()));
     assert!(config.enabled);
+    assert!(config.allow_model_control);
 }
 
 /// Test server configuration serialization for settings storage
@@ -106,6 +108,7 @@ fn test_server_config_serialization() {
         port: 47842,
         password: Some("mypassword".to_string()),
         enabled: true,
+        allow_model_control: false,
     };
 
     let json = serde_json::to_string(&config).unwrap();
@@ -125,6 +128,7 @@ fn test_password_validation_correct() {
         port: 47842,
         password: Some("secret123".to_string()),
         enabled: true,
+        allow_model_control: false,
     };
 
     assert!(config.validate_password(Some("secret123")));
@@ -137,6 +141,7 @@ fn test_password_validation_wrong() {
         port: 47842,
         password: Some("secret123".to_string()),
         enabled: true,
+        allow_model_control: false,
     };
 
     assert!(!config.validate_password(Some("wrongpassword")));
@@ -149,6 +154,7 @@ fn test_password_validation_missing_when_required() {
         port: 47842,
         password: Some("secret123".to_string()),
         enabled: true,
+        allow_model_control: false,
     };
 
     assert!(!config.validate_password(None));
@@ -161,6 +167,7 @@ fn test_password_validation_not_required() {
         port: 47842,
         password: None,
         enabled: true,
+        allow_model_control: false,
     };
 
     assert!(config.validate_password(None));
@@ -173,6 +180,7 @@ fn test_password_validation_not_required_but_provided() {
         port: 47842,
         password: None,
         enabled: true,
+        allow_model_control: false,
     };
 
     // Even if client sends a password, it should be accepted when server doesn't require one

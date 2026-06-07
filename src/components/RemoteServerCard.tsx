@@ -93,6 +93,21 @@ function remoteControlErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+
+function remoteControlUnavailableMessage(error: unknown, fallback: string) {
+  const raw = remoteControlErrorMessage(error, fallback);
+  if (raw.includes("disabled on this device") || raw.includes("model_control_disabled")) {
+    return "This device has not enabled remote model changes.";
+  }
+  if (raw.includes("requires a sharing password")) {
+    return "Remote model changes are unavailable until the host adds a sharing password.";
+  }
+  if (/404|403|unsupported|not found|unavailable/i.test(raw)) {
+    return "Remote model changes are not available for this connection.";
+  }
+  return raw;
+}
+
 function lockMessageForStatus(status: ConnectionStatus | undefined, fallback?: string) {
   if (fallback?.trim()) {
     return fallback;
@@ -100,7 +115,7 @@ function lockMessageForStatus(status: ConnectionStatus | undefined, fallback?: s
 
   switch (status) {
     case "AuthFailed":
-      return "Remote model control is locked until authentication succeeds.";
+      return "Authentication failed. Tap edit to update the password.";
     case "Offline":
       return "Remote model control is unavailable while the host is offline.";
     default:
@@ -110,10 +125,14 @@ function lockMessageForStatus(status: ConnectionStatus | undefined, fallback?: s
 
 function RemoteTranscriptionModelControl({
   server,
+  serverName,
   onUpdated,
+  onEdit,
 }: {
   server: SavedConnection;
+  serverName: string;
   onUpdated?: () => void | Promise<void>;
+  onEdit: (server: SavedConnection) => void;
 }) {
   const [control, setControl] = useState<RemoteModelControlSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
@@ -134,9 +153,9 @@ function RemoteTranscriptionModelControl({
       console.error("Failed to load remote transcription control:", error);
       setControl(null);
       setFetchError(
-        remoteControlErrorMessage(
+        remoteControlUnavailableMessage(
           error,
-          "Could not load remote transcription model control.",
+          "Remote model changes are not available for this connection.",
         ),
       );
     } finally {
@@ -179,7 +198,7 @@ function RemoteTranscriptionModelControl({
     } catch (error) {
       console.error("Failed to update remote transcription control:", error);
       toast.error("Failed to update remote shared transcription model", {
-        description: remoteControlErrorMessage(
+        description: remoteControlUnavailableMessage(
           error,
           "The host model could not be changed.",
         ),
@@ -194,7 +213,10 @@ function RemoteTranscriptionModelControl({
       <RemoteModelControlShell>
         <LockedMessage
           icon={KeyRound}
+          title={`Transcription model on ${serverName}`}
           message={lockMessageForStatus("AuthFailed")}
+          actionLabel="Edit password"
+          onAction={() => onEdit(server)}
         />
       </RemoteModelControlShell>
     );
@@ -205,6 +227,7 @@ function RemoteTranscriptionModelControl({
       <RemoteModelControlShell>
         <LockedMessage
           icon={WifiOff}
+          title={`Transcription model on ${serverName}`}
           message={lockMessageForStatus("Offline")}
         />
       </RemoteModelControlShell>
@@ -229,7 +252,11 @@ function RemoteTranscriptionModelControl({
   if (fetchError) {
     return (
       <RemoteModelControlShell>
-        <LockedMessage icon={Lock} message={fetchError} />
+        <LockedMessage
+          icon={Lock}
+          title={`Transcription model on ${serverName}`}
+          message={fetchError}
+        />
       </RemoteModelControlShell>
     );
   }
@@ -252,9 +279,9 @@ function RemoteTranscriptionModelControl({
     <RemoteModelControlShell>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <p className="text-xs font-medium text-foreground">Host shared transcription model</p>
+          <p className="text-xs font-medium text-foreground">Transcription model on {serverName}</p>
           <p className="text-[11px] text-muted-foreground">
-            Controls only the transcription model shared by this remote VoiceTypr host.
+            Changes only affect dictation routed to that device.
           </p>
         </div>
         {selectableModels.length > 0 ? (
@@ -267,7 +294,7 @@ function RemoteTranscriptionModelControl({
           >
             <SelectTrigger
               className="h-8 w-full sm:w-[220px]"
-              aria-label="Remote host shared transcription model"
+              aria-label={`Transcription model on ${serverName}`}
               onClick={(event) => event.stopPropagation()}
             >
               <SelectValue placeholder={currentLabel} />
@@ -290,7 +317,7 @@ function RemoteTranscriptionModelControl({
       {updating && (
         <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
           <Spinner className="size-3" />
-          Updating host shared transcription model...
+          Updating transcription model on host...
         </div>
       )}
     </RemoteModelControlShell>
@@ -310,17 +337,37 @@ function RemoteModelControlShell({ children }: { children: React.ReactNode }) {
 
 function LockedMessage({
   icon: Icon,
+  title,
   message,
+  actionLabel,
+  onAction,
 }: {
   icon: typeof Lock;
+  title: string;
   message: string;
+  actionLabel?: string;
+  onAction?: () => void;
 }) {
   return (
     <div className="flex items-start gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
       <Icon className="mt-0.5 size-3.5 shrink-0" />
-      <div>
-        <p className="font-medium text-foreground">Host shared transcription model</p>
+      <div className="min-w-0 flex-1">
+        <p className="font-medium text-foreground">{title}</p>
         <p className="mt-0.5">{message}</p>
+        {actionLabel && onAction && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="mt-2 h-7 px-2 text-xs"
+            onClick={(event) => {
+              event.stopPropagation();
+              onAction();
+            }}
+          >
+            {actionLabel}
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -381,7 +428,7 @@ export function RemoteServerCard({
         status === "self_connection"
           ? "border-amber-500/30 bg-amber-500/10"
           : isActive
-            ? "border-primary/45 bg-primary/5 shadow-sm ring-2 ring-primary/15"
+            ? "border-sky-500/40 bg-sky-500/5 shadow-sm ring-2 ring-sky-500/20"
             : isSelectable
               ? "border-border/60 bg-card/90 hover:border-border"
               : "border-border/60 bg-card/90"
@@ -394,7 +441,7 @@ export function RemoteServerCard({
             className={cn(
               "flex size-9 shrink-0 items-center justify-center rounded-lg border",
               isActive
-                ? "border-primary/25 bg-primary/10 text-primary"
+                ? "border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300"
                 : status === "online"
                   ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700"
                   : status === "auth_failed" || status === "self_connection"
@@ -409,15 +456,15 @@ export function RemoteServerCard({
               <h3
                 className={cn(
                   "truncate text-sm font-semibold tracking-tight",
-                  isActive && "text-primary"
+                  isActive && "text-sky-800 dark:text-sky-200"
                 )}
               >
                 {displayName}
               </h3>
               {isActive && (
-                <Badge className="gap-1">
+                <Badge variant="outline" className="gap-1 border-sky-500/40 bg-sky-500/10 text-sky-800 dark:text-sky-300">
                   <CheckCircle2 className="size-3" />
-                  Active
+                  Routing to {displayName}
                 </Badge>
               )}
             </div>
@@ -460,6 +507,13 @@ export function RemoteServerCard({
                   <span className="text-amber-700 dark:text-amber-400">
                     Auth Failed
                   </span>
+                  <button
+                    type="button"
+                    className="text-amber-700 underline underline-offset-2 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300"
+                    onClick={handleEdit}
+                  >
+                    Edit password
+                  </button>
                   {isRefreshing && <Spinner className="size-3" />}
                 </>
               ) : status === "self_connection" ? (
@@ -515,7 +569,9 @@ export function RemoteServerCard({
       {showRemoteModelControl && (
         <RemoteTranscriptionModelControl
           server={server}
+          serverName={displayName}
           onUpdated={onServerUpdated}
+          onEdit={onEdit}
         />
       )}
     </Card>

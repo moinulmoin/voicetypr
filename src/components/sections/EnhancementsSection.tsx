@@ -81,6 +81,12 @@ export function EnhancementsSection() {
     useState<WritingSettings>(defaultWritingSettings);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const writingSaveGeneration = useRef(0);
+  const writingSettingsRef = useRef(writingSettings);
+  const writingSaveQueueRef = useRef(Promise.resolve());
+
+  useEffect(() => {
+    writingSettingsRef.current = writingSettings;
+  }, [writingSettings]);
 
   const loadEnhancementOptions = async (aiEnabled: boolean) => {
     try {
@@ -322,20 +328,28 @@ export function EnhancementsSection() {
     await persistEnhancementOptions({ preset });
   };
 
-  const handleWritingSettingsChange = async (nextSettings: WritingSettings) => {
-    const previousSettings = writingSettings;
-    const saveGeneration = writingSaveGeneration.current + 1;
-    writingSaveGeneration.current = saveGeneration;
-    setWritingSettings(nextSettings);
-    try {
-      await invoke("update_writing_settings", { settings: nextSettings });
-    } catch (error) {
-      if (writingSaveGeneration.current === saveGeneration) {
-        setWritingSettings(previousSettings);
+  const enqueueWritingSettingsSave = (rollbackSettings: WritingSettings) => {
+    const generationAtEnqueue = writingSaveGeneration.current;
+    writingSaveQueueRef.current = writingSaveQueueRef.current.then(async () => {
+      const settingsToSave = writingSettingsRef.current;
+      try {
+        await invoke("update_writing_settings", { settings: settingsToSave });
+      } catch (error) {
+        if (writingSaveGeneration.current === generationAtEnqueue) {
+          setWritingSettings(rollbackSettings);
+          const message = getErrorMessage(error, "Failed to save writing settings");
+          toast.error(message);
+        }
       }
-      const message = getErrorMessage(error, "Failed to save writing settings");
-      toast.error(message);
-    }
+    });
+  };
+
+  const handleWritingSettingsChange = (nextSettings: WritingSettings) => {
+    const rollbackSettings = writingSettingsRef.current;
+    writingSaveGeneration.current += 1;
+    setWritingSettings(nextSettings);
+    writingSettingsRef.current = nextSettings;
+    enqueueWritingSettingsSave(rollbackSettings);
   };
 
   const handleFinalTextLanguageChange = async (value: string) => {
@@ -384,11 +398,16 @@ export function EnhancementsSection() {
         await handleFinalTextLanguageChange("same_as_transcript");
       }
 
-      if (nextPreset !== enhancementOptions.preset) {
+      const presetChanged = nextPreset !== enhancementOptions.preset;
+      if (presetChanged) {
         await persistEnhancementOptions({ preset: nextPreset });
       }
 
-      toast.success(enabled ? "AI formatting enabled" : "AI formatting disabled");
+      if (!enabled && presetChanged) {
+        toast.success("AI formatting disabled. Switched to Dictation (no AI).");
+      } else {
+        toast.success(enabled ? "AI formatting enabled" : "AI formatting disabled");
+      }
     } catch (error) {
       const message = getErrorMessage(error, "Failed to update AI settings");
       toast.error(message);
@@ -654,9 +673,8 @@ export function EnhancementsSection() {
               await saveApiKey("custom", trimmedKey);
             }
 
-            const nextEnabled = aiSettings.enabled || !aiSettings.model;
             await invoke("update_ai_settings", {
-              enabled: nextEnabled,
+              enabled: aiSettings.enabled,
               provider: "custom",
               model: trimmedModel,
             });
@@ -665,16 +683,11 @@ export function EnhancementsSection() {
             setOpenAIDefaultBaseUrl(trimmedBase);
             setAISettings((prev) => ({
               ...prev,
-              enabled: nextEnabled,
               provider: "custom",
               model: trimmedModel,
               hasApiKey: true,
             }));
             setProviderApiKeys((prev) => ({ ...prev, custom: true }));
-
-            if (nextEnabled && enhancementOptions.preset === "PersonalDictation") {
-              await persistEnhancementOptions({ preset: "CleanDictation" });
-            }
 
             toast.success("Custom provider configured");
             setShowOpenAIConfig(false);

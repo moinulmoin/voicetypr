@@ -32,7 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { presetRequiresAiFormatting, type EnhancementPreset } from "@/types/ai";
+import { presetDisplayLabel, presetRequiresAiFormatting, type EnhancementPreset } from "@/types/ai";
 import type {
   AppFormattingRule,
   CustomWord,
@@ -45,6 +45,7 @@ import {
   Code,
   FileText,
   Globe,
+  Lock,
   MessageSquare,
   PenLine,
   Plus,
@@ -74,17 +75,18 @@ function removeItem<T>(items: T[], index: number): T[] {
 
 
 const FORMATTING_MODES = [
-  { id: "PersonalDictation", label: "Personal Dictation", icon: AudioLines },
-  { id: "CleanDictation", label: "Clean Dictation", icon: FileText },
-  { id: "Writing", label: "Writing", icon: PenLine },
-  { id: "Notes", label: "Notes", icon: StickyNote },
-  { id: "Message", label: "Message", icon: MessageSquare },
-  { id: "Code", label: "Code", icon: Code },
+  { id: "PersonalDictation", icon: AudioLines },
+  { id: "CleanDictation", icon: FileText },
+  { id: "Writing", icon: PenLine },
+  { id: "Notes", icon: StickyNote },
+  { id: "Message", icon: MessageSquare },
+  { id: "Code", icon: Code },
 ] as const satisfies ReadonlyArray<{
   id: EnhancementPreset;
-  label: string;
   icon: typeof AudioLines;
 }>;
+
+const formattingModeLabel = (preset: EnhancementPreset) => presetDisplayLabel(preset);
 
 function AppFormattingRulesEditor({
   rules,
@@ -146,7 +148,6 @@ function AppFormattingRulesEditor({
       ) : (
         <FieldGroup className="mt-3 gap-2">
           {rules.map((rule, index) => {
-            const selectedRequiresAi = presetRequiresAiFormatting(rule.preset);
             const selectedMode = FORMATTING_MODES.find((mode) => mode.id === rule.preset);
 
             return (
@@ -188,7 +189,7 @@ function AppFormattingRulesEditor({
                   >
                     <SelectTrigger size="sm" className="w-[11rem]" aria-label="Formatting mode">
                       <SelectValue placeholder="Mode">
-                        {selectedMode?.label ?? rule.preset}
+                        {selectedMode ? formattingModeLabel(selectedMode.id) : rule.preset}
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
@@ -204,7 +205,7 @@ function AppFormattingRulesEditor({
                             value={modeOption.id}
                             disabled={isOptionDisabled}
                           >
-                            {modeOption.label}
+                            {formattingModeLabel(modeOption.id)}
                             {requiresAi && !aiFormattingEnabled && !isSelected
                               ? " (requires AI)"
                               : ""}
@@ -235,12 +236,6 @@ function AppFormattingRulesEditor({
                   </div>
                 </div>
 
-                {!aiFormattingEnabled && selectedRequiresAi && (
-                  <FieldDescription className="mt-2 text-amber-700 dark:text-amber-300">
-                    {selectedMode?.label ?? rule.preset} requires AI formatting. Turn on AI
-                    formatting above to use this rule.
-                  </FieldDescription>
-                )}
               </div>
             );
           })}
@@ -733,15 +728,10 @@ export function EnhancementSettings({
         <FieldDescription className="mb-3">
           Choose how VoiceTypr structures your final text.
         </FieldDescription>
-        {!aiFormattingEnabled && (
-          <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-            AI modes require AI formatting to be enabled and configured above.
-          </div>
-        )}
         {!aiFormattingEnabled && selectedRequiresAi && (
           <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-            The selected mode requires AI formatting. Turn on AI formatting above or switch to
-            Personal Dictation.
+            {formattingModeLabel(preset)} requires AI formatting. Turn on AI formatting above or
+            switch to Dictation (no AI).
           </div>
         )}
         <ButtonGroup className="w-full flex-wrap md:w-fit">
@@ -749,8 +739,12 @@ export function EnhancementSettings({
             const Icon = modeOption.icon;
             const isSelected = preset === modeOption.id;
             const requiresAi = presetRequiresAiFormatting(modeOption.id);
+            const modeLabel = formattingModeLabel(modeOption.id);
             const isModeDisabled =
               disabled || (requiresAi && !aiFormattingEnabled && !isSelected);
+            const aiRequiredHint = requiresAi
+              ? `${modeLabel} requires AI formatting. Turn on AI formatting above.`
+              : undefined;
             return (
               <Button
                 key={modeOption.id}
@@ -758,10 +752,19 @@ export function EnhancementSettings({
                 variant={isSelected ? "default" : "outline"}
                 size="sm"
                 disabled={isModeDisabled}
+                title={aiRequiredHint}
+                aria-label={
+                  requiresAi && !aiFormattingEnabled
+                    ? `${modeLabel} (requires AI formatting)`
+                    : modeLabel
+                }
                 onClick={() => !isModeDisabled && onPresetChange(modeOption.id)}
               >
                 <Icon className="h-4 w-4" />
-                {modeOption.label}
+                {modeLabel}
+                {requiresAi && !aiFormattingEnabled && (
+                  <Lock className="h-3 w-3 opacity-70" aria-hidden="true" />
+                )}
               </Button>
             );
           })}

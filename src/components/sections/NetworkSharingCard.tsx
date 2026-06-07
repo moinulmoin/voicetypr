@@ -25,6 +25,7 @@ interface SharingStatus {
   active_connections: number;
   password_configured: boolean;
   binding_results: BindingResult[];
+  allow_model_control: boolean;
 }
 
 interface FirewallStatus {
@@ -37,10 +38,53 @@ interface ModelInfo {
   name: string;
   display_name: string;
   downloaded: boolean;
+  engine?: string;
+  kind?: string;
 }
 
 interface ModelStatusResponse {
   models: ModelInfo[];
+}
+
+const MIN_SHARING_PORT = 1;
+const MAX_SHARING_PORT = 65535;
+const NO_NETWORK_SENTINEL = "No network connection";
+
+function isShareableEngine(engine?: string | null): boolean {
+  return engine === "whisper" || engine === "parakeet";
+}
+
+function isShareableModel(model: ModelInfo): boolean {
+  return (
+    model.downloaded &&
+    model.kind !== "cloud" &&
+    isShareableEngine(model.engine)
+  );
+}
+
+function parseSharingPort(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const port = Number.parseInt(trimmed, 10);
+  if (!Number.isInteger(port) || port < MIN_SHARING_PORT || port > MAX_SHARING_PORT) {
+    return null;
+  }
+  return port;
+}
+
+function bindingResultsFromLocalIps(localIps: string[]): BindingResult[] {
+  return localIps
+    .filter((entry) => entry && entry !== NO_NETWORK_SENTINEL)
+    .map((entry) => {
+      const match = entry.match(/^(.*?) \((.*?)\)$/);
+
+      return {
+        ip: match?.[1] ?? entry,
+        success: true,
+        error: null,
+        interface_name: match?.[2],
+      };
+    });
 }
 
 export function NetworkSharingCard() {
@@ -53,6 +97,7 @@ export function NetworkSharingCard() {
     active_connections: 0,
     password_configured: false,
     binding_results: [],
+    allow_model_control: false,
   });
   const [showPassword, setShowPassword] = useState(false);
   const [port, setPort] = useState("47842");
@@ -62,8 +107,10 @@ export function NetworkSharingCard() {
   const [loading, setLoading] = useState(false);
   const [savingPort, setSavingPort] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
+  const [savingModelControl, setSavingModelControl] = useState(false);
   const [modelDisplayName, setModelDisplayName] = useState<string | null>(null);
-  const [hasDownloadedModel, setHasDownloadedModel] = useState<boolean>(true);
+  const [hasShareableModel, setHasShareableModel] = useState<boolean>(true);
+  const [currentSelectionShareable, setCurrentSelectionShareable] = useState<boolean>(true);
   const [activeRemoteServer, setActiveRemoteServer] = useState<string | null>(null);
   const [firewallStatus, setFirewallStatus] = useState<FirewallStatus | null>(null);
 
@@ -87,16 +134,7 @@ export function NetworkSharingCard() {
       if (result.enabled && bindingResults.length === 0) {
         try {
           const localIps = await invoke<string[]>("get_local_ips");
-          bindingResults = localIps.map((entry) => {
-            const match = entry.match(/^(.*?) \((.*?)\)$/);
-
-            return {
-              ip: match?.[1] ?? entry,
-              success: true,
-              error: null,
-              interface_name: match?.[2],
-            };
-          });
+          bindingResults = bindingResultsFromLocalIps(localIps);
         } catch (error) {
           console.error("Failed to get local IPs:", error);
         }
@@ -147,24 +185,33 @@ export function NetworkSharingCard() {
     try {
       const response = await invoke<ModelStatusResponse>("get_model_status");
       const models = response.models || [];
-      const downloaded = models.filter((m) => m.downloaded);
-      setHasDownloadedModel(downloaded.length > 0);
+      const shareableModels = models.filter(isShareableModel);
+      setHasShareableModel(shareableModels.length > 0);
 
-      // Find display name for the currently selected model
-      if (currentModel && downloaded.length > 0) {
-        const selected = downloaded.find((m) => m.name === currentModel);
-        setModelDisplayName(selected?.display_name || getModelDisplayName(currentModel) || currentModel);
-      } else if (downloaded.length > 0) {
-        // Fallback to first downloaded model
-        setModelDisplayName(downloaded[0].display_name);
+      const selectedModel = currentModel
+        ? models.find((m) => m.name === currentModel)
+        : null;
+      const selectionShareable = selectedModel
+        ? isShareableModel(selectedModel)
+        : isShareableEngine(currentEngine) && shareableModels.length > 0;
+      setCurrentSelectionShareable(selectionShareable);
+
+      if (currentModel && selectionShareable) {
+        const selected = shareableModels.find((m) => m.name === currentModel);
+        setModelDisplayName(
+          selected?.display_name || getModelDisplayName(currentModel) || currentModel,
+        );
+      } else if (shareableModels.length > 0) {
+        setModelDisplayName(shareableModels[0].display_name);
       } else {
         setModelDisplayName(null);
       }
     } catch (error) {
       console.error("Failed to get model status:", error);
-      setHasDownloadedModel(false);
+      setHasShareableModel(false);
+      setCurrentSelectionShareable(false);
     }
-  }, [currentModel]);
+  }, [currentModel, currentEngine]);
 
   // Fetch status, model info, remote server state, and firewall status on mount
   useEffect(() => {
@@ -232,10 +279,17 @@ export function NetworkSharingCard() {
     const autoRestartSharing = async () => {
       console.log(`[Remote Transcription] Local model changed to ${currentModel}, restarting sharing...`);
 
+      const validatedPort = parseSharingPort(port);
+      if (!validatedPort) {
+        toast.error(`Enter a valid port between ${MIN_SHARING_PORT} and ${MAX_SHARING_PORT}`);
+        await fetchStatus();
+        return;
+      }
+
       try {
         await invoke("stop_sharing");
         await invoke("start_sharing", {
-          port: parseInt(port, 10),
+          port: validatedPort,
           password: null,
           preservePassword: true,
           serverName: null,
@@ -245,24 +299,50 @@ export function NetworkSharingCard() {
       } catch (error) {
         console.error("Failed to restart remote transcription with new model:", error);
         toast.error("Failed to switch remote transcription model");
+        await fetchStatus();
       }
     };
 
     autoRestartSharing();
   }, [settings, currentModel, currentEngine, status.enabled, status.model_name, port, fetchStatus, modelDisplayName]);
 
+
+  const handleToggleModelControl = async (checked: boolean) => {
+    setSavingModelControl(true);
+    try {
+      await invoke("update_remote_model_control_enabled", { enabled: checked });
+      setStatus((current) => ({ ...current, allow_model_control: checked }));
+      toast.success(
+        checked
+          ? "Remote model changes enabled for trusted devices"
+          : "Remote model changes disabled",
+      );
+    } catch (error) {
+      console.error("Failed to update remote model control setting:", error);
+      toast.error("Failed to update remote model control setting");
+      await fetchStatus();
+    } finally {
+      setSavingModelControl(false);
+    }
+  };
+
   const handleToggleSharing = async (checked: boolean) => {
     setLoading(true);
     try {
       if (checked) {
+        const validatedPort = parseSharingPort(port);
+        if (!validatedPort) {
+          toast.error(`Enter a valid port between ${MIN_SHARING_PORT} and ${MAX_SHARING_PORT}`);
+          return;
+        }
+
         await invoke("start_sharing", {
-          port: parseInt(port, 10),
+          port: validatedPort,
           password: password || null,
           preservePassword: !password,
           serverName: null, // Use hostname
         });
         toast.success("Remote transcription enabled");
-        // Re-fetch firewall status when enabling sharing
         fetchFirewallStatus();
       } else {
         await invoke("stop_sharing");
@@ -274,6 +354,7 @@ export function NetworkSharingCard() {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       toast.error(errorMessage || "Failed to toggle remote transcription");
+      await fetchStatus();
     } finally {
       setLoading(false);
     }
@@ -282,24 +363,31 @@ export function NetworkSharingCard() {
   // Save port and restart server
   const handleSavePort = async () => {
     if (!status.enabled) return;
+
+    const validatedPort = parseSharingPort(port);
+    if (!validatedPort) {
+      toast.error(`Enter a valid port between ${MIN_SHARING_PORT} and ${MAX_SHARING_PORT}`);
+      return;
+    }
+
     setSavingPort(true);
     try {
       await invoke("stop_sharing");
       await invoke("start_sharing", {
-        port: parseInt(port, 10),
+        port: validatedPort,
         password: null,
         preservePassword: true,
         serverName: null,
       });
       setSavedPort(port);
-      // Persist to settings
-      await updateSettings({ sharing_port: parseInt(port, 10) });
+      await updateSettings({ sharing_port: validatedPort });
       await fetchStatus();
       toast.success(`Port changed to ${port}`);
     } catch (error) {
       console.error("Failed to update port:", error);
       toast.error("Failed to update port");
-      setPort(savedPort); // Revert on error
+      setPort(savedPort);
+      await fetchStatus();
     } finally {
       setSavingPort(false);
     }
@@ -308,22 +396,34 @@ export function NetworkSharingCard() {
   // Save password and restart server
   const handleSavePassword = async () => {
     if (!status.enabled) return;
+
+    const validatedPort = parseSharingPort(savedPort);
+    if (!validatedPort) {
+      toast.error(`Enter a valid port between ${MIN_SHARING_PORT} and ${MAX_SHARING_PORT}`);
+      return;
+    }
+
     setSavingPassword(true);
     try {
       await invoke("stop_sharing");
       await invoke("start_sharing", {
-        port: parseInt(savedPort, 10),
+        port: validatedPort,
         password: password || null,
         preservePassword: false,
         serverName: null,
       });
+      if (!password && status.allow_model_control) {
+        await invoke("update_remote_model_control_enabled", { enabled: false });
+        setStatus((current) => ({ ...current, allow_model_control: false }));
+      }
       setSavedPassword(password);
       await fetchStatus();
       toast.success(password ? "Password updated" : "Password removed");
     } catch (error) {
       console.error("Failed to update password:", error);
       toast.error("Failed to update password");
-      setPassword(savedPassword); // Revert on error
+      setPassword(savedPassword);
+      await fetchStatus();
     } finally {
       setSavingPassword(false);
     }
@@ -336,6 +436,13 @@ export function NetworkSharingCard() {
     navigator.clipboard.writeText(address);
     toast.success("Address copied to clipboard");
   };
+
+  const reachableBindings = status.binding_results.filter(
+    (result) =>
+      result.success &&
+      result.ip !== "127.0.0.1" &&
+      result.ip !== NO_NETWORK_SENTINEL,
+  );
 
   return (
     <div className="rounded-lg border border-border/50 bg-card">
@@ -357,22 +464,38 @@ export function NetworkSharingCard() {
             id="network-sharing"
             checked={status.enabled}
             onCheckedChange={handleToggleSharing}
-            disabled={loading || (!status.enabled && (!hasDownloadedModel || !!activeRemoteServer))}
+            disabled={loading || (!status.enabled && (!!activeRemoteServer || !hasShareableModel || !currentSelectionShareable))}
           />
         </div>
       </div>
 
       {/* Warning if no model downloaded */}
-      {!hasDownloadedModel && !status.enabled && (
+      {!hasShareableModel && !status.enabled && (
         <div className="px-4 py-3">
           <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
             <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
             <div>
               <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
-                No model downloaded
+                No shareable local model
               </p>
               <p className="text-xs text-amber-600 dark:text-amber-500">
-                Download a transcription model in the Models tab to enable remote transcription.
+                Remote sharing requires a downloaded Whisper or Parakeet model on this device.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {hasShareableModel && !currentSelectionShareable && !status.enabled && !activeRemoteServer && (
+        <div className="px-4 py-3">
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                Current model cannot be shared
+              </p>
+              <p className="text-xs text-amber-600 dark:text-amber-500">
+                Soniox and cloud sources cannot be shared over the network. Select a downloaded Whisper or Parakeet model in the Models tab to enable sharing.
               </p>
             </div>
           </div>
@@ -397,7 +520,7 @@ export function NetworkSharingCard() {
       )}
 
       {/* Model info when disabled but model available - hide when using remote server */}
-      {hasDownloadedModel && !status.enabled && modelDisplayName && !activeRemoteServer && (
+      {hasShareableModel && currentSelectionShareable && !status.enabled && modelDisplayName && !activeRemoteServer && (
         <div className="px-4 py-3">
           <p className="text-xs text-muted-foreground">
             When enabled, another VoiceTypr app can use this device's{" "}
@@ -506,16 +629,17 @@ export function NetworkSharingCard() {
             <div className="space-y-2">
               <Label className="text-sm font-medium">Connect from another device</Label>
               <div className="space-y-1">
-                {status.binding_results.length === 0 ? (
-                  <div className="px-3 py-2 rounded-md bg-muted/50 border border-border/50 font-mono text-sm text-muted-foreground">
-                    Starting server...
+                {reachableBindings.length === 0 ? (
+                  <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+                    <p className="font-medium">No network address available</p>
+                    <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">
+                      Connect this device to Wi-Fi or Ethernet so other VoiceTypr apps can reach it.
+                    </p>
                   </div>
                 ) : (
                   <>
                     {/* Show successful bindings first (exclude localhost - can't connect to self) */}
-                    {status.binding_results
-                      .filter((result) => result.success && result.ip !== "127.0.0.1")
-                      .map((result, index) => (
+                    {reachableBindings.map((result, index) => (
                         <div key={`success-${index}`} className="flex items-center gap-2">
                           <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
                           <div className="flex-1 px-3 py-2 rounded-md bg-background/60 border border-border/60 font-mono text-sm">
@@ -559,7 +683,7 @@ export function NetworkSharingCard() {
                   </>
                 )}
               </div>
-              {status.binding_results.filter((r) => r.success && r.ip !== "127.0.0.1").length > 0 && (
+              {reachableBindings.length > 0 && (
                 <p className="text-xs text-muted-foreground">
                   Enter one of these addresses in VoiceTypr on another device on the same network.
                 </p>
@@ -617,6 +741,9 @@ export function NetworkSharingCard() {
                 <Label htmlFor="sharing-password" className="text-sm">
                   Password (Optional)
                 </Label>
+                <p className="text-xs text-muted-foreground">
+                  Other devices need this password to connect to your shared transcription.
+                </p>
                 <div className="flex items-center gap-2">
                   <div className="relative flex-1">
                     <Input
@@ -666,6 +793,33 @@ export function NetworkSharingCard() {
                     </button>
                   )}
                 </div>
+              </div>
+
+              {/* Remote model control opt-in */}
+              <div className="space-y-1.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="allow-model-control" className="text-sm">
+                      Allow trusted devices to change shared model
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Devices with the password can switch only the model this device shares.
+                    </p>
+                  </div>
+                  <Switch
+                    id="allow-model-control"
+                    checked={status.allow_model_control}
+                    onCheckedChange={(checked) => {
+                      void handleToggleModelControl(checked);
+                    }}
+                    disabled={savingModelControl || !status.password_configured}
+                  />
+                </div>
+                {!status.password_configured && (
+                  <p className="text-xs text-muted-foreground">
+                    Add a sharing password to enable remote model changes.
+                  </p>
+                )}
               </div>
             </div>
           </div>

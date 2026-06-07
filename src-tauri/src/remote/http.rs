@@ -24,6 +24,9 @@ pub trait ServerContext: Send + Sync {
     fn get_model_name(&self) -> String;
     fn get_server_name(&self) -> String;
     fn get_password(&self) -> Option<String>;
+    fn allow_model_control(&self) -> bool {
+        crate::remote::model_control::is_model_control_enabled()
+    }
     fn transcribe(
         &self,
         audio_data: &[u8],
@@ -123,12 +126,13 @@ async fn require_control_auth<T: ServerContext + 'static>(
     auth_key: Option<String>,
     ctx: Arc<RwLock<T>>,
 ) -> Result<Arc<RwLock<T>>, Rejection> {
-    let password = {
+    let (password, allow_model_control) = {
         let ctx = ctx.read().await;
-        ctx.get_password()
+        (ctx.get_password(), ctx.allow_model_control())
     };
 
-    check_control_auth(&password, auth_key).map_err(|_| warp::reject::not_found())?;
+    check_control_auth(&password, allow_model_control, auth_key)
+        .map_err(|_| warp::reject::not_found())?;
 
     Ok(ctx)
 }
@@ -137,14 +141,14 @@ async fn handle_patch_control_preflight<T: ServerContext + 'static>(
     auth_key: Option<String>,
     ctx: Arc<RwLock<T>>,
 ) -> Result<Box<dyn Reply>, Rejection> {
-    let password = {
+    let (password, allow_model_control) = {
         let ctx = ctx.read().await;
-        ctx.get_password()
+        (ctx.get_password(), ctx.allow_model_control())
     };
 
-    match check_control_auth(&password, auth_key) {
+    match check_control_auth(&password, allow_model_control, auth_key) {
         Ok(()) => Err(warp::reject::not_found()),
-        Err(status) => Ok(control_auth_error(status)),
+        Err(failure) => Ok(control_auth_error(failure)),
     }
 }
 
@@ -152,26 +156,42 @@ fn control_requires_password(password: &Option<String>) -> bool {
     password.as_ref().is_some_and(|value| !value.is_empty())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControlAuthFailure {
+    RequiresPassword,
+    ModelControlDisabled,
+    Unauthorized,
+}
+
 fn check_control_auth(
     password: &Option<String>,
+    allow_model_control: bool,
     auth_key: Option<String>,
-) -> Result<(), StatusCode> {
+) -> Result<(), ControlAuthFailure> {
     if !control_requires_password(password) {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ControlAuthFailure::RequiresPassword);
+    }
+
+    if !allow_model_control {
+        return Err(ControlAuthFailure::ModelControlDisabled);
     }
 
     let required = password.as_ref().expect("password checked above");
     match auth_key {
         Some(provided) if provided == *required => Ok(()),
-        _ => Err(StatusCode::UNAUTHORIZED),
+        _ => Err(ControlAuthFailure::Unauthorized),
     }
 }
 
-fn control_auth_error(status: StatusCode) -> Box<dyn Reply> {
-    let error = match status {
-        StatusCode::FORBIDDEN => "control_requires_password",
-        StatusCode::UNAUTHORIZED => "unauthorized",
-        _ => "forbidden",
+fn control_auth_error(failure: ControlAuthFailure) -> Box<dyn Reply> {
+    let (status, error) = match failure {
+        ControlAuthFailure::RequiresPassword => {
+            (StatusCode::FORBIDDEN, "control_requires_password")
+        }
+        ControlAuthFailure::ModelControlDisabled => {
+            (StatusCode::FORBIDDEN, "model_control_disabled")
+        }
+        ControlAuthFailure::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
     };
     Box::new(warp::reply::with_status(
         warp::reply::json(&ErrorResponse {
@@ -187,8 +207,10 @@ async fn handle_get_model_control<T: ServerContext + 'static>(
     ctx: Arc<RwLock<T>>,
 ) -> Result<Box<dyn Reply>, Rejection> {
     let ctx = ctx.read().await;
-    if let Err(status) = check_control_auth(&ctx.get_password(), auth_key) {
-        return Ok(control_auth_error(status));
+    if let Err(failure) =
+        check_control_auth(&ctx.get_password(), ctx.allow_model_control(), auth_key)
+    {
+        return Ok(control_auth_error(failure));
     }
 
     match ctx.get_model_control_snapshot() {
@@ -1189,6 +1211,7 @@ mod tests {
     struct PasswordedControlContext {
         password: String,
         model_name: String,
+        allow_model_control: bool,
     }
 
     impl ServerContext for PasswordedControlContext {
@@ -1200,6 +1223,9 @@ mod tests {
         }
         fn get_password(&self) -> Option<String> {
             Some(self.password.clone())
+        }
+        fn allow_model_control(&self) -> bool {
+            self.allow_model_control
         }
         fn transcribe(
             &self,
@@ -1255,6 +1281,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(PasswordedControlContext {
             password: "secret".to_string(),
             model_name: "base.en".to_string(),
+            allow_model_control: true,
         }));
         let routes = create_routes(ctx);
 
@@ -1272,6 +1299,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(PasswordedControlContext {
             password: "secret".to_string(),
             model_name: "base.en".to_string(),
+            allow_model_control: true,
         }));
         let routes = create_routes(ctx);
 
@@ -1293,6 +1321,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(PasswordedControlContext {
             password: "secret".to_string(),
             model_name: "base.en".to_string(),
+            allow_model_control: true,
         }));
         let routes = create_routes(ctx);
 
@@ -1314,6 +1343,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(PasswordedControlContext {
             password: "secret".to_string(),
             model_name: "base.en".to_string(),
+            allow_model_control: true,
         }));
         let routes = create_routes(ctx);
 
@@ -1334,6 +1364,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(PasswordedControlContext {
             password: "secret".to_string(),
             model_name: "base.en".to_string(),
+            allow_model_control: true,
         }));
         let routes = create_routes(ctx);
 
@@ -1349,5 +1380,48 @@ mod tests {
         assert_eq!(response.status(), 200);
         let body: RemoteModelControlSnapshot = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(body.current.id, "large-v3-turbo");
+    }
+    #[tokio::test]
+    async fn test_control_models_rejects_when_host_opt_in_disabled() {
+        let ctx = Arc::new(RwLock::new(PasswordedControlContext {
+            password: "secret".to_string(),
+            model_name: "base.en".to_string(),
+            allow_model_control: false,
+        }));
+        let routes = create_routes(ctx);
+
+        let response = warp::test::request()
+            .method("GET")
+            .path("/api/v1/control/models")
+            .header(AUTH_HEADER, "secret")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 403);
+        let body: ErrorResponse = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.error, "model_control_disabled");
+    }
+
+    #[tokio::test]
+    async fn test_control_models_patch_rejects_when_host_opt_in_disabled() {
+        let ctx = Arc::new(RwLock::new(PasswordedControlContext {
+            password: "secret".to_string(),
+            model_name: "base.en".to_string(),
+            allow_model_control: false,
+        }));
+        let routes = create_routes(ctx);
+
+        let response = warp::test::request()
+            .method("PATCH")
+            .path("/api/v1/control/models")
+            .header(AUTH_HEADER, "secret")
+            .header("content-type", "application/json")
+            .body(r#"{"model":"large-v3-turbo","engine":"whisper"}"#)
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 403);
+        let body: ErrorResponse = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.error, "model_control_disabled");
     }
 }
