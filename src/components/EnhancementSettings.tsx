@@ -24,9 +24,17 @@ import {
   InputGroupText,
   InputGroupTextarea,
 } from "@/components/ui/input-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { presetRequiresAiFormatting, type EnhancementPreset } from "@/types/ai";
 import type {
+  AppFormattingRule,
   CustomWord,
   Snippet,
   TextReplacementRule,
@@ -61,6 +69,185 @@ function updateItem<T>(items: T[], index: number, next: T): T[] {
 
 function removeItem<T>(items: T[], index: number): T[] {
   return items.filter((_, itemIndex) => itemIndex !== index);
+}
+
+
+
+const FORMATTING_MODES = [
+  { id: "PersonalDictation", label: "Personal Dictation", icon: AudioLines },
+  { id: "CleanDictation", label: "Clean Dictation", icon: FileText },
+  { id: "Writing", label: "Writing", icon: PenLine },
+  { id: "Notes", label: "Notes", icon: StickyNote },
+  { id: "Message", label: "Message", icon: MessageSquare },
+  { id: "Code", label: "Code", icon: Code },
+] as const satisfies ReadonlyArray<{
+  id: EnhancementPreset;
+  label: string;
+  icon: typeof AudioLines;
+}>;
+
+function AppFormattingRulesEditor({
+  rules,
+  onChange,
+  disabled,
+  aiFormattingEnabled,
+}: {
+  rules: AppFormattingRule[];
+  onChange: (rules: AppFormattingRule[]) => void;
+  disabled: boolean;
+  aiFormattingEnabled: boolean;
+}) {
+  const hasAiRequiredSelection =
+    !aiFormattingEnabled && rules.some((rule) => presetRequiresAiFormatting(rule.preset));
+
+  return (
+    <FieldSet className="mt-4 rounded-lg border border-border/60 bg-background/60 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <FieldLegend className="mb-1 text-sm">App Rules</FieldLegend>
+          <FieldDescription>
+            Switch formatting mode when the active app name matches. Matches the foreground app
+            name only — not URLs, document titles, or clipboard content.
+          </FieldDescription>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled}
+          onClick={() =>
+            onChange([
+              ...rules,
+              { app_name: "", preset: "PersonalDictation", enabled: true },
+            ])
+          }
+        >
+          <Plus className="mr-2 h-4 w-4" />
+          Add rule
+        </Button>
+      </div>
+
+      {!aiFormattingEnabled && hasAiRequiredSelection && (
+        <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          One or more app rules use AI modes. Turn on AI formatting above to activate them.
+        </div>
+      )}
+
+      {rules.length === 0 ? (
+        <Empty className="mt-3 border-border/60 bg-muted/20 p-4">
+          <EmptyHeader className="max-w-none gap-1">
+            <EmptyTitle className="text-sm">No app rules yet</EmptyTitle>
+            <EmptyDescription className="text-xs">
+              Example: when <span className="font-mono">Slack</span> is active, use{" "}
+              <span className="font-mono">Message</span> mode.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <FieldGroup className="mt-3 gap-2">
+          {rules.map((rule, index) => {
+            const selectedRequiresAi = presetRequiresAiFormatting(rule.preset);
+            const selectedMode = FORMATTING_MODES.find((mode) => mode.id === rule.preset);
+
+            return (
+              <div
+                key={`app-rule-${index}`}
+                className="rounded-lg border border-border/60 bg-card/60 p-3"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <InputGroup className="min-w-[10rem] flex-1">
+                    <InputGroupAddon>
+                      <InputGroupText>App</InputGroupText>
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      placeholder="App name, e.g. Slack"
+                      value={rule.app_name}
+                      disabled={disabled}
+                      onChange={(event) =>
+                        onChange(
+                          updateItem(rules, index, {
+                            ...rule,
+                            app_name: event.target.value,
+                          }),
+                        )
+                      }
+                    />
+                  </InputGroup>
+
+                  <Select
+                    value={rule.preset}
+                    disabled={disabled}
+                    onValueChange={(value) =>
+                      onChange(
+                        updateItem(rules, index, {
+                          ...rule,
+                          preset: value as EnhancementPreset,
+                        }),
+                      )
+                    }
+                  >
+                    <SelectTrigger size="sm" className="w-[11rem]" aria-label="Formatting mode">
+                      <SelectValue placeholder="Mode">
+                        {selectedMode?.label ?? rule.preset}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {FORMATTING_MODES.map((modeOption) => {
+                        const requiresAi = presetRequiresAiFormatting(modeOption.id);
+                        const isSelected = rule.preset === modeOption.id;
+                        const isOptionDisabled =
+                          disabled || (requiresAi && !aiFormattingEnabled && !isSelected);
+
+                        return (
+                          <SelectItem
+                            key={modeOption.id}
+                            value={modeOption.id}
+                            disabled={isOptionDisabled}
+                          >
+                            {modeOption.label}
+                            {requiresAi && !aiFormattingEnabled && !isSelected
+                              ? " (requires AI)"
+                              : ""}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Enabled</span>
+                    <Switch
+                      checked={rule.enabled}
+                      disabled={disabled}
+                      onCheckedChange={(checked) =>
+                        onChange(updateItem(rules, index, { ...rule, enabled: checked }))
+                      }
+                    />
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      disabled={disabled}
+                      onClick={() => onChange(removeItem(rules, index))}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {!aiFormattingEnabled && selectedRequiresAi && (
+                  <FieldDescription className="mt-2 text-amber-700 dark:text-amber-300">
+                    {selectedMode?.label ?? rule.preset} requires AI formatting. Turn on AI
+                    formatting above to use this rule.
+                  </FieldDescription>
+                )}
+              </div>
+            );
+          })}
+        </FieldGroup>
+      )}
+    </FieldSet>
+  );
 }
 
 function ReplacementEditor({
@@ -535,15 +722,6 @@ export function EnhancementSettings({
   onWritingSettingsChange,
   disabled = false,
 }: EnhancementSettingsProps) {
-  const modes = [
-    { id: "PersonalDictation", label: "Personal Dictation", icon: AudioLines },
-    { id: "CleanDictation", label: "Clean Dictation", icon: FileText },
-    { id: "Writing", label: "Writing", icon: PenLine },
-    { id: "Notes", label: "Notes", icon: StickyNote },
-    { id: "Message", label: "Message", icon: MessageSquare },
-    { id: "Code", label: "Code", icon: Code },
-  ] as const;
-
   const allowsSpecificFinalLanguage = preset !== "PersonalDictation";
   const usingSpecificLanguage =
     allowsSpecificFinalLanguage && finalTextLanguage !== "same_as_transcript";
@@ -567,7 +745,7 @@ export function EnhancementSettings({
           </div>
         )}
         <ButtonGroup className="w-full flex-wrap md:w-fit">
-          {modes.map((modeOption) => {
+          {FORMATTING_MODES.map((modeOption) => {
             const Icon = modeOption.icon;
             const isSelected = preset === modeOption.id;
             const requiresAi = presetRequiresAiFormatting(modeOption.id);
@@ -666,6 +844,15 @@ export function EnhancementSettings({
             }
           />
         </Field>
+
+        <AppFormattingRulesEditor
+          rules={writingSettings.app_formatting_rules}
+          disabled={disabled}
+          aiFormattingEnabled={aiFormattingEnabled}
+          onChange={(app_formatting_rules) =>
+            onWritingSettingsChange({ ...writingSettings, app_formatting_rules })
+          }
+        />
       </FieldSet>
 
       <p className="text-xs text-muted-foreground">

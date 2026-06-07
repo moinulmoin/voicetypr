@@ -29,7 +29,7 @@ import {
   toBackendOptions,
 } from "@/types/ai";
 import type { WritingSettings } from "@/types/writing";
-import { defaultWritingSettings } from "@/types/writing";
+import { defaultWritingSettings, mergeWritingSettings } from "@/types/writing";
 import { AI_PROVIDERS } from "@/types/providers";
 import { useAllProviderModels } from "@/hooks/useProviderModels";
 import { hasApiKey, removeApiKey, saveApiKey, getApiKey } from "@/utils/keyring";
@@ -97,8 +97,8 @@ export function EnhancementsSection() {
 
   const loadWritingSettings = async () => {
     try {
-      const nextSettings = await invoke<WritingSettings>("get_writing_settings");
-      setWritingSettings(nextSettings);
+      const nextSettings = await invoke<Partial<WritingSettings>>("get_writing_settings");
+      setWritingSettings(mergeWritingSettings(nextSettings));
     } catch (error) {
       console.error("Failed to load writing settings:", error);
     }

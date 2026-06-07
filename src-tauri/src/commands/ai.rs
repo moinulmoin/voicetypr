@@ -832,7 +832,9 @@ pub async fn update_writing_settings(
     settings: WritingSettings,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    save_writing_settings(&app, &settings)
+    save_writing_settings(&app, &settings)?;
+    crate::commands::audio::invalidate_recording_config_cache(&app).await;
+    Ok(())
 }
 
 #[tauri::command]

@@ -104,12 +104,7 @@ describe('EnhancementsSection', () => {
         return Promise.resolve(undefined)
       }
       if (cmd === 'get_writing_settings') {
-        return Promise.resolve({
-          replacements: [],
-          custom_words: [],
-          snippets: [],
-          context_policy: 'off',
-        })
+        return Promise.resolve(defaultWritingSettings)
       }
       if (cmd === 'update_writing_settings') {
         return rejectWritingSettingsUpdate
@@ -368,6 +363,36 @@ describe('EnhancementsSection', () => {
       expect(invoke).toHaveBeenCalledWith('update_writing_settings', {
         settings: expect.objectContaining({
           context_policy: 'app_hint_only',
+        }),
+      })
+    })
+  })
+
+  it('adds an app formatting rule and persists writing settings', async () => {
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    const appRulesHeading = await screen.findByText('App Rules')
+    const appRulesCard = appRulesHeading.parentElement?.parentElement
+    expect(appRulesCard).toBeTruthy()
+
+    await user.click(
+      within(appRulesCard as HTMLElement).getByRole('button', { name: /add rule/i }),
+    )
+
+    const appInput = await screen.findByPlaceholderText('App name, e.g. Slack')
+    await user.type(appInput, 'Slack')
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_writing_settings', {
+        settings: expect.objectContaining({
+          app_formatting_rules: [
+            expect.objectContaining({
+              app_name: 'Slack',
+              preset: 'PersonalDictation',
+              enabled: true,
+            }),
+          ],
         }),
       })
     })

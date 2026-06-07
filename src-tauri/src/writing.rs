@@ -96,6 +96,14 @@ pub struct Snippet {
     pub preserve_literal: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppFormattingRule {
+    pub app_name: String,
+    pub preset: EnhancementPreset,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct WritingSettings {
     #[serde(default)]
@@ -106,6 +114,8 @@ pub struct WritingSettings {
     pub snippets: Vec<Snippet>,
     #[serde(default)]
     pub context_policy: ContextPolicy,
+    #[serde(default)]
+    pub app_formatting_rules: Vec<AppFormattingRule>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,6 +230,21 @@ pub fn sanitize_writing_settings(settings: WritingSettings) -> WritingSettings {
             })
             .collect(),
         context_policy: settings.context_policy,
+        app_formatting_rules: settings
+            .app_formatting_rules
+            .into_iter()
+            .filter_map(|rule| {
+                let app_name = rule.app_name.trim();
+                if app_name.is_empty() {
+                    return None;
+                }
+                Some(AppFormattingRule {
+                    app_name: app_name.to_string(),
+                    preset: rule.preset,
+                    enabled: rule.enabled,
+                })
+            })
+            .collect(),
     }
 }
 
@@ -247,7 +272,46 @@ pub fn save_writing_settings(app: &AppHandle, settings: &WritingSettings) -> Res
         .map_err(|e| format!("Failed to save writing settings: {}", e))
 }
 
-async fn load_writing_profile(app: &AppHandle, ai_enabled: bool) -> Result<WritingProfile, String> {
+fn enabled_app_rules(settings: &WritingSettings) -> impl Iterator<Item = &AppFormattingRule> {
+    settings
+        .app_formatting_rules
+        .iter()
+        .filter(|rule| rule.enabled && !rule.app_name.trim().is_empty())
+}
+
+fn app_rules_need_active_app(settings: &WritingSettings) -> bool {
+    enabled_app_rules(settings).next().is_some()
+}
+
+fn resolve_app_formatting_preset(
+    settings: &WritingSettings,
+    active_app: Option<&ContextHint>,
+    ai_enabled: bool,
+) -> Option<EnhancementPreset> {
+    let app_name = active_app?.app_name.as_deref()?.trim();
+    if app_name.is_empty() {
+        return None;
+    }
+
+    let normalized_app_name = app_name.to_ascii_lowercase();
+    let matched_rule = enabled_app_rules(settings).find(|rule| {
+        let rule_app_name = rule.app_name.trim().to_ascii_lowercase();
+        normalized_app_name.contains(&rule_app_name)
+    })?;
+
+    if matched_rule.preset.requires_ai_formatting() && !ai_enabled {
+        return None;
+    }
+
+    Some(matched_rule.preset)
+}
+
+async fn load_writing_profile(
+    app: &AppHandle,
+    ai_enabled: bool,
+    settings: &WritingSettings,
+    active_app: Option<&ContextHint>,
+) -> Result<WritingProfile, String> {
     let options =
         crate::commands::ai::get_enhancement_options_for_ai_enabled(app.clone(), ai_enabled)
             .await
@@ -268,7 +332,9 @@ async fn load_writing_profile(app: &AppHandle, ai_enabled: bool) -> Result<Writi
         .get("final_text_language")
         .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-    let mode = options.preset.into();
+    let selected_preset =
+        resolve_app_formatting_preset(settings, active_app, ai_enabled).unwrap_or(options.preset);
+    let mode = selected_preset.into();
     let mut final_text_language =
         normalize_final_text_language(stored_final_text_language.as_deref(), &transcription_task);
     if mode == WritingMode::PersonalDictation {
@@ -893,8 +959,8 @@ fn classify_app_category(app_name: &str) -> Option<String> {
     category.map(str::to_string)
 }
 
-fn capture_context_hint(policy: ContextPolicy) -> Option<ContextHint> {
-    if policy != ContextPolicy::AppHintOnly {
+fn capture_active_app_context(should_capture: bool) -> Option<ContextHint> {
+    if !should_capture {
         return None;
     }
 
@@ -907,6 +973,15 @@ fn capture_context_hint(policy: ContextPolicy) -> Option<ContextHint> {
         app_category: classify_app_category(&window.app_name),
         app_name: Some(window.app_name),
     })
+}
+
+fn context_hint_for_policy(
+    policy: ContextPolicy,
+    active_app: Option<&ContextHint>,
+) -> Option<ContextHint> {
+    (policy == ContextPolicy::AppHintOnly)
+        .then(|| active_app.cloned())
+        .flatten()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1471,16 +1546,18 @@ pub async fn process_transcription(
     transcription: TranscriptionResult,
     ai_enabled: bool,
 ) -> Result<WritingResult, String> {
-    let profile = load_writing_profile(&app, ai_enabled).await?;
     let settings = load_writing_settings(&app)?;
+    let should_capture_active_app = settings.context_policy == ContextPolicy::AppHintOnly
+        || app_rules_need_active_app(&settings);
+    let active_app = capture_active_app_context(should_capture_active_app);
+    let context_hint = context_hint_for_policy(settings.context_policy, active_app.as_ref());
+    let profile = load_writing_profile(&app, ai_enabled, &settings, active_app.as_ref()).await?;
     let transcript_language = transcription.transcript_language.clone().or_else(|| {
         transcription
             .task
             .fallback_transcript_language(transcription.spoken_language.as_deref())
     });
     let mut output_language = resolve_output_language(&profile, &transcription);
-    let context_hint = capture_context_hint(settings.context_policy);
-
     let mut applied_operations = Vec::new();
     let mut warnings = Vec::new();
     let cleaned_text = run_transcript_cleanup_mechanical(&transcription.raw_text);
@@ -1712,6 +1789,7 @@ mod tests {
                 Snippet::default(),
             ],
             context_policy: ContextPolicy::AppHintOnly,
+            ..WritingSettings::default()
         });
 
         assert_eq!(settings.replacements.len(), 1);
@@ -1771,6 +1849,134 @@ mod tests {
 
         assert_eq!(text, "VoiceTypr launched");
         assert_eq!(ops.len(), 1);
+    }
+
+    #[test]
+    fn test_sanitize_writing_settings_trims_app_formatting_rules() {
+        let settings = sanitize_writing_settings(WritingSettings {
+            app_formatting_rules: vec![
+                AppFormattingRule {
+                    app_name: "  Slack  ".to_string(),
+                    preset: EnhancementPreset::Message,
+                    enabled: true,
+                },
+                AppFormattingRule {
+                    app_name: "   ".to_string(),
+                    preset: EnhancementPreset::Writing,
+                    enabled: true,
+                },
+            ],
+            ..WritingSettings::default()
+        });
+
+        assert_eq!(settings.app_formatting_rules.len(), 1);
+        assert_eq!(settings.app_formatting_rules[0].app_name, "Slack");
+        assert_eq!(
+            settings.app_formatting_rules[0].preset,
+            EnhancementPreset::Message
+        );
+    }
+
+    #[test]
+    fn test_app_formatting_rules_match_first_enabled_rule_and_skip_ai_when_disabled() {
+        let settings = WritingSettings {
+            app_formatting_rules: vec![
+                AppFormattingRule {
+                    app_name: "slack".to_string(),
+                    preset: EnhancementPreset::Message,
+                    enabled: true,
+                },
+                AppFormattingRule {
+                    app_name: "slack".to_string(),
+                    preset: EnhancementPreset::PersonalDictation,
+                    enabled: true,
+                },
+            ],
+            ..WritingSettings::default()
+        };
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            app_category: Some("chat".to_string()),
+        };
+
+        assert_eq!(
+            resolve_app_formatting_preset(&settings, Some(&active_app), true),
+            Some(EnhancementPreset::Message)
+        );
+        assert_eq!(
+            resolve_app_formatting_preset(&settings, Some(&active_app), false),
+            None
+        );
+    }
+
+    #[test]
+    fn test_context_hint_for_policy_only_returns_hint_when_enabled() {
+        let active_app = ContextHint {
+            app_name: Some("Cursor".to_string()),
+            app_category: Some("editor".to_string()),
+        };
+
+        assert_eq!(
+            context_hint_for_policy(ContextPolicy::Off, Some(&active_app)),
+            None
+        );
+        assert_eq!(
+            context_hint_for_policy(ContextPolicy::AppHintOnly, Some(&active_app)),
+            Some(active_app.clone())
+        );
+        assert_eq!(
+            context_hint_for_policy(ContextPolicy::AppHintOnly, None),
+            None
+        );
+    }
+
+    #[test]
+    fn test_app_formatting_rules_use_case_insensitive_substring_match() {
+        let settings = WritingSettings {
+            app_formatting_rules: vec![AppFormattingRule {
+                app_name: "cursor".to_string(),
+                preset: EnhancementPreset::Code,
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+        let active_app = ContextHint {
+            app_name: Some("Cursor IDE".to_string()),
+            app_category: Some("editor".to_string()),
+        };
+
+        assert_eq!(
+            resolve_app_formatting_preset(&settings, Some(&active_app), true),
+            Some(EnhancementPreset::Code)
+        );
+    }
+
+    #[test]
+    fn test_app_formatting_rules_skip_disabled_rules() {
+        let settings = WritingSettings {
+            app_formatting_rules: vec![
+                AppFormattingRule {
+                    app_name: "slack".to_string(),
+                    preset: EnhancementPreset::Message,
+                    enabled: false,
+                },
+                AppFormattingRule {
+                    app_name: "mail".to_string(),
+                    preset: EnhancementPreset::Writing,
+                    enabled: true,
+                },
+            ],
+            ..WritingSettings::default()
+        };
+        let active_app = ContextHint {
+            app_name: Some("Slack Desktop".to_string()),
+            app_category: Some("chat".to_string()),
+        };
+
+        assert_eq!(
+            resolve_app_formatting_preset(&settings, Some(&active_app), true),
+            None
+        );
     }
 
     #[test]
@@ -1945,6 +2151,7 @@ mod tests {
                 preserve_literal: true,
             }],
             context_policy: ContextPolicy::Off,
+            ..WritingSettings::default()
         };
 
         let context = compile_context_for_target(

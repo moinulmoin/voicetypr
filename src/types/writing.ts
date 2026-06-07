@@ -1,4 +1,12 @@
+import type { EnhancementPreset } from '@/types/ai'
+
 export type WritingContextPolicy = 'off' | 'app_hint_only'
+
+export interface AppFormattingRule {
+  app_name: string
+  preset: EnhancementPreset
+  enabled: boolean
+}
 
 export interface TextReplacementRule {
   from: string
@@ -27,6 +35,7 @@ export interface WritingSettings {
   custom_words: CustomWord[]
   snippets: Snippet[]
   context_policy: WritingContextPolicy
+  app_formatting_rules: AppFormattingRule[]
 }
 
 export const defaultWritingSettings: WritingSettings = {
@@ -34,4 +43,18 @@ export const defaultWritingSettings: WritingSettings = {
   custom_words: [],
   snippets: [],
   context_policy: 'off',
+  app_formatting_rules: [],
 }
+
+export const mergeWritingSettings = (
+  partial: Partial<WritingSettings> | WritingSettings,
+): WritingSettings => ({
+  ...defaultWritingSettings,
+  ...partial,
+  replacements: partial.replacements ?? defaultWritingSettings.replacements,
+  custom_words: partial.custom_words ?? defaultWritingSettings.custom_words,
+  snippets: partial.snippets ?? defaultWritingSettings.snippets,
+  context_policy: partial.context_policy ?? defaultWritingSettings.context_policy,
+  app_formatting_rules:
+    partial.app_formatting_rules ?? defaultWritingSettings.app_formatting_rules,
+})
