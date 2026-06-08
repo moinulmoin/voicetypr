@@ -7,6 +7,7 @@ import { ModelsTab } from "./ModelsTab";
 import { OverviewTab } from "./OverviewTab";
 import { RecordingsTab } from "./RecordingsTab";
 import { SettingsTab } from "./SettingsTab";
+import { ShortcutsTab } from "./ShortcutsTab";
 import { AudioUploadSection } from "../sections/AudioUploadSection";
 import type { ScreenId } from "@/components/navigation";
 
@@ -29,6 +30,9 @@ export function TabContainer({ activeSection }: TabContainerProps) {
 
       case "general":
         return <SettingsTab />;
+
+      case "shortcuts":
+        return <ShortcutsTab />;
 
       case "models":
         return <ModelsTab />;

@@ -59,6 +59,9 @@ mod audio_recording_tests;
 mod tray_menu_tests;
 
 #[cfg(test)]
+mod shortcut_bindings;
+
+#[cfg(test)]
 mod integration_tests {
     use crate::whisper::manager::{ModelSize, WhisperManager};
     use tempfile::TempDir;

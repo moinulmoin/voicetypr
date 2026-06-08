@@ -1,6 +1,10 @@
 use crate::commands::audio::{
     start_recording, stop_recording, RecorderState, PTT_START_ABORTED_AFTER_RELEASE,
 };
+use crate::commands::shortcuts::{
+    self, hold_shortcut_transition, pressed_shortcut_should_run, CustomHoldTransition,
+    RegisteredShortcutBinding, ShortcutAction, ShortcutTrigger,
+};
 use crate::recording::escape_handler::handle_escape_key_press;
 use crate::{get_recording_state, update_recording_state, AppState, RecordingMode, RecordingState};
 use std::sync::atomic::Ordering;
@@ -26,6 +30,11 @@ pub fn handle_global_shortcut(
         log::warn!("Global shortcut triggered before AppState initialized");
         return;
     };
+
+    if let Some(binding) = shortcuts::matching_custom_binding(&app_state, shortcut) {
+        dispatch_custom_shortcut(app, &app_state, binding, event_state);
+        return;
+    }
 
     let recording_mode = {
         if let Ok(mode_guard) = app_state.recording_mode.lock() {
@@ -66,27 +75,50 @@ pub fn handle_global_shortcut(
 
     if should_handle {
         let current_state = get_recording_state(app);
-        handle_recording_shortcut(app, &app_state, recording_mode, current_state, event_state);
+        match recording_mode {
+            RecordingMode::Toggle => {
+                handle_toggle_mode(app, &app_state, current_state, event_state);
+            }
+            RecordingMode::PushToTalk => {
+                let source_id = if is_ptt_shortcut {
+                    "__builtin_ptt_shortcut"
+                } else {
+                    "__builtin_recording_shortcut"
+                };
+                handle_hold_to_record_source(app, &app_state, source_id, event_state);
+            }
+        }
     } else if !is_recording_shortcut && !is_ptt_shortcut {
         handle_non_recording_shortcut(app, shortcut, event_state);
     }
 }
 
-/// Handle recording-related shortcuts (toggle or PTT)
-fn handle_recording_shortcut(
+fn handle_hold_to_record_source(
     app: &tauri::AppHandle,
     app_state: &AppState,
-    recording_mode: RecordingMode,
-    current_state: RecordingState,
+    source_id: &str,
     event_state: ShortcutState,
 ) {
-    match recording_mode {
-        RecordingMode::Toggle => {
-            handle_toggle_mode(app, app_state, current_state, event_state);
+    let transition = match app_state.active_custom_hold_bindings.lock() {
+        Ok(mut active_bindings) => {
+            hold_shortcut_transition(&mut active_bindings, source_id, event_state)
         }
-        RecordingMode::PushToTalk => {
-            handle_ptt_mode(app, app_state, current_state, event_state);
+        Err(error) => {
+            log::error!("Failed to lock active hold bindings: {}", error);
+            CustomHoldTransition::Noop
         }
+    };
+
+    match transition {
+        CustomHoldTransition::Start => {
+            let current_state = get_recording_state(app);
+            handle_ptt_mode(app, app_state, current_state, ShortcutState::Pressed);
+        }
+        CustomHoldTransition::Stop => {
+            let current_state = get_recording_state(app);
+            handle_ptt_mode(app, app_state, current_state, ShortcutState::Released);
+        }
+        CustomHoldTransition::Noop => {}
     }
 }
 
@@ -234,6 +266,138 @@ fn handle_ptt_mode(
                 _ => {
                     log::debug!("PTT: Key released in state {:?}; no action", current_state);
                 }
+            }
+        }
+    }
+}
+
+fn dispatch_custom_shortcut(
+    app: &tauri::AppHandle,
+    app_state: &AppState,
+    binding: RegisteredShortcutBinding,
+    event_state: ShortcutState,
+) {
+    if binding.trigger == ShortcutTrigger::Pressed {
+        let should_run = match app_state.active_custom_pressed_bindings.lock() {
+            Ok(mut active_bindings) => {
+                pressed_shortcut_should_run(&mut active_bindings, &binding.id, event_state)
+            }
+            Err(error) => {
+                log::error!("Failed to lock active custom pressed bindings: {}", error);
+                false
+            }
+        };
+
+        if !should_run {
+            return;
+        }
+    } else if binding.action != ShortcutAction::HoldToRecord {
+        return;
+    }
+
+    match binding.action {
+        ShortcutAction::ToggleRecording => {
+            let current_state = get_recording_state(app);
+            handle_toggle_mode(app, app_state, current_state, event_state);
+        }
+        ShortcutAction::HoldToRecord => {
+            if binding.trigger != ShortcutTrigger::Hold {
+                return;
+            }
+            handle_hold_to_record_source(app, app_state, &binding.id, event_state);
+        }
+        ShortcutAction::CancelRecording => {
+            if event_state == ShortcutState::Pressed {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = crate::commands::audio::cancel_recording(app_handle).await {
+                        log::error!("Shortcut cancel_recording failed: {}", error);
+                    }
+                });
+            }
+        }
+        ShortcutAction::CopyLastTranscription => {
+            if event_state == ShortcutState::Pressed {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    match shortcuts::latest_copyable_transcription_text(&app_handle).await {
+                        Ok(Some(text)) => {
+                            if let Err(error) =
+                                crate::commands::text::copy_text_to_clipboard(text).await
+                            {
+                                log::error!("Shortcut copy_last_transcription failed: {}", error);
+                            }
+                        }
+                        Ok(None) => log::debug!(
+                            "Shortcut copy_last_transcription found no copyable history item"
+                        ),
+                        Err(error) => {
+                            log::error!("Shortcut copy_last_transcription failed: {}", error)
+                        }
+                    }
+                });
+            }
+        }
+        ShortcutAction::PasteLastTranscription => {
+            if event_state == ShortcutState::Pressed {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    match shortcuts::latest_copyable_transcription_text(&app_handle).await {
+                        Ok(Some(text)) => {
+                            if let Err(error) =
+                                crate::commands::text::insert_text(app_handle.clone(), text).await
+                            {
+                                log::error!("Shortcut paste_last_transcription failed: {}", error);
+                            }
+                        }
+                        Ok(None) => log::debug!(
+                            "Shortcut paste_last_transcription found no copyable history item"
+                        ),
+                        Err(error) => {
+                            log::error!("Shortcut paste_last_transcription failed: {}", error)
+                        }
+                    }
+                });
+            }
+        }
+        ShortcutAction::CycleFormattingMode => {
+            if event_state == ShortcutState::Pressed {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = shortcuts::cycle_formatting_preset(app_handle).await {
+                        log::error!("Shortcut cycle_formatting_mode failed: {}", error);
+                    }
+                });
+            }
+        }
+        ShortcutAction::SetPersonalDictation
+        | ShortcutAction::SetCleanDictation
+        | ShortcutAction::SetWriting
+        | ShortcutAction::SetNotes
+        | ShortcutAction::SetMessage
+        | ShortcutAction::SetCode => {
+            if event_state == ShortcutState::Pressed {
+                if let Some(preset) = shortcuts::action_preset(binding.action) {
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) =
+                            shortcuts::set_formatting_preset(app_handle, preset).await
+                        {
+                            log::error!("Shortcut set formatting mode failed: {}", error);
+                        }
+                    });
+                }
+            }
+        }
+        ShortcutAction::OpenDashboard => {
+            if event_state == ShortcutState::Pressed {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = crate::commands::window::focus_main_window(app_handle).await
+                    {
+                        log::error!("Shortcut open_dashboard failed: {}", error);
+                    }
+                });
             }
         }
     }

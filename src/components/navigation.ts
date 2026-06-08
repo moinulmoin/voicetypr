@@ -6,6 +6,7 @@ import {
   FileAudio,
   HelpCircle,
   Home,
+  Keyboard,
   Key,
   Layers,
   Settings2,
@@ -17,6 +18,7 @@ export type ScreenId =
   | "recordings"
   | "audio"
   | "general"
+  | "shortcuts"
   | "models"
   | "formatting"
   | "license"
@@ -75,6 +77,12 @@ export const primaryScreens: ScreenDefinition[] = [
     label: "Settings",
     icon: Settings2,
     description: "Hotkeys, paste behavior, microphones, and app preferences.",
+  },
+  {
+    id: "shortcuts",
+    label: "Shortcuts",
+    icon: Keyboard,
+    description: "Recording, history, and mode shortcuts.",
   },
   {
     id: "license",

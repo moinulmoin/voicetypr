@@ -12,6 +12,7 @@ pub mod permissions;
 pub mod remote;
 pub mod reset;
 pub mod settings;
+pub mod shortcuts;
 pub mod stt;
 pub mod text;
 pub mod utils;

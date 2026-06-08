@@ -91,6 +91,7 @@ use commands::{
     },
     reset::reset_app_data,
     settings::*,
+    shortcuts::{get_shortcut_settings, list_shortcut_actions, update_shortcut_settings},
     stt::{clear_soniox_key_cache, validate_and_cache_soniox_key},
     text::*,
     utils::export_transcriptions,
@@ -1000,6 +1001,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            if let Err(error) = crate::commands::shortcuts::register_saved_shortcuts(app.app_handle()) {
+                log::error!("Failed to register saved custom shortcuts: {}", error);
+            }
+
             // Preload current model if set (graceful degradation)
             // Use Tauri's async runtime which is available after setup
             if let Ok(store) = app.store("settings") {
@@ -1252,6 +1257,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             set_audio_device,
             validate_microphone_selection,
             set_global_shortcut,
+            get_shortcut_settings,
+            update_shortcut_settings,
+            list_shortcut_actions,
             get_supported_languages,
             set_model_from_tray,
             update_tray_menu,

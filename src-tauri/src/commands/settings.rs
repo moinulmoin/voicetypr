@@ -1,6 +1,7 @@
 use crate::audio::device_watcher::try_start_device_watcher_if_ready;
 use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_combination};
 use crate::commands::remote::{resolve_shareable_model_config, save_remote_settings};
+use crate::commands::shortcuts;
 use crate::menu::should_include_remote_connection_in_tray;
 use crate::parakeet::models::AVAILABLE_MODELS;
 use crate::parakeet::ParakeetManager;
@@ -527,6 +528,54 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         .map(|v| v as u32)
         .unwrap_or_else(|| Settings::default().pill_indicator_offset);
 
+    if settings.recording_mode == "push_to_talk" && settings.use_different_ptt_key {
+        if let Some(ptt_hotkey) = settings.ptt_hotkey.as_deref() {
+            let normalized_ptt = normalize_shortcut_keys(ptt_hotkey);
+            if let Ok(ptt_shortcut) = normalized_ptt.parse::<Shortcut>() {
+                let app_state = app.state::<crate::AppState>();
+                if let Some(conflict) =
+                    shortcuts::registered_custom_shortcut_conflict(&app_state, &ptt_shortcut)
+                {
+                    return Err(format!(
+                        "Push-to-talk hotkey duplicates enabled custom shortcut '{}'",
+                        conflict.id
+                    ));
+                }
+            }
+        }
+    }
+    let app_state = app.state::<crate::AppState>();
+    let recording_mode = match settings.recording_mode.as_str() {
+        "push_to_talk" => crate::RecordingMode::PushToTalk,
+        _ => crate::RecordingMode::Toggle,
+    };
+    let old_ptt_shortcut = app_state.ptt_shortcut.lock().ok().and_then(|guard| *guard);
+    let mut active_ptt_shortcut: Option<Shortcut> = None;
+    let mut newly_registered_ptt: Option<Shortcut> = None;
+    let mut old_ptt_to_unregister_after_save: Option<Shortcut> = None;
+
+    if recording_mode == crate::RecordingMode::PushToTalk && settings.use_different_ptt_key {
+        if let Some(ptt_hotkey) = settings.ptt_hotkey.clone() {
+            let normalized_ptt =
+                crate::commands::key_normalizer::normalize_shortcut_keys(&ptt_hotkey);
+            let ptt_shortcut: Shortcut = normalized_ptt
+                .parse()
+                .map_err(|e| format!("Invalid push-to-talk hotkey '{}': {}", ptt_hotkey, e))?;
+
+            if old_ptt_shortcut != Some(ptt_shortcut) {
+                app.global_shortcut().register(ptt_shortcut).map_err(|e| {
+                    log::error!("Failed to register PTT shortcut: {}", e);
+                    format!("Failed to register push-to-talk hotkey: {}", e)
+                })?;
+                newly_registered_ptt = Some(ptt_shortcut);
+                old_ptt_to_unregister_after_save = old_ptt_shortcut;
+            }
+
+            active_ptt_shortcut = Some(ptt_shortcut);
+        }
+    } else {
+        old_ptt_to_unregister_after_save = old_ptt_shortcut;
+    }
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
     store.set("current_model_engine", json!(settings.current_model_engine));
@@ -619,7 +668,12 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         if let Some(port) = settings.sharing_port {
             remote_settings.server_config.port = port;
         }
-        save_remote_settings(&app, &remote_settings)?;
+        if let Err(error) = save_remote_settings(&app, &remote_settings) {
+            if let Some(new_ptt) = newly_registered_ptt {
+                let _ = app.global_shortcut().unregister(new_ptt);
+            }
+            return Err(error);
+        }
     }
 
     // Recording persistence settings
@@ -634,60 +688,24 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         store.set("pill_position", json!([x, y]));
     }
 
-    store.save().map_err(|e| e.to_string())?;
+    if let Err(error) = store.save() {
+        if let Some(new_ptt) = newly_registered_ptt {
+            let _ = app.global_shortcut().unregister(new_ptt);
+        }
+        return Err(error.to_string());
+    }
 
-    // Update recording mode in AppState
-    let app_state = app.state::<crate::AppState>();
-    let recording_mode = match settings.recording_mode.as_str() {
-        "push_to_talk" => crate::RecordingMode::PushToTalk,
-        _ => crate::RecordingMode::Toggle,
-    };
+    if let Some(old_ptt) = old_ptt_to_unregister_after_save {
+        let _ = app.global_shortcut().unregister(old_ptt);
+    }
+
+    if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
+        *ptt_guard = active_ptt_shortcut;
+    }
 
     if let Ok(mut mode_guard) = app_state.recording_mode.lock() {
         *mode_guard = recording_mode;
         log::info!("Recording mode updated to: {:?}", recording_mode);
-    }
-
-    // Handle PTT shortcut registration if needed
-    if recording_mode == crate::RecordingMode::PushToTalk && settings.use_different_ptt_key {
-        if let Some(ptt_hotkey) = settings.ptt_hotkey.clone() {
-            let normalized_ptt =
-                crate::commands::key_normalizer::normalize_shortcut_keys(&ptt_hotkey);
-
-            if let Ok(ptt_shortcut) =
-                normalized_ptt.parse::<tauri_plugin_global_shortcut::Shortcut>()
-            {
-                let shortcuts = app.global_shortcut();
-
-                // Unregister old PTT shortcut if exists
-                if let Ok(ptt_guard) = app_state.ptt_shortcut.lock() {
-                    if let Some(old_ptt) = *ptt_guard {
-                        let _ = shortcuts.unregister(old_ptt);
-                    }
-                }
-
-                // Register new PTT shortcut
-                match shortcuts.register(ptt_shortcut) {
-                    Ok(_) => {
-                        if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
-                            *ptt_guard = Some(ptt_shortcut);
-                        }
-                        log::info!("PTT shortcut updated to: {}", ptt_hotkey);
-                    }
-                    Err(e) => {
-                        log::error!("Failed to register PTT shortcut: {}", e);
-                    }
-                }
-            }
-        }
-    } else {
-        // Clear PTT shortcut if not using different key
-        if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
-            if let Some(old_ptt) = *ptt_guard {
-                let _ = app.global_shortcut().unregister(old_ptt);
-            }
-            *ptt_guard = None;
-        }
     }
 
     // Invalidate recording config cache when settings change
@@ -899,6 +917,15 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
     // Get global shortcut manager and app state
     let shortcuts = app.global_shortcut();
     let app_state = app.state::<AppState>();
+
+    if let Some(conflict) =
+        shortcuts::registered_custom_shortcut_conflict(&app_state, &new_shortcut)
+    {
+        return Err(format!(
+            "Primary recording hotkey duplicates enabled custom shortcut '{}'",
+            conflict.id
+        ));
+    }
 
     // Unregister only the current recording shortcut (not ESC or others)
     log::debug!("Unregistering current recording shortcut if exists");

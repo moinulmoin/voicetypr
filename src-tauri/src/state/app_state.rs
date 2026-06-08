@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -43,6 +44,10 @@ pub struct AppState {
     pub recording_mode: Arc<Mutex<RecordingMode>>,
     pub ptt_key_held: Arc<AtomicBool>,
     pub ptt_shortcut: Arc<Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>>,
+    pub custom_shortcut_bindings:
+        Arc<Mutex<Vec<crate::commands::shortcuts::RegisteredShortcutBinding>>>,
+    pub active_custom_hold_bindings: Arc<Mutex<HashSet<String>>>,
+    pub active_custom_pressed_bindings: Arc<Mutex<HashSet<String>>>,
     pub should_cancel_recording: Arc<AtomicBool>,
     pub pending_stop_after_start: Arc<AtomicBool>,
     pub esc_pressed_once: Arc<AtomicBool>,
@@ -71,6 +76,9 @@ impl AppState {
             recording_mode: Arc::new(Mutex::new(RecordingMode::Toggle)),
             ptt_key_held: Arc::new(AtomicBool::new(false)),
             ptt_shortcut: Arc::new(Mutex::new(None)),
+            custom_shortcut_bindings: Arc::new(Mutex::new(Vec::new())),
+            active_custom_hold_bindings: Arc::new(Mutex::new(HashSet::new())),
+            active_custom_pressed_bindings: Arc::new(Mutex::new(HashSet::new())),
             should_cancel_recording: Arc::new(AtomicBool::new(false)),
             pending_stop_after_start: Arc::new(AtomicBool::new(false)),
             esc_pressed_once: Arc::new(AtomicBool::new(false)),
