@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use super::error::ParakeetError;
-use super::messages::{ParakeetCommand, ParakeetResponse};
+use super::messages::{ParakeetCommand, ParakeetResponse, ParakeetVocabularyTerm};
 use super::models::{get_available_models, ParakeetModelDefinition, AVAILABLE_MODELS};
 use super::sidecar::ParakeetClient;
 
@@ -24,6 +24,12 @@ pub struct ParakeetModelStatus {
     pub accuracy_score: u8,
     pub recommended: bool,
     pub engine: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ParakeetVocabularyStatus {
+    pub supported: bool,
+    pub ready: bool,
 }
 
 pub struct ParakeetManager {
@@ -319,13 +325,61 @@ impl ParakeetManager {
         }
     }
 
+    pub fn vocabulary_status_from_response(
+        response: &ParakeetResponse,
+    ) -> Option<ParakeetVocabularyStatus> {
+        match response {
+            ParakeetResponse::Status {
+                custom_vocabulary_supported,
+                custom_vocabulary_ready,
+                ..
+            } => Some(ParakeetVocabularyStatus {
+                supported: *custom_vocabulary_supported,
+                ready: *custom_vocabulary_ready,
+            }),
+            _ => None,
+        }
+    }
+
+    pub async fn status(&self, app: &AppHandle) -> Result<ParakeetResponse, ParakeetError> {
+        self.send_command(app, &ParakeetCommand::Status {}).await
+    }
+
+    pub async fn download_ctc_models(
+        &self,
+        app: &AppHandle,
+    ) -> Result<ParakeetResponse, ParakeetError> {
+        self.send_command(app, &ParakeetCommand::DownloadCtcModels {})
+            .await
+    }
+
     pub async fn transcribe(
+        &self,
+        app: &AppHandle,
+        model_name: &str,
+        audio_path: PathBuf,
+        language: Option<String>,
+        translate: bool,
+    ) -> Result<ParakeetResponse, ParakeetError> {
+        self.transcribe_with_custom_vocabulary(
+            app,
+            model_name,
+            audio_path,
+            language,
+            translate,
+            Vec::new(),
+        )
+        .await
+    }
+
+    pub async fn transcribe_with_custom_vocabulary(
         &self,
         app: &AppHandle,
         _model_name: &str,
         audio_path: PathBuf,
         language: Option<String>,
         translate: bool,
+        custom_vocabulary: Vec<ParakeetVocabularyTerm>,
     ) -> Result<ParakeetResponse, ParakeetError> {
         let command = ParakeetCommand::Transcribe {
             audio_path: audio_path.to_string_lossy().to_string(),
@@ -337,6 +391,7 @@ impl ParakeetManager {
             overlap_duration: None,
             attention: None,
             local_attention_context: None,
+            custom_vocabulary: (!custom_vocabulary.is_empty()).then_some(custom_vocabulary),
         };
 
         self.send_command(app, &command).await

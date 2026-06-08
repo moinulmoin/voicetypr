@@ -550,6 +550,21 @@ pub fn compile_remote_request_context(
     )
 }
 
+fn compile_parakeet_custom_vocabulary_for_transcription(
+    app: &AppHandle,
+    language: Option<&str>,
+) -> Vec<crate::parakeet::messages::ParakeetVocabularyTerm> {
+    let Ok(settings) = crate::writing::load_writing_settings(app) else {
+        return Vec::new();
+    };
+
+    if settings.custom_words.is_empty() {
+        return Vec::new();
+    }
+
+    crate::writing::compile_parakeet_custom_vocabulary(&settings, language)
+}
+
 fn compile_whisper_initial_prompt(app: &AppHandle, language: Option<&str>) -> Option<String> {
     compile_remote_request_context(app, language)
 }
@@ -3245,13 +3260,19 @@ pub async fn stop_recording(
                         return;
                     }
 
+                    let custom_vocabulary = compile_parakeet_custom_vocabulary_for_transcription(
+                        &app_for_task,
+                        language_for_task.as_deref(),
+                    );
+
                     match parakeet_manager
-                        .transcribe(
+                        .transcribe_with_custom_vocabulary(
                             &app_for_task,
                             model_name,
                             audio_path_clone.clone(),
                             language_for_task.clone(),
                             translate_to_english,
+                            custom_vocabulary,
                         )
                         .await
                     {
@@ -4270,13 +4291,17 @@ async fn transcribe_audio_file_impl(
                 .await
                 .map_err(|e| format!("Failed to load Parakeet model: {}", e))?;
 
+            let custom_vocabulary =
+                compile_parakeet_custom_vocabulary_for_transcription(&app, Some(&language));
+
             match parakeet_manager
-                .transcribe(
+                .transcribe_with_custom_vocabulary(
                     &app,
                     &model_name,
                     normalized_file.path().to_path_buf(),
                     Some(language.clone()),
                     translate_to_english,
+                    custom_vocabulary,
                 )
                 .await
             {
@@ -4539,13 +4564,17 @@ pub async fn transcribe_audio(
                 .await
                 .map_err(|e| format!("Failed to load Parakeet model: {}", e))?;
 
+            let custom_vocabulary =
+                compile_parakeet_custom_vocabulary_for_transcription(&app, Some(&language));
+
             match parakeet_manager
-                .transcribe(
+                .transcribe_with_custom_vocabulary(
                     &app,
                     &model_name,
                     temp_path.clone(),
                     Some(language.clone()),
                     translate_to_english,
+                    custom_vocabulary,
                 )
                 .await
             {

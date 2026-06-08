@@ -70,8 +70,9 @@ use commands::{
     license::*,
     logs::{clear_old_logs, get_latest_log_for_bug_report, get_log_directory, open_logs_folder},
     model::{
-        cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
-        preload_model, verify_model,
+        cancel_download, delete_model, download_model, download_parakeet_vocabulary_model,
+        get_model_status, get_parakeet_vocabulary_status, list_downloaded_models, preload_model,
+        verify_model,
     },
     permissions::{
         check_accessibility_permission, check_microphone_permission, open_accessibility_settings,
@@ -1239,6 +1240,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_current_audio_device,
             download_model,
             get_model_status,
+            get_parakeet_vocabulary_status,
+            download_parakeet_vocabulary_model,
             preload_model,
             verify_model,
             transcribe_audio,

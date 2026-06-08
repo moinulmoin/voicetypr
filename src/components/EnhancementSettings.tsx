@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { invoke } from "@tauri-apps/api/core";
 import { presetDisplayLabel, presetRequiresAiFormatting, type EnhancementPreset } from "@/types/ai";
 import type {
   AppFormattingRule,
@@ -48,10 +49,13 @@ import {
   Lock,
   MessageSquare,
   PenLine,
+  Loader2,
   Plus,
   StickyNote,
   Trash2,
 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 
 interface EnhancementSettingsProps {
   preset: EnhancementPreset;
@@ -71,9 +75,10 @@ function updateItem<T>(items: T[], index: number, next: T): T[] {
 function removeItem<T>(items: T[], index: number): T[] {
   return items.filter((_, itemIndex) => itemIndex !== index);
 }
-
-
-
+type ParakeetVocabularyStatus = {
+  supported: boolean;
+  ready: boolean;
+};
 const FORMATTING_MODES = [
   { id: "PersonalDictation", icon: AudioLines },
   { id: "CleanDictation", icon: FileText },
@@ -389,6 +394,82 @@ function ReplacementEditor({
   );
 }
 
+function ParakeetVocabularyBoostRow({ disabled }: { disabled: boolean }) {
+  const [status, setStatus] = useState<ParakeetVocabularyStatus | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      const nextStatus = await invoke<ParakeetVocabularyStatus>(
+        "get_parakeet_vocabulary_status",
+      );
+      setStatus(nextStatus.supported ? nextStatus : null);
+    } catch {
+      setStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshStatus();
+  }, [refreshStatus]);
+
+  const handleDownload = async () => {
+    setIsDownloading(true);
+    try {
+      await invoke("download_parakeet_vocabulary_model");
+      await refreshStatus();
+    } catch {
+      toast.error("Failed to download Parakeet vocabulary model");
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  if (!status) {
+    return null;
+  }
+
+  if (status.ready) {
+    return (
+      <div className="mt-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+        Vocabulary boost installed. Parakeet can use your Words & Names on-device after
+        transcription to help with names and domain terms.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+      <div>
+        <div className="font-medium text-foreground">
+          Parakeet vocabulary boost (optional, ~70–100MB)
+        </div>
+        <div>
+          Runs on-device after transcription to help Parakeet recognize your Words & Names,
+          including names and domain terms.
+        </div>
+      </div>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={disabled || isDownloading}
+        onClick={handleDownload}
+        aria-label="Download Parakeet vocabulary boost model"
+      >
+        {isDownloading ? (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Downloading…
+          </>
+        ) : (
+          "Download"
+        )}
+      </Button>
+    </div>
+  );
+}
+
 function CustomWordEditor({
   customWords,
   onChange,
@@ -423,6 +504,8 @@ function CustomWordEditor({
           Add word
         </Button>
       </div>
+
+      <ParakeetVocabularyBoostRow disabled={disabled} />
 
       {customWords.length === 0 ? (
         <Empty className="mt-3 border-border/60 bg-muted/20 p-6">
