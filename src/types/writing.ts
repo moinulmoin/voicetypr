@@ -15,6 +15,13 @@ export interface TextReplacementRule {
   enabled: boolean
 }
 
+export interface VoiceCommandRule {
+  phrase: string
+  output: string
+  language?: string | null
+  enabled: boolean
+}
+
 export interface CustomWord {
   phrase: string
   spoken_form?: string | null
@@ -34,6 +41,7 @@ export interface WritingSettings {
   replacements: TextReplacementRule[]
   custom_words: CustomWord[]
   snippets: Snippet[]
+  voice_commands: VoiceCommandRule[]
   context_policy: WritingContextPolicy
   app_formatting_rules: AppFormattingRule[]
 }
@@ -42,6 +50,7 @@ export const defaultWritingSettings: WritingSettings = {
   replacements: [],
   custom_words: [],
   snippets: [],
+  voice_commands: [],
   context_policy: 'off',
   app_formatting_rules: [],
 }
@@ -54,6 +63,7 @@ export const mergeWritingSettings = (
   replacements: partial.replacements ?? defaultWritingSettings.replacements,
   custom_words: partial.custom_words ?? defaultWritingSettings.custom_words,
   snippets: partial.snippets ?? defaultWritingSettings.snippets,
+  voice_commands: partial.voice_commands ?? defaultWritingSettings.voice_commands,
   context_policy: partial.context_policy ?? defaultWritingSettings.context_policy,
   app_formatting_rules:
     partial.app_formatting_rules ?? defaultWritingSettings.app_formatting_rules,

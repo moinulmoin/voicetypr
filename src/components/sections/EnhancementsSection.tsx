@@ -105,8 +105,10 @@ export function EnhancementsSection() {
     try {
       const nextSettings = await invoke<Partial<WritingSettings>>("get_writing_settings");
       setWritingSettings(mergeWritingSettings(nextSettings));
+      return true;
     } catch (error) {
       console.error("Failed to load writing settings:", error);
+      return false;
     }
   };
 
@@ -192,11 +194,10 @@ export function EnhancementsSection() {
       (async () => {
         const loadedAISettings = await loadAISettings();
         await loadEnhancementOptions(loadedAISettings?.enabled ?? false);
-        await loadWritingSettings();
-        setSettingsLoaded(true);
+        const writingSettingsLoaded = await loadWritingSettings();
+        setSettingsLoaded(writingSettingsLoaded);
       })().catch((error) => {
         console.error("Failed to load formatting settings:", error);
-        setSettingsLoaded(true);
       });
     }
   }, [settingsLoaded, loadAISettings]);
@@ -349,7 +350,9 @@ export function EnhancementsSection() {
     writingSaveGeneration.current += 1;
     setWritingSettings(nextSettings);
     writingSettingsRef.current = nextSettings;
-    enqueueWritingSettingsSave(rollbackSettings);
+    if (settingsLoaded) {
+      enqueueWritingSettingsSave(rollbackSettings);
+    }
   };
 
   const handleFinalTextLanguageChange = async (value: string) => {
@@ -641,6 +644,7 @@ export function EnhancementsSection() {
               onPresetChange={handlePresetChange}
               onFinalTextLanguageChange={handleFinalTextLanguageChange}
               onWritingSettingsChange={handleWritingSettingsChange}
+              writingSettingsDisabled={!settingsLoaded}
             />
           </FieldSet>
 

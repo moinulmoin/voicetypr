@@ -39,6 +39,7 @@ import type {
   CustomWord,
   Snippet,
   TextReplacementRule,
+  VoiceCommandRule,
   WritingSettings,
 } from "@/types/writing";
 import {
@@ -66,6 +67,7 @@ interface EnhancementSettingsProps {
   onFinalTextLanguageChange: (value: string) => void;
   onWritingSettingsChange: (settings: WritingSettings) => void;
   disabled?: boolean;
+  writingSettingsDisabled?: boolean;
 }
 
 function updateItem<T>(items: T[], index: number, next: T): T[] {
@@ -90,6 +92,18 @@ const FORMATTING_MODES = [
   id: EnhancementPreset;
   icon: typeof AudioLines;
 }>;
+
+const VOICE_COMMAND_OUTPUT_OPTIONS = [
+  { value: "comma", label: "Comma ," },
+  { value: "period", label: "Period ." },
+  { value: "question_mark", label: "Question mark ?" },
+  { value: "exclamation_mark", label: "Exclamation mark !" },
+  { value: "colon", label: "Colon :" },
+  { value: "semicolon", label: "Semicolon ;" },
+  { value: "dash", label: "Dash —" },
+  { value: "new_line", label: "New line" },
+  { value: "paragraph", label: "New paragraph" },
+] as const;
 
 const formattingModeLabel = (preset: EnhancementPreset) => presetDisplayLabel(preset);
 
@@ -388,6 +402,174 @@ function ReplacementEditor({
               </FieldGroup>
             </FieldSet>
           ))}
+        </FieldGroup>
+      )}
+    </FieldSet>
+  );
+}
+
+function VoiceCommandEditor({
+  voiceCommands,
+  onChange,
+  disabled,
+}: {
+  voiceCommands: VoiceCommandRule[];
+  onChange: (voiceCommands: VoiceCommandRule[]) => void;
+  disabled: boolean;
+}) {
+  return (
+    <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <FieldLegend className="mb-1">Voice Commands</FieldLegend>
+          <FieldDescription>
+            Deterministic spoken punctuation and breaks applied on-device after transcription.
+            Not AI. Phrases like <span className="font-mono">new paragraph</span> insert a break.
+          </FieldDescription>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled}
+          onClick={() =>
+            onChange([
+              ...voiceCommands,
+              { phrase: "", output: "period", language: null, enabled: true },
+            ])
+          }
+        >
+          <Plus className="mr-2 h-4 w-4" />
+          Add command
+        </Button>
+      </div>
+
+      {voiceCommands.length === 0 ? (
+        <Empty className="mt-3 border-border/60 bg-muted/20 p-6">
+          <EmptyHeader className="max-w-none gap-1">
+            <EmptyTitle className="text-sm">No voice commands yet</EmptyTitle>
+            <EmptyDescription className="text-xs">
+              Example: <span className="font-mono">new paragraph</span> inserts a paragraph break.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <FieldGroup className="mt-3 gap-3">
+          {voiceCommands.map((rule, index) => {
+            const selectedOutput = VOICE_COMMAND_OUTPUT_OPTIONS.find(
+              (option) => option.value === rule.output,
+            );
+
+            return (
+              <FieldSet
+                key={`voice-command-${index}`}
+                className="rounded-lg border border-border/60 bg-background/60 p-3"
+              >
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <FieldTitle>Command {index + 1}</FieldTitle>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Enabled</span>
+                    <Switch
+                      aria-label={`Enable voice command ${index + 1}`}
+                      checked={rule.enabled}
+                      disabled={disabled}
+                      onCheckedChange={(checked) =>
+                        onChange(updateItem(voiceCommands, index, { ...rule, enabled: checked }))
+                      }
+                    />
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      aria-label={`Delete voice command ${index + 1}`}
+                      disabled={disabled}
+                      onClick={() => onChange(removeItem(voiceCommands, index))}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                <FieldGroup className="gap-3">
+                  <Field>
+                    <InputGroup>
+                      <InputGroupAddon>
+                        <InputGroupText>When I say…</InputGroupText>
+                      </InputGroupAddon>
+                      <InputGroupInput
+                        aria-label={`Voice command phrase ${index + 1}`}
+                        placeholder="Spoken phrase"
+                        value={rule.phrase}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          onChange(
+                            updateItem(voiceCommands, index, {
+                              ...rule,
+                              phrase: event.target.value,
+                            }),
+                          )
+                        }
+                      />
+                    </InputGroup>
+                  </Field>
+
+                  <Field>
+                    <Select
+                      value={rule.output}
+                      disabled={disabled}
+                      onValueChange={(value) =>
+                        onChange(
+                          updateItem(voiceCommands, index, {
+                            ...rule,
+                            output: value,
+                          }),
+                        )
+                      }
+                    >
+                      <SelectTrigger
+                        size="sm"
+                        className="w-full"
+                        aria-label={`Voice command output ${index + 1}`}
+                      >
+                        <SelectValue placeholder="Output">
+                          {selectedOutput ? selectedOutput.label : rule.output}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {VOICE_COMMAND_OUTPUT_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+
+                  <Field>
+                    <InputGroup>
+                      <InputGroupAddon>
+                        <Globe className="h-4 w-4" />
+                      </InputGroupAddon>
+                      <InputGroupInput
+                        aria-label={`Voice command language ${index + 1}`}
+                        placeholder="Language code (optional, e.g. en)"
+                        value={rule.language ?? ""}
+                        disabled={disabled}
+                        onChange={(event) =>
+                          onChange(
+                            updateItem(voiceCommands, index, {
+                              ...rule,
+                              language: event.target.value || null,
+                            }),
+                          )
+                        }
+                      />
+                    </InputGroup>
+                  </Field>
+                </FieldGroup>
+              </FieldSet>
+            );
+          })}
         </FieldGroup>
       )}
     </FieldSet>
@@ -799,6 +981,7 @@ export function EnhancementSettings({
   onFinalTextLanguageChange,
   onWritingSettingsChange,
   disabled = false,
+  writingSettingsDisabled = disabled,
 }: EnhancementSettingsProps) {
   const allowsSpecificFinalLanguage = preset !== "PersonalDictation";
   const usingSpecificLanguage =
@@ -921,7 +1104,7 @@ export function EnhancementSettings({
           </FieldContent>
           <Switch
             checked={writingSettings.context_policy === "app_hint_only"}
-            disabled={disabled}
+            disabled={writingSettingsDisabled}
             onCheckedChange={(checked) =>
               onWritingSettingsChange({
                 ...writingSettings,
@@ -933,7 +1116,7 @@ export function EnhancementSettings({
 
         <AppFormattingRulesEditor
           rules={writingSettings.app_formatting_rules}
-          disabled={disabled}
+          disabled={writingSettingsDisabled}
           aiFormattingEnabled={aiFormattingEnabled}
           onChange={(app_formatting_rules) =>
             onWritingSettingsChange({ ...writingSettings, app_formatting_rules })
@@ -949,7 +1132,7 @@ export function EnhancementSettings({
 
       <ReplacementEditor
         replacements={writingSettings.replacements}
-        disabled={disabled}
+        disabled={writingSettingsDisabled}
         onChange={(replacements) =>
           onWritingSettingsChange({ ...writingSettings, replacements })
         }
@@ -957,15 +1140,23 @@ export function EnhancementSettings({
 
       <CustomWordEditor
         customWords={writingSettings.custom_words}
-        disabled={disabled}
+        disabled={writingSettingsDisabled}
         onChange={(custom_words) =>
           onWritingSettingsChange({ ...writingSettings, custom_words })
         }
       />
 
+      <VoiceCommandEditor
+        voiceCommands={writingSettings.voice_commands}
+        disabled={writingSettingsDisabled}
+        onChange={(voice_commands) =>
+          onWritingSettingsChange({ ...writingSettings, voice_commands })
+        }
+      />
+
       <SnippetEditor
         snippets={writingSettings.snippets}
-        disabled={disabled}
+        disabled={writingSettingsDisabled}
         onChange={(snippets) =>
           onWritingSettingsChange({ ...writingSettings, snippets })
         }

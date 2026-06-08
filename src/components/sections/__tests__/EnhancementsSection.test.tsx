@@ -144,6 +144,7 @@ describe('EnhancementsSection', () => {
       expect(screen.getByText('Corrections')).toBeInTheDocument()
       expect(screen.getByText('Words & Names')).toBeInTheDocument()
       expect(screen.getByText('Text Shortcuts')).toBeInTheDocument()
+      expect(screen.getByText('Voice Commands')).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Dictation (no AI)' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /Code \(requires AI formatting\)/i })).toBeInTheDocument()
     })
@@ -378,6 +379,94 @@ describe('EnhancementsSection', () => {
     })
   })
 
+  it('does not persist placeholder writing settings before backend settings load', async () => {
+    const user = userEvent.setup()
+    let resolveWritingSettings: (settings: typeof defaultWritingSettings) => void = () => {}
+    const loadedWritingSettings = {
+      ...defaultWritingSettings,
+      voice_commands: [
+        {
+          phrase: 'insert period',
+          output: 'period',
+          language: 'en',
+          enabled: true,
+        },
+      ],
+    }
+    const writingSettingsPromise = new Promise<typeof defaultWritingSettings>((resolve) => {
+      resolveWritingSettings = resolve
+    })
+
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_settings') {
+        return Promise.resolve(baseAppSettings)
+      }
+      if (cmd === 'save_settings') {
+        return Promise.resolve(undefined)
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'PersonalDictation' })
+      }
+      if (cmd === 'update_enhancement_options') {
+        return Promise.resolve(undefined)
+      }
+      if (cmd === 'get_writing_settings') {
+        return writingSettingsPromise
+      }
+      if (cmd === 'update_writing_settings') {
+        return Promise.resolve(undefined)
+      }
+      if (cmd === 'get_ai_settings') {
+        return Promise.resolve(aiSettingsResponse)
+      }
+      if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider || ''
+        return Promise.resolve({ ...aiSettingsResponse, provider })
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' })
+      }
+      if (cmd === 'update_ai_settings') {
+        aiSettingsResponse = {
+          ...aiSettingsResponse,
+          ...(args as typeof aiSettingsResponse),
+        }
+        return Promise.resolve(undefined)
+      }
+      if (cmd === 'cache_ai_api_key') {
+        return Promise.resolve(undefined)
+      }
+      return Promise.resolve(undefined)
+    })
+
+    renderWithProviders()
+
+    const switches = await screen.findAllByRole('switch')
+    const contextSwitch = switches[1]
+    expect(contextSwitch).toBeDisabled()
+    fireEvent.click(contextSwitch)
+    expect(
+      (invoke as ReturnType<typeof vi.fn>).mock.calls.some(
+        ([cmd, args]) =>
+          cmd === 'update_writing_settings' &&
+          (args as { settings?: typeof defaultWritingSettings })?.settings?.voice_commands.length === 0,
+      ),
+    ).toBe(false)
+
+    resolveWritingSettings(loadedWritingSettings)
+    await waitFor(() => expect(contextSwitch).toBeEnabled())
+    await user.click(contextSwitch)
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_writing_settings', {
+        settings: expect.objectContaining({
+          context_policy: 'app_hint_only',
+          voice_commands: loadedWritingSettings.voice_commands,
+        }),
+      })
+    })
+  })
+
   it('adds an app formatting rule and persists writing settings', async () => {
     const user = userEvent.setup()
     renderWithProviders()
@@ -435,6 +524,41 @@ describe('EnhancementsSection', () => {
     })
   })
 
+  it('adds a voice command row and persists writing settings', async () => {
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    const voiceCommandsHeading = await screen.findByText('Voice Commands')
+    const voiceCommandsCard = voiceCommandsHeading.parentElement?.parentElement
+    expect(voiceCommandsCard).toBeTruthy()
+
+    await user.click(
+      within(voiceCommandsCard as HTMLElement).getByRole('button', { name: /add command/i }),
+    )
+
+    fireEvent.change(await screen.findByLabelText('Voice command phrase 1'), {
+      target: { value: 'new paragraph' },
+    })
+    fireEvent.change(screen.getByLabelText('Voice command language 1'), {
+      target: { value: 'en' },
+    })
+    await user.click(screen.getByRole('switch', { name: 'Enable voice command 1' }))
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_writing_settings', {
+        settings: expect.objectContaining({
+          voice_commands: [
+            expect.objectContaining({
+              phrase: 'new paragraph',
+              output: 'period',
+              language: 'en',
+              enabled: false,
+            }),
+          ],
+        }),
+      })
+    })
+  })
 
   it('coalesces rapid writing settings saves so the latest edit wins on disk', async () => {
     const user = userEvent.setup()
