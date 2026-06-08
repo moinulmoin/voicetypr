@@ -1596,7 +1596,6 @@ async fn run_smart_formatting(request: SmartFormattingRequest<'_>) -> Result<Str
     }
 }
 
-
 fn resolve_smart_formatting_outcome(
     result: Result<String, String>,
     library_text: &str,
@@ -1756,7 +1755,6 @@ mod tests {
         TranscriptionResult::new(&job, raw_text.to_string())
             .with_transcript_language(transcript_language.map(str::to_string))
     }
-
 
     #[test]
     fn test_resolve_smart_formatting_outcome_preserves_success() {

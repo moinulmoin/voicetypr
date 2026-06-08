@@ -885,8 +885,16 @@ mod tests {
         let (result1, result2) = tokio::join!(req1, req2);
         let elapsed = start.elapsed();
 
-        assert!(result1.expect("task 1 panicked").expect("request 1 failed").status().is_success());
-        assert!(result2.expect("task 2 panicked").expect("request 2 failed").status().is_success());
+        assert!(result1
+            .expect("task 1 panicked")
+            .expect("request 1 failed")
+            .status()
+            .is_success());
+        assert!(result2
+            .expect("task 2 panicked")
+            .expect("request 2 failed")
+            .status()
+            .is_success());
         assert!(
             elapsed >= Duration::from_millis(180),
             "Concurrent transcribe requests should serialize; elapsed {:?}",
