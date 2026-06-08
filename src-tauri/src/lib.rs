@@ -22,6 +22,7 @@ mod license;
 mod media;
 mod menu;
 mod parakeet;
+pub mod provider_capabilities;
 mod recognition;
 mod recording;
 mod remote;
