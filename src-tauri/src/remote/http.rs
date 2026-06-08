@@ -2,21 +2,26 @@
 //!
 //! Uses warp to create REST API endpoints for status and transcription.
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use log::{info, warn};
 use std::sync::Arc;
 use tokio::sync::{RwLock, Semaphore};
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 use super::server::{
-    ErrorResponse, RemoteModelControlSnapshot, RemoteModelControlUpdate, StatusResponse,
-    TranscribeResponse,
+    ErrorResponse, RemoteCapabilities, RemoteModelControlSnapshot, RemoteModelControlUpdate,
+    StatusResponse, TranscribeResponse, REMOTE_PROTOCOL_VERSION,
 };
 use crate::transcription::TranscriptionResult;
 
 /// Auth header name
 const AUTH_HEADER: &str = "X-VoiceTypr-Key";
+const CONTEXT_HEADER: &str = "X-VoiceTypr-Context";
 
 const MAX_AUDIO_BODY_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
+const MAX_CONTEXT_HEADER_BYTES: usize = 4096;
+const MAX_CONTEXT_HEADER_ENCODED_BYTES: usize = (MAX_CONTEXT_HEADER_BYTES + 2) / 3 * 4;
 const MAX_CONTROL_BODY_BYTES: u64 = 4 * 1024;
 
 /// Trait for server context (allows mocking in tests)
@@ -33,6 +38,19 @@ pub trait ServerContext: Send + Sync {
         spoken_language: Option<&str>,
         transcription_task: Option<&str>,
     ) -> Result<TranscriptionResult, String>;
+    fn get_engine(&self) -> String {
+        "whisper".to_string()
+    }
+    fn transcribe_with_context(
+        &self,
+        audio_data: &[u8],
+        spoken_language: Option<&str>,
+        transcription_task: Option<&str>,
+        context: Option<&str>,
+    ) -> Result<crate::transcription::TranscriptionResult, String> {
+        let _ = context;
+        self.transcribe(audio_data, spoken_language, transcription_task)
+    }
     fn get_model_control_snapshot(&self) -> Result<RemoteModelControlSnapshot, String> {
         Err("Remote model control is unavailable for this host".to_string())
     }
@@ -83,6 +101,7 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
         .and(warp::header::optional::<String>(
             "X-VoiceTypr-Transcription-Task",
         ))
+        .and(warp::header::optional::<String>(CONTEXT_HEADER))
         .and(warp::body::content_length_limit(MAX_AUDIO_BODY_BYTES))
         .and(warp::body::bytes())
         .and(with_context(ctx))
@@ -292,12 +311,16 @@ async fn handle_status<T: ServerContext + 'static>(
     let machine_id =
         crate::license::device::get_device_hash().unwrap_or_else(|_| "unknown".to_string());
 
+    let engine = ctx.get_engine();
     let response = StatusResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         model: ctx.get_model_name(),
         name: ctx.get_server_name(),
         machine_id,
+        protocol_version: REMOTE_PROTOCOL_VERSION,
+        engine: Some(engine.clone()),
+        capabilities: Some(remote_capabilities_for_engine(&engine)),
     };
 
     info!(
@@ -311,12 +334,72 @@ async fn handle_status<T: ServerContext + 'static>(
     ))
 }
 
+fn remote_capabilities_for_engine(engine: &str) -> RemoteCapabilities {
+    match crate::provider_capabilities::capabilities_for_engine(engine) {
+        Some(capabilities) => RemoteCapabilities {
+            supports_initial_prompt: capabilities.supports_initial_prompt,
+            supports_structured_terms: capabilities.supports_structured_terms,
+            supports_vocabulary_terms: capabilities.supports_vocabulary_terms,
+            accepts_request_context: capabilities.supports_initial_prompt,
+            max_context_bytes: if capabilities.supports_initial_prompt {
+                900
+            } else {
+                0
+            },
+            acceleration: vec!["cpu".to_string()],
+        },
+        None => RemoteCapabilities {
+            acceleration: vec!["cpu".to_string()],
+            ..RemoteCapabilities::default()
+        },
+    }
+}
+
+fn decode_context_header(encoded_context: Option<String>) -> Option<String> {
+    let encoded_context = encoded_context?;
+    let encoded_len = encoded_context.len();
+
+    if encoded_len > MAX_CONTEXT_HEADER_ENCODED_BYTES {
+        warn!(
+            "[Remote Server] Dropping oversized encoded transcription context header: {} bytes",
+            encoded_len
+        );
+        return None;
+    }
+
+    let decoded = match BASE64.decode(encoded_context.as_bytes()) {
+        Ok(decoded) => decoded,
+        Err(_) => {
+            warn!("[Remote Server] Dropping invalid base64 transcription context header");
+            return None;
+        }
+    };
+
+    let decoded_len = decoded.len();
+    if decoded_len > MAX_CONTEXT_HEADER_BYTES {
+        warn!(
+            "[Remote Server] Dropping oversized transcription context header: {} decoded bytes",
+            decoded_len
+        );
+        return None;
+    }
+
+    match String::from_utf8(decoded) {
+        Ok(context) => Some(context),
+        Err(_) => {
+            warn!("[Remote Server] Dropping non-UTF-8 transcription context header");
+            None
+        }
+    }
+}
+
 /// Handle POST /api/v1/transcribe
 async fn handle_transcribe<T: ServerContext + 'static>(
     auth_key: Option<String>,
     content_type: String,
     spoken_language: Option<String>,
     transcription_task: Option<String>,
+    request_context: Option<String>,
     body: bytes::Bytes,
     ctx: Arc<RwLock<T>>,
     transcription_guard: Arc<Semaphore>,
@@ -382,12 +465,15 @@ async fn handle_transcribe<T: ServerContext + 'static>(
         .await
         .expect("transcription semaphore closed");
 
+    let request_context = decode_context_header(request_context);
+
     // Perform transcription
     let ctx = ctx.read().await;
-    match ctx.transcribe(
+    match ctx.transcribe_with_context(
         &body,
         spoken_language.as_deref(),
         transcription_task.as_deref(),
+        request_context.as_deref(),
     ) {
         Ok(result) => {
             let response = TranscribeResponse {
@@ -448,6 +534,7 @@ mod tests {
     }
 
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -661,6 +748,165 @@ mod tests {
         assert_eq!(ctx.get_model_name(), "mock-model");
         assert_eq!(ctx.get_server_name(), "mock-server");
         assert!(ctx.get_password().is_none());
+    }
+    struct ContextCaptureMock {
+        captured_context: Arc<Mutex<Option<String>>>,
+    }
+
+    impl ServerContext for ContextCaptureMock {
+        fn get_model_name(&self) -> String {
+            "mock-model".to_string()
+        }
+
+        fn get_server_name(&self) -> String {
+            "mock-server".to_string()
+        }
+
+        fn get_password(&self) -> Option<String> {
+            None
+        }
+
+        fn transcribe(
+            &self,
+            _audio_data: &[u8],
+            _spoken_language: Option<&str>,
+            _transcription_task: Option<&str>,
+        ) -> Result<TranscriptionResult, String> {
+            Err("transcribe_with_context should be used".to_string())
+        }
+
+        fn transcribe_with_context(
+            &self,
+            _audio_data: &[u8],
+            _spoken_language: Option<&str>,
+            _transcription_task: Option<&str>,
+            context: Option<&str>,
+        ) -> Result<TranscriptionResult, String> {
+            *self.captured_context.lock().unwrap() = context.map(str::to_string);
+
+            let job = crate::transcription::TranscriptionJob::from_legacy_settings(
+                crate::transcription::TranscriptionSource::RemoteServer,
+                "remote",
+                "mock-model",
+                None,
+                false,
+            );
+            Ok(crate::transcription::TranscriptionResult::new(
+                &job,
+                "mock transcription",
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_status_advertises_protocol_engine_and_capabilities() {
+        let ctx = Arc::new(RwLock::new(MockContext));
+        let routes = create_routes(ctx);
+
+        let response = warp::test::request()
+            .method("GET")
+            .path("/api/v1/status")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+
+        let body: StatusResponse = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.protocol_version, REMOTE_PROTOCOL_VERSION);
+        assert_eq!(body.engine.as_deref(), Some("whisper"));
+        assert!(
+            body.capabilities
+                .as_ref()
+                .expect("capabilities should be advertised")
+                .accepts_request_context
+        );
+    }
+
+    #[tokio::test]
+    async fn test_transcribe_forwards_context_header() {
+        let captured_context = Arc::new(Mutex::new(None));
+        let ctx = Arc::new(RwLock::new(ContextCaptureMock {
+            captured_context: captured_context.clone(),
+        }));
+        let routes = create_routes(ctx);
+
+        let context = "project glossary: José 中";
+        let encoded_context = BASE64.encode(context.as_bytes());
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/v1/transcribe")
+            .header("Content-Type", "audio/wav")
+            .header(CONTEXT_HEADER, encoded_context)
+            .body(b"audio".to_vec())
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(captured_context.lock().unwrap().as_deref(), Some(context));
+    }
+
+    #[tokio::test]
+    async fn test_transcribe_without_context_header_passes_none() {
+        let captured_context = Arc::new(Mutex::new(Some("stale".to_string())));
+        let ctx = Arc::new(RwLock::new(ContextCaptureMock {
+            captured_context: captured_context.clone(),
+        }));
+        let routes = create_routes(ctx);
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/v1/transcribe")
+            .header("Content-Type", "audio/wav")
+            .body(b"audio".to_vec())
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(captured_context.lock().unwrap().as_deref(), None);
+    }
+
+    #[tokio::test]
+    async fn test_transcribe_drops_oversized_context_header() {
+        let captured_context = Arc::new(Mutex::new(Some("stale".to_string())));
+        let ctx = Arc::new(RwLock::new(ContextCaptureMock {
+            captured_context: captured_context.clone(),
+        }));
+        let routes = create_routes(ctx);
+        let oversized_context = BASE64.encode(vec![b'a'; MAX_CONTEXT_HEADER_BYTES + 1]);
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/v1/transcribe")
+            .header("Content-Type", "audio/wav")
+            .header(CONTEXT_HEADER, oversized_context)
+            .body(b"audio".to_vec())
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(captured_context.lock().unwrap().as_deref(), None);
+    }
+
+    #[tokio::test]
+    async fn test_transcribe_drops_invalid_base64_context() {
+        let captured_context = Arc::new(Mutex::new(Some("stale".to_string())));
+        let ctx = Arc::new(RwLock::new(ContextCaptureMock {
+            captured_context: captured_context.clone(),
+        }));
+        let routes = create_routes(ctx);
+
+        let response = warp::test::request()
+            .method("POST")
+            .path("/api/v1/transcribe")
+            .header("Content-Type", "audio/wav")
+            .header(CONTEXT_HEADER, "not-valid-base64!")
+            .body(b"audio".to_vec())
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(captured_context.lock().unwrap().as_deref(), None);
     }
 
     // ============================================================================

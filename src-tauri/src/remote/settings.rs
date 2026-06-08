@@ -39,6 +39,9 @@ pub struct SavedConnection {
     /// Model being served by this server (cached from last status check)
     #[serde(default)]
     pub model: Option<String>,
+    /// Capabilities advertised by this server (cached from last successful status check)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<crate::remote::server::RemoteCapabilities>,
     /// Cached connection status from last check
     #[serde(default)]
     pub status: ConnectionStatus,
@@ -92,6 +95,7 @@ impl RemoteSettings {
             name,
             created_at,
             model,
+            capabilities: None,
             status: ConnectionStatus::Unknown,
             last_checked: 0,
         };
@@ -100,18 +104,29 @@ impl RemoteSettings {
         saved
     }
 
-    /// Update the status of a connection after a status check
+    /// Update a connection after a status probe.
+    ///
+    /// `model` overwrites only when `Some`. `capabilities` uses an explicit
+    /// two-level option: outer `None` leaves the cached capabilities untouched
+    /// (use on error paths), while `Some(value)` is authoritative — it sets the
+    /// cache to `value`, INCLUDING clearing it when `value` is `None`. A
+    /// successful probe from a host that no longer advertises context support
+    /// must clear stale capabilities so the client fails safe.
     pub fn update_connection_status(
         &mut self,
         id: &str,
         status: ConnectionStatus,
         model: Option<String>,
+        capabilities: Option<Option<crate::remote::server::RemoteCapabilities>>,
     ) {
         if let Some(conn) = self.saved_connections.iter_mut().find(|c| c.id == id) {
             conn.status = status;
             conn.last_checked = current_timestamp();
             if model.is_some() {
                 conn.model = model;
+            }
+            if let Some(new_capabilities) = capabilities {
+                conn.capabilities = new_capabilities;
             }
         }
     }
@@ -168,7 +183,10 @@ impl Serialize for SavedConnection {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("SavedConnection", 9)?;
+        let mut state = serializer.serialize_struct(
+            "SavedConnection",
+            if self.capabilities.is_some() { 10 } else { 9 },
+        )?;
         state.serialize_field("id", &self.id)?;
         state.serialize_field("host", &self.host)?;
         state.serialize_field("port", &self.port)?;
@@ -181,6 +199,9 @@ impl Serialize for SavedConnection {
         state.serialize_field("model", &self.model)?;
         state.serialize_field("status", &self.status)?;
         state.serialize_field("last_checked", &self.last_checked)?;
+        if let Some(capabilities) = &self.capabilities {
+            state.serialize_field("capabilities", capabilities)?;
+        }
         state.end()
     }
 }
@@ -213,5 +234,98 @@ mod tests {
         let id1 = generate_id();
         let id2 = generate_id();
         assert_ne!(id1, id2);
+    }
+    #[test]
+    fn saved_connection_capabilities_round_trip_and_skip_when_none() {
+        let capabilities = crate::remote::server::RemoteCapabilities {
+            supports_initial_prompt: true,
+            accepts_request_context: true,
+            max_context_bytes: 900,
+            acceleration: vec!["metal".to_string()],
+            ..Default::default()
+        };
+        let saved = SavedConnection {
+            id: "server-1".to_string(),
+            host: "192.168.1.10".to_string(),
+            port: 47842,
+            password: Some("secret".to_string()),
+            name: Some("Office".to_string()),
+            created_at: 42,
+            model: Some("whisper".to_string()),
+            capabilities: Some(capabilities.clone()),
+            status: ConnectionStatus::Online,
+            last_checked: 99,
+        };
+
+        let serialized = serde_json::to_value(&saved).unwrap();
+        assert_eq!(
+            serialized.get("capabilities").cloned(),
+            Some(serde_json::to_value(&capabilities).unwrap())
+        );
+        assert_eq!(
+            serialized.get("has_password").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert!(serialized.get("password").is_none());
+
+        let round_tripped: SavedConnection = serde_json::from_value(serialized).unwrap();
+        assert_eq!(round_tripped.capabilities, Some(capabilities));
+        assert!(round_tripped.password.is_none());
+
+        let without_capabilities = SavedConnection {
+            capabilities: None,
+            ..saved
+        };
+        let serialized_without = serde_json::to_value(&without_capabilities).unwrap();
+        assert!(serialized_without.get("capabilities").is_none());
+    }
+
+    #[test]
+    fn update_connection_status_only_overwrites_capabilities_when_present() {
+        let mut settings = RemoteSettings::default();
+        let conn = settings.add_connection(
+            "192.168.1.10".to_string(),
+            47842,
+            None,
+            Some("Office".to_string()),
+            None,
+        );
+        let capabilities = crate::remote::server::RemoteCapabilities {
+            supports_initial_prompt: true,
+            accepts_request_context: true,
+            max_context_bytes: 900,
+            ..Default::default()
+        };
+
+        settings.update_connection_status(
+            &conn.id,
+            ConnectionStatus::Online,
+            Some("whisper".to_string()),
+            Some(Some(capabilities.clone())),
+        );
+        assert_eq!(
+            settings
+                .get_connection(&conn.id)
+                .and_then(|connection| connection.capabilities.clone()),
+            Some(capabilities.clone())
+        );
+
+        settings.update_connection_status(&conn.id, ConnectionStatus::Offline, None, None);
+        assert_eq!(
+            settings
+                .get_connection(&conn.id)
+                .and_then(|connection| connection.capabilities.clone()),
+            Some(capabilities)
+        );
+
+        // Authoritative clear: a successful probe with no advertised capabilities
+        // wipes the stale cache so the client fails safe.
+        settings.update_connection_status(&conn.id, ConnectionStatus::Online, None, Some(None));
+        assert_eq!(
+            settings
+                .get_connection(&conn.id)
+                .and_then(|connection| connection.capabilities.clone()),
+            None
+        );
     }
 }

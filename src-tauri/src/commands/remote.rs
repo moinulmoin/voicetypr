@@ -695,37 +695,61 @@ pub async fn test_remote_server(
     };
 
     // Test the connection
-    let status = test_connection(
+    let status = match test_connection(
         &connection.host,
         connection.port,
         connection.password.as_deref(),
     )
     .await
-    .map_err(|e| e.to_string())?;
-
-    // Check if model changed and update if needed
-    let new_model = Some(status.model.clone());
-    if cached_model != new_model {
-        log::info!(
-            "🔄 [REMOTE] Model changed for '{}': {:?} -> {:?}",
-            connection.display_name(),
-            cached_model,
-            new_model
-        );
-
-        // Update the cached model
-        {
-            let mut settings = remote_settings.lock().await;
-            if let Some(conn) = settings
-                .saved_connections
-                .iter_mut()
-                .find(|c| c.id == server_id)
+    {
+        Ok(status) => status,
+        Err(error) => {
             {
+                let mut settings = remote_settings.lock().await;
+                settings.update_connection_status(
+                    &server_id,
+                    connection_status_for_remote_error(&error),
+                    None,
+                    None,
+                );
+                if let Err(save_error) = save_remote_settings(&app, &settings) {
+                    log::warn!(
+                        "Failed to save remote settings after test probe failure: {}",
+                        save_error
+                    );
+                }
+            }
+            return Err(error.to_string());
+        }
+    };
+
+    // Persist the freshly advertised capabilities (authoritative) and the model.
+    let new_model = Some(status.model.clone());
+    let model_changed = cached_model != new_model;
+    {
+        let mut settings = remote_settings.lock().await;
+        if let Some(conn) = settings
+            .saved_connections
+            .iter_mut()
+            .find(|c| c.id == server_id)
+        {
+            // A successful probe is authoritative for capabilities: this clears
+            // stale caps when the host no longer advertises context support.
+            conn.capabilities = status.capabilities.clone();
+            if model_changed {
                 conn.model = new_model;
             }
-            // Save updated settings
-            save_remote_settings(&app, &settings)?;
         }
+        save_remote_settings(&app, &settings)?;
+    }
+
+    if model_changed {
+        log::info!(
+            "🔄 [REMOTE] Model changed for '{}': {:?} -> {}",
+            connection.display_name(),
+            cached_model,
+            status.model
+        );
 
         // Refresh tray menu to show new model
         if let Err(e) = crate::commands::settings::update_tray_menu(app.clone()).await {
@@ -761,15 +785,21 @@ pub(crate) async fn refresh_saved_connection_status(
 
     let check_result = test_connection(&server.host, server.port, server.password.as_deref()).await;
 
-    let (new_status, new_model) = match check_result {
+    let (new_status, new_model, capabilities) = match check_result {
         Ok(status_response) => {
+            let capabilities = status_response.capabilities.clone();
             if is_self_connection(local_machine_id.as_deref(), &status_response.machine_id) {
                 (
                     ConnectionStatus::SelfConnection,
                     Some(status_response.model),
+                    Some(capabilities),
                 )
             } else {
-                (ConnectionStatus::Online, Some(status_response.model))
+                (
+                    ConnectionStatus::Online,
+                    Some(status_response.model),
+                    Some(capabilities),
+                )
             }
         }
         Err(error) => {
@@ -778,14 +808,19 @@ pub(crate) async fn refresh_saved_connection_status(
                 server.display_name(),
                 error
             );
-            (connection_status_for_remote_error(&error), None)
+            (connection_status_for_remote_error(&error), None, None)
         }
     };
 
     let (updated_server, was_active) = {
         let mut settings = remote_settings.lock().await;
         let was_active = settings.active_connection_id.as_deref() == Some(server_id);
-        settings.update_connection_status(server_id, new_status.clone(), new_model.clone());
+        settings.update_connection_status(
+            server_id,
+            new_status.clone(),
+            new_model.clone(),
+            capabilities,
+        );
         if let Err(e) = save_remote_settings(app, &settings) {
             log::warn!("Failed to save remote settings: {}", e);
         }
@@ -981,6 +1016,7 @@ pub async fn update_remote_transcription_control(
             &server_id,
             ConnectionStatus::Online,
             Some(snapshot.current.id.clone()),
+            Some(None), // model/engine may have changed; clear caps to re-fetch (fail safe)
         );
         save_remote_settings(&app, &settings)?;
     }
@@ -1373,6 +1409,30 @@ pub async fn get_active_remote_server(
     Ok(active_id)
 }
 
+pub(crate) async fn resolve_remote_request_context(
+    app: &AppHandle,
+    target_server_id: &str,
+    transcript_language: Option<&str>,
+) -> Option<String> {
+    let connection = refresh_saved_connection_status(app, target_server_id)
+        .await
+        .ok()?;
+
+    if !matches!(connection.status, ConnectionStatus::Online) {
+        return None;
+    }
+
+    let capabilities = connection.capabilities.as_ref()?;
+    if capabilities.accepts_request_context
+        && capabilities.supports_initial_prompt
+        && capabilities.max_context_bytes > 0
+    {
+        crate::commands::audio::compile_remote_request_context(app, transcript_language)
+    } else {
+        None
+    }
+}
+
 // ============================================================================
 // Transcription Commands
 // ============================================================================
@@ -1453,9 +1513,11 @@ pub async fn transcribe_remote(
 
     let translate_to_english =
         transcription_task == crate::commands::settings::TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH;
-    let request_spoken_language = spoken_language.clone();
+    let request_context =
+        resolve_remote_request_context(&app, &server_id, spoken_language.as_deref()).await;
     let request = TranscriptionRequest::new(audio_data, TranscriptionSource::Upload)
-        .with_language_and_task(spoken_language, Some(transcription_task));
+        .with_language_and_task(spoken_language.clone(), Some(transcription_task))
+        .with_context(request_context);
     let response = client::transcribe_audio(&server_conn, request, timeout_ms)
         .await
         .map_err(|e| e.to_string())?;
@@ -1470,7 +1532,7 @@ pub async fn transcribe_remote(
         crate::transcription::TranscriptionSource::RemoteServer,
         "remote",
         response.model.clone(),
-        request_spoken_language,
+        spoken_language,
         translate_to_english,
     );
     let transcription = crate::transcription::TranscriptionResult::new(&job, response.text)
@@ -2006,7 +2068,7 @@ mod tests {
             Some("Self".to_string()),
             None,
         );
-        settings.update_connection_status(&conn.id, ConnectionStatus::SelfConnection, None);
+        settings.update_connection_status(&conn.id, ConnectionStatus::SelfConnection, None, None);
 
         let result = ensure_remote_selection_is_allowed(&settings, &conn.id);
 
@@ -2026,7 +2088,7 @@ mod tests {
             Some("Remote".to_string()),
             None,
         );
-        settings.update_connection_status(&conn.id, ConnectionStatus::Online, None);
+        settings.update_connection_status(&conn.id, ConnectionStatus::Online, None, None);
 
         assert!(ensure_remote_selection_is_allowed(&settings, &conn.id).is_ok());
     }

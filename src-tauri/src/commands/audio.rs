@@ -537,14 +537,21 @@ fn resolve_transcription_task_for_audio(
     }
 }
 
-fn compile_whisper_initial_prompt(app: &AppHandle, language: Option<&str>) -> Option<String> {
+pub fn compile_remote_request_context(
+    app: &tauri::AppHandle,
+    transcript_language: Option<&str>,
+) -> Option<String> {
     let settings = crate::writing::load_writing_settings(app).ok()?;
     crate::writing::compile_context_for_target(
         &settings,
-        language,
+        transcript_language,
         None,
         crate::writing::ProviderContextTarget::WhisperInitialPrompt,
     )
+}
+
+fn compile_whisper_initial_prompt(app: &AppHandle, language: Option<&str>) -> Option<String> {
+    compile_remote_request_context(app, language)
 }
 
 #[cfg(target_os = "windows")]
@@ -683,6 +690,7 @@ fn build_remote_upload_transcription_request(
     audio_path: &Path,
     audio_data: Vec<u8>,
     job: Option<&TranscriptionJob>,
+    request_context: Option<String>,
 ) -> (RemoteTranscriptionRequest, u64) {
     let audio_path = audio_path.to_string_lossy();
     let timeout_ms = timeout_ms_for_wav_file(audio_path.as_ref(), RemoteTimeoutSource::Upload);
@@ -690,7 +698,8 @@ fn build_remote_upload_transcription_request(
         .with_language_and_task(
             job.and_then(|job| job.spoken_language.clone()),
             job.map(|job| transcription_task_header_value(job.task)),
-        );
+        )
+        .with_context(request_context);
 
     (request, timeout_ms)
 }
@@ -790,7 +799,7 @@ mod tests {
         let audio_data = vec![0x12, 0x34, 0x56];
 
         let (request, timeout_ms) =
-            build_remote_upload_transcription_request(audio_path, audio_data.clone(), None);
+            build_remote_upload_transcription_request(audio_path, audio_data.clone(), None, None);
 
         assert_eq!(request.audio_data, audio_data);
         assert_eq!(request.source, TranscriptionSource::Upload);
@@ -806,7 +815,7 @@ mod tests {
         let audio_data = vec![0x9a, 0xbc, 0xde];
 
         let (request, timeout_ms) =
-            build_remote_upload_transcription_request(audio_path, audio_data.clone(), None);
+            build_remote_upload_transcription_request(audio_path, audio_data.clone(), None, None);
 
         assert_eq!(request.audio_data, audio_data);
         assert_eq!(request.source, TranscriptionSource::Upload);
@@ -829,13 +838,33 @@ mod tests {
         );
 
         let (request, _) =
-            build_remote_upload_transcription_request(audio_path, audio_data, Some(&job));
+            build_remote_upload_transcription_request(audio_path, audio_data, Some(&job), None);
 
         assert_eq!(request.spoken_language.as_deref(), Some("es"));
         assert_eq!(
             request.transcription_task.as_deref(),
             Some("translate_to_english")
         );
+    }
+
+    #[test]
+    fn remote_upload_transcription_request_attaches_provided_context() {
+        let audio_path = std::path::Path::new("sample.wav");
+
+        let (with_context, _) = build_remote_upload_transcription_request(
+            audio_path,
+            vec![1, 2, 3],
+            None,
+            Some("Preferred spellings: VoiceTypr.".to_string()),
+        );
+        assert_eq!(
+            with_context.context.as_deref(),
+            Some("Preferred spellings: VoiceTypr.")
+        );
+
+        let (without_context, _) =
+            build_remote_upload_transcription_request(audio_path, vec![1, 2, 3], None, None);
+        assert!(without_context.context.is_none());
     }
 
     #[test]
@@ -1543,6 +1572,7 @@ enum ActiveEngineSelection {
         model_name: String,
     },
     Remote {
+        server_id: String,
         server_name: String,
         host: String,
         port: u16,
@@ -1631,6 +1661,7 @@ async fn resolve_engine_for_model(
                 crate::remote::settings::ConnectionStatus::Online
             ) {
                 return Ok(ActiveEngineSelection::Remote {
+                    server_id: remote_conn.id.clone(),
                     server_name: remote_conn.display_name(),
                     host: remote_conn.host,
                     port: remote_conn.port,
@@ -2752,6 +2783,7 @@ pub async fn stop_recording(
                 remote_conn.port
             );
             ActiveEngineSelection::Remote {
+                server_id: remote_conn.id.clone(),
                 server_name: remote_conn.display_name(),
                 host: remote_conn.host,
                 port: remote_conn.port,
@@ -3261,6 +3293,7 @@ pub async fn stop_recording(
                     }
                 }
                 ActiveEngineSelection::Remote {
+                    server_id,
                     server_name,
                     host,
                     port,
@@ -3291,6 +3324,14 @@ pub async fn stop_recording(
                         let server_conn =
                             RemoteServerConnection::new(host.clone(), *port, password.clone());
 
+                        let request_context =
+                            crate::commands::remote::resolve_remote_request_context(
+                                &app_for_task,
+                                server_id,
+                                transcription_job_for_task.spoken_language.as_deref(),
+                            )
+                            .await;
+
                         let request = RemoteTranscriptionRequest::new(
                             audio_data,
                             RemoteTimeoutSource::LiveRecording,
@@ -3300,7 +3341,8 @@ pub async fn stop_recording(
                             Some(transcription_task_header_value(
                                 transcription_job_for_task.task,
                             )),
-                        );
+                        )
+                        .with_context(request_context);
                         let timeout_ms = timeout_ms_for_wav_file(
                             audio_path_clone.to_string_lossy().as_ref(),
                             RemoteTimeoutSource::LiveRecording,
@@ -4267,6 +4309,7 @@ async fn transcribe_audio_file_impl(
             TranscriptionResult::new(&soniox_job, text)
         }
         ActiveEngineSelection::Remote {
+            server_id,
             server_name,
             host,
             port,
@@ -4306,10 +4349,18 @@ async fn transcribe_audio_file_impl(
             // Create HTTP client connection
             let server_conn = RemoteServerConnection::new(host.clone(), port, password.clone());
 
+            let request_context = crate::commands::remote::resolve_remote_request_context(
+                &app,
+                &server_id,
+                transcription_job.spoken_language.as_deref(),
+            )
+            .await;
+
             let (request, timeout_ms) = build_remote_upload_transcription_request(
                 normalized_file.path(),
                 audio_data,
                 Some(&transcription_job),
+                request_context,
             );
 
             let response = client::transcribe_audio(&server_conn, request, timeout_ms)
@@ -4523,6 +4574,7 @@ pub async fn transcribe_audio(
             TranscriptionResult::new(&soniox_job, text)
         }
         ActiveEngineSelection::Remote {
+            server_id,
             server_name,
             host,
             port,
@@ -4562,10 +4614,18 @@ pub async fn transcribe_audio(
             // Create HTTP client connection
             let server_conn = RemoteServerConnection::new(host.clone(), port, password.clone());
 
+            let request_context = crate::commands::remote::resolve_remote_request_context(
+                &app,
+                &server_id,
+                transcription_job.spoken_language.as_deref(),
+            )
+            .await;
+
             let (request, timeout_ms) = build_remote_upload_transcription_request(
                 normalized_file.path(),
                 audio_data,
                 Some(&transcription_job),
+                request_context,
             );
 
             let response = client::transcribe_audio(&server_conn, request, timeout_ms)

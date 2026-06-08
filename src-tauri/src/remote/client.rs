@@ -3,6 +3,8 @@
 //! HTTP client for connecting to other VoiceTypr instances
 //! to use their transcription capabilities.
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::Duration;
@@ -78,6 +80,8 @@ pub struct TranscriptionRequest {
     pub spoken_language: Option<String>,
     /// Optional transcription task (`transcribe` or `translate_to_english`).
     pub transcription_task: Option<String>,
+    /// Optional privacy-preserving request context for engines that advertise support.
+    pub context: Option<String>,
 }
 
 impl TranscriptionRequest {
@@ -91,6 +95,7 @@ impl TranscriptionRequest {
             source,
             spoken_language: None,
             transcription_task: None,
+            context: None,
         }
     }
 
@@ -101,6 +106,11 @@ impl TranscriptionRequest {
     ) -> Self {
         self.spoken_language = spoken_language;
         self.transcription_task = transcription_task;
+        self
+    }
+
+    pub fn with_context(mut self, context: Option<String>) -> Self {
+        self.context = context;
         self
     }
 }
@@ -308,6 +318,14 @@ pub fn calculate_timeout_ms(audio_duration_ms: u64, source: TranscriptionSource)
     }
 }
 
+fn context_header_value(request: &TranscriptionRequest) -> Option<String> {
+    request
+        .context
+        .as_deref()
+        .filter(|context| !context.is_empty())
+        .map(|context| BASE64.encode(context.as_bytes()))
+}
+
 pub fn timeout_ms_for_wav_file(audio_path: &str, source: TranscriptionSource) -> u64 {
     let base_timeout_ms = calculate_timeout_ms(0, source);
 
@@ -504,8 +522,7 @@ pub async fn transcribe_audio(
 
     let mut request_builder = client
         .post(connection.transcribe_url())
-        .header("Content-Type", "audio/wav")
-        .body(request.audio_data);
+        .header("Content-Type", "audio/wav");
 
     if let Some(pwd) = connection.password.as_ref() {
         request_builder = request_builder.header("X-VoiceTypr-Key", pwd);
@@ -517,6 +534,12 @@ pub async fn transcribe_audio(
         request_builder =
             request_builder.header("X-VoiceTypr-Transcription-Task", transcription_task);
     }
+    if let Some(context) = context_header_value(&request) {
+        request_builder = request_builder.header("X-VoiceTypr-Context", context);
+    }
+
+    // Move the audio body in last so the header borrows above stay valid.
+    let request_builder = request_builder.body(request.audio_data);
 
     let response = request_builder
         .send()
@@ -565,6 +588,27 @@ mod tests {
         assert_eq!(request.source, TranscriptionSource::Upload);
         assert!(request.spoken_language.is_none());
         assert!(request.transcription_task.is_none());
+        assert!(request.context.is_none());
+    }
+
+    #[test]
+    fn transcription_request_context_header_is_optional() {
+        let request = TranscriptionRequest::new(vec![1], TranscriptionSource::LiveRecording)
+            .with_context(Some("project terms".to_string()));
+
+        assert_eq!(request.context.as_deref(), Some("project terms"));
+        assert_eq!(
+            context_header_value(&request),
+            Some(BASE64.encode("project terms".as_bytes()))
+        );
+
+        let empty_context = TranscriptionRequest::new(vec![1], TranscriptionSource::LiveRecording)
+            .with_context(Some(String::new()));
+        assert_eq!(context_header_value(&empty_context), None);
+
+        let no_context = TranscriptionRequest::new(vec![1], TranscriptionSource::LiveRecording)
+            .with_context(None);
+        assert_eq!(context_header_value(&no_context), None);
     }
 
     #[test]

@@ -3,7 +3,9 @@
 //! These tests verify the HTTP server functionality for sharing
 //! transcription capabilities with other VoiceTypr instances.
 
-use crate::remote::server::{RemoteServerConfig, ServerStatus, StatusResponse, TranscribeResponse};
+use crate::remote::server::{
+    RemoteServerConfig, ServerStatus, StatusResponse, TranscribeResponse, REMOTE_PROTOCOL_VERSION,
+};
 
 /// Test that StatusResponse serializes correctly
 #[test]
@@ -14,6 +16,9 @@ fn test_status_response_serialization() {
         model: "large-v3-turbo".to_string(),
         name: "Desktop-PC".to_string(),
         machine_id: "test-machine-123".to_string(),
+        protocol_version: REMOTE_PROTOCOL_VERSION,
+        engine: None,
+        capabilities: None,
     };
 
     let json = serde_json::to_string(&response).unwrap();
@@ -22,6 +27,7 @@ fn test_status_response_serialization() {
     assert!(json.contains("\"model\":\"large-v3-turbo\""));
     assert!(json.contains("\"name\":\"Desktop-PC\""));
     assert!(json.contains("\"machine_id\":\"test-machine-123\""));
+    assert!(json.contains("\"protocol_version\":2"));
 }
 
 /// Test that StatusResponse deserializes correctly

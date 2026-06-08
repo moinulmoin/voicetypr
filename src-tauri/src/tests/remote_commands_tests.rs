@@ -543,6 +543,7 @@ fn test_saved_connection_display_name_with_name() {
         model: None,
         status: ConnectionStatus::Unknown,
         last_checked: 0,
+        capabilities: None,
     };
     assert_eq!(conn.display_name(), "My Server");
 }
@@ -559,6 +560,7 @@ fn test_saved_connection_display_name_without_name() {
         model: None,
         status: ConnectionStatus::Unknown,
         last_checked: 0,
+        capabilities: None,
     };
     assert_eq!(conn.display_name(), "192.168.1.100:47842");
 }
@@ -575,6 +577,7 @@ fn test_saved_connection_serialization() {
         model: Some("whisper-large".to_string()),
         status: ConnectionStatus::Unknown,
         last_checked: 0,
+        capabilities: None,
     };
 
     let json = serde_json::to_string(&conn).unwrap();
@@ -636,6 +639,7 @@ fn test_saved_connection_equality() {
         model: None,
         status: ConnectionStatus::Unknown,
         last_checked: 0,
+        capabilities: None,
     };
 
     let conn2 = SavedConnection {
@@ -648,6 +652,7 @@ fn test_saved_connection_equality() {
         model: None,
         status: ConnectionStatus::Unknown,
         last_checked: 0,
+        capabilities: None,
     };
 
     assert_eq!(conn1, conn2);
@@ -665,6 +670,7 @@ fn test_saved_connection_inequality() {
         model: None,
         status: ConnectionStatus::Unknown,
         last_checked: 0,
+        capabilities: None,
     };
 
     let conn2 = SavedConnection {
@@ -677,6 +683,7 @@ fn test_saved_connection_inequality() {
         model: None,
         status: ConnectionStatus::Unknown,
         last_checked: 0,
+        capabilities: None,
     };
 
     assert_ne!(conn1, conn2);

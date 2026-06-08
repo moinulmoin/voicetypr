@@ -5,6 +5,24 @@
 
 use serde::{ser::SerializeStruct, Deserialize, Serialize};
 
+pub const REMOTE_PROTOCOL_VERSION: u16 = 2;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RemoteCapabilities {
+    #[serde(default)]
+    pub supports_initial_prompt: bool,
+    #[serde(default)]
+    pub supports_structured_terms: bool,
+    #[serde(default)]
+    pub supports_vocabulary_terms: bool,
+    #[serde(default)]
+    pub accepts_request_context: bool,
+    #[serde(default)]
+    pub max_context_bytes: u32,
+    #[serde(default)]
+    pub acceleration: Vec<String>,
+}
+
 /// Response from the /api/v1/status endpoint
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StatusResponse {
@@ -14,6 +32,12 @@ pub struct StatusResponse {
     pub name: String,
     /// Unique machine identifier to prevent self-connection
     pub machine_id: String,
+    #[serde(default)]
+    pub protocol_version: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<RemoteCapabilities>,
 }
 
 /// Response from the /api/v1/transcribe endpoint
@@ -163,6 +187,16 @@ mod tests {
             model: "base.en".to_string(),
             name: "desk".to_string(),
             machine_id: "machine".to_string(),
+            protocol_version: REMOTE_PROTOCOL_VERSION,
+            engine: Some("whisper".to_string()),
+            capabilities: Some(RemoteCapabilities {
+                supports_initial_prompt: true,
+                supports_structured_terms: false,
+                supports_vocabulary_terms: false,
+                accepts_request_context: true,
+                max_context_bytes: 900,
+                acceleration: vec!["cpu".to_string()],
+            }),
         };
 
         let value = serde_json::to_value(response).unwrap();
@@ -171,7 +205,15 @@ mod tests {
         assert_eq!(value["model"], "base.en");
         assert_eq!(value["name"], "desk");
         assert_eq!(value["machine_id"], "machine");
-        assert_eq!(value.as_object().unwrap().len(), 5);
+        assert_eq!(value["protocol_version"], REMOTE_PROTOCOL_VERSION);
+        assert_eq!(value["engine"], "whisper");
+        assert_eq!(value["capabilities"]["supports_initial_prompt"], true);
+        assert_eq!(value["capabilities"]["supports_structured_terms"], false);
+        assert_eq!(value["capabilities"]["supports_vocabulary_terms"], false);
+        assert_eq!(value["capabilities"]["accepts_request_context"], true);
+        assert_eq!(value["capabilities"]["max_context_bytes"], 900);
+        assert_eq!(value["capabilities"]["acceleration"][0], "cpu");
+        assert_eq!(value.as_object().unwrap().len(), 8);
     }
 
     #[test]

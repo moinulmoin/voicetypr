@@ -216,11 +216,54 @@ impl ServerContext for RealTranscriptionContext {
         self.password.clone()
     }
 
+    fn get_engine(&self) -> String {
+        self.shared_state.get_engine()
+    }
+
     fn transcribe(
         &self,
         audio_data: &[u8],
         spoken_language: Option<&str>,
         transcription_task: Option<&str>,
+    ) -> Result<TranscriptionResult, String> {
+        self.transcribe_inner(audio_data, spoken_language, transcription_task, None)
+    }
+
+    fn transcribe_with_context(
+        &self,
+        audio_data: &[u8],
+        spoken_language: Option<&str>,
+        transcription_task: Option<&str>,
+        context: Option<&str>,
+    ) -> Result<TranscriptionResult, String> {
+        self.transcribe_inner(audio_data, spoken_language, transcription_task, context)
+    }
+
+    fn get_model_control_snapshot(&self) -> Result<RemoteModelControlSnapshot, String> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.model_control_snapshot())
+        })
+    }
+
+    fn update_shared_model(
+        &self,
+        model_id: &str,
+        engine: &str,
+    ) -> Result<RemoteModelControlSnapshot, String> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(self.set_shared_model(model_id.to_string(), engine.to_string()))
+        })
+    }
+}
+
+impl RealTranscriptionContext {
+    fn transcribe_inner(
+        &self,
+        audio_data: &[u8],
+        spoken_language: Option<&str>,
+        transcription_task: Option<&str>,
+        context: Option<&str>,
     ) -> Result<TranscriptionResult, String> {
         let start = Instant::now();
 
@@ -238,10 +281,11 @@ impl ServerContext for RealTranscriptionContext {
         );
 
         log::info!(
-            "Starting remote transcription: {} bytes of audio, engine='{}', model='{}'",
+            "Starting remote transcription: {} bytes of audio, engine='{}', model='{}', context_bytes={}",
             audio_data.len(),
             engine,
-            model_name
+            model_name,
+            context.map(str::len).unwrap_or(0)
         );
 
         // Validate audio data is not empty
@@ -279,6 +323,7 @@ impl ServerContext for RealTranscriptionContext {
                     &temp_path,
                     spoken_language,
                     translate_to_english,
+                    context,
                 )?;
                 TranscriptionResult::new(&job, output.raw_text)
                     .with_transcript_language(output.transcript_language)
@@ -301,31 +346,13 @@ impl ServerContext for RealTranscriptionContext {
         Ok(result)
     }
 
-    fn get_model_control_snapshot(&self) -> Result<RemoteModelControlSnapshot, String> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.model_control_snapshot())
-        })
-    }
-
-    fn update_shared_model(
-        &self,
-        model_id: &str,
-        engine: &str,
-    ) -> Result<RemoteModelControlSnapshot, String> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(self.set_shared_model(model_id.to_string(), engine.to_string()))
-        })
-    }
-}
-
-impl RealTranscriptionContext {
     /// Transcribe using Whisper model
     fn transcribe_with_whisper(
         &self,
         audio_path: &Path,
         spoken_language: Option<&str>,
         translate_to_english: bool,
+        context: Option<&str>,
     ) -> Result<crate::whisper::transcriber::WhisperTranscriptionOutput, String> {
         let model_path = self.shared_state.get_model_path();
 
@@ -345,7 +372,13 @@ impl RealTranscriptionContext {
 
         // Perform transcription (this can take a while)
         transcriber
-            .transcribe_with_metadata(audio_path, spoken_language, translate_to_english, || false)
+            .transcribe_with_metadata_with_prompt(
+                audio_path,
+                spoken_language,
+                translate_to_english,
+                context,
+                || false,
+            )
             .map_err(|e| format!("Whisper transcription failed: {}", e))
     }
 
