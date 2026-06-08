@@ -138,6 +138,12 @@ if (-not $SkipBuild) {
     New-Item -ItemType Directory -Path "sidecar\whisper-vulkan\dist" -Force | Out-Null
     Copy-Item $SidecarExe $SidecarDist -Force
 
+    Write-Info "Verifying bundled sidecar and runtime installers before packaging..."
+    Require-File "$runtimeDir\vc_redist.x64.exe"
+    Require-File "$runtimeDir\VulkanRT-Installer.exe"
+    Require-File $SidecarDist
+    Write-Success "Bundled Vulkan sidecar + VC++/Vulkan runtime installers present"
+
     Write-Info "Building Tauri x86_64 installer..."
     pnpm tauri build --ci --config src-tauri/tauri.windows.conf.json
     if ($LASTEXITCODE -ne 0) {
