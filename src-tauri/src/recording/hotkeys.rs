@@ -59,10 +59,8 @@ pub fn handle_global_shortcut(
         }
     };
 
-    let should_handle = match recording_mode {
-        RecordingMode::Toggle => is_recording_shortcut && event_state == ShortcutState::Pressed,
-        RecordingMode::PushToTalk => is_recording_shortcut || is_ptt_shortcut,
-    };
+    let should_handle =
+        should_handle_recording_shortcut(recording_mode, is_recording_shortcut, is_ptt_shortcut);
 
     if should_handle {
         let event_state_label = match event_state {
@@ -101,6 +99,19 @@ fn handle_recording_shortcut(
     }
 }
 
+fn should_handle_recording_shortcut(
+    recording_mode: RecordingMode,
+    is_recording_shortcut: bool,
+    is_ptt_shortcut: bool,
+) -> bool {
+    match recording_mode {
+        // Toggle mode needs both Pressed and Released events so repeated
+        // Windows key-repeat Pressed events can be tied to a single physical hold.
+        RecordingMode::Toggle => is_recording_shortcut,
+        RecordingMode::PushToTalk => is_recording_shortcut || is_ptt_shortcut,
+    }
+}
+
 /// Handle toggle mode recording (click to start/stop)
 fn handle_toggle_mode(
     app: &tauri::AppHandle,
@@ -108,7 +119,16 @@ fn handle_toggle_mode(
     current_state: RecordingState,
     event_state: ShortcutState,
 ) {
-    if event_state != ShortcutState::Pressed {
+    match event_state {
+        ShortcutState::Released => {
+            app_state.toggle_key_held.store(false, Ordering::SeqCst);
+            return;
+        }
+        ShortcutState::Pressed => {}
+    }
+
+    if !claim_toggle_press(&app_state.toggle_key_held) {
+        log::debug!("Toggle: Ignoring duplicate key press while hotkey is held");
         return;
     }
 
@@ -175,6 +195,10 @@ fn handle_toggle_mode(
         }
         _ => log::debug!("Toggle: Ignoring hotkey in state {:?}", current_state),
     }
+}
+
+fn claim_toggle_press(toggle_key_held: &AtomicBool) -> bool {
+    !toggle_key_held.swap(true, Ordering::SeqCst)
 }
 
 fn claim_ptt_press(ptt_key_held: &AtomicBool) -> bool {
@@ -294,8 +318,34 @@ fn handle_non_recording_shortcut(
 
 #[cfg(test)]
 mod tests {
-    use super::claim_ptt_press;
+    use super::{claim_ptt_press, claim_toggle_press, should_handle_recording_shortcut};
+    use crate::RecordingMode;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn toggle_shortcut_events_are_handled_for_press_and_release() {
+        assert!(should_handle_recording_shortcut(
+            RecordingMode::Toggle,
+            true,
+            false
+        ));
+        assert!(!should_handle_recording_shortcut(
+            RecordingMode::Toggle,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn claim_toggle_press_blocks_repeats_until_release() {
+        let held = AtomicBool::new(false);
+
+        assert!(claim_toggle_press(&held));
+        assert!(!claim_toggle_press(&held));
+
+        held.store(false, Ordering::SeqCst);
+        assert!(claim_toggle_press(&held));
+    }
 
     #[test]
     fn claim_ptt_press_allows_only_first_press_until_release() {

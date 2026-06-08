@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import { CheckCircle, ChevronLeft, ChevronRight, Info, Keyboard, Loader2, Mic, Zap, HardDrive, Star } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 interface OnboardingDesktopProps {
@@ -67,11 +67,17 @@ export const OnboardingDesktop = function OnboardingDesktop({
     modelOrder,
     downloadProgress,
     verifyingModels,
+    downloadErrors,
     loadModels,
     downloadModel,
     cancelDownload,
     isLoading
   } = modelManagement;
+
+  const isModelReady = useCallback((name: string) => {
+    const model = models[name];
+    return model?.downloaded === true && !model.requires_setup;
+  }, [models]);
 
   // Define steps based on platform
   // Default to showing permissions until platform is detected
@@ -113,7 +119,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   useEffect(() => {
     // Only auto-select if no model is selected yet
     if (!settings?.current_model) {
-      const downloadedModelEntry = Object.entries(models).find(([_, m]) => m.downloaded);
+      const downloadedModelEntry = Object.entries(models).find(([name]) => isModelReady(name));
       if (downloadedModelEntry) {
         const [modelName, info] = downloadedModelEntry;
         updateSettings({
@@ -125,7 +131,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         });
       }
     }
-  }, [models, settings?.current_model, updateSettings]); // Depend on both to react to changes
+  }, [isModelReady, models, settings?.current_model, updateSettings]); // Depend on both to react to changes
 
   const checkPermissions = async () => {
     // Use the hook methods to check permissions
@@ -257,7 +263,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
           if (!currentModel) {
             return false;
           }
-          return models[currentModel]?.downloaded === true;
+          return isModelReady(currentModel);
         }
       default:
         return true;
@@ -483,6 +489,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                               name={name}
                               model={model}
                               downloadProgress={progress}
+                              downloadError={downloadErrors[name]}
                               isVerifying={verifyingModels.has(name)}
                               isSelected={settings?.current_model === name}
                               onDownload={downloadModel}
@@ -495,7 +502,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                                 });
                               }}
                               onCancelDownload={cancelDownload}
-                              showSelectButton={model.downloaded}
+                              showSelectButton={isModelReady(name)}
                             />
                           </div>
                         );

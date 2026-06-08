@@ -17,6 +17,7 @@ import { invoke } from "@tauri-apps/api/core";
 interface ModelsSectionProps {
   models: [string, ModelInfo][];
   downloadProgress: Record<string, number>;
+  downloadErrors: Record<string, string>;
   verifyingModels: Set<string>;
   currentModel?: string;
   onDownload: (modelName: string) => Promise<void> | void;
@@ -37,6 +38,7 @@ interface CloudModalState {
 export function ModelsSection({
   models,
   downloadProgress,
+  downloadErrors,
   verifyingModels,
   currentModel,
   onDownload,
@@ -354,6 +356,7 @@ export function ModelsSection({
                         name={name}
                         model={model}
                         downloadProgress={downloadProgress[name]}
+                        downloadError={downloadErrors[name]}
                         isVerifying={verifyingModels.has(name)}
                         onDownload={onDownload}
                         onDelete={onDelete}
@@ -385,6 +388,7 @@ export function ModelsSection({
                         name={name}
                         model={model}
                         downloadProgress={downloadProgress[name]}
+                        downloadError={downloadErrors[name]}
                         isVerifying={verifyingModels.has(name)}
                         onDownload={onDownload}
                         onDelete={onDelete}

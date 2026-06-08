@@ -93,13 +93,12 @@ impl WhisperManager {
         // Define available models based on official whisper.cpp download script
         // URLs match https://github.com/ggml-org/whisper.cpp/blob/master/models/download-ggml-model.sh
 
-        // OFFICIAL SHA1 CHECKSUMS from whisper.cpp repository
-        // Source: https://github.com/ggml-org/whisper.cpp/blob/master/models/download-ggml-model.sh
-        // These are SHA1 hashes (40 characters) as used by the official download script
-        // Note: The field is named 'sha256' for historical reasons but contains SHA1 values
+        // Official Hugging Face LFS SHA256 checksums for the ggml binaries.
+        // Source: https://huggingface.co/api/models/ggerganov/whisper.cpp?blobs=true
+        // The field is named 'sha256' for API compatibility with the frontend.
 
-        // English-only (.en) and multilingual models from official whisper.cpp metadata
-        // Tiny variants omitted; medium restored with official size and checksum
+        // English-only (.en) and multilingual models from official whisper.cpp metadata.
+        // Tiny and medium variants omitted to keep onboarding choices focused.
 
         models.insert(
             "base.en".to_string(),
@@ -109,7 +108,8 @@ impl WhisperManager {
                 size: 147_964_211,
                 url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
                     .to_string(),
-                sha256: "137c40403d78fd54d454da0f9bd998f78703390c".to_string(), // SHA1 (correct)
+                sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+                    .to_string(),
                 downloaded: false,
                 speed_score: 8,    // Very fast
                 accuracy_score: 5, // Basic accuracy
@@ -125,7 +125,8 @@ impl WhisperManager {
                 size: 3_095_033_483,
                 url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"
                     .to_string(),
-                sha256: "ad82bf6a9043ceed055076d0fd39f5f186ff8062".to_string(), // SHA1 (correct)
+                sha256: "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
+                    .to_string(),
                 downloaded: false,
                 speed_score: 2,    // Slowest
                 accuracy_score: 9, // Best accuracy
@@ -141,7 +142,7 @@ impl WhisperManager {
                 size: 1_081_140_203,
                 url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin"
                     .to_string(),
-                sha256: "e6e2ed78495d403bef4b7cff42ef4aaadcfea8de".to_string(), // SHA1 (correct)
+                sha256: "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1".to_string(),
                 downloaded: false,
                 speed_score: 4,    // Faster than full large-v3, slower than turbo
                 accuracy_score: 8, // Comparable but below full large-v3
@@ -154,7 +155,7 @@ impl WhisperManager {
             display_name: "Large v3 Turbo".to_string(),
             size: 1_624_555_275,
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".to_string(),
-            sha256: "4af2b29d7ec73d781377bfd1758ca957a807e941".to_string(), // SHA1 (correct)
+            sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69".to_string(),
             downloaded: false,
             speed_score: 7,       // 6x faster than large-v3
             accuracy_score: 9,    // Comparable to large-v2
@@ -169,26 +170,11 @@ impl WhisperManager {
                 size: 487_614_201,
                 url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin"
                     .to_string(),
-                sha256: "db8a495a91d927739e50b3fc1cc4c6b8f6c2d022".to_string(), // SHA1 (correct)
+                sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d"
+                    .to_string(),
                 downloaded: false,
                 speed_score: 7,    // Fast for English-only
                 accuracy_score: 6, // Good accuracy for English
-                recommended: false,
-            },
-        );
-
-        models.insert(
-            "medium".to_string(),
-            ModelInfo {
-                name: "medium".to_string(),
-                display_name: "Medium".to_string(),
-                size: 1_533_763_059,
-                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
-                    .to_string(),
-                sha256: "fd9727b6e1217c2f614f9b698455c4ffd82463b4".to_string(), // SHA1 (correct)
-                downloaded: false,
-                speed_score: 5,
-                accuracy_score: 7,
                 recommended: false,
             },
         );
@@ -788,23 +774,49 @@ impl WhisperManager {
             },
         );
 
-        models.insert(
-            "medium".to_string(),
-            ModelInfo {
-                name: "medium".to_string(),
-                display_name: "Medium".to_string(),
-                size: 1792,
-                url: "https://test.example.com/medium.bin".to_string(),
-                sha256: "test_hash_medium".to_string(),
-                downloaded: false,
-                speed_score: 5,
-                accuracy_score: 7,
-                recommended: false,
-            },
-        );
-
         let mut manager = Self { models, models_dir };
         manager.check_downloaded_models();
         manager
+    }
+}
+
+#[cfg(test)]
+mod checksum_tests {
+    use super::WhisperManager;
+    use sha2::{Digest, Sha256};
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn verify_sha256_checksum_accepts_matching_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("model.bin");
+        let bytes = b"voice model bytes";
+        tokio::fs::write(&path, bytes).await.unwrap();
+
+        let expected = format!("{:x}", Sha256::digest(bytes));
+
+        WhisperManager::verify_sha256_checksum(&path, &expected)
+            .await
+            .unwrap();
+        assert!(path.exists());
+    }
+
+    #[tokio::test]
+    async fn verify_sha256_checksum_deletes_mismatched_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("model.bin");
+        tokio::fs::write(&path, b"corrupt model bytes")
+            .await
+            .unwrap();
+
+        let err = WhisperManager::verify_sha256_checksum(
+            &path,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.contains("Checksum verification failed"));
+        assert!(!path.exists());
     }
 }

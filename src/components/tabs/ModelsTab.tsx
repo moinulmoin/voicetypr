@@ -11,6 +11,7 @@ export function ModelsTab() {
   // Use the model management context
   const {
     downloadProgress,
+    downloadErrors,
     verifyingModels,
     downloadModel,
     cancelDownload,
@@ -57,6 +58,7 @@ export function ModelsTab() {
     <ModelsSection
       models={sortedModels}
       downloadProgress={downloadProgress}
+      downloadErrors={downloadErrors}
       verifyingModels={verifyingModels}
       currentModel={settings?.current_model}
       onDownload={downloadModel}

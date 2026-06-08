@@ -1,4 +1,4 @@
-import { CheckCircle, Download, HardDrive, Loader2, Star, X, Zap, Trash2 } from 'lucide-react';
+import { AlertCircle, CheckCircle, Download, HardDrive, Loader2, Star, X, Zap, Trash2 } from 'lucide-react';
 import { ModelInfo, isLocalModel } from '../types';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
@@ -9,6 +9,7 @@ interface ModelCardProps {
   model: ModelInfo;
   downloadProgress?: number;
   isVerifying?: boolean;
+  downloadError?: string;
   isSelected?: boolean;
   onDownload: (name: string) => void;
   onSelect: (name: string) => void;
@@ -21,6 +22,7 @@ export const ModelCard = function ModelCard({
   name,
   model,
   downloadProgress,
+  downloadError,
   isVerifying = false,
   isSelected = false,
   onDownload,
@@ -42,8 +44,8 @@ export const ModelCard = function ModelCard({
       : `${Math.round(sizeInMB)} MB`;
   };
 
-  // Model is usable if downloaded
-  const isUsable = model.downloaded;
+  // Model is usable only when it is ready for transcription.
+  const isUsable = model.downloaded && !model.requires_setup;
 
   return (
     <Card
@@ -81,7 +83,7 @@ export const ModelCard = function ModelCard({
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2 flex-shrink-0">
-          {model.downloaded ? (
+          {isUsable ? (
             // Model is downloaded - show delete option
             <>
               {onDelete && (
@@ -147,6 +149,12 @@ export const ModelCard = function ModelCard({
           )}
         </div>
       </div>
+      {downloadError && !isUsable && downloadProgress === undefined && !isVerifying && (
+        <div className="mt-2 flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+          <span className="whitespace-pre-line">{downloadError}</span>
+        </div>
+      )}
     </Card>
   );
 };
