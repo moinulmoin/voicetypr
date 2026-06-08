@@ -75,10 +75,9 @@ beforeEach(() => {
 
 
 describe('sortModels', () => {
-  it('orders whisper models by accuracy with medium after small', () => {
+  it('orders whisper models by accuracy without medium', () => {
     const entries: [string, LocalModelInfo][] = [
       ['large-v3-q5_0', whisperModel('large-v3-q5_0', 8, 4, 1_081_140_203)],
-      ['medium', whisperModel('medium', 7, 5, 1_533_763_059)],
       ['small.en', whisperModel('small.en', 6, 7, 487_614_201)],
       ['base.en', whisperModel('base.en', 5, 8, 147_964_211)],
     ];
@@ -88,7 +87,6 @@ describe('sortModels', () => {
     expect(sorted.map(([name]) => name)).toEqual([
       'base.en',
       'small.en',
-      'medium',
       'large-v3-q5_0',
     ]);
   });
@@ -122,5 +120,52 @@ describe('useModelManagement terminal download events', () => {
       expect(result.current.verifyingModels.has('base.en')).toBe(false);
     });
     expect(result.current.downloadProgress['base.en']).toBeUndefined();
+    expect(result.current.downloadErrors['base.en']).toBe('verification_failed');
+  });
+
+  it('keeps detailed event error when invoke later rejects generically', async () => {
+    let rejectDownload!: (error: string) => void;
+    mockTauri.invoke.mockImplementation((command: string) => {
+      if (command === 'get_model_status') {
+        return Promise.resolve({
+          models: [whisperModel('base.en', 5, 8, 147_964_211)],
+        });
+      }
+      if (command === 'download_model') {
+        return new Promise((_, reject) => {
+          rejectDownload = reject;
+        });
+      }
+      return Promise.resolve();
+    });
+
+    const { result } = renderHook(() => useModelManagement({ showToasts: false }));
+
+    await waitFor(() => {
+      expect(result.current.models['base.en']).toBeDefined();
+      expect(mockTauri.handlers['download-error']).toEqual(expect.any(Function));
+    });
+
+    act(() => {
+      result.current.downloadModel('base.en');
+    });
+
+    act(() => {
+      mockTauri.handlers['download-error']({
+        model: 'base.en',
+        error: 'Checksum verification failed: expected abc, calculated def',
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.downloadErrors['base.en']).toBe('Checksum verification failed: expected abc, calculated def');
+    });
+
+    await act(async () => {
+      rejectDownload('verification_failed');
+      await Promise.resolve();
+    });
+
+    expect(result.current.downloadErrors['base.en']).toBe('Checksum verification failed: expected abc, calculated def');
   });
 });

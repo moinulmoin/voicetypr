@@ -39,6 +39,7 @@ vi.mock('@/contexts/ModelManagementContext', () => ({
   useModelManagementContext: () => ({
     models: {},
     downloadProgress: {},
+    downloadErrors: {},
     verifyingModels: new Set(),
     downloadModel: vi.fn(),
     retryDownload: vi.fn(),

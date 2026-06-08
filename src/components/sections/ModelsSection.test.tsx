@@ -47,6 +47,7 @@ function renderModelsSection(props: Partial<Parameters<typeof ModelsSection>[0]>
     <ModelsSection
       models={[]}
       downloadProgress={{}}
+      downloadErrors={{}}
       verifyingModels={new Set()}
       onDownload={noop}
       onDelete={noop}

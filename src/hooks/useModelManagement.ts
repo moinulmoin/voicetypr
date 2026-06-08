@@ -64,6 +64,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   const [models, setModels] = useState<Record<string, ModelInfo>>({});
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
   const [verifyingModels, setVerifyingModels] = useState<Set<string>>(new Set());
+  const [downloadErrors, setDownloadErrors] = useState<Record<string, string>>({});
 
   // Removed selectedModel state - now using settings.current_model directly
   const [isLoading, setIsLoading] = useState(true);
@@ -81,6 +82,17 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       const newSet = new Set(prev);
       newSet.delete(modelName);
       return newSet;
+    });
+  }, []);
+
+  const clearDownloadError = useCallback((modelName: string) => {
+    setDownloadErrors((prev) => {
+      if (!(modelName in prev)) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[modelName];
+      return next;
     });
   }, []);
 
@@ -134,6 +146,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     try {
       // Mark as downloading
       activeDownloads.current.add(modelName);
+      clearDownloadError(modelName);
 
       // Set initial progress to show download started
       setDownloadProgress((prev) => ({
@@ -145,19 +158,23 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       invoke("download_model", { modelName }).catch((error) => {
         console.error("[useModelManagement.downloadModel] Failed to download model:", error);
         const message = String(error);
-        if (showToasts && !message.toLowerCase().includes("cancel")) {
-          toast.error(`Failed to download model: ${message}`);
+        if (!message.toLowerCase().includes("cancel")) {
+          setDownloadErrors((prev) => (prev[modelName] ? prev : { ...prev, [modelName]: message }));
+          if (showToasts) {
+            toast.error(`Failed to download model: ${message}`);
+          }
         }
         clearDownloadState(modelName);
       });
     } catch (error) {
-      console.error("[useModelManagement.downloadModel] Failed to start download:", error);
+      const message = String(error);
+      setDownloadErrors((prev) => ({ ...prev, [modelName]: message }));
       if (showToasts) {
-        toast.error(`Failed to start download: ${error}`);
+        toast.error(`Failed to start download: ${message}`);
       }
       clearDownloadState(modelName);
     }
-  }, [clearDownloadState, models, showToasts]);
+  }, [clearDownloadError, clearDownloadState, models, showToasts]);
 
   // Cancel download
   const cancelDownload = useCallback(async (modelName: string) => {
@@ -259,6 +276,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         const modelName = event.model;
 
         clearDownloadState(modelName);
+        clearDownloadError(modelName);
 
         // Refresh model list
         await loadModels();
@@ -272,6 +290,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       unregisterCancelled = await registerEvent<{ model: string; engine?: string }>("download-cancelled", (payload) => {
         const modelName = typeof payload === 'string' ? payload : payload.model;
         clearDownloadState(modelName);
+        clearDownloadError(modelName);
 
         if (showToasts) {
           toast.info(`Download cancelled for ${modelName}`);
@@ -281,6 +300,10 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       // Download error
       unregisterError = await registerEvent<{ model: string; engine?: string; error?: string }>("download-error", (payload) => {
         const modelName = payload.model;
+        setDownloadErrors((prev) => ({
+          ...prev,
+          [modelName]: payload.error || "Download failed"
+        }));
         clearDownloadState(modelName);
       });
     };
@@ -295,7 +318,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       unregisterCancelled?.();
       unregisterError?.();
     };
-  }, [registerEvent, loadModels, showToasts, clearDownloadState]);
+  }, [registerEvent, loadModels, showToasts, clearDownloadState, clearDownloadError]);
 
   // Load models on mount
   useEffect(() => {
@@ -312,6 +335,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     modelOrder,
     downloadProgress,
     verifyingModels,
+    downloadErrors,
     isLoading,
 
     // Actions
