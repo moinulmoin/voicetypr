@@ -6,8 +6,8 @@
   IgnorableNamespaces="uap rescap">
 
   <Identity
-    Name="Ideaplexa.VoiceTypr"
-    Publisher="CN=Ideaplexa LLC"
+    Name="IdeaplexaLLC.Voicetypr"
+    Publisher="CN=98864543-9DFC-4D03-A121-2CA8406CB004"
     Version="1.12.9.0"
     ProcessorArchitecture="x64" />
 
