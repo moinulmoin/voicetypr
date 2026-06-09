@@ -211,7 +211,7 @@ fn main() {
         }
     }
 
-    if std::env::var("TARGET").as_deref() == Ok("x86_64-pc-windows-msvc") {
+    if std::env::var("VOICETYPR_REQUIRE_VULKAN_SIDECAR").as_deref() == Ok("1") {
         let sidecar_dir = Path::new("../sidecar/whisper-vulkan/dist");
         let sidecar_exe = sidecar_dir.join("whisper-vulkan-sidecar-x86_64-pc-windows-msvc.exe");
         if !sidecar_exe.exists() {

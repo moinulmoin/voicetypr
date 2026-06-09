@@ -795,7 +795,7 @@ describe("NetworkSharingCard", () => {
       });
 
       // Find and click the copy button
-      const copyButton = screen.getByTitle("Copy address");
+      const copyButton = screen.getByRole("button", { name: "Copy address 192.168.1.100:47842" });
       fireEvent.click(copyButton);
 
       // Verify the toast is shown (the clipboard call is a browser API side effect)
@@ -812,7 +812,7 @@ describe("NetworkSharingCard", () => {
       });
 
       // Should have at least one copy button
-      const copyButtons = screen.getAllByTitle("Copy address");
+      const copyButtons = screen.getAllByRole("button", { name: /Copy address/ });
       expect(copyButtons.length).toBeGreaterThan(0);
     });
   });
@@ -1033,7 +1033,7 @@ describe("NetworkSharingCard", () => {
       });
 
       expect(
-        screen.getByText("Devices with the password can switch only the model this device shares."),
+        screen.getByText("Requires a sharing password so only trusted devices can change the model this device shares."),
       ).toBeInTheDocument();
     });
     it("allows removing a saved sharing password", async () => {

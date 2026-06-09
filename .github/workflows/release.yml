@@ -334,7 +334,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-
+        with:
+          targets: x86_64-pc-windows-msvc
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -376,7 +377,7 @@ jobs:
         env:
           RUSTFLAGS: -C target-feature=+crt-static
         run: |
-          cargo build --manifest-path sidecar/whisper-vulkan/Cargo.toml --release
+          cargo build --manifest-path sidecar/whisper-vulkan/Cargo.toml --release --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) {
             throw "Whisper Vulkan sidecar build failed with exit code $LASTEXITCODE"
           }
@@ -385,7 +386,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($targetDir)) {
             $targetDir = "sidecar/whisper-vulkan/target"
           }
-          $sidecarExe = Join-Path $targetDir "release/whisper-vulkan-sidecar.exe"
+          $sidecarExe = Join-Path $targetDir "x86_64-pc-windows-msvc/release/whisper-vulkan-sidecar.exe"
           if (-not (Test-Path $sidecarExe)) {
             throw "Whisper Vulkan sidecar binary not found: $sidecarExe"
           }
@@ -394,6 +395,24 @@ jobs:
       - name: Download Windows runtime installers
         shell: pwsh
         run: |
+          function Require-TrustedInstallerSignature($Path, $Name, [string[]]$AllowedPublisherFragments) {
+            if (-not (Test-Path $Path)) {
+              throw "$Name installer not found: $Path"
+            }
+            $signature = Get-AuthenticodeSignature -FilePath $Path
+            if ($signature.Status -ne "Valid" -or -not $signature.SignerCertificate) {
+              throw "$Name installer is not Authenticode signed by a trusted publisher (status: $($signature.Status))."
+            }
+            $subject = $signature.SignerCertificate.Subject
+            foreach ($publisher in $AllowedPublisherFragments) {
+              if ($subject -like "*$publisher*") {
+                Write-Host "$Name installer signature verified: $subject"
+                return
+              }
+            }
+            throw "$Name installer signer is not an allowed publisher: $subject"
+          }
+
           New-Item -ItemType Directory -Force -Path "src-tauri/windows/resources" | Out-Null
           Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "src-tauri/windows/resources/vc_redist.x64.exe"
           $vulkanVersion = $env:VULKAN_RUNTIME_VERSION
@@ -408,18 +427,21 @@ jobs:
           }
           $vulkanRuntimeUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanRT-$vulkanVersion-Installer.exe"
           Invoke-WebRequest -Uri $vulkanRuntimeUrl -OutFile "src-tauri/windows/resources/VulkanRT-Installer.exe"
+          Require-TrustedInstallerSignature "src-tauri/windows/resources/vc_redist.x64.exe" "Visual C++ Runtime" @("Microsoft Corporation")
+          Require-TrustedInstallerSignature "src-tauri/windows/resources/VulkanRT-Installer.exe" "Vulkan Runtime" @("LunarG", "The Khronos Group")
 
       - name: Build Tauri app (x86_64 CPU-safe main app)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           RUSTFLAGS: -C target-feature=+crt-static
-        run: pnpm tauri build --ci --config src-tauri/tauri.windows.conf.json
+          VOICETYPR_REQUIRE_VULKAN_SIDECAR: "1"
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --ci --config src-tauri/tauri.windows.conf.json
 
       - name: Assert CPU build does not import vulkan-1.dll
         shell: pwsh
         run: |
-          & ./src-tauri/windows/assert-no-vulkan-import.ps1 -ExePath "$env:CARGO_TARGET_DIR\release\voicetypr.exe"
+          & ./src-tauri/windows/assert-no-vulkan-import.ps1 -ExePath "$env:CARGO_TARGET_DIR\x86_64-pc-windows-msvc\release\voicetypr.exe"
 
       - name: Sign installer for updates
         env:
@@ -427,9 +449,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         shell: pwsh
         run: |
-          $installer = Get-ChildItem "$env:CARGO_TARGET_DIR\release\bundle\nsis\*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $installer = Get-ChildItem "$env:CARGO_TARGET_DIR\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $installer) {
-            throw "No NSIS installer found at $env:CARGO_TARGET_DIR\release\bundle\nsis\*.exe"
+            throw "No NSIS installer found at $env:CARGO_TARGET_DIR\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe"
           }
 
           $keyPath = "$env:TEMP\tauri.key"
@@ -465,7 +487,7 @@ jobs:
         run: |
           $version = "${{ needs.prepare.outputs.version }}"
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          $installer = Get-ChildItem "$env:CARGO_TARGET_DIR\release\bundle\nsis\*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $installer = Get-ChildItem "$env:CARGO_TARGET_DIR\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $installer) { throw "No NSIS installer found" }
           Copy-Item $installer.FullName "artifacts/VoiceTypr_${version}_x64-setup.exe"
           $sig = "$($installer.FullName).sig"

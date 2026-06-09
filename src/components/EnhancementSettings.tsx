@@ -150,7 +150,7 @@ function AppFormattingRulesEditor({
 
       {!aiFormattingEnabled && hasAiRequiredSelection && (
         <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-          One or more app rules use AI modes. Turn on AI formatting above to activate them.
+          One or more app rules use AI modes. Turn on AI formatting with a selected provider model to activate them.
         </div>
       )}
 
@@ -996,8 +996,8 @@ export function EnhancementSettings({
         </FieldDescription>
         {!aiFormattingEnabled && selectedRequiresAi && (
           <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-            {formattingModeLabel(preset)} requires AI formatting. Turn on AI formatting above or
-            switch to Dictation (no AI).
+            {formattingModeLabel(preset)} requires AI formatting. Turn on AI formatting with a
+            selected provider model, or switch to Dictation (no AI).
           </div>
         )}
         <ButtonGroup className="w-full flex-wrap md:w-fit">
@@ -1009,7 +1009,7 @@ export function EnhancementSettings({
             const isModeDisabled =
               disabled || (requiresAi && !aiFormattingEnabled && !isSelected);
             const aiRequiredHint = requiresAi
-              ? `${modeLabel} requires AI formatting. Turn on AI formatting above.`
+              ? `${modeLabel} requires AI formatting. Turn on AI formatting with a selected provider model.`
               : undefined;
             return (
               <Button
@@ -1039,15 +1039,15 @@ export function EnhancementSettings({
           {preset === "PersonalDictation" &&
             "Transcription plus local mechanical cleanup and Personal Library rules. No semantic AI rewriting."}
           {preset === "CleanDictation" &&
-            "Clean dictation with grammar, punctuation, and intent cleanup via AI."}
+            "Sends dictated text to the connected provider for grammar, punctuation, and intent-preserving cleanup."}
           {preset === "Writing" &&
-            "Polish text into clear, well-structured prose."}
+            "Sends dictated text to the connected provider to polish it into clear, well-structured prose."}
           {preset === "Notes" &&
-            "Organize dictation into concise, structured notes."}
+            "Sends dictated text to the connected provider to organize it into concise, structured notes."}
           {preset === "Message" &&
-            "Format as a clear, well-phrased message."}
+            "Sends dictated text to the connected provider to format a clear message."}
           {preset === "Code" &&
-            "Create conventional commit messages and code annotations."}
+            "Sends dictated text to the connected provider to create conventional commits and code annotations."}
         </FieldDescription>
       </FieldSet>
 

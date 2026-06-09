@@ -5,7 +5,7 @@ import { EnhancementsSection } from '../EnhancementsSection'
 import { invoke } from '@tauri-apps/api/core'
 import { toast } from 'sonner'
 import { SettingsProvider } from '@/contexts/SettingsContext'
-import { hasApiKey } from '@/utils/keyring'
+import { hasApiKey, saveApiKey } from '@/utils/keyring'
 import { defaultWritingSettings } from '@/types/writing'
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -160,7 +160,7 @@ describe('EnhancementsSection', () => {
       expect(writingButton).toBeDisabled()
       expect(writingButton).toHaveAttribute(
         'title',
-        'Writing requires AI formatting. Turn on AI formatting above.',
+        'Writing requires AI formatting. Turn on AI formatting with a selected provider model.',
       )
       expect(screen.getByRole('button', { name: 'Dictation (no AI)' })).toBeEnabled()
     })
@@ -168,6 +168,38 @@ describe('EnhancementsSection', () => {
     expect(
       screen.queryByText(/requires AI formatting\. Turn on AI formatting above or/i),
     ).not.toBeInTheDocument()
+  })
+
+  it('explains how to enable AI formatting when setup is incomplete', async () => {
+    renderWithProviders()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('AI cleanup sends text to your connected provider; Personal Dictation stays no-AI.'),
+      ).toBeInTheDocument()
+      expect(
+        screen.getByText('Add an API key and choose a model below to turn on AI formatting.'),
+      ).toBeInTheDocument()
+      expect(screen.getByRole('switch', { name: /ai formatting/i })).toBeDisabled()
+    })
+  })
+
+  it('shows the selected model when AI formatting is off', async () => {
+    aiSettingsResponse = { ...enabledAISettings, enabled: false }
+    ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
+      providerId === 'openai',
+    )
+
+    renderWithProviders()
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText((_, element) =>
+          element?.textContent === 'Selected model: GPT-5 Mini (AI formatting off)',
+        ).length,
+      ).toBeGreaterThan(0)
+      expect(screen.queryByText('Add an API key and choose a model below to turn on AI formatting.')).not.toBeInTheDocument()
+    })
   })
 
   it('hides specific language selection when Personal Dictation is loaded', async () => {
@@ -222,6 +254,56 @@ describe('EnhancementsSection', () => {
       expect(invoke).toHaveBeenCalledWith('update_enhancement_options', {
         options: { preset: 'Writing' },
       })
+    })
+  })
+
+  it('rolls back optimistic mode changes when preset persistence fails', async () => {
+    aiSettingsResponse = enabledAISettings
+    ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
+      providerId === 'openai',
+    )
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_settings') {
+        return Promise.resolve(baseAppSettings)
+      }
+      if (cmd === 'save_settings') {
+        return Promise.resolve(undefined)
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'PersonalDictation' })
+      }
+      if (cmd === 'update_enhancement_options') {
+        return Promise.reject(new Error('preset save failed'))
+      }
+      if (cmd === 'get_writing_settings') {
+        return Promise.resolve(defaultWritingSettings)
+      }
+      if (cmd === 'get_ai_settings') {
+        return Promise.resolve(aiSettingsResponse)
+      }
+      if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider || ''
+        return Promise.resolve({ ...aiSettingsResponse, provider, hasApiKey: provider === 'openai' })
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' })
+      }
+      if (cmd === 'cache_ai_api_key') {
+        return Promise.resolve(undefined)
+      }
+      return Promise.resolve(undefined)
+    })
+
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    await user.click(await screen.findByRole('button', { name: 'Writing' }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('preset save failed')
+      expect(
+        screen.getByText(/Transcription plus local mechanical cleanup/i),
+      ).toBeInTheDocument()
     })
   })
 
@@ -646,6 +728,106 @@ describe('EnhancementsSection', () => {
     })
   })
 
+  it('saves each queued writing settings snapshot instead of the latest ref for every save', async () => {
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    const replacementsHeading = await screen.findByText('Corrections')
+    const replacementsCard = replacementsHeading.parentElement?.parentElement
+    expect(replacementsCard).toBeTruthy()
+    const addRuleButton = within(replacementsCard as HTMLElement).getByRole('button', {
+      name: /add/i,
+    })
+
+    await user.click(addRuleButton)
+    await user.click(addRuleButton)
+
+    await waitFor(() => {
+      const updateCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([cmd]) => cmd === 'update_writing_settings',
+      )
+      expect(updateCalls).toHaveLength(2)
+      expect(
+        (updateCalls[0]?.[1] as { settings: typeof defaultWritingSettings }).settings.replacements,
+      ).toHaveLength(1)
+      expect(
+        (updateCalls[1]?.[1] as { settings: typeof defaultWritingSettings }).settings.replacements,
+      ).toHaveLength(2)
+    })
+  })
+
+  it('does not roll back writing settings when an older queued save fails after a newer edit', async () => {
+    const user = userEvent.setup()
+    let rejectFirstSave: (() => void) | undefined
+    const firstSaveGate = new Promise<void>((_, reject) => {
+      rejectFirstSave = () => reject(new Error('stale save failed'))
+    })
+    let saveCount = 0
+
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_settings') {
+        return Promise.resolve(baseAppSettings)
+      }
+      if (cmd === 'save_settings') {
+        return Promise.resolve(undefined)
+      }
+      if (cmd === 'get_enhancement_options') {
+        return Promise.resolve({ preset: 'PersonalDictation' })
+      }
+      if (cmd === 'update_enhancement_options') {
+        return Promise.resolve(undefined)
+      }
+      if (cmd === 'get_writing_settings') {
+        return Promise.resolve(defaultWritingSettings)
+      }
+      if (cmd === 'update_writing_settings') {
+        saveCount += 1
+        return saveCount === 1 ? firstSaveGate : Promise.resolve(undefined)
+      }
+      if (cmd === 'get_ai_settings') {
+        return Promise.resolve(aiSettingsResponse)
+      }
+      if (cmd === 'get_ai_settings_for_provider') {
+        const provider = (args as { provider?: string })?.provider || ''
+        return Promise.resolve({ ...aiSettingsResponse, provider })
+      }
+      if (cmd === 'get_openai_config') {
+        return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' })
+      }
+      if (cmd === 'update_ai_settings') {
+        aiSettingsResponse = {
+          ...aiSettingsResponse,
+          ...(args as typeof aiSettingsResponse),
+        }
+        return Promise.resolve(undefined)
+      }
+      if (cmd === 'cache_ai_api_key') {
+        return Promise.resolve(undefined)
+      }
+      return Promise.resolve(undefined)
+    })
+
+    renderWithProviders()
+
+    const replacementsHeading = await screen.findByText('Corrections')
+    const replacementsCard = replacementsHeading.parentElement?.parentElement
+    expect(replacementsCard).toBeTruthy()
+    const addRuleButton = within(replacementsCard as HTMLElement).getByRole('button', {
+      name: /add/i,
+    })
+
+    await user.click(addRuleButton)
+    await waitFor(() => expect(saveCount).toBe(1))
+    await user.click(addRuleButton)
+    rejectFirstSave?.()
+
+    await waitFor(() => {
+      expect(saveCount).toBe(2)
+      expect(screen.getByText('Rule 2')).toBeInTheDocument()
+    })
+    expect(toast.error).not.toHaveBeenCalledWith('stale save failed')
+  })
+
   it('rolls back optimistic writing settings when save fails', async () => {
     const user = userEvent.setup()
     rejectWritingSettingsUpdate = true
@@ -667,6 +849,49 @@ describe('EnhancementsSection', () => {
     })
   })
 
+
+  it('clears a stale model when saving an API key for a different provider', async () => {
+    aiSettingsResponse = { ...enabledAISettings, enabled: false }
+    ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
+      providerId === 'openai',
+    )
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    const geminiHeading = await screen.findByText('Google Gemini')
+    const geminiCard = geminiHeading.closest('.p-4')
+    expect(geminiCard).toBeTruthy()
+
+    await user.click(within(geminiCard as HTMLElement).getByRole('button', { name: /add key/i }))
+    await user.type(await screen.findByLabelText('API Key'), 'gemini-key')
+    await user.click(screen.getByRole('button', { name: 'Save API Key' }))
+
+    await waitFor(() => {
+      expect(saveApiKey).toHaveBeenCalledWith('gemini', 'gemini-key')
+      expect(within(geminiCard as HTMLElement).getByRole('button', { name: /select model/i })).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('button', { name: /gpt-5 mini/i })).not.toBeInTheDocument()
+  })
+
+  it('keeps the selected model when saving an API key for the current provider', async () => {
+    aiSettingsResponse = { ...enabledAISettings, enabled: false, hasApiKey: false }
+    ;(hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false)
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    const openAIHeading = await screen.findByText('OpenAI')
+    const openAICard = openAIHeading.closest('.p-4')
+    expect(openAICard).toBeTruthy()
+
+    await user.click(within(openAICard as HTMLElement).getByRole('button', { name: /add key/i }))
+    await user.type(await screen.findByLabelText('API Key'), 'openai-key')
+    await user.click(screen.getByRole('button', { name: 'Save API Key' }))
+
+    await waitFor(() => {
+      expect(saveApiKey).toHaveBeenCalledWith('openai', 'openai-key')
+      expect(within(openAICard as HTMLElement).getByRole('button', { name: /gpt-5 mini/i })).toBeInTheDocument()
+    })
+  })
   it('shows formatting setup guidance in the guide dialog', async () => {
     const user = userEvent.setup()
     renderWithProviders()

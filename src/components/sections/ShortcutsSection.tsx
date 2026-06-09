@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { ValidationPresets } from "@/lib/keyboard-normalizer";
+import { normalizeShortcutKeys, ValidationPresets } from "@/lib/keyboard-normalizer";
 import type {
   ShortcutAction,
   ShortcutActionDefinition,
@@ -44,6 +44,14 @@ function normalizeSettings(value: ShortcutSettings | null | undefined): Shortcut
 
 function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function formatTrigger(trigger: ShortcutBinding["trigger"]) {
+  return trigger === "hold" ? "Hold" : "Press";
+}
+
+function shortcutComparisonKey(shortcut: string) {
+  return normalizeShortcutKeys(shortcut).toLowerCase();
 }
 
 export function ShortcutsSection() {
@@ -135,6 +143,10 @@ export function ShortcutsSection() {
     return groups;
   }, [draftBindings, settings.bindings]);
 
+  const actionLabels = useMemo(() => {
+    return new Map(actions.map((action) => [action.action, action.label]));
+  }, [actions]);
+
   const isMutating = savingBindingId !== null;
   const editingDisabled = isMutating || settingsLoadError !== null;
 
@@ -160,6 +172,23 @@ export function ShortcutsSection() {
   }, []);
 
   const updateBinding = useCallback(async (nextBinding: ShortcutBinding) => {
+    const nextShortcut = nextBinding.shortcut.trim();
+    if (nextShortcut) {
+      const nextShortcutKey = shortcutComparisonKey(nextShortcut);
+      const duplicateBinding = [...settings.bindings, ...draftBindings].find((binding) =>
+        binding.id !== nextBinding.id
+        && binding.shortcut
+        && shortcutComparisonKey(binding.shortcut) === nextShortcutKey,
+      );
+
+      if (duplicateBinding) {
+        toast.error("Shortcut already assigned", {
+          description: `${nextShortcut} is already assigned to ${actionLabels.get(duplicateBinding.action) ?? duplicateBinding.action}.`,
+        });
+        return;
+      }
+    }
+
     if (!beginMutation(nextBinding.id)) {
       return;
     }
@@ -186,7 +215,7 @@ export function ShortcutsSection() {
     } finally {
       endMutation();
     }
-  }, [beginMutation, draftBindings, endMutation, persistSettings, settings.bindings]);
+  }, [actionLabels, beginMutation, draftBindings, endMutation, persistSettings, settings.bindings]);
 
   const changeBinding = useCallback((nextBinding: ShortcutBinding) => {
     if (editingDisabled || savingBindingIdRef.current !== null) {
@@ -283,7 +312,13 @@ export function ShortcutsSection() {
               No shortcut actions are available.
             </div>
           ) : (
-            groupedActions.map(([section, sectionActions]) => (
+            groupedActions.map(([section, sectionActions]) => {
+              const sectionBindingCount = sectionActions.reduce(
+                (count, action) => count + (bindingsByAction.get(action.action)?.length ?? 0),
+                0,
+              );
+
+              return (
               <section key={section} className="rounded-xl border border-border/60 bg-card">
                 <div className="border-b border-border/60 px-4 py-3">
                   <div className="flex items-center gap-2">
@@ -292,7 +327,9 @@ export function ShortcutsSection() {
                     </div>
                     <div>
                       <h2 className="font-medium">{section}</h2>
-                      <p className="text-xs text-muted-foreground">Shortcut actions</p>
+                      <p className="text-xs text-muted-foreground">
+                        {sectionBindingCount === 1 ? "1 binding configured" : `${sectionBindingCount} bindings configured`}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -331,7 +368,7 @@ export function ShortcutsSection() {
                                     <div className="min-w-[220px] flex-1">
                                       {editingDisabled ? (
                                         <div className="flex min-h-9 items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-muted-foreground" aria-label={`${action.label} shortcut read-only`}>
-                                          {binding.shortcut || "Click to set shortcut"}
+                                          {binding.shortcut || "No shortcut configured"}
                                         </div>
                                       ) : (
                                         <HotkeyInput
@@ -345,6 +382,9 @@ export function ShortcutsSection() {
 
                                     <div className="flex flex-wrap items-center gap-3">
                                       {isSaving && <Spinner className="h-4 w-4 text-muted-foreground" />}
+                                      <span className="rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                                        {formatTrigger(binding.trigger)}
+                                      </span>
                                       <label className="flex items-center gap-2 text-sm text-muted-foreground">
                                         <Switch
                                           aria-label={`${action.label} enabled`}
@@ -381,7 +421,7 @@ export function ShortcutsSection() {
                                         <span>
                                           <span className="block font-medium text-foreground">Allow single-key push-to-talk</span>
                                           <span className="block text-muted-foreground">
-                                            Advanced: lets this hold-to-record shortcut use one non-modifier key. VoiceTypr applies the shortcut that registers successfully.
+                                            Single keys are captured globally. Registration may still be refused by macOS, Windows, or another app that already owns the key.
                                           </span>
                                           {canUseSingleKey && (
                                             <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">
@@ -402,7 +442,8 @@ export function ShortcutsSection() {
                   })}
                 </div>
               </section>
-            ))
+              );
+            })
           )}
         </div>
       </ScrollArea>

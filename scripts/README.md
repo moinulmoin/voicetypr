@@ -39,7 +39,7 @@ The recommended release process is:
    - Verifies the GitHub release exists
    - Builds the Windows x64 NSIS installer (CPU-safe main app + optional x86_64 Vulkan sidecar)
    - Uses `src-tauri/tauri.windows.conf.json`, which is x86_64-only (Windows ARM64 stays CPU-only)
-   - Bundles VC++ and Vulkan Runtime installers as best-effort post-install steps
+   - Bundles VC++ and Vulkan Runtime installers as best-effort post-install steps after Authenticode publisher verification
    - Signs the installer and updates latest.json with the Windows platform
    - Uploads the installer, signature, and latest.json to the existing release
 
@@ -54,15 +54,19 @@ The recommended release process is:
 **Windows x86_64 (release-windows.ps1)**:
 - `VULKAN_SDK` - Path to Vulkan SDK (required to build the optional x64 GPU sidecar)
 - `VULKAN_RUNTIME_VERSION` or `VULKAN_VERSION` - Vulkan Runtime version for bundling (defaults to SDK folder name)
-- `CARGO_TARGET_DIR` - Optional short build output path (honored for sidecar and main app builds)
-- `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` - Tauri update signing
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` - Password for signing key (if needed)
+- `CARGO_TARGET_DIR` - Optional short build output path (honored for target-specific sidecar and main app builds)
+- `TAURI_SIGNING_PRIVATE_KEY_PATH` - Preferred Tauri update signing key path
+- `TAURI_SIGNING_PRIVATE_KEY` - Tauri update signing key content, written to a temporary key file when no path is set
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` - Password for signing key (if needed; empty passwords are supported)
+- If neither signing key env var is set, the script falls back to `%USERPROFILE%\.tauri\voicetypr.key`
 - `GITHUB_TOKEN` - GitHub authentication (usually handled by gh CLI)
 
 ### Windows x86_64 Build Prerequisites
 
-This release path builds an x64 installer with an optional x86_64 Vulkan sidecar.
+This release path builds an x64 installer with an optional x86_64 Vulkan sidecar using the `x86_64-pc-windows-msvc` target.
 Windows ARM64 builds are CPU-only and must not use `src-tauri/tauri.windows.conf.json`.
+The release script and GitHub workflow verify downloaded VC++ and Vulkan Runtime installers with Authenticode before bundling them. GPU acceleration still depends on compatible GPU drivers/runtime availability; CPU fallback remains the safe path.
+
 
 **1. Vulkan SDK**
 Download from https://vulkan.lunarg.com/sdk/home and ensure `VULKAN_SDK` is set.

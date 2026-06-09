@@ -72,6 +72,7 @@ describe("RemoteServerCard", () => {
   const mockOnSelect = vi.fn();
   const mockOnRemove = vi.fn();
   const mockOnEdit = vi.fn();
+  const mockOnDeselect = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -133,7 +134,7 @@ describe("RemoteServerCard", () => {
       expect(screen.getByText("My Home Server")).toBeInTheDocument();
     });
 
-    it("renders Edit and Remove buttons", async () => {
+    it("renders accessible Edit and Remove buttons", async () => {
       const server = createMockServer();
 
       await act(async () => {
@@ -148,8 +149,8 @@ describe("RemoteServerCard", () => {
         );
       });
 
-      expect(screen.getByTitle("Edit server")).toBeInTheDocument();
-      expect(screen.getByTitle("Remove server")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Edit 192.168.1.100:47842" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Remove 192.168.1.100:47842" })).toBeInTheDocument();
     });
   });
 
@@ -219,7 +220,7 @@ describe("RemoteServerCard", () => {
       });
     });
 
-    it("shows Auth Failed status when authentication fails", async () => {
+    it("shows Password incorrect status when authentication fails", async () => {
       const server = createMockServer({ status: "AuthFailed" });
 
       await act(async () => {
@@ -235,7 +236,7 @@ describe("RemoteServerCard", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText("Auth Failed")).toBeInTheDocument();
+        expect(screen.getByText("Password incorrect")).toBeInTheDocument();
       });
     });
 
@@ -258,8 +259,8 @@ describe("RemoteServerCard", () => {
         expect(screen.getByText("This Machine")).toBeInTheDocument();
       });
 
-      // "Cannot use self" is displayed with a bullet prefix
-      expect(screen.getByText(/Cannot use self/)).toBeInTheDocument();
+      // Self-connections explain that the saved connection points back to this device.
+      expect(screen.getByText(/This is the same device/)).toBeInTheDocument();
     });
   });
 
@@ -286,6 +287,26 @@ describe("RemoteServerCard", () => {
       await waitFor(() => {
         expect(screen.getByText(/Routing to/)).toBeInTheDocument();
       });
+    });
+
+    it("shows warning badge instead of positive Routing to copy when active server is offline", async () => {
+      const server = createMockServer({ status: "Offline" });
+
+      await act(async () => {
+        render(
+          <RemoteServerCard
+            server={server}
+            isActive={true}
+            onSelect={mockOnSelect}
+            onDeselect={mockOnDeselect}
+            onRemove={mockOnRemove}
+            onEdit={mockOnEdit}
+          />
+        );
+      });
+
+      expect(screen.getByText(/Routing risk: Offline/)).toBeInTheDocument();
+      expect(screen.queryByText(/Routing to/)).not.toBeInTheDocument();
     });
 
     it("does not show Routing to badge when isActive is false", async () => {
@@ -368,6 +389,55 @@ describe("RemoteServerCard", () => {
       });
 
       expect(mockOnSelect).toHaveBeenCalledWith("server-1");
+    });
+
+    it("does not deselect when clicking an already-active card", async () => {
+      const server = createMockServer();
+
+      await act(async () => {
+        render(
+          <RemoteServerCard
+            server={server}
+            isActive={true}
+            onSelect={mockOnSelect}
+            onDeselect={mockOnDeselect}
+            onRemove={mockOnRemove}
+            onEdit={mockOnEdit}
+          />
+        );
+      });
+
+      const card = screen.getByText("192.168.1.100:47842").closest("[class*='px-4']");
+      await act(async () => {
+        fireEvent.click(card!);
+      });
+
+      expect(mockOnSelect).not.toHaveBeenCalled();
+      expect(mockOnDeselect).not.toHaveBeenCalled();
+    });
+
+    it("calls onDeselect only from the explicit Stop routing button", async () => {
+      const server = createMockServer();
+
+      await act(async () => {
+        render(
+          <RemoteServerCard
+            server={server}
+            isActive={true}
+            onSelect={mockOnSelect}
+            onDeselect={mockOnDeselect}
+            onRemove={mockOnRemove}
+            onEdit={mockOnEdit}
+          />
+        );
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Stop routing" }));
+      });
+
+      expect(mockOnDeselect).toHaveBeenCalledTimes(1);
+      expect(mockOnSelect).not.toHaveBeenCalled();
     });
 
     it("calls onEdit when clicking Edit button", async () => {
@@ -598,7 +668,7 @@ describe("RemoteServerCard", () => {
 
       expect(screen.getByText("Transcription model on 192.168.1.100:47842")).toBeInTheDocument();
       expect(
-        screen.getByText("Changes only affect dictation routed to that device."),
+        screen.getByText("Changes the host's shared transcription model, not this device's local model."),
       ).toBeInTheDocument();
       expect(
         screen.getByRole("combobox", { name: "Transcription model on 192.168.1.100:47842" }),
@@ -632,7 +702,7 @@ describe("RemoteServerCard", () => {
       await waitFor(() => {
         expect(
           screen.getByText(
-            "Remote model changes are unavailable until the host adds a sharing password.",
+            "Add a sharing password on the host so only trusted devices can change the shared model.",
           ),
         ).toBeInTheDocument();
       });
@@ -665,7 +735,7 @@ describe("RemoteServerCard", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText("This device has not enabled remote model changes."),
+          screen.getByText("The host has not enabled remote model changes."),
         ).toBeInTheDocument();
       });
     });
@@ -804,7 +874,7 @@ describe("RemoteServerCard", () => {
 
       expect(screen.getAllByText("Edit password").length).toBeGreaterThan(0);
       expect(
-        screen.getByText("Authentication failed. Tap edit to update the password."),
+        screen.getByText("Password incorrect. Tap edit to update the saved password."),
       ).toBeInTheDocument();
 
       fireEvent.click(screen.getAllByText("Edit password")[0]);

@@ -28,6 +28,27 @@ function Require-File($Path) {
     }
 }
 
+function Require-TrustedInstallerSignature($Path, $Name, [string[]]$AllowedPublisherFragments) {
+    Require-File $Path
+
+    $signature = Get-AuthenticodeSignature -FilePath $Path
+    if ($signature.Status -ne "Valid" -or -not $signature.SignerCertificate) {
+        Write-Error "$Name installer is not Authenticode signed by a trusted publisher (status: $($signature.Status))."
+        exit 1
+    }
+
+    $subject = $signature.SignerCertificate.Subject
+    foreach ($publisher in $AllowedPublisherFragments) {
+        if ($subject -like "*$publisher*") {
+            Write-Success "$Name installer signature verified: $subject"
+            return
+        }
+    }
+
+    Write-Error "$Name installer signer is not an allowed publisher: $subject"
+    exit 1
+}
+
 if ($Help) {
     Write-Host @"
 Windows x86_64 Release Script
@@ -49,7 +70,7 @@ Usage:
 
 Requirements for building:
   - Vulkan SDK in VULKAN_SDK, used only to build/package the x64 GPU sidecar
-  - Optional CARGO_TARGET_DIR for short build paths (honored for sidecar and main app)
+  - Optional CARGO_TARGET_DIR for short target-specific build paths (honored for sidecar and main app)
 "@
     exit 0
 }
@@ -65,6 +86,7 @@ $ReleaseTag = "v$Version"
 $OutputDir = "release-windows-$Version"
 $InstallerName = "VoiceTypr_${Version}_x64-setup.exe"
 
+$WindowsTarget = "x86_64-pc-windows-msvc"
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
@@ -78,6 +100,15 @@ if (-not $SkipPublish) {
 }
 
 if (-not $SkipBuild) {
+    if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne [System.Runtime.InteropServices.Architecture]::X64) {
+        Write-Error "This release script is only for x86_64 Windows. Windows ARM64 builds must use the CPU-only release path."
+        exit 1
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:CARGO_BUILD_TARGET) -and $env:CARGO_BUILD_TARGET -ne $WindowsTarget) {
+        Write-Error "CARGO_BUILD_TARGET must be $WindowsTarget for this release path, got: $env:CARGO_BUILD_TARGET"
+        exit 1
+    }
+
     Write-Step "Building x86_64 CPU-safe app with bundled Vulkan sidecar"
 
     $AppTargetDir = $env:CARGO_TARGET_DIR
@@ -115,6 +146,8 @@ if (-not $SkipBuild) {
     $vulkanRuntimeUrl = "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/VulkanRT-$vulkanVersion-Installer.exe"
     Invoke-WebRequest -Uri $vulkanRuntimeUrl -OutFile "$runtimeDir\VulkanRT-Installer.exe"
 
+    Require-TrustedInstallerSignature "$runtimeDir\vc_redist.x64.exe" "Visual C++ Runtime" @("Microsoft Corporation")
+    Require-TrustedInstallerSignature "$runtimeDir\VulkanRT-Installer.exe" "Vulkan Runtime" @("LunarG", "The Khronos Group")
     Write-Info "Building Whisper Vulkan sidecar (x86_64 only)..."
     $SidecarTargetDir = $env:CARGO_TARGET_DIR
     if ([string]::IsNullOrWhiteSpace($SidecarTargetDir)) {
@@ -122,13 +155,13 @@ if (-not $SkipBuild) {
     }
 
     $env:RUSTFLAGS = "-C target-feature=+crt-static"
-    cargo build --manifest-path sidecar\whisper-vulkan\Cargo.toml --release
+    cargo build --manifest-path sidecar\whisper-vulkan\Cargo.toml --release --target $WindowsTarget
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Vulkan sidecar build failed"
         exit $LASTEXITCODE
     }
 
-    $SidecarExe = Join-Path $SidecarTargetDir "release\whisper-vulkan-sidecar.exe"
+    $SidecarExe = Join-Path $SidecarTargetDir "$WindowsTarget\release\whisper-vulkan-sidecar.exe"
     if (-not (Test-Path $SidecarExe)) {
         Write-Error "Whisper Vulkan sidecar binary not found after build: $SidecarExe"
         exit 1
@@ -144,18 +177,20 @@ if (-not $SkipBuild) {
     Require-File $SidecarDist
     Write-Success "Bundled Vulkan sidecar + VC++/Vulkan runtime installers present"
 
+    $env:VOICETYPR_REQUIRE_VULKAN_SIDECAR = "1"
+
     Write-Info "Building Tauri x86_64 installer..."
-    pnpm tauri build --ci --config src-tauri/tauri.windows.conf.json
+    pnpm tauri build --target $WindowsTarget --ci --config src-tauri/tauri.windows.conf.json
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Build failed"
         exit $LASTEXITCODE
     }
 
-    $MainExe = Join-Path $AppTargetDir "release\voicetypr.exe"
+    $MainExe = Join-Path $AppTargetDir "$WindowsTarget\release\voicetypr.exe"
     powershell -ExecutionPolicy Bypass -File .\src-tauri\windows\assert-no-vulkan-import.ps1 -ExePath $MainExe
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    $InstallerDir = Join-Path $AppTargetDir "release\bundle\nsis"
+    $InstallerDir = Join-Path $AppTargetDir "$WindowsTarget\release\bundle\nsis"
     $installer = Get-ChildItem "$InstallerDir\*.exe" |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
@@ -168,27 +203,47 @@ if (-not $SkipBuild) {
     Copy-Item $installer.FullName $installerPath -Force
     Write-Success "Installer built: $installerPath"
 
-    $keyPath = "$env:USERPROFILE\.tauri\voicetypr.key"
-    $signature = ""
-    if (Test-Path $keyPath) {
-        Write-Info "Signing installer for updates..."
-        if (-not [string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
-            & pnpm tauri signer sign -f $keyPath -p $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD $installerPath
-        } else {
-            & pnpm tauri signer sign -f $keyPath --password= $installerPath
-        }
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-        if (Test-Path "$installerPath.sig") {
-            $signature = (Get-Content "$installerPath.sig" -Raw).Trim() -replace "`r`n", "" -replace "`n", ""
-            Write-Success "Installer signed"
-        } else {
-            Write-Error "Failed to sign installer (missing .sig file)"
+    $tempSigningKey = $null
+    if (-not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PATH)) {
+        $keyPath = $env:TAURI_SIGNING_PRIVATE_KEY_PATH
+        if (-not (Test-Path $keyPath)) {
+            Write-Error "TAURI_SIGNING_PRIVATE_KEY_PATH does not exist: $keyPath"
             exit 1
         }
+    } elseif (-not [string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY)) {
+        $tempSigningKey = Join-Path ([System.IO.Path]::GetTempPath()) "tauri-signing-$([System.Guid]::NewGuid()).key"
+        [System.IO.File]::WriteAllText($tempSigningKey, $env:TAURI_SIGNING_PRIVATE_KEY)
+        $keyPath = $tempSigningKey
     } else {
-        Write-Error "No signing key found at $keyPath (required for auto-updates)"
-        exit 1
+        $keyPath = "$env:USERPROFILE\.tauri\voicetypr.key"
+    }
+
+    $signature = ""
+    try {
+        if (Test-Path $keyPath) {
+            Write-Info "Signing installer for updates..."
+            if (-not [string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+                & pnpm tauri signer sign -f $keyPath -p $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD $installerPath
+            } else {
+                & pnpm tauri signer sign -f $keyPath --password= $installerPath
+            }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+            if (Test-Path "$installerPath.sig") {
+                $signature = (Get-Content "$installerPath.sig" -Raw).Trim() -replace "`r`n", "" -replace "`n", ""
+                Write-Success "Installer signed"
+            } else {
+                Write-Error "Failed to sign installer (missing .sig file)"
+                exit 1
+            }
+        } else {
+            Write-Error "No signing key found. Set TAURI_SIGNING_PRIVATE_KEY_PATH, TAURI_SIGNING_PRIVATE_KEY, or place the key at $keyPath."
+            exit 1
+        }
+    } finally {
+        if ($tempSigningKey) {
+            Remove-Item $tempSigningKey -ErrorAction SilentlyContinue
+        }
     }
 
     Write-Info "Updating latest.json with Windows platform..."

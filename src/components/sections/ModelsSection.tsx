@@ -32,6 +32,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { useSettings } from "@/contexts/SettingsContext";
+import { getErrorMessage } from "@/utils/error";
 import { getCloudProviderByModel } from "@/lib/cloudProviders";
 import { cn } from "@/lib/utils";
 import { getModelDisplayName, humanizeModelId } from "@/lib/model-display";
@@ -305,25 +306,32 @@ export function ModelsSection({
 
   const handleSelectRemoteServer = useCallback(
     async (serverId: string) => {
+      if (serverId === activeRemoteServer) return;
+
       try {
-        await invoke("set_active_remote_server", {
-          serverId: serverId === activeRemoteServer ? null : serverId,
-        });
-        setActiveRemoteServer(
-          serverId === activeRemoteServer ? null : serverId
-        );
-        toast.success(
-          serverId === activeRemoteServer
-            ? "Remote VoiceTypr deselected"
-            : "Remote VoiceTypr selected"
-        );
+        await invoke("set_active_remote_server", { serverId });
+        setActiveRemoteServer(serverId);
+        toast.success("Remote VoiceTypr selected");
       } catch (error) {
+        const message = getErrorMessage(error, "Failed to select remote VoiceTypr");
         console.error("Failed to set active remote server:", error);
-        toast.error("Failed to select remote VoiceTypr");
+        toast.error(message);
       }
     },
     [activeRemoteServer]
   );
+
+  const handleDeselectRemoteServer = useCallback(async () => {
+    try {
+      await invoke("set_active_remote_server", { serverId: null });
+      setActiveRemoteServer(null);
+      toast.success("Remote VoiceTypr deselected");
+    } catch (error) {
+      const message = getErrorMessage(error, "Failed to stop routing to remote VoiceTypr");
+      console.error("Failed to clear active remote server:", error);
+      toast.error(message);
+    }
+  }, []);
 
   const handleRemoveRemoteServer = useCallback(
     async (serverId: string) => {
@@ -401,23 +409,45 @@ export function ModelsSection({
     setAddServerModalOpen(true);
   }, []);
 
+  const activeServer = useMemo(
+    () => remoteServers.find((server) => server.id === activeRemoteServer),
+    [activeRemoteServer, remoteServers],
+  );
+
   const activeModelLabel = useMemo(() => {
     // If a remote server is active, show "ServerName - ModelName" format
-    if (activeRemoteServer) {
-      const activeServer = remoteServers.find(s => s.id === activeRemoteServer);
-      if (activeServer) {
-        const serverName = activeServer.name || activeServer.host;
-        if (activeServer.model) {
-          return `${serverName} - ${getModelDisplayName(activeServer.model) ?? activeServer.model}`;
-        }
-        return serverName;
+    if (activeRemoteServer && activeServer) {
+      const serverName = activeServer.name || activeServer.host;
+      if (activeServer.model) {
+        return `${serverName} - ${getModelDisplayName(activeServer.model) ?? activeServer.model}`;
       }
+      return serverName;
+    }
+    if (activeRemoteServer) {
+      return "Selected remote VoiceTypr";
     }
     if (!currentModel) return null;
     const entry = models.find(([name]) => name === currentModel);
     if (!entry) return getModelDisplayName(currentModel) ?? currentModel;
     return getModelDisplayName(currentModel, { [currentModel]: entry[1] }) ?? currentModel;
-  }, [currentModel, models, activeRemoteServer, remoteServers]);
+  }, [currentModel, models, activeRemoteServer, activeServer]);
+
+  const activeRemoteWarning = useMemo(() => {
+    if (!activeRemoteServer) return null;
+
+    switch (activeServer?.status) {
+      case "Online":
+        return null;
+      case "Offline":
+        return "Remote offline";
+      case "AuthFailed":
+        return "Auth failed";
+      case "SelfConnection":
+        return "Self connection";
+      default:
+        return "Status unknown";
+    }
+  }, [activeRemoteServer, activeServer]);
 
   useEffect(() => {
     if (!settings) return;
@@ -661,10 +691,17 @@ export function ModelsSection({
                       variant={activeRemoteServer ? "outline" : "secondary"}
                       className={cn(
                         "max-w-[320px] justify-start truncate",
-                        activeRemoteServer && "border-sky-500/40 bg-sky-500/10 text-sky-800 dark:text-sky-300",
+                        activeRemoteServer &&
+                          (activeRemoteWarning
+                            ? "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300"
+                            : "border-sky-500/40 bg-sky-500/10 text-sky-800 dark:text-sky-300"),
                       )}
                     >
-                      {activeRemoteServer ? "Routing to" : "Active"}: {activeModelLabel}
+                      {activeRemoteServer
+                        ? activeRemoteWarning
+                          ? `Routing risk (${activeRemoteWarning})`
+                          : "Routing to"
+                        : "Active"}: {activeModelLabel}
                     </Badge>
                   ) : (
                     availableToUse.length > 0 && (
@@ -883,6 +920,7 @@ export function ModelsSection({
                       server={server}
                       isActive={activeRemoteServer === server.id}
                       onSelect={handleSelectRemoteServer}
+                      onDeselect={handleDeselectRemoteServer}
                       onRemove={handleRemoveRemoteServer}
                       onEdit={handleEditServer}
                       isRefreshing={isRefreshingServers}

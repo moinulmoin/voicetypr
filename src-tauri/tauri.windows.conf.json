@@ -1,6 +1,5 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "_comment": "Windows x86_64 release config only. Bundles the x64 Vulkan sidecar; do not use for Windows ARM64 CPU-only builds.",
   "bundle": {
     "resources": [
       "windows/resources/vc_redist.x64.exe",

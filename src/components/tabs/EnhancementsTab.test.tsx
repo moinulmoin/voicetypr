@@ -56,7 +56,7 @@ describe('EnhancementsTab', () => {
     render(<EnhancementsTab />);
     
     const callback = (window as any).__testEventCallbacks['ai-enhancement-auth-error'];
-    callback({ payload: 'Invalid API key' });
+    callback('Invalid API key');
 
     expect(toast.error).toHaveBeenCalledWith(
       'Invalid API key',
@@ -71,7 +71,7 @@ describe('EnhancementsTab', () => {
     render(<EnhancementsTab />);
     
     const callback = (window as any).__testEventCallbacks['ai-enhancement-error'];
-    callback({ payload: 'Rate limit exceeded' });
+    callback('Rate limit exceeded');
 
     expect(toast.warning).toHaveBeenCalledWith('Rate limit exceeded');
   });

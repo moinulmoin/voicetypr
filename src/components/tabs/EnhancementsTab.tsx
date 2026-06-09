@@ -11,16 +11,16 @@ export function EnhancementsTab() {
     const init = async () => {
       try {
         // Listen for AI enhancement errors
-        registerEvent("ai-enhancement-auth-error", (event) => {
-          console.error("AI authentication error:", event.payload);
-          toast.error(event.payload as string, {
+        registerEvent("ai-enhancement-auth-error", (payload) => {
+          console.error("AI authentication error:", payload);
+          toast.error(payload as string, {
             description: "Please update your API key in the Formatting section",
           });
         });
 
-        registerEvent("ai-enhancement-error", (event) => {
-          console.warn("AI formatting error:", event.payload);
-          toast.warning(event.payload as string);
+        registerEvent("ai-enhancement-error", (payload) => {
+          console.warn("AI formatting error:", payload);
+          toast.warning(payload as string);
         });
       } catch (error) {
         console.error("Failed to initialize enhancements tab:", error);

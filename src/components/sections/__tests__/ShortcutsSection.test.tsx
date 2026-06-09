@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { ShortcutsSection } from "../ShortcutsSection";
 import type { ShortcutActionDefinition, ShortcutSettings } from "@/types/shortcuts";
+import { toast } from "sonner";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -207,6 +208,37 @@ describe("ShortcutsSection", () => {
     });
   });
 
+  it("blocks duplicate shortcuts before saving and names the assigned action", async () => {
+    const user = userEvent.setup();
+    arrangeInvoke({
+      bindings: [
+        {
+          id: "copy-binding",
+          action: "copy_last_transcription",
+          shortcut: "Alt+C",
+          trigger: "pressed",
+          enabled: true,
+          allow_risky_combo: false,
+        },
+      ],
+    });
+
+    render(<ShortcutsSection />);
+
+    const pasteRow = await screen.findByRole("group", { name: "Paste Last Transcription" });
+    await user.click(within(pasteRow).getByRole("button", { name: "Add shortcut" }));
+    await user.click(within(pasteRow).getByTitle("Change hotkey"));
+    await user.keyboard("{Alt>}c{/Alt}");
+    await user.click(within(pasteRow).getByTitle("Save hotkey"));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Shortcut already assigned", {
+        description: "Alt+C is already assigned to Copy Last Transcription.",
+      });
+    });
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "update_shortcut_settings")).toHaveLength(0);
+  });
+
   it("uses the shortcut settings returned by the backend after saving", async () => {
     const user = userEvent.setup();
     arrangeInvoke({ bindings: [] }, (submittedSettings) => ({
@@ -266,20 +298,61 @@ describe("ShortcutsSection", () => {
     expect(within(holdRow).getByText("Single-key validation is enabled for this push-to-talk binding.")).toBeInTheDocument();
   });
 
-  it("keeps shortcut controls read-only when settings fail to load", async () => {
+  it("shows an empty shortcut as unconfigured while controls are read-only", async () => {
     const user = userEvent.setup();
-    arrangeInvoke({ bindings: [] }, undefined, { rejectSettings: new Error("settings unavailable") });
+    let resolveUpdate: (settings: ShortcutSettings) => void = () => {};
+    const updatePromise = new Promise<ShortcutSettings>((resolve) => {
+      resolveUpdate = resolve;
+    });
+    const settings: ShortcutSettings = {
+      bindings: [
+        {
+          id: "copy-binding",
+          action: "copy_last_transcription",
+          shortcut: "Alt+C",
+          trigger: "pressed",
+          enabled: true,
+          allow_risky_combo: false,
+        },
+        {
+          id: "paste-binding",
+          action: "paste_last_transcription",
+          shortcut: "",
+          trigger: "pressed",
+          enabled: false,
+          allow_risky_combo: false,
+        },
+      ],
+    };
+
+    arrangeInvoke(settings, () => updatePromise);
 
     render(<ShortcutsSection />);
 
     const copyRow = await screen.findByRole("group", { name: "Copy Last Transcription" });
-    expect(screen.getByText(/Reload shortcut settings before editing/)).toBeInTheDocument();
-    expect(within(copyRow).getByRole("button", { name: "Add shortcut" })).toBeDisabled();
+    const pasteRow = await screen.findByRole("group", { name: "Paste Last Transcription" });
 
-    await user.click(within(copyRow).getByRole("button", { name: "Add shortcut" }));
+    await user.click(within(copyRow).getByRole("switch", { name: "Copy Last Transcription enabled" }));
 
-    expect(invoke).not.toHaveBeenCalledWith("update_shortcut_settings", expect.anything());
-    expect(within(copyRow).getByText("No shortcut set")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", expect.anything());
+    });
+
+    await waitFor(() => {
+      expect(within(pasteRow).getByLabelText("Paste Last Transcription shortcut read-only")).toHaveTextContent("No shortcut configured");
+    });
+    expect(within(pasteRow).queryByText("Click to set shortcut")).not.toBeInTheDocument();
+
+    resolveUpdate({
+      bindings: [
+        { ...settings.bindings[0], enabled: false },
+        settings.bindings[1],
+      ],
+    });
+
+    await waitFor(() => {
+      expect(within(copyRow).getByRole("switch", { name: "Copy Last Transcription enabled" })).toBeEnabled();
+    });
   });
 
   it("serializes shortcut mutations while a full settings save is in flight", async () => {

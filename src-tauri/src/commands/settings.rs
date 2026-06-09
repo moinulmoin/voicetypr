@@ -927,46 +927,57 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
         ));
     }
 
-    // Unregister only the current recording shortcut (not ESC or others)
-    log::debug!("Unregistering current recording shortcut if exists");
     let old_shortcut = app_state
         .recording_shortcut
         .lock()
         .ok()
         .and_then(|guard| *guard);
-
-    if let Some(old) = old_shortcut {
-        log::debug!("Unregistering old shortcut: {:?}", old);
-        if let Err(e) = shortcuts.unregister(old) {
-            log::warn!(
-                "Failed to unregister old shortcut: {}. Continuing anyway.",
-                e
-            );
-            // Don't fail - the old shortcut might already be unregistered
-        }
-    }
-
-    // Register new shortcut immediately
-    log::debug!("Registering new shortcut: {}", normalized_shortcut);
-
-    // Attempt registration - according to docs, ANY error means hotkey won't work
-    let registration_result = shortcuts.register(new_shortcut);
-
-    match registration_result {
-        Ok(_) => {
-            log::info!("Successfully registered hotkey: {}", normalized_shortcut);
-            // Hotkey registered successfully, no conflicts
-        }
+    let shortcut_changed = old_shortcut != Some(new_shortcut);
+    let shortcut_registered = shortcuts.is_registered(new_shortcut);
+    let needs_registration = shortcut_changed || !shortcut_registered;
+    // Save to settings (original version for display).
+    let store = match app.store("settings") {
+        Ok(store) => store,
         Err(e) => {
+            log::error!("Failed to get settings store: {}", e);
+            return Err("Failed to access settings store".to_string());
+        }
+    };
+    let previous_hotkey_value = store.get("hotkey");
+
+    let restore_store_value = || {
+        if let Some(previous_hotkey_value) = previous_hotkey_value.clone() {
+            store.set("hotkey", previous_hotkey_value);
+        } else {
+            store.delete("hotkey");
+        }
+    };
+
+    let unregister_new_shortcut = || {
+        if needs_registration {
+            if let Err(e) = shortcuts.unregister(new_shortcut) {
+                log::debug!(
+                    "Failed to unregister new recording shortcut while rolling back: {}",
+                    e
+                );
+            }
+        }
+    };
+
+    if needs_registration {
+        // Register the candidate before touching the currently-working shortcut.
+        // If registration fails, the old shortcut remains active.
+        log::debug!("Registering new shortcut: {}", normalized_shortcut);
+
+        if let Err(e) = shortcuts.register(new_shortcut) {
             let error_msg = e.to_string();
             let error_lower = error_msg.to_lowercase();
 
             // According to tauri-plugin-global-shortcut docs:
-            // If register() returns an error, the shortcut is NOT functional
-            // Registration is atomic - it either succeeds completely or fails
+            // If register() returns an error, the shortcut is NOT functional.
+            // Registration is atomic - it either succeeds completely or fails.
             log::error!("Failed to register hotkey '{}': {}", normalized_shortcut, e);
 
-            // Provide helpful error message based on error type
             let detailed_error = if error_lower.contains("already registered")
                 || error_lower.contains("conflict")
                 || error_lower.contains("in use")
@@ -980,34 +991,72 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
 
             return Err(detailed_error);
         }
+
+        log::info!(
+            "Successfully registered candidate hotkey: {}",
+            normalized_shortcut
+        );
+    } else {
+        log::debug!("Recording shortcut unchanged and already registered; skipping global shortcut re-registration");
     }
 
-    // Update the recording shortcut in managed state regardless of registration warnings
-    match app_state.recording_shortcut.lock() {
-        Ok(mut shortcut_guard) => {
-            *shortcut_guard = Some(new_shortcut);
-            log::debug!("Updated recording shortcut state");
-        }
-        Err(e) => {
-            log::error!("Failed to acquire recording shortcut lock: {}", e);
-            // Continue anyway since the hotkey might be registered
-            log::warn!("Continuing despite lock failure");
+    if shortcut_changed {
+        match app_state.recording_shortcut.lock() {
+            Ok(mut shortcut_guard) => {
+                *shortcut_guard = Some(new_shortcut);
+                log::debug!("Updated recording shortcut state");
+            }
+            Err(e) => {
+                log::error!("Failed to acquire recording shortcut lock: {}", e);
+                unregister_new_shortcut();
+                return Err("Failed to update shortcut state".to_string());
+            }
         }
     }
-
-    // Save to settings (original version for display)
-    let store = app.store("settings").map_err(|e| {
-        log::error!("Failed to get settings store: {}", e);
-        "Failed to access settings store".to_string()
-    })?;
 
     store.set("hotkey", json!(shortcut));
     if let Err(e) = store.save() {
         log::error!("Failed to save settings: {}", e);
-        // The shortcut is already registered, so this isn't a critical failure
-        log::warn!("Shortcut registered but settings save failed");
+        if shortcut_changed {
+            if let Ok(mut shortcut_guard) = app_state.recording_shortcut.lock() {
+                *shortcut_guard = old_shortcut;
+            }
+        }
+        restore_store_value();
+        unregister_new_shortcut();
+        return Err(format!("Failed to save settings: {}", e));
     }
 
+    if shortcut_changed {
+        if let Some(old) = old_shortcut {
+            if shortcuts.is_registered(old) {
+                log::debug!(
+                    "Unregistering old shortcut after committing new shortcut: {:?}",
+                    old
+                );
+                if let Err(e) = shortcuts.unregister(old) {
+                    log::error!("Failed to unregister old recording shortcut: {}", e);
+                    if let Ok(mut shortcut_guard) = app_state.recording_shortcut.lock() {
+                        *shortcut_guard = old_shortcut;
+                    }
+                    restore_store_value();
+                    if let Err(save_error) = store.save() {
+                        log::error!(
+                            "Failed to restore previous hotkey setting after unregister failure: {}",
+                            save_error
+                        );
+                    }
+                    unregister_new_shortcut();
+                    return Err(format!("Failed to replace previous hotkey: {}", e));
+                }
+            } else {
+                log::debug!(
+                    "Previous recording shortcut was not registered; no unregister needed: {:?}",
+                    old
+                );
+            }
+        }
+    }
     log::info!("Successfully updated global shortcut to: {}", shortcut);
 
     Ok(())

@@ -13,6 +13,16 @@ interface UseRecordingReturn {
   isActive: boolean;
 }
 
+const getCommandErrorMessage = (err: unknown, fallback: string) => {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message;
+  }
+  if (typeof err === 'string' && err.trim()) {
+    return err;
+  }
+  return fallback;
+};
+
 export function useRecording(): UseRecordingReturn {
   const [state, setState] = useState<RecordingState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +111,8 @@ export function useRecording(): UseRecordingReturn {
       await invoke('start_recording');
     } catch (err) {
       console.error('[Recording Hook] Failed to start recording:', err);
-      // Backend will emit appropriate error events
+      setState('error');
+      setError(`${getCommandErrorMessage(err, 'Recording could not start')}. Try again in a moment.`);
     }
   }, []);
 
@@ -111,7 +122,8 @@ export function useRecording(): UseRecordingReturn {
       await invoke('stop_recording');
     } catch (err) {
       console.error('[Recording Hook] Failed to stop recording:', err);
-      // Backend will emit appropriate error events
+      setState('error');
+      setError(`${getCommandErrorMessage(err, 'Recording could not stop')}. Try again in a moment.`);
     }
   }, []);
 

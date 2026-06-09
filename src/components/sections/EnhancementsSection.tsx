@@ -81,6 +81,7 @@ export function EnhancementsSection() {
     useState<WritingSettings>(defaultWritingSettings);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const writingSaveGeneration = useRef(0);
+  const enhancementSaveGeneration = useRef(0);
   const writingSettingsRef = useRef(writingSettings);
   const writingSaveQueueRef = useRef(Promise.resolve());
 
@@ -211,9 +212,19 @@ export function EnhancementsSection() {
 
     const unlistenApiKey = listen("api-key-saved", async (event) => {
       const loadedAISettings = await invoke<AISettings>("get_ai_settings");
-      setAISettings(loadedAISettings);
-
       const provider = (event.payload as { provider?: string }).provider;
+      setAISettings(
+        provider && provider !== loadedAISettings.provider
+          ? {
+              ...loadedAISettings,
+              provider,
+              enabled: false,
+              model: "",
+              hasApiKey: true,
+            }
+          : loadedAISettings,
+      );
+
       if (provider) {
         setProviderApiKeys((prev) => ({ ...prev, [provider]: true }));
       }
@@ -304,12 +315,18 @@ export function EnhancementsSection() {
   }, [settingsLoaded, aiSettings.provider, clearModels, updateSettings]);
 
   const persistEnhancementOptions = async (nextOptions: { preset: EnhancementPreset }) => {
+    const rollbackOptions = enhancementOptions;
+    const generationAtEnqueue = enhancementSaveGeneration.current + 1;
+    enhancementSaveGeneration.current = generationAtEnqueue;
     setEnhancementOptions(nextOptions);
     try {
       await invoke("update_enhancement_options", {
         options: toBackendOptions(nextOptions),
       });
     } catch (error) {
+      if (enhancementSaveGeneration.current === generationAtEnqueue) {
+        setEnhancementOptions(rollbackOptions);
+      }
       const message = getErrorMessage(error, "Failed to save enhancement options");
       toast.error(message);
     }
@@ -329,15 +346,18 @@ export function EnhancementsSection() {
     await persistEnhancementOptions({ preset });
   };
 
-  const enqueueWritingSettingsSave = (rollbackSettings: WritingSettings) => {
-    const generationAtEnqueue = writingSaveGeneration.current;
+  const enqueueWritingSettingsSave = (
+    settingsToSave: WritingSettings,
+    rollbackSettings: WritingSettings,
+    generationAtEnqueue: number,
+  ) => {
     writingSaveQueueRef.current = writingSaveQueueRef.current.then(async () => {
-      const settingsToSave = writingSettingsRef.current;
       try {
         await invoke("update_writing_settings", { settings: settingsToSave });
       } catch (error) {
         if (writingSaveGeneration.current === generationAtEnqueue) {
           setWritingSettings(rollbackSettings);
+          writingSettingsRef.current = rollbackSettings;
           const message = getErrorMessage(error, "Failed to save writing settings");
           toast.error(message);
         }
@@ -347,11 +367,12 @@ export function EnhancementsSection() {
 
   const handleWritingSettingsChange = (nextSettings: WritingSettings) => {
     const rollbackSettings = writingSettingsRef.current;
-    writingSaveGeneration.current += 1;
+    const generationAtEnqueue = writingSaveGeneration.current + 1;
+    writingSaveGeneration.current = generationAtEnqueue;
     setWritingSettings(nextSettings);
     writingSettingsRef.current = nextSettings;
     if (settingsLoaded) {
-      enqueueWritingSettingsSave(rollbackSettings);
+      enqueueWritingSettingsSave(nextSettings, rollbackSettings, generationAtEnqueue);
     }
   };
 
@@ -442,6 +463,8 @@ export function EnhancementsSection() {
       setAISettings((prev) => ({
         ...prev,
         provider: selectedProvider,
+        enabled: prev.provider === selectedProvider ? prev.enabled : false,
+        model: prev.provider === selectedProvider ? prev.model : "",
         hasApiKey: true,
       }));
       setShowApiKeyModal(false);
@@ -546,19 +569,26 @@ export function EnhancementsSection() {
               </Dialog>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
-              Premium writing cleanup with private local-first controls.
+              AI cleanup sends text to your connected provider; Personal Dictation stays no-AI.
             </p>
           </div>
-          <Field orientation="horizontal" className="w-auto items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-1.5">
-            <FieldTitle className="text-sm">AI formatting</FieldTitle>
-            <Switch
-              id="ai-formatting"
-              aria-label="AI formatting"
-              checked={aiSettings.enabled}
-              onCheckedChange={handleToggleEnabled}
-              disabled={!hasAnyValidConfig || !hasSelectedModel}
-            />
-          </Field>
+          <div className="flex flex-col items-end gap-1">
+            <Field orientation="horizontal" className="w-auto items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-1.5">
+              <FieldTitle className="text-sm">AI formatting</FieldTitle>
+              <Switch
+                id="ai-formatting"
+                aria-label="AI formatting"
+                checked={aiSettings.enabled}
+                onCheckedChange={handleToggleEnabled}
+                disabled={!hasAnyValidConfig || !hasSelectedModel}
+              />
+            </Field>
+            {!aiSettings.enabled && (!hasAnyValidConfig || !hasSelectedModel) && (
+              <p className="max-w-56 text-right text-xs text-muted-foreground">
+                Add an API key and choose a model below to turn on AI formatting.
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -574,9 +604,11 @@ export function EnhancementsSection() {
                     Refreshing models
                   </span>
                 )}
-                {activeModelName && aiSettings.enabled && (
+                {activeModelName && (
                   <span>
-                    Active model: <span className="text-foreground">{activeModelName}</span>
+                    {aiSettings.enabled ? "Active model" : "Selected model"}:{" "}
+                    <span className="text-foreground">{activeModelName}</span>
+                    {!aiSettings.enabled && " (AI formatting off)"}
                   </span>
                 )}
               </div>
@@ -632,7 +664,8 @@ export function EnhancementsSection() {
             {!aiSettings.enabled &&
               effectiveFinalTextLanguage !== "same_as_transcript" && (
                 <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                  Final text language changes beyond the raw transcript require AI formatting to be enabled.
+                  Choose an AI-capable mode and turn on AI formatting to use a final text language
+                  different from the transcript.
                 </div>
               )}
 

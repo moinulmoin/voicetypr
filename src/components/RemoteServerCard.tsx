@@ -59,6 +59,7 @@ interface RemoteServerCardProps {
   server: SavedConnection;
   isActive: boolean;
   onSelect: (serverId: string) => void;
+  onDeselect?: () => void;
   onRemove: (serverId: string) => void;
   onEdit: (server: SavedConnection) => void;
   /** Whether a global refresh is in progress */
@@ -97,10 +98,10 @@ function remoteControlErrorMessage(error: unknown, fallback: string) {
 function remoteControlUnavailableMessage(error: unknown, fallback: string) {
   const raw = remoteControlErrorMessage(error, fallback);
   if (raw.includes("disabled on this device") || raw.includes("model_control_disabled")) {
-    return "This device has not enabled remote model changes.";
+    return "The host has not enabled remote model changes.";
   }
   if (raw.includes("requires a sharing password")) {
-    return "Remote model changes are unavailable until the host adds a sharing password.";
+    return "Add a sharing password on the host so only trusted devices can change the shared model.";
   }
   if (/404|403|unsupported|not found|unavailable/i.test(raw)) {
     return "Remote model changes are not available for this connection.";
@@ -115,7 +116,7 @@ function lockMessageForStatus(status: ConnectionStatus | undefined, fallback?: s
 
   switch (status) {
     case "AuthFailed":
-      return "Authentication failed. Tap edit to update the password.";
+      return "Password incorrect. Tap edit to update the saved password.";
     case "Offline":
       return "Remote model control is unavailable while the host is offline.";
     default:
@@ -281,7 +282,7 @@ function RemoteTranscriptionModelControl({
         <div className="min-w-0">
           <p className="text-xs font-medium text-foreground">Transcription model on {serverName}</p>
           <p className="text-[11px] text-muted-foreground">
-            Changes only affect dictation routed to that device.
+            Changes the host's shared transcription model, not this device's local model.
           </p>
         </div>
         {selectableModels.length > 0 ? (
@@ -377,6 +378,7 @@ export function RemoteServerCard({
   server,
   isActive,
   onSelect,
+  onDeselect,
   onRemove,
   onEdit,
   isRefreshing = false,
@@ -412,6 +414,11 @@ export function RemoteServerCard({
     onEdit(server);
   };
 
+  const handleDeselect = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onDeselect?.();
+  };
+
   const displayName = server.name || `${server.host}:${server.port}`;
   const modelDisplayName = getModelDisplayName(server.model) ?? server.model;
 
@@ -424,7 +431,7 @@ export function RemoteServerCard({
     <Card
       className={cn(
         "px-4 py-3 border transition-all hover:shadow-sm",
-        isSelectable ? "cursor-pointer" : "cursor-default",
+        isSelectable && !isActive ? "cursor-pointer" : "cursor-default",
         status === "self_connection"
           ? "border-amber-500/30 bg-amber-500/10"
           : isActive
@@ -433,7 +440,7 @@ export function RemoteServerCard({
               ? "border-border/60 bg-card/90 hover:border-border"
               : "border-border/60 bg-card/90"
       )}
-      onClick={() => isSelectable && onSelect(server.id)}
+      onClick={() => isSelectable && !isActive && onSelect(server.id)}
     >
       <div className="flex items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
@@ -462,9 +469,26 @@ export function RemoteServerCard({
                 {displayName}
               </h3>
               {isActive && (
-                <Badge variant="outline" className="gap-1 border-sky-500/40 bg-sky-500/10 text-sky-800 dark:text-sky-300">
-                  <CheckCircle2 className="size-3" />
-                  Routing to {displayName}
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "gap-1",
+                    status === "online"
+                      ? "border-sky-500/40 bg-sky-500/10 text-sky-800 dark:text-sky-300"
+                      : "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300",
+                  )}
+                >
+                  {status === "online" ? (
+                    <>
+                      <CheckCircle2 className="size-3" />
+                      Routing to {displayName}
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="size-3" />
+                      Routing risk: {status === "auth_failed" ? "Auth failed" : status === "offline" ? "Offline" : "Status unknown"}
+                    </>
+                  )}
                 </Badge>
               )}
             </div>
@@ -505,7 +529,7 @@ export function RemoteServerCard({
                 <>
                   <KeyRound className="size-3 text-amber-600" />
                   <span className="text-amber-700 dark:text-amber-400">
-                    Auth Failed
+                    Password incorrect
                   </span>
                   <button
                     type="button"
@@ -523,7 +547,7 @@ export function RemoteServerCard({
                     This Machine
                   </span>
                   <span>
-                    • Cannot use self
+                    • This is the same device
                   </span>
                 </>
               ) : (
@@ -539,6 +563,17 @@ export function RemoteServerCard({
           </div>
         </div>
 
+        {isActive && onDeselect && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            onClick={handleDeselect}
+          >
+            Stop routing
+          </Button>
+        )}
+
         <ButtonGroup className="shrink-0">
           <Button
             size="sm"
@@ -546,6 +581,7 @@ export function RemoteServerCard({
             className="size-8 p-0 text-muted-foreground hover:text-foreground"
             onClick={handleEdit}
             title="Edit server"
+            aria-label={`Edit ${displayName}`}
           >
             <Pencil className="size-4" />
           </Button>
@@ -556,6 +592,7 @@ export function RemoteServerCard({
             onClick={handleRemove}
             disabled={removing}
             title="Remove server"
+            aria-label={`Remove ${displayName}`}
           >
             {removing ? (
               <Spinner className="size-4" />

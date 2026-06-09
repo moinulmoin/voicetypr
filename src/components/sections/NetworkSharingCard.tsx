@@ -314,8 +314,8 @@ export function NetworkSharingCard() {
       setStatus((current) => ({ ...current, allow_model_control: checked }));
       toast.success(
         checked
-          ? "Remote model changes enabled for trusted devices"
-          : "Remote model changes disabled",
+          ? "Host model changes enabled for trusted devices"
+          : "Host model changes disabled",
       );
     } catch (error) {
       console.error("Failed to update remote model control setting:", error);
@@ -699,6 +699,7 @@ export function NetworkSharingCard() {
                             onClick={() => copyAddress(result.ip)}
                             className="p-2 rounded-md border border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground hover:border-border/50 active:bg-accent/80 active:scale-95 transition-all duration-150"
                             title="Copy address"
+                            aria-label={`Copy address ${result.ip}:${port}`}
                           >
                             <Copy className="h-4 w-4" />
                           </button>
@@ -711,7 +712,7 @@ export function NetworkSharingCard() {
                         <div
                           key={`failed-${index}`}
                           className="flex items-center gap-2 opacity-50"
-                          title={result.error || "Failed to bind"}
+                          title={result.error || "Could not use this address"}
                         >
                           <XCircle className="h-4 w-4 text-red-400 flex-shrink-0" />
                           <div className="flex-1 px-3 py-2 rounded-md bg-muted/30 border border-border/30 font-mono text-sm text-muted-foreground">
@@ -721,7 +722,7 @@ export function NetworkSharingCard() {
                                 ({result.interface_name})
                               </span>
                             )}
-                            <span className="ml-2 text-xs text-red-400">(bind failed)</span>
+                            <span className="ml-2 text-xs text-red-400">(could not use this address)</span>
                           </div>
                         </div>
                       ))}
@@ -735,7 +736,7 @@ export function NetworkSharingCard() {
               )}
               {status.binding_results.filter((r) => !r.success && r.ip !== "127.0.0.1").length > 0 && (
                 <p className="text-xs text-amber-500">
-                  Some addresses failed to bind - hover for details
+                  Some addresses could not be used - hover for details
                 </p>
               )}
             </div>
@@ -848,7 +849,7 @@ export function NetworkSharingCard() {
                       Allow trusted devices to change shared model
                     </Label>
                     <p className="text-xs text-muted-foreground">
-                      Devices with the password can switch only the model this device shares.
+                      Requires a sharing password so only trusted devices can change the model this device shares.
                     </p>
                   </div>
                   <Switch
@@ -862,7 +863,7 @@ export function NetworkSharingCard() {
                 </div>
                 {!status.password_configured && (
                   <p className="text-xs text-muted-foreground">
-                    Add a sharing password to enable remote model changes.
+                    Add a sharing password first so only trusted devices can change the shared model.
                   </p>
                 )}
               </div>

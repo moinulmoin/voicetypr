@@ -12,6 +12,7 @@ const {
   eventListeners,
   modelManagement,
   settingsState,
+  recordingState,
 } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   updateSettingsMock: vi.fn(),
@@ -25,6 +26,11 @@ const {
     current_model_engine: "whisper",
     speech_language: "en",
     onboarding_completed: false,
+  },
+  recordingState: {
+    state: "idle",
+    error: null as string | null,
+    isActive: false,
   },
   modelManagement: {
     models: {
@@ -80,11 +86,11 @@ vi.mock("@/hooks/useAccessibilityPermission", () => ({
 
 vi.mock("@/hooks/useRecording", () => ({
   useRecording: () => ({
-    state: "idle",
-    error: null,
+    state: recordingState.state,
+    error: recordingState.error,
     startRecording: startRecordingMock,
     stopRecording: stopRecordingMock,
-    isActive: false,
+    isActive: recordingState.isActive,
   }),
 }));
 
@@ -126,6 +132,11 @@ beforeEach(() => {
     current_model_engine: "whisper",
     speech_language: "en",
     onboarding_completed: false,
+  });
+  Object.assign(recordingState, {
+    state: "idle",
+    error: null,
+    isActive: false,
   });
   modelManagement.models = {
     "base.en": {
@@ -177,6 +188,9 @@ describe("OnboardingDesktop", () => {
     await user.click(screen.getByRole("button", { name: /save hotkey/i }));
 
     const reviewButton = await screen.findByRole("button", { name: /review result/i });
+
+    expect(screen.queryByText(/current state:/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/start a short sample/i)).toBeInTheDocument();
     expect(reviewButton).toBeDisabled();
 
     await user.click(screen.getByRole("button", { name: /start sample/i }));
@@ -212,6 +226,37 @@ describe("OnboardingDesktop", () => {
 
     await user.click(screen.getByText("Use this device"));
     expect(continueButton).toBeEnabled();
+  });
+
+  it("guides users to select a downloaded local model before continuing", async () => {
+    const user = userEvent.setup();
+    settingsState.current_model = "";
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+
+    expect(screen.getByText(/select a downloaded model/i)).toBeInTheDocument();
+    expect(screen.getByText(/onboarding needs one selected/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /continue/i })).toBeDisabled();
+  });
+
+  it("lets remote-first users switch to local setup from the empty remote state", async () => {
+    const user = userEvent.setup();
+    settingsState.current_model = "";
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use another VoiceTypr"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+
+    await user.click(await screen.findByRole("button", { name: /set up this device instead/i }));
+
+    expect(screen.getByText("Prepare this device")).toBeInTheDocument();
+    expect(screen.getByText(/select a downloaded model/i)).toBeInTheDocument();
   });
 
   it("allows an online remote VoiceTypr source without a local model", async () => {

@@ -230,8 +230,13 @@ export const OnboardingDesktop = function OnboardingDesktop({
     [activeRemoteServerId, remoteServers],
   );
   const localReady = Boolean(selectedModelName && selectedModel?.downloaded);
+  const hasDownloadedLocalModel = modelOrder.some((name) => models[name]?.downloaded);
   const remoteReady = isRemoteServerOnline(activeRemoteServer);
   const sourceReady = sourceType === "local" ? localReady : remoteReady;
+  const sampleErrorDescription =
+    sourceType === "remote" && sampleError && !remoteReady
+      ? "The selected remote VoiceTypr is offline. Make sure sharing is enabled on that device, keep both devices on the same network, then go back and choose an online server."
+      : sampleError;
 
   const loadRemoteServers = useCallback(async () => {
     setIsLoadingRemoteServers(true);
@@ -404,6 +409,10 @@ export const OnboardingDesktop = function OnboardingDesktop({
       current_model_engine: info?.engine ?? "whisper",
       speech_language: "en",
     });
+  };
+
+  const switchToLocalReadiness = () => {
+    confirmSource("local");
   };
 
   const selectRemoteServer = async (serverId: string) => {
@@ -834,6 +843,15 @@ export const OnboardingDesktop = function OnboardingDesktop({
                       {!isLoading && modelOrder.length === 0 ? (
                         <EmptyState title="No local models available" description="Remote VoiceTypr is still available if you have another machine ready." />
                       ) : null}
+                      {hasDownloadedLocalModel && !localReady ? (
+                        <Alert>
+                          <Info className="size-4" />
+                          <AlertTitle>Select a downloaded model</AlertTitle>
+                          <AlertDescription>
+                            Downloaded models are ready to use, but onboarding needs one selected before continuing.
+                          </AlertDescription>
+                        </Alert>
+                      ) : null}
                     </div>
                   </ScrollArea>
                 </Card>
@@ -868,10 +886,15 @@ export const OnboardingDesktop = function OnboardingDesktop({
                         <LoadingState label="Checking remote servers" />
                       ) : null}
                       {!isLoadingRemoteServers && remoteServers.length === 0 ? (
-                        <EmptyState
-                          title="No remote servers saved"
-                          description="Add the host and password from a VoiceTypr machine with sharing enabled."
-                        />
+                        <div className="flex flex-col items-center gap-3">
+                          <EmptyState
+                            title="No remote servers saved"
+                            description="Add a VoiceTypr server, or set up this device with a local model instead."
+                          />
+                          <Button variant="outline" onClick={switchToLocalReadiness}>
+                            Set up this device instead
+                          </Button>
+                        </div>
                       ) : null}
                       {discoveredRemoteServers.map((server) => (
                         <Card
@@ -1042,7 +1065,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   Sample recording
                 </CardTitle>
                 <CardDescription>
-                  Current state: {recording.state}
+                  Start a short sample, then stop to transcribe it.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-4">
@@ -1078,7 +1101,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   <Alert variant="destructive">
                     <CircleAlert className="size-4" />
                     <AlertTitle>Sample failed</AlertTitle>
-                    <AlertDescription>{sampleError}</AlertDescription>
+                    <AlertDescription>{sampleErrorDescription}</AlertDescription>
                   </Alert>
                 ) : null}
 
