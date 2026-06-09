@@ -1051,6 +1051,8 @@ pub async fn get_transcription_acceleration_status(
             gpu_available: None,
             message: "CPU mode is selected. GPU acceleration will not be used.".to_string(),
             last_error: None,
+            diagnostic_code: "cpu_selected".to_string(),
+            recommended_action: "none".to_string(),
         });
     }
 
@@ -1066,6 +1068,8 @@ pub async fn get_transcription_acceleration_status(
             gpu_available: None,
             message: "This acceleration setting applies to Windows Vulkan builds.".to_string(),
             last_error: None,
+            diagnostic_code: "unsupported_platform".to_string(),
+            recommended_action: "none".to_string(),
         })
     }
 

@@ -40,15 +40,70 @@ interface AccelerationStatus {
   effective_backend: string;
   gpu_available: boolean | null;
   message: string;
+  diagnostic_code: string;
+  recommended_action: string;
   last_error?: string | null;
 }
 
 function isAccelerationStatus(value: unknown): value is AccelerationStatus {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const status = value as Record<string, unknown>;
   return (
-    !!value &&
-    typeof value === "object" &&
-    "message" in value &&
-    "effective_backend" in value
+    typeof status.message === "string" &&
+    typeof status.effective_backend === "string" &&
+    typeof status.diagnostic_code === "string" &&
+    typeof status.recommended_action === "string"
+  );
+}
+
+function getRecommendedActionDescription(action: string): string | undefined {
+  switch (action) {
+    case "download_model":
+      return "Download or select a local Whisper model, then retry Test GPU.";
+    case "update_graphics_driver":
+      return "Update or install your graphics driver, then retry Test GPU.";
+    case "use_cpu":
+      return "Use CPU mode for now, or retry GPU after updating your graphics driver.";
+    case "report_bug":
+      return "Report this with logs so we can inspect the packaged GPU helper.";
+    default:
+      return undefined;
+  }
+}
+
+function getAccelerationGuidance(status: AccelerationStatus | null): string {
+  if (!status) {
+    return "VoiceTypr will test GPU acceleration when needed and keep CPU transcription available.";
+  }
+
+  switch (status.diagnostic_code) {
+    case "ready":
+      return "GPU acceleration is ready.";
+    case "vulkan_loader_missing":
+    case "vulkan_device_missing":
+    case "driver_or_runtime_failed":
+      return "GPU acceleration needs a Vulkan-capable NVIDIA, AMD, or Intel graphics driver. Update or install your graphics driver, then retry Test GPU. VoiceTypr will keep using CPU transcription safely until GPU acceleration is available.";
+    case "sidecar_missing":
+    case "sidecar_protocol_error":
+      return "VoiceTypr has a package or runtime issue. Please report this with logs. VoiceTypr will keep using CPU transcription safely.";
+    case "model_missing":
+      return "Download or select a local Whisper model before testing GPU acceleration. VoiceTypr will keep using CPU transcription safely.";
+    default:
+      return (
+        getRecommendedActionDescription(status.recommended_action) ||
+        "VoiceTypr will keep using CPU transcription safely."
+      );
+  }
+}
+
+function getAccelerationToastDescription(status: AccelerationStatus): string | undefined {
+  return (
+    getRecommendedActionDescription(status.recommended_action) ||
+    status.last_error ||
+    undefined
   );
 }
 
@@ -139,9 +194,11 @@ export function GeneralSettings() {
       if (isAccelerationStatus(status)) {
         setAccelerationStatus(status);
         if (status.gpu_available === true) {
-          toast.success("GPU acceleration is available");
+          toast.success(status.message || "GPU acceleration is available");
         } else if (status.gpu_available === false) {
-          toast.warning("GPU acceleration is unavailable; CPU mode will be used");
+          toast.warning(status.message, {
+            description: getAccelerationToastDescription(status),
+          });
         } else {
           toast.info(status.message);
         }
@@ -668,6 +725,9 @@ export function GeneralSettings() {
                   <p className="text-xs text-muted-foreground">
                     {accelerationStatus?.message ??
                       "VoiceTypr will test GPU acceleration when needed."}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {getAccelerationGuidance(accelerationStatus)}
                   </p>
                   {accelerationStatus?.last_error && (
                     <p className="text-xs text-amber-600 dark:text-amber-500">

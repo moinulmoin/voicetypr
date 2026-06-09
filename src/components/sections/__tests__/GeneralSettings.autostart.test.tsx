@@ -1,4 +1,5 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeneralSettings } from '../GeneralSettings';
 
@@ -21,6 +22,8 @@ const accelerationStatus = {
   effective_backend: 'unknown',
   gpu_available: null,
   message: 'GPU acceleration has not been tested yet.',
+  diagnostic_code: 'not_tested',
+  recommended_action: 'none',
   last_error: null,
 };
 
@@ -60,7 +63,7 @@ vi.mock('@/components/HotkeyInput', () => ({
 }));
 
 vi.mock('@/components/ui/scroll-area', () => ({
-  ScrollArea: ({ children }: { children: any }) => <div>{children}</div>,
+  ScrollArea: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock('@/components/ui/switch', () => ({
@@ -88,8 +91,8 @@ vi.mock('@/components/ui/switch', () => ({
 }));
 
 vi.mock('@/components/ui/toggle-group', () => ({
-  ToggleGroup: ({ children }: { children: any }) => <div>{children}</div>,
-  ToggleGroupItem: ({ children }: { children: any }) => <div>{children}</div>,
+  ToggleGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ToggleGroupItem: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock('@/components/ui/select', () => ({
@@ -98,7 +101,7 @@ vi.mock('@/components/ui/select', () => ({
     value,
     onValueChange,
   }: {
-    children: any;
+    children: ReactNode;
     value?: string;
     onValueChange?: (v: string) => void;
   }) => (
@@ -110,15 +113,15 @@ vi.mock('@/components/ui/select', () => ({
       {children}
     </div>
   ),
-  SelectTrigger: ({ children }: { children: any }) => (
+  SelectTrigger: ({ children }: { children: ReactNode }) => (
     <div data-testid="select-trigger">{children}</div>
   ),
-  SelectContent: ({ children }: { children: any }) => <div>{children}</div>,
+  SelectContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   SelectItem: ({
     children,
     value,
   }: {
-    children: any;
+    children: ReactNode;
     value: string;
   }) => <div data-testid={`select-item-${value}`}>{children}</div>,
   SelectValue: () => <div data-testid="select-value" />,
@@ -148,7 +151,12 @@ describe('GeneralSettings autostart via backend commands', () => {
         return Promise.resolve(accelerationStatus);
       }
       if (command === 'test_transcription_acceleration') {
-        return Promise.resolve({ ...accelerationStatus, gpu_available: true });
+        return Promise.resolve({
+          ...accelerationStatus,
+          diagnostic_code: 'ready',
+          recommended_action: 'none',
+          gpu_available: true,
+        });
       }
       return Promise.resolve(false);
     });
@@ -264,6 +272,53 @@ describe('GeneralSettings autostart via backend commands', () => {
     expect(autostartPlugin.enable).not.toHaveBeenCalled();
     expect(autostartPlugin.disable).not.toHaveBeenCalled();
     expect(autostartPlugin.isEnabled).not.toHaveBeenCalled();
+  });
+
+  it('renders actionable GPU driver diagnostics and uses backend failure toast message', async () => {
+    const { toast } = await import('sonner');
+    const driverFailureStatus = {
+      ...accelerationStatus,
+      effective_backend: 'cpu',
+      gpu_available: false,
+      message: 'Vulkan runtime failed to initialize.',
+      diagnostic_code: 'driver_or_runtime_failed',
+      recommended_action: 'update_graphics_driver',
+      last_error: 'The Vulkan loader could not create a device.',
+    };
+
+    mockInvoke.mockImplementation((command: string, args?: { enabled?: boolean }) => {
+      if (command === 'get_autostart_status') return Promise.resolve(false);
+      if (command === 'set_autostart') return Promise.resolve(args?.enabled ?? false);
+      if (command === 'get_transcription_acceleration_status') {
+        return Promise.resolve(driverFailureStatus);
+      }
+      if (command === 'test_transcription_acceleration') {
+        return Promise.resolve(driverFailureStatus);
+      }
+      return Promise.resolve(false);
+    });
+
+    render(<GeneralSettings />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Vulkan-capable NVIDIA, AMD, or Intel graphics driver/),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/VoiceTypr will keep using CPU transcription safely/),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /check status/i }));
+
+    await waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith(
+        'Vulkan runtime failed to initialize.',
+        {
+          description: 'Update or install your graphics driver, then retry Test GPU.',
+        },
+      );
+    });
   });
 
   it('checks acceleration status through backend command without showing a false GPU warning', async () => {
