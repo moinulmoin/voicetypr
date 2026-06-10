@@ -272,6 +272,7 @@ impl Transcriber {
         language: Option<&str>,
         translate: bool,
         cancel_flag: Arc<AtomicBool>,
+        local_abort_flag: Arc<AtomicBool>,
     ) -> Result<String, String> {
         let transcription_start = Instant::now();
         let audio_path_str = format!("{:?}", audio_path);
@@ -307,7 +308,7 @@ impl Transcriber {
             return Err(error);
         }
 
-        if is_cancelled(&cancel_flag) {
+        if is_cancelled(&cancel_flag) || is_cancelled(&local_abort_flag) {
             log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled before starting");
             return Err("Transcription cancelled".to_string());
         }
@@ -369,7 +370,7 @@ impl Transcriber {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to read audio samples: {}", e))?;
 
-        if is_cancelled(&cancel_flag) {
+        if is_transcription_cancelled(&cancel_flag, &local_abort_flag) {
             log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after reading samples");
             return Err("Transcription cancelled".to_string());
         }
@@ -380,7 +381,7 @@ impl Transcriber {
         let mut audio: Vec<f32> = vec![0.0; samples_i16.len()];
         convert_integer_to_float_audio(&samples_i16, &mut audio).map_err(|e| e.to_string())?;
 
-        if is_cancelled(&cancel_flag) {
+        if is_transcription_cancelled(&cancel_flag, &local_abort_flag) {
             log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after audio conversion");
             return Err("Transcription cancelled".to_string());
         }
@@ -401,6 +402,11 @@ impl Transcriber {
             audio = convert_multichannel_to_mono(&audio, spec.channels as usize)?;
         } else if spec.channels != 1 {
             return Err(format!("Invalid channel count: {}", spec.channels));
+        }
+
+        if is_transcription_cancelled(&cancel_flag, &local_abort_flag) {
+            log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after channel conversion");
+            return Err("Transcription cancelled".to_string());
         }
 
         // Store original audio length before the move
@@ -445,7 +451,7 @@ impl Transcriber {
             ],
         );
 
-        if is_cancelled(&cancel_flag) {
+        if is_transcription_cancelled(&cancel_flag, &local_abort_flag) {
             log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after resampling");
             return Err("Transcription cancelled".to_string());
         }
@@ -554,7 +560,7 @@ impl Transcriber {
         params.set_initial_prompt(""); // Empty prompt to avoid biasing the model
 
         params.set_temperature(if cpu_profile { 0.0 } else { 0.2 });
-        params.set_temperature_inc(0.2); // Increase by 0.2 on fallback (default)
+        params.set_temperature_inc(if cpu_profile { 0.0 } else { 0.2 });
         params.set_max_initial_ts(1.0); // Limit initial timestamp search
 
         // Limit segment length to prevent runaway hallucinations
@@ -589,8 +595,10 @@ impl Transcriber {
             return Ok(String::new());
         }
 
-        let abort_flag = cancel_flag.clone();
-        let abort_callback: Box<dyn FnMut() -> bool> = Box::new(move || is_cancelled(&abort_flag));
+        let abort_cancel_flag = cancel_flag.clone();
+        let abort_local_flag = local_abort_flag.clone();
+        let abort_callback: Box<dyn FnMut() -> bool> =
+            Box::new(move || is_cancelled(&abort_cancel_flag) || is_cancelled(&abort_local_flag));
         params
             .set_abort_callback_safe::<Option<Box<dyn FnMut() -> bool>>, Box<dyn FnMut() -> bool>>(
                 Some(abort_callback),
@@ -647,7 +655,7 @@ impl Transcriber {
                 );
             }
             Err(e) => {
-                if is_cancelled(&cancel_flag) {
+                if is_transcription_cancelled(&cancel_flag, &local_abort_flag) {
                     log::info!("[TRANSCRIPTION_DEBUG] Whisper inference aborted by cancellation");
                     return Err("Transcription cancelled".to_string());
                 }
@@ -769,6 +777,10 @@ struct AudioMetrics {
 
 const SILENCE_RMS_THRESHOLD: f64 = 0.0005;
 const SILENCE_PEAK_THRESHOLD: f64 = 0.003;
+
+fn is_transcription_cancelled(cancel_flag: &AtomicBool, local_abort_flag: &AtomicBool) -> bool {
+    is_cancelled(cancel_flag) || is_cancelled(local_abort_flag)
+}
 
 fn is_cancelled(cancel_flag: &AtomicBool) -> bool {
     cancel_flag.load(Ordering::SeqCst)

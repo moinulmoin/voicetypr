@@ -23,7 +23,7 @@ use serde_json;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_store::StoreExt;
@@ -32,6 +32,71 @@ pub(crate) const PTT_START_ABORTED_AFTER_RELEASE: &str =
     "PTT key released before recording could start";
 const LICENSE_CHECK_TIMEOUT_SECS: u64 = 3;
 const STALE_TRIAL_LICENSE_FALLBACK_MAX_AGE_SECS: u64 = 24 * 60 * 60;
+const TRANSCRIPTION_TIMED_OUT: &str = "Transcription timed out";
+const CPU_TRANSCRIPTION_TIMEOUT_MIN_SECS: f32 = 20.0;
+const CPU_TRANSCRIPTION_TIMEOUT_MAX_SECS: f32 = 60.0;
+const CPU_TRANSCRIPTION_TIMEOUT_SECONDS_PER_AUDIO_SECOND: f32 = 4.0;
+const CPU_TRANSCRIPTION_ABORT_GRACE_SECS: u64 = 2;
+const PREVIOUS_TRANSCRIPTION_STOPPING: &str = "Previous transcription is still stopping";
+
+static RECORDING_WHISPER_CPU_DECODE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+struct RecordingWhisperCpuDecodeGuard;
+
+impl RecordingWhisperCpuDecodeGuard {
+    fn try_acquire() -> Result<Self, String> {
+        RECORDING_WHISPER_CPU_DECODE_IN_FLIGHT
+            .compare_exchange(false, true, AtomicOrdering::SeqCst, AtomicOrdering::SeqCst)
+            .map(|_| Self)
+            .map_err(|_| PREVIOUS_TRANSCRIPTION_STOPPING.to_string())
+    }
+}
+
+impl Drop for RecordingWhisperCpuDecodeGuard {
+    fn drop(&mut self) {
+        RECORDING_WHISPER_CPU_DECODE_IN_FLIGHT.store(false, AtomicOrdering::SeqCst);
+    }
+}
+
+fn cpu_transcription_timeout(duration_s: f32) -> Duration {
+    let scaled_secs = if duration_s.is_finite() && duration_s > 0.0 {
+        duration_s * CPU_TRANSCRIPTION_TIMEOUT_SECONDS_PER_AUDIO_SECOND
+    } else {
+        CPU_TRANSCRIPTION_TIMEOUT_MIN_SECS
+    };
+
+    Duration::from_secs_f32(scaled_secs.clamp(
+        CPU_TRANSCRIPTION_TIMEOUT_MIN_SECS,
+        CPU_TRANSCRIPTION_TIMEOUT_MAX_SECS,
+    ))
+}
+
+fn is_non_retryable_transcription_error(error: &str) -> bool {
+    error.contains("cancelled")
+        || error == TRANSCRIPTION_TIMED_OUT
+        || error == PREVIOUS_TRANSCRIPTION_STOPPING
+}
+
+async fn wait_for_decode_to_stop(
+    decode: &mut tokio::task::JoinHandle<Result<String, String>>,
+    grace: Duration,
+) -> Result<(), String> {
+    match tokio::time::timeout(grace, decode).await {
+        Ok(join_result) => {
+            if let Err(e) = join_result {
+                return Err(format!("Transcription task failed: {e}"));
+            }
+        }
+        Err(_) => {
+            log::warn!(
+                "CPU transcription did not stop within {:?}; leaving worker to unwind",
+                grace
+            );
+        }
+    }
+
+    Ok(())
+}
 
 /// Atomic counter for toast IDs to prevent race conditions
 static TOAST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -132,6 +197,7 @@ async fn transcribe_whisper_with_acceleration(
     language: Option<&str>,
     translate: bool,
     cancel_flag: Arc<AtomicBool>,
+    cpu_timeout: Option<Duration>,
 ) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     let mode = {
@@ -213,8 +279,72 @@ async fn transcribe_whisper_with_acceleration(
         cache.get_or_create(model_path)?
     };
 
-    let result =
-        transcriber.transcribe_with_cancellation(audio_path, language, translate, cancel_flag);
+    let audio_path = audio_path.to_path_buf();
+    let language = language.map(str::to_owned);
+    let local_abort_flag = Arc::new(AtomicBool::new(false));
+    let local_abort_for_decode = Arc::clone(&local_abort_flag);
+    let cancel_for_decode = cancel_flag.clone();
+    let decode_guard = if cpu_timeout.is_some() {
+        Some(RecordingWhisperCpuDecodeGuard::try_acquire()?)
+    } else {
+        None
+    };
+    let transcriber_for_decode = Arc::clone(&transcriber);
+    let mut decode = tokio::task::spawn_blocking(move || {
+        let _decode_guard = decode_guard;
+        transcriber_for_decode.transcribe_with_cancellation(
+            &audio_path,
+            language.as_deref(),
+            translate,
+            cancel_for_decode,
+            local_abort_for_decode,
+        )
+    });
+
+    let result = if let Some(timeout) = cpu_timeout {
+        tokio::select! {
+            join_result = &mut decode => {
+                join_result.map_err(|e| format!("Transcription task failed: {e}"))?
+            }
+            _ = wait_for_cancellation(cancel_flag.clone()) => {
+                local_abort_flag.store(true, AtomicOrdering::SeqCst);
+                wait_for_decode_to_stop(
+                    &mut decode,
+                    Duration::from_secs(CPU_TRANSCRIPTION_ABORT_GRACE_SECS),
+                )
+                .await?;
+                Err("Transcription cancelled".to_string())
+            }
+            _ = tokio::time::sleep(timeout) => {
+                local_abort_flag.store(true, AtomicOrdering::SeqCst);
+                log::warn!(
+                    "CPU transcription exceeded {:?}; requested Whisper abort",
+                    timeout
+                );
+                wait_for_decode_to_stop(
+                    &mut decode,
+                    Duration::from_secs(CPU_TRANSCRIPTION_ABORT_GRACE_SECS),
+                )
+                .await?;
+                Err(TRANSCRIPTION_TIMED_OUT.to_string())
+            }
+        }
+    } else {
+        tokio::select! {
+            join_result = &mut decode => {
+                join_result.map_err(|e| format!("Transcription task failed: {e}"))?
+            }
+            _ = wait_for_cancellation(cancel_flag.clone()) => {
+                local_abort_flag.store(true, AtomicOrdering::SeqCst);
+                wait_for_decode_to_stop(
+                    &mut decode,
+                    Duration::from_secs(CPU_TRANSCRIPTION_ABORT_GRACE_SECS),
+                )
+                .await?;
+                Err("Transcription cancelled".to_string())
+            }
+        }
+    };
 
     #[cfg(target_os = "windows")]
     {
@@ -276,9 +406,12 @@ pub async fn should_hide_pill(app: &AppHandle) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{
-        is_likely_silence, select_best_fallback_model, should_hide_pill_when_idle,
-        NormalizedAudioStats,
+        cpu_transcription_timeout, is_likely_silence, is_non_retryable_transcription_error,
+        select_best_fallback_model, should_hide_pill_when_idle, NormalizedAudioStats,
+        TRANSCRIPTION_TIMED_OUT,
     };
 
     #[test]
@@ -319,6 +452,27 @@ mod tests {
             rms: 0.01,
             peak: 0.02,
         }));
+    }
+
+    #[test]
+    fn cpu_transcription_timeout_scales_with_floor_and_ceiling() {
+        assert_eq!(cpu_transcription_timeout(4.0), Duration::from_secs(20));
+        assert_eq!(cpu_transcription_timeout(10.0), Duration::from_secs(40));
+        assert_eq!(cpu_transcription_timeout(20.0), Duration::from_secs(60));
+        assert_eq!(cpu_transcription_timeout(f32::NAN), Duration::from_secs(20));
+    }
+
+    #[test]
+    fn timeout_and_cancellation_do_not_retry() {
+        assert!(is_non_retryable_transcription_error(
+            TRANSCRIPTION_TIMED_OUT
+        ));
+        assert!(is_non_retryable_transcription_error(
+            "Transcription cancelled"
+        ));
+        assert!(!is_non_retryable_transcription_error(
+            "Whisper inference failed"
+        ));
     }
 }
 
@@ -762,12 +916,10 @@ struct NormalizedAudioStats {
 const SILENCE_RMS_THRESHOLD: f64 = 0.0005;
 const SILENCE_PEAK_THRESHOLD: f64 = 0.003;
 
-#[cfg(target_os = "windows")]
 fn is_cancelled(cancel_flag: &AtomicBool) -> bool {
     cancel_flag.load(AtomicOrdering::SeqCst)
 }
 
-#[cfg(target_os = "windows")]
 async fn wait_for_cancellation(cancel_flag: Arc<AtomicBool>) {
     while !is_cancelled(&cancel_flag) {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1051,6 +1203,11 @@ pub async fn start_recording(
             );
             return Err(e);
         }
+    }
+
+    if RECORDING_WHISPER_CPU_DECODE_IN_FLIGHT.load(AtomicOrdering::SeqCst) {
+        log::warn!("Cannot start recording while previous CPU transcription is still stopping");
+        return Err(PREVIOUS_TRANSCRIPTION_STOPPING.to_string());
     }
 
     // PTT guard: if recording mode is PushToTalk and the key was already released
@@ -1910,10 +2067,10 @@ pub async fn stop_recording(
     };
 
     // For Whisper/Parakeet: normalize and duration gate; for Soniox: skip both
-    let audio_path = match &engine_selection {
+    let (audio_path, recording_audio_duration_s) = match &engine_selection {
         ActiveEngineSelection::Soniox { .. } => {
             log::info!("[RECORD] Soniox selected — skipping normalization");
-            audio_path
+            (audio_path, None)
         }
         _ => {
             // Normalize captured audio to Whisper contract (WAV PCM s16, mono, 16k) via ffmpeg sidecar
@@ -2016,11 +2173,7 @@ pub async fn stop_recording(
                     audio_stats.rms,
                     audio_stats.peak
                 );
-                pill_toast(
-                    &app,
-                    "No speech detected - try speaking closer to the microphone",
-                    1500,
-                );
+                pill_toast(&app, "No speech detected", 1500);
                 let _ = app.emit(
                     "no-speech-detected",
                     serde_json::json!({
@@ -2036,7 +2189,7 @@ pub async fn stop_recording(
                 return Ok("".to_string());
             }
 
-            normalized_path
+            (normalized_path, Some(audio_stats.duration_s))
         }
     };
 
@@ -2081,6 +2234,7 @@ pub async fn stop_recording(
     let engine_selection_for_task = engine_selection;
     let language_for_task = language.clone();
     let selected_model_name_for_task = selected_model_name.clone();
+    let transcription_timeout_for_task = recording_audio_duration_s.map(cpu_transcription_timeout);
 
     // Spawn and track the transcription task
     let app_for_task = app.clone();
@@ -2134,6 +2288,7 @@ pub async fn stop_recording(
                         language_for_task.as_deref(),
                         translate_to_english,
                         cancel_flag.clone(),
+                        transcription_timeout_for_task,
                     )
                     .await;
 
@@ -2145,6 +2300,15 @@ pub async fn stop_recording(
                             break;
                         }
                         Err(e) => {
+                            if is_non_retryable_transcription_error(e) {
+                                log::warn!(
+                                    "Transcription attempt {} stopped without retry: {}",
+                                    attempt,
+                                    e
+                                );
+                                break;
+                            }
+
                             if attempt < MAX_RETRIES {
                                 log::warn!(
                                     "Transcription attempt {} failed: {}. Retrying in {}ms...",
@@ -2241,15 +2405,11 @@ pub async fn stop_recording(
                 log::debug!("Transcription successful, {} chars", text.len());
 
                 // Check if transcription is empty or just noise
-                if text.is_empty() || text.trim().is_empty() || text == "[BLANK_AUDIO]" {
+                if text.trim().is_empty() || text == "[BLANK_AUDIO]" || text == "[SOUND]" {
                     log::info!("Whisper returned empty transcription - no speech detected");
 
                     // Emit graceful feedback to user via pill toast
-                    pill_toast(
-                        &app_for_task,
-                        "No speech detected - try speaking closer to the microphone",
-                        1500,
-                    );
+                    pill_toast(&app_for_task, "No speech detected", 1500);
 
                     // Wait for feedback to show before hiding pill
                     let app_for_hide = app_for_task.clone();
@@ -2506,8 +2666,12 @@ pub async fn stop_recording(
                     // For other errors, show error state briefly
                     update_recording_state(&app_for_task, RecordingState::Error, Some(e.clone()));
 
-                    // Emit error via pill toast
-                    pill_toast(&app_for_task, &e, 1500);
+                    let toast_message = if e == TRANSCRIPTION_TIMED_OUT {
+                        TRANSCRIPTION_TIMED_OUT
+                    } else {
+                        "Transcription failed"
+                    };
+                    pill_toast(&app_for_task, toast_message, 1500);
 
                     // Transition back to Idle after a delay
                     // This ensures we don't get stuck in Error state
@@ -2819,6 +2983,7 @@ pub async fn transcribe_audio_file(
                 Some(&language),
                 translate_to_english,
                 Arc::new(AtomicBool::new(false)),
+                None,
             )
             .await?;
             let _ = std::fs::remove_file(&normalized_path);
@@ -2942,6 +3107,7 @@ pub async fn transcribe_audio(
                 Some(language.as_str()),
                 translate_to_english,
                 Arc::new(AtomicBool::new(false)),
+                None,
             )
             .await?
         }
@@ -3159,8 +3325,15 @@ pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
     let current_state = app_state.get_current_state();
     log::info!("Current state when cancelling: {:?}", current_state);
 
-    // Abort any ongoing transcription task
-    if let Ok(mut task_guard) = app_state.transcription_task.lock() {
+    // Do not abort the outer transcription task while guarded native CPU Whisper
+    // is running. The task owns the per-transcription abort flag and will ask
+    // whisper.cpp to stop cooperatively after observing `should_cancel_recording`.
+    // Other engines/paths do not observe that flag and must keep the old abort path.
+    if matches!(current_state, RecordingState::Transcribing)
+        && RECORDING_WHISPER_CPU_DECODE_IN_FLIGHT.load(AtomicOrdering::SeqCst)
+    {
+        log::info!("CPU Whisper transcription task will observe cancellation cooperatively");
+    } else if let Ok(mut task_guard) = app_state.transcription_task.lock() {
         if let Some(task) = task_guard.take() {
             log::info!("Aborting transcription task");
             task.abort();

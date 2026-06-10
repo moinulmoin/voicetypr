@@ -98,7 +98,7 @@ jobs:
   # Build Windows (CPU-safe app + Vulkan sidecar)
   # ===========================================
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     env:
       # Keep Windows paths short to avoid MSBuild/FileTracker failures on deep dependency trees.
       CARGO_TARGET_DIR: D:\cargo-target
