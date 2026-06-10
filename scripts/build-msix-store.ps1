@@ -19,38 +19,6 @@ function Require-Command($Command) {
     }
 }
 
-function Resolve-VulkanRuntimeVersion {
-    if (-not [string]::IsNullOrWhiteSpace($env:VULKAN_RUNTIME_VERSION)) {
-        return $env:VULKAN_RUNTIME_VERSION
-    }
-    if (-not [string]::IsNullOrWhiteSpace($env:VULKAN_VERSION)) {
-        return $env:VULKAN_VERSION
-    }
-    if (-not [string]::IsNullOrWhiteSpace($env:VULKAN_SDK)) {
-        return Split-Path -Leaf $env:VULKAN_SDK
-    }
-    throw "Cannot determine Vulkan runtime version. Set VULKAN_RUNTIME_VERSION, VULKAN_VERSION, or VULKAN_SDK."
-}
-
-function Ensure-WindowsRuntimeResources {
-    $RuntimeDir = Join-Path $RepoRoot "src-tauri\windows\resources"
-    New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
-
-    $VcRedist = Join-Path $RuntimeDir "vc_redist.x64.exe"
-    if (-not (Test-Path $VcRedist)) {
-        Write-Info "Downloading Visual C++ Runtime installer..."
-        Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $VcRedist
-    }
-
-    $VulkanInstaller = Join-Path $RuntimeDir "VulkanRT-Installer.exe"
-    if (-not (Test-Path $VulkanInstaller)) {
-        $VulkanVersion = Resolve-VulkanRuntimeVersion
-        Write-Info "Downloading Vulkan Runtime installer $VulkanVersion..."
-        $VulkanRuntimeUrl = "https://sdk.lunarg.com/sdk/download/$VulkanVersion/windows/VulkanRT-$VulkanVersion-Installer.exe"
-        Invoke-WebRequest -Uri $VulkanRuntimeUrl -OutFile $VulkanInstaller
-    }
-}
-
 if ($env:OS -ne "Windows_NT") {
     throw "Store MSIX packaging must run on Windows."
 }
@@ -85,8 +53,6 @@ if (-not $SkipGpuSidecarBuild) {
     Copy-Item $BuiltSidecar (Join-Path $SidecarOutDir "whisper-vulkan-sidecar-$TargetTriple.exe") -Force
     Copy-Item $BuiltSidecar (Join-Path $SidecarOutDir "whisper-vulkan-sidecar.exe") -Force
 }
-
-Ensure-WindowsRuntimeResources
 
 if (-not $SkipTauriBuild) {
     Write-Step "Building Tauri Store binary"

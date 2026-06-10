@@ -719,9 +719,11 @@ export function GeneralSettings() {
                     {accelerationStatus?.message ??
                       "VoiceTypr will test GPU acceleration when needed."}
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    {getAccelerationGuidance(accelerationStatus)}
-                  </p>
+                  {accelerationStatus?.diagnostic_code !== "ready" && (
+                    <p className="text-xs text-muted-foreground">
+                      {getAccelerationGuidance(accelerationStatus)}
+                    </p>
+                  )}
                   {accelerationStatus?.last_error && (
                     <p className="text-xs text-amber-600 dark:text-amber-500">
                       {accelerationStatus.last_error}

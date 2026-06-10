@@ -38,9 +38,10 @@ vi.mock('sonner', () => ({
 }));
 
 import { UpdateService } from './updateService';
+import type { DistributionInfo } from '@/types/distribution';
+import type { AppSettings } from '@/types';
 
 const JUST_UPDATED_KEY = 'just_updated_version';
-
 
 type TestUpdate = Update & {
   downloadAndInstall: ReturnType<typeof vi.fn>;
@@ -240,6 +241,41 @@ describe('UpdateService update consent', () => {
     expect(ask).toHaveBeenCalled();
     expect(downloadAndInstall).toHaveBeenCalledOnce();
     expect(relaunch).toHaveBeenCalledOnce();
+  });
+
+  it('deduplicates concurrent distribution info requests', async () => {
+    let resolveDistribution!: (info: DistributionInfo) => void;
+    const distributionInfoPromise = new Promise<DistributionInfo>((resolve) => {
+      resolveDistribution = resolve;
+    });
+
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'get_distribution_info') {
+        return distributionInfoPromise;
+      }
+
+      return { state: 'idle' };
+    });
+
+    const settings: AppSettings = {
+      hotkey: 'CommandOrControl+Shift+Space',
+      current_model: 'base.en',
+      language: 'en',
+      theme: 'system',
+      check_updates_automatically: false,
+    };
+    const first = service.initialize(settings);
+    const second = service.initialize(settings);
+
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === 'get_distribution_info')).toHaveLength(1);
+
+    resolveDistribution({
+      channel: 'direct',
+      is_store_install: false,
+      package_family_name: null,
+    });
+
+    await Promise.all([first, second]);
   });
 
   it('skips direct updater checks for Microsoft Store installs', async () => {

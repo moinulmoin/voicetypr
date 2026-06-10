@@ -25,7 +25,7 @@ import {
 export function AboutSection() {
   const [appVersion, setAppVersion] = useState<string>('');
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [updatesManagedByStore, setUpdatesManagedByStore] = useState(false);
+  const [updatesManagedByStore, setUpdatesManagedByStore] = useState<boolean | null>(null);
   const { settings, updateSettings } = useSettings();
 
   useEffect(() => {
@@ -113,7 +113,7 @@ export function AboutSection() {
                 </Badge>
               </div>
 
-              {updatesManagedByStore ? (
+              {updatesManagedByStore === null ? null : updatesManagedByStore ? (
                 <div className="rounded-lg border border-border/40 bg-background/50 p-3">
                   <p className="text-sm font-medium">Updates managed by Microsoft Store</p>
                   <p className="text-xs text-muted-foreground mt-1">

@@ -14,7 +14,6 @@ const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const LAST_UPDATE_CHECK_KEY = 'last_update_check';
 const JUST_UPDATED_KEY = 'just_updated_version';
 
-
 export class UpdateService {
   private static instance: UpdateService;
   private checkInProgress = false;
@@ -24,6 +23,7 @@ export class UpdateService {
   private pendingUpdateVersion: string | null = null;
   private installUpdatesAutomatically = false;
   private distributionInfo: DistributionInfo | null = null;
+  private distributionInfoPromise: Promise<DistributionInfo> | null = null;
 
   private constructor() {}
 
@@ -111,18 +111,25 @@ export class UpdateService {
       return this.distributionInfo;
     }
 
-    try {
-      this.distributionInfo = await invoke<DistributionInfo>('get_distribution_info');
-    } catch (error) {
-      console.error('Failed to read distribution info, assuming direct install:', error);
-      this.distributionInfo = {
-        channel: 'direct',
-        is_store_install: false,
-        package_family_name: null,
-      };
+    if (!this.distributionInfoPromise) {
+      this.distributionInfoPromise = invoke<DistributionInfo>('get_distribution_info')
+        .then((info) => {
+          this.distributionInfo = info;
+          return info;
+        })
+        .catch((error) => {
+          console.error('Failed to read distribution info, assuming direct install:', error);
+          const fallback: DistributionInfo = {
+            channel: 'direct',
+            is_store_install: false,
+            package_family_name: null,
+          };
+          this.distributionInfo = fallback;
+          return fallback;
+        });
     }
 
-    return this.distributionInfo;
+    return this.distributionInfoPromise;
   }
 
   private async usesStoreUpdates(): Promise<boolean> {
