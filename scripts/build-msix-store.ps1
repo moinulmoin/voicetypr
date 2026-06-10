@@ -103,7 +103,17 @@ $PackageVersion = node -p "require('./package.json').version + '.0'"
 $ManifestSource = Join-Path $RepoRoot "src-tauri\msix\Package.appxmanifest"
 $ManifestDest = Join-Path $StageDir "Package.appxmanifest"
 $Manifest = Get-Content $ManifestSource -Raw
-$Manifest = [regex]::Replace($Manifest, 'Version="[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+"', ('Version="' + $PackageVersion + '"'))
+$Manifest = [regex]::Replace(
+    $Manifest,
+    '(?m)^(\s*Version=")[^"]+(")',
+    ('${1}' + $PackageVersion + '${2}')
+)
+if ($Manifest -notmatch ('(?m)^\s*Version="' + [regex]::Escape($PackageVersion) + '"')) {
+    throw "Failed to set MSIX package identity version to $PackageVersion."
+}
+if ($Manifest -notmatch 'MinVersion="10\.0\.19041\.0"') {
+    throw "MSIX TargetDeviceFamily MinVersion must remain 10.0.19041.0 for Partner Center."
+}
 $Utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
 [System.IO.File]::WriteAllText($ManifestDest, $Manifest, $Utf8NoBom)
 
