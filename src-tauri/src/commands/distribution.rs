@@ -10,10 +10,7 @@ pub struct DistributionInfo {
 
 #[tauri::command]
 pub fn get_distribution_info() -> DistributionInfo {
-    let package_family_name = cached_package_family_name();
-    let is_store_install = package_family_name.is_some();
-
-    distribution_info(package_family_name, is_store_install)
+    distribution_info(cached_package_family_name())
 }
 
 pub(crate) fn is_store_install() -> bool {
@@ -26,10 +23,9 @@ fn cached_package_family_name() -> Option<String> {
     PACKAGE_FAMILY_NAME.get_or_init(package_family_name).clone()
 }
 
-fn distribution_info(
-    package_family_name: Option<String>,
-    is_store_install: bool,
-) -> DistributionInfo {
+fn distribution_info(package_family_name: Option<String>) -> DistributionInfo {
+    let is_store_install = package_family_name.is_some();
+
     DistributionInfo {
         channel: if is_store_install {
             "store_msix"
@@ -62,12 +58,12 @@ mod tests {
 
     #[test]
     fn distribution_info_maps_store_detection_to_channel() {
-        let direct = distribution_info(None, false);
+        let direct = distribution_info(None);
         assert_eq!(direct.channel, "direct");
         assert!(!direct.is_store_install);
         assert!(direct.package_family_name.is_none());
 
-        let store = distribution_info(Some("IdeaplexaLLC.Voicetypr_test".to_string()), true);
+        let store = distribution_info(Some("IdeaplexaLLC.Voicetypr_test".to_string()));
         assert_eq!(store.channel, "store_msix");
         assert!(store.is_store_install);
         assert_eq!(

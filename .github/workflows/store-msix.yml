@@ -55,14 +55,14 @@ jobs:
         run: New-Item -ItemType Directory -Force -Path $env:CARGO_TARGET_DIR | Out-Null
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: |
             src-tauri
             sidecar/whisper-vulkan
 
       - name: Install Vulkan SDK
-        uses: jakoch/install-vulkan-sdk-action@v1
+        uses: jakoch/install-vulkan-sdk-action@b394a1abed9cb019d8e637eeadac93d73e0853da
         with:
           vulkan_version: 1.3.290.0
           install_runtime: true

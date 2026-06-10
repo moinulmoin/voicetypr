@@ -166,6 +166,7 @@ mod tests {
     use super::collect_search_dirs;
     use std::path::PathBuf;
 
+    // Portable fixtures only: these tests compare PathBuf values and never touch the filesystem.
     fn path(value: &str) -> PathBuf {
         PathBuf::from(value)
     }

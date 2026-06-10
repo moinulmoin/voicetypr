@@ -47,7 +47,6 @@ export class UpdateService {
    */
   private async performRelaunch(): Promise<void> {
     if (await this.usesStoreUpdates()) {
-      console.log('Skipping direct updater relaunch for Microsoft Store install');
       return;
     }
 
@@ -143,7 +142,6 @@ export class UpdateService {
    */
   async initialize(settings: AppSettings): Promise<void> {
     if (await this.usesStoreUpdates()) {
-      console.log('Microsoft Store install detected; updates are handled by the Store');
       return;
     }
     const autoUpdateEnabled = settings.check_updates_automatically ?? true;
@@ -218,7 +216,6 @@ export class UpdateService {
       return;
     }
     if (await this.usesStoreUpdates()) {
-      console.log('Skipping direct update check for Microsoft Store install');
       return;
     }
     try {

@@ -75,6 +75,7 @@ function mockDirectDistribution(): void {
     return undefined;
   });
 }
+
 describe('UpdateService version marker', () => {
   let service: UpdateService;
 
