@@ -39,6 +39,7 @@
   </Applications>
 
   <Capabilities>
+    <Capability Name="internetClient" />
     <rescap:Capability Name="runFullTrust" />
     <DeviceCapability Name="microphone" />
   </Capabilities>

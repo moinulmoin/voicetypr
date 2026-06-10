@@ -39,6 +39,7 @@ import {
   formatHotkeyDiagnosticLines,
   type HotkeyDiagnostics,
 } from "@/utils/hotkeyDiagnostics";
+import type { AccelerationStatus } from "@/types/acceleration";
 
 interface QuickFix {
   id: string;
@@ -58,15 +59,6 @@ interface ReadinessSnapshot {
   selected_model_available: boolean | null;
 }
 
-interface AccelerationStatus {
-  mode: string;
-  effective_backend: string;
-  gpu_available: boolean | null;
-  message: string;
-  diagnostic_code: string;
-  recommended_action: string;
-  last_error?: string | null;
-}
 
 interface DiagnosticsSummary {
   status: DiagnosticsStatus;

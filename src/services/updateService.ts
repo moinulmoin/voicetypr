@@ -5,16 +5,15 @@ import { sendNotification, isPermissionGranted, requestPermission } from '@tauri
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import type { AppSettings } from '@/types';
+import {
+  isStoreDistribution,
+  type DistributionInfo,
+} from '@/types/distribution';
 
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const LAST_UPDATE_CHECK_KEY = 'last_update_check';
 const JUST_UPDATED_KEY = 'just_updated_version';
 
-type DistributionInfo = {
-  channel: 'direct' | 'store_msix';
-  is_store_install: boolean;
-  package_family_name: string | null;
-};
 
 export class UpdateService {
   private static instance: UpdateService;
@@ -88,9 +87,7 @@ export class UpdateService {
    * Returns null if no marker exists.
    */
   getJustUpdatedVersion(): string | null {
-    const usesStoreUpdates = this.distributionInfo?.is_store_install
-      || this.distributionInfo?.channel === 'store_msix';
-    if (usesStoreUpdates) {
+    if (isStoreDistribution(this.distributionInfo)) {
       localStorage.removeItem(JUST_UPDATED_KEY);
       return null;
     }
@@ -129,8 +126,7 @@ export class UpdateService {
   }
 
   private async usesStoreUpdates(): Promise<boolean> {
-    const info = await this.getDistributionInfo();
-    return info.is_store_install || info.channel === 'store_msix';
+    return isStoreDistribution(await this.getDistributionInfo());
   }
 
   /**

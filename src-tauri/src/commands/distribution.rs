@@ -1,5 +1,6 @@
-use serde::Serialize;
+use std::sync::OnceLock;
 
+use serde::Serialize;
 #[derive(Debug, Serialize)]
 pub struct DistributionInfo {
     pub channel: &'static str,
@@ -9,14 +10,20 @@ pub struct DistributionInfo {
 
 #[tauri::command]
 pub fn get_distribution_info() -> DistributionInfo {
-    let package_family_name = package_family_name();
+    let package_family_name = cached_package_family_name();
     let is_store_install = package_family_name.is_some();
 
     distribution_info(package_family_name, is_store_install)
 }
 
 pub(crate) fn is_store_install() -> bool {
-    package_family_name().is_some()
+    cached_package_family_name().is_some()
+}
+
+static PACKAGE_FAMILY_NAME: OnceLock<Option<String>> = OnceLock::new();
+
+fn cached_package_family_name() -> Option<String> {
+    PACKAGE_FAMILY_NAME.get_or_init(package_family_name).clone()
 }
 
 fn distribution_info(
@@ -51,16 +58,30 @@ fn package_family_name() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::get_distribution_info;
+    use super::{distribution_info, get_distribution_info};
 
     #[test]
+    fn distribution_info_maps_store_detection_to_channel() {
+        let direct = distribution_info(None, false);
+        assert_eq!(direct.channel, "direct");
+        assert!(!direct.is_store_install);
+        assert!(direct.package_family_name.is_none());
+
+        let store = distribution_info(Some("IdeaplexaLLC.Voicetypr_test".to_string()), true);
+        assert_eq!(store.channel, "store_msix");
+        assert!(store.is_store_install);
+        assert_eq!(
+            store.package_family_name.as_deref(),
+            Some("IdeaplexaLLC.Voicetypr_test"),
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
     fn non_windows_distribution_defaults_to_direct() {
-        #[cfg(not(target_os = "windows"))]
-        {
-            let info = get_distribution_info();
-            assert_eq!(info.channel, "direct");
-            assert!(!info.is_store_install);
-            assert!(info.package_family_name.is_none());
-        }
+        let info = get_distribution_info();
+        assert_eq!(info.channel, "direct");
+        assert!(!info.is_store_install);
+        assert!(info.package_family_name.is_none());
     }
 }

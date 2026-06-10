@@ -17,6 +17,10 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { updateService } from '@/services/updateService';
 import { useSettings } from '@/contexts/SettingsContext';
+import {
+  isStoreDistribution,
+  type DistributionInfo,
+} from '@/types/distribution';
 
 export function AboutSection() {
   const [appVersion, setAppVersion] = useState<string>('');
@@ -37,11 +41,8 @@ export function AboutSection() {
 
     const fetchDistributionInfo = async () => {
       try {
-        const info = await invoke<{
-          channel: 'direct' | 'store_msix';
-          is_store_install: boolean;
-        }>('get_distribution_info');
-        setUpdatesManagedByStore(info.is_store_install || info.channel === 'store_msix');
+        const info = await invoke<DistributionInfo>('get_distribution_info');
+        setUpdatesManagedByStore(isStoreDistribution(info));
       } catch (error) {
         console.error('Failed to get distribution info:', error);
         setUpdatesManagedByStore(false);

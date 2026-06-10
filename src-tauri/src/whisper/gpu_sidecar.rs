@@ -526,6 +526,10 @@ pub(crate) fn should_attempt_vulkan_warm_on_preload(
 
 fn classify_gpu_error(error: &str) -> GpuDiagnostic {
     let normalized = error.to_ascii_lowercase();
+    let mentions_vulkan = normalized.contains("vulkan")
+        || normalized.contains("vkcreateinstance")
+        || normalized.contains("context_failed")
+        || normalized.contains("probe_failed");
 
     if normalized.contains("select or download")
         || normalized.contains("download a local whisper model")
@@ -582,7 +586,7 @@ fn classify_gpu_error(error: &str) -> GpuDiagnostic {
 
     if normalized.contains("no vulkan device")
         || normalized.contains("no suitable vulkan device")
-        || normalized.contains("device init")
+        || (mentions_vulkan && normalized.contains("device init"))
     {
         return GpuDiagnostic {
             code: "vulkan_device_missing",
@@ -592,16 +596,17 @@ fn classify_gpu_error(error: &str) -> GpuDiagnostic {
     }
 
     if normalized.contains("vkcreateinstance")
-        || normalized.contains("loader")
-        || normalized.contains("vulkan-1")
-        || normalized.contains("backend init")
         || normalized.contains("context_failed")
         || normalized.contains("probe_failed")
-        || normalized.contains("failed to spawn")
-        || normalized.contains("failed to read")
-        || normalized.contains("failed to write")
-        || normalized.contains("failed to flush")
-        || normalized.contains("exited before responding")
+        || (mentions_vulkan
+            && (normalized.contains("loader")
+                || normalized.contains("vulkan-1")
+                || normalized.contains("backend init")
+                || normalized.contains("failed to spawn")
+                || normalized.contains("failed to read")
+                || normalized.contains("failed to write")
+                || normalized.contains("failed to flush")
+                || normalized.contains("exited before responding")))
     {
         return GpuDiagnostic {
             code: "driver_or_runtime_failed",
@@ -611,36 +616,25 @@ fn classify_gpu_error(error: &str) -> GpuDiagnostic {
     }
 
     GpuDiagnostic {
-        code: "driver_or_runtime_failed",
-        action: "update_graphics_driver",
-        message: "Vulkan GPU acceleration failed. Install or update your NVIDIA, AMD, or Intel graphics driver. VoiceTypr is using CPU mode.",
+        code: "gpu_failed",
+        action: "use_cpu",
+        message: "GPU acceleration failed. VoiceTypr is using CPU mode. Retry GPU after updating your graphics driver, or report this with logs if it continues.",
     }
 }
 
 #[cfg(target_os = "windows")]
 fn ensure_vulkan_loader_available() -> Result<(), String> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
+    use windows::core::w;
+    use windows::Win32::Foundation::FreeLibrary;
+    use windows::Win32::System::LibraryLoader::LoadLibraryW;
 
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        #[link_name = "LoadLibraryW"]
-        fn load_library_w(lp_lib_file_name: *const u16) -> *mut std::ffi::c_void;
-        #[link_name = "FreeLibrary"]
-        fn free_library(h_lib_module: *mut std::ffi::c_void) -> i32;
-    }
-
-    let library_name = OsStr::new("vulkan-1.dll")
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let module = unsafe { load_library_w(library_name.as_ptr()) };
-    if module.is_null() {
+    let module = unsafe { LoadLibraryW(w!("vulkan-1.dll")) };
+    let Ok(module) = module else {
         return Err("Vulkan loader missing: install or update your NVIDIA, AMD, or Intel graphics driver so vulkan-1.dll is available.".to_string());
-    }
+    };
 
     unsafe {
-        free_library(module);
+        let _ = FreeLibrary(module);
     }
     Ok(())
 }
@@ -861,6 +855,10 @@ mod tests {
         assert_eq!(init_failed.action, "update_graphics_driver");
 
         let timeout = classify_gpu_error("Vulkan sidecar request timed out");
+
+        let unknown_io = classify_gpu_error("failed to read model header");
+        assert_eq!(unknown_io.code, "gpu_failed");
+        assert_eq!(unknown_io.action, "use_cpu");
         assert_eq!(timeout.code, "sidecar_timeout");
         assert_eq!(timeout.action, "use_cpu");
     }

@@ -321,6 +321,36 @@ describe('GeneralSettings autostart via backend commands', () => {
     });
   });
 
+
+  it('shows timeout-specific GPU guidance', async () => {
+    const timeoutStatus = {
+      ...accelerationStatus,
+      effective_backend: 'cpu',
+      gpu_available: false,
+      message: 'The Vulkan helper did not respond in time.',
+      diagnostic_code: 'sidecar_timeout',
+      recommended_action: 'use_cpu',
+      last_error: 'Vulkan sidecar request timed out',
+    };
+
+    mockInvoke.mockImplementation((command: string, args?: { enabled?: boolean }) => {
+      if (command === 'get_autostart_status') return Promise.resolve(false);
+      if (command === 'set_autostart') return Promise.resolve(args?.enabled ?? false);
+      if (command === 'get_transcription_acceleration_status') {
+        return Promise.resolve(timeoutStatus);
+      }
+      return Promise.resolve(false);
+    });
+
+    render(<GeneralSettings />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/retry Test GPU after updating your graphics driver/),
+      ).toBeInTheDocument();
+    });
+  });
+
   it('checks acceleration status through backend command without showing a false GPU warning', async () => {
     const { toast } = await import('sonner');
     mockInvoke.mockImplementation((command: string, args?: { enabled?: boolean }) => {

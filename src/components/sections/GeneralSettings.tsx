@@ -21,6 +21,7 @@ import {
   TranscriptionAcceleration,
 } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
+import type { AccelerationStatus } from "@/types/acceleration";
 import {
   AlertCircle,
   Cpu,
@@ -34,16 +35,6 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { MicrophoneSelection } from "../MicrophoneSelection";
 
-// Mirrors `AccelerationRuntimeStatus` in src-tauri/src/whisper/gpu_sidecar.rs.
-interface AccelerationStatus {
-  mode: string;
-  effective_backend: string;
-  gpu_available: boolean | null;
-  message: string;
-  diagnostic_code: string;
-  recommended_action: string;
-  last_error?: string | null;
-}
 
 function isAccelerationStatus(value: unknown): value is AccelerationStatus {
   if (!value || typeof value !== "object") {
@@ -89,6 +80,8 @@ function getAccelerationGuidance(status: AccelerationStatus | null): string {
     case "sidecar_missing":
     case "sidecar_protocol_error":
       return "VoiceTypr has a package or runtime issue. Please report this with logs. VoiceTypr will keep using CPU transcription safely.";
+    case "sidecar_timeout":
+      return "The Vulkan helper did not respond in time. VoiceTypr will keep using CPU transcription safely; retry Test GPU after updating your graphics driver.";
     case "model_missing":
       return "Download or select a local Whisper model before testing GPU acceleration. VoiceTypr will keep using CPU transcription safely.";
     default:
