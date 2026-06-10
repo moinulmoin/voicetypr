@@ -435,7 +435,7 @@ export function AudioUploadSection() {
                                     {segment.speaker_id}
                                   </span>
                                   <span className="font-mono text-muted-foreground">
-                                    {formatTimestamp(segment.start_ms)}–{formatTimestamp(segment.end_ms)}
+                                    {formatTimestamp(segment.start_ms)} - {formatTimestamp(segment.end_ms)}
                                   </span>
                                 </div>
                               ))}
@@ -486,8 +486,8 @@ export function AudioUploadSection() {
           <div className="rounded-lg border border-border/50 bg-card overflow-hidden">
             <div className="p-4">
               <div className="flex items-start gap-3">
-                <div className="p-1.5 rounded-md bg-amber-500/10">
-                  <AlertCircle className="h-4 w-4 text-amber-500" />
+                <div className="p-1.5 rounded-md bg-muted">
+                  <AlertCircle className="h-4 w-4 text-muted-foreground" />
                 </div>
                 <div className="space-y-2 flex-1">
                   <h3 className="font-medium text-sm">Important Information</h3>
@@ -497,8 +497,8 @@ export function AudioUploadSection() {
                     <p>• <strong>Video:</strong> Video files are supported; audio is extracted first</p>
                     <p>• <strong>Processing:</strong> Uses your selected local, cloud, or remote transcription source</p>
                     <p>• <strong>Duration:</strong> Longer media may take longer and use more memory</p>
-                    <p className="text-amber-600 font-medium mt-2">
-                      ⚠️ Long media (4-5+ hours) may take several minutes and use significant memory
+                    <p className="font-medium text-foreground/80 mt-2">
+                      Long media (4-5+ hours) may take several minutes and use significant memory.
                     </p>
                   </div>
                 </div>

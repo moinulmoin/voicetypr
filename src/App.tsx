@@ -32,7 +32,7 @@ export default function App() {
                       error:
                         "border-red-500/25 bg-red-500/10 text-red-900 dark:text-red-100",
                       warning:
-                        "border-amber-500/25 bg-amber-500/10 text-amber-900 dark:text-amber-100",
+                        "border-amber-500/30 bg-amber-50/80 text-amber-800 dark:border-amber-400/25 dark:bg-amber-950/20 dark:text-amber-200",
                       info:
                         "border-blue-500/25 bg-blue-500/10 text-blue-900 dark:text-blue-100",
                     },

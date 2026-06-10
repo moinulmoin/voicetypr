@@ -79,8 +79,8 @@ export const ModelCard = function ModelCard({
               {getModelDisplayName(name, { [name]: model })}
             </h3>
             {model.recommended && (
-              <Badge variant="secondary" className="gap-1 bg-amber-500/10 text-amber-700">
-                <Star className="size-3 fill-current" aria-label="Recommended model" />
+              <Badge variant="secondary" className="gap-1 bg-secondary text-secondary-foreground">
+                <Star className="size-3 fill-current text-primary/70" aria-label="Recommended model" />
                 Recommended
               </Badge>
             )}
@@ -140,7 +140,7 @@ export const ModelCard = function ModelCard({
               )}
             </>
           ) : isVerifying ? (
-            <Badge variant="outline" className="gap-1.5 bg-amber-500/10 text-amber-700">
+            <Badge variant="outline" className="gap-1.5 bg-muted/60 text-muted-foreground">
               <Spinner className="size-3.5" />
               Verifying
             </Badge>

@@ -281,11 +281,11 @@ export function ShortcutsSection() {
 
       <ScrollArea className="flex-1 min-h-0">
         <div className="space-y-5 p-6">
-          <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-300">
+          <div className="rounded-lg border border-border/60 bg-muted/40 p-3 text-sm text-muted-foreground">
             <div className="flex gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-foreground/70" />
               <p>
-                Global shortcuts may conflict with macOS, Windows, or other apps. VoiceTypr tests registration and will refuse unavailable shortcuts.
+                VoiceTypr tests global shortcuts and refuses combos already owned by macOS, Windows, or another app.
               </p>
             </div>
           </div>
@@ -424,8 +424,8 @@ export function ShortcutsSection() {
                                             Single keys are captured globally. Registration may still be refused by macOS, Windows, or another app that already owns the key.
                                           </span>
                                           {canUseSingleKey && (
-                                            <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">
-                                              Single-key validation is enabled for this push-to-talk binding.
+                                            <span className="mt-1 block text-xs text-muted-foreground">
+                                              Single-key validation enabled.
                                             </span>
                                           )}
                                         </span>

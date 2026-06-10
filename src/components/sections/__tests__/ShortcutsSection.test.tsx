@@ -291,11 +291,11 @@ describe("ShortcutsSection", () => {
     await user.click(within(holdRow).getByRole("button", { name: "Add shortcut" }));
 
     expect(within(holdRow).getByText("Allow single-key push-to-talk")).toBeInTheDocument();
-    expect(within(holdRow).queryByText("Single-key validation is enabled for this push-to-talk binding.")).not.toBeInTheDocument();
+    expect(within(holdRow).queryByText("Single-key validation enabled.")).not.toBeInTheDocument();
 
     await user.click(within(holdRow).getByRole("switch", { name: "Allow single-key push-to-talk" }));
 
-    expect(within(holdRow).getByText("Single-key validation is enabled for this push-to-talk binding.")).toBeInTheDocument();
+    expect(within(holdRow).getByText("Single-key validation enabled.")).toBeInTheDocument();
   });
 
   it("shows an empty shortcut as unconfigured while controls are read-only", async () => {
