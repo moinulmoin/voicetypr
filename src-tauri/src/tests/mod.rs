@@ -56,6 +56,9 @@ mod remote_commands_tests;
 mod audio_recording_tests;
 
 #[cfg(test)]
+mod recording_state_characterization;
+
+#[cfg(test)]
 mod tray_menu_tests;
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -25,6 +25,28 @@ impl RecordingSize {
         }
         Ok(())
     }
+}
+
+enum WriterMsg {
+    Chunk(Vec<i16>),
+    Finalize,
+}
+
+fn f32_to_i16(sample: f32) -> i16 {
+    let clamped = sample.clamp(-1.0, 1.0);
+    (clamped * 32767.0) as i16
+}
+
+fn i16_to_f32(sample: i16) -> f32 {
+    sample as f32 / i16::MAX as f32
+}
+
+fn u16_to_f32(sample: u16) -> f32 {
+    (sample as f32 - 32768.0) / 32768.0
+}
+
+fn u16_to_i16(sample: u16) -> i16 {
+    (sample as i32 - 32768) as i16
 }
 
 pub struct AudioRecorder {
@@ -181,13 +203,65 @@ impl AudioRecorder {
                 sample_format: hound::SampleFormat::Int,
             };
 
-            let writer = Arc::new(Mutex::new(Some(
-                hound::WavWriter::create(&output_path, spec).map_err(|e| e.to_string())?,
-            )));
+            let writer = hound::WavWriter::create(&output_path, spec).map_err(|e| e.to_string())?;
+
+            let (writer_tx, writer_rx) = mpsc::sync_channel::<WriterMsg>(64);
+            let (recycle_tx, recycle_rx) = mpsc::channel::<Vec<i16>>();
+            let recycle_tx_for_drop = recycle_tx.clone();
+            let bytes_written = Arc::new(AtomicU64::new(0));
+            let dropped_chunks = Arc::new(AtomicU64::new(0));
+            let writer_bytes = bytes_written.clone();
+            let writer_dropped = dropped_chunks.clone();
+            let stop_tx_for_size = stop_tx_clone.clone();
+            let writer_handle = thread::spawn(move || -> Result<(), String> {
+                let mut writer = writer;
+                let mut write_error = None::<String>;
+
+                while let Ok(WriterMsg::Chunk(mut samples)) = writer_rx.recv() {
+                    let sample_bytes = (samples.len() * 2) as u64;
+                    for &sample in &samples {
+                        if let Err(e) = writer.write_sample(sample) {
+                            write_error = Some(format!("Failed to write audio sample: {}", e));
+                            break;
+                        }
+                    }
+
+                    if write_error.is_some() {
+                        break;
+                    }
+
+                    let new_total =
+                        writer_bytes.fetch_add(sample_bytes, Ordering::SeqCst) + sample_bytes;
+                    if RecordingSize::check(new_total).is_err() {
+                        let _ = stop_tx_for_size.send(RecorderCommand::Stop);
+                    }
+
+                    samples.clear();
+                    let _ = recycle_tx.send(samples);
+                }
+
+                let dropped = writer_dropped.load(Ordering::SeqCst);
+                if dropped > 0 {
+                    log::warn!(
+                        "Dropped {} audio chunks because the writer queue was full",
+                        dropped
+                    );
+                }
+
+                writer.finalize().map_err(|e| e.to_string())?;
+
+                if let Some(error) = write_error {
+                    return Err(error);
+                }
+
+                Ok(())
+            });
+
             // Error callback that triggers stop on device errors (e.g., disconnection)
             let stop_tx_for_error = stop_tx_clone.clone();
             let error_occurred = Arc::new(Mutex::new(None::<String>));
             let error_occurred_for_callback = error_occurred.clone();
+
             let err_fn = move |err: cpal::StreamError| {
                 // Detailed logging for audio device errors
                 log::error!("═══════════════════════════════════════════════════════");
@@ -206,19 +280,15 @@ impl AudioRecorder {
                 let _ = stop_tx_for_error.send(RecorderCommand::Stop);
             };
 
-            // Shared state for size tracking
-            let bytes_written = Arc::new(Mutex::new(0u64));
-
             // Drain barrier flags shared between callback and stop path
             let stop_requested = Arc::new(AtomicBool::new(false));
             let callback_drained = Arc::new(AtomicBool::new(false));
 
             // Common audio processing closure
             let process_audio = {
-                let writer_clone = writer.clone();
-                let error_clone = error_occurred.clone();
-                let bytes_clone = bytes_written.clone();
-                let stop_tx_for_size = stop_tx_clone.clone();
+                let writer_tx_clone: SyncSender<WriterMsg> = writer_tx.clone();
+                let dropped_chunks_clone = dropped_chunks.clone();
+                let recycle_tx_for_drop = recycle_tx_for_drop.clone();
                 let stop_tx_for_silence = stop_tx_clone.clone();
                 let silence_detector_clone = silence_detector.clone();
                 let level_meter_clone = level_meter.clone();
@@ -230,25 +300,20 @@ impl AudioRecorder {
                     if stop_requested_clone.load(Ordering::SeqCst) {
                         // Only write on the first callback after stop; skip all subsequent ones
                         if !callback_drained_clone.load(Ordering::SeqCst) {
-                            // Use lock() not try_lock() here: we're draining, not in the
-                            // real-time hot path. The recording thread is in the drain wait
-                            // loop and won't hold this mutex until after stream.pause().
-                            // CPAL callbacks are serialized per-stream (one thread per stream
-                            // on both WASAPI and CoreAudio), so no concurrent callback contention.
-                            if let Ok(mut guard) = writer_clone.lock() {
-                                if let Some(writer) = guard.as_mut() {
-                                    for &sample in i16_samples {
-                                        if let Err(e) = writer.write_sample(sample) {
-                                            if let Ok(mut error_guard) = error_clone.lock() {
-                                                *error_guard = Some(format!(
-                                                    "Failed to write audio sample: {}",
-                                                    e
-                                                ));
-                                            }
-                                            break;
-                                        }
-                                    }
+                            let mut chunk = recycle_rx
+                                .try_recv()
+                                .unwrap_or_else(|_| Vec::with_capacity(4096));
+                            chunk.clear();
+                            chunk.extend_from_slice(i16_samples);
+                            match writer_tx_clone.try_send(WriterMsg::Chunk(chunk)) {
+                                Ok(()) => {}
+                                Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
+                                    dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
+                                    chunk.clear();
+                                    let _ = recycle_tx_for_drop.send(chunk);
                                 }
+                                Err(TrySendError::Full(WriterMsg::Finalize)) => {}
+                                Err(TrySendError::Disconnected(_)) => {}
                             }
                             callback_drained_clone.store(true, Ordering::SeqCst);
                         }
@@ -271,53 +336,39 @@ impl AudioRecorder {
                         }
                     }
 
-                    // Check size before writing
-                    let sample_bytes = i16_samples.len() * 2; // 2 bytes per i16 sample
-                    if let Ok(mut bytes_guard) = bytes_clone.lock() {
-                        let new_total = *bytes_guard + sample_bytes as u64;
-                        if RecordingSize::check(new_total).is_err() {
-                            let _ = stop_tx_for_size.send(RecorderCommand::Stop);
-                            return;
-                        }
-                        *bytes_guard = new_total;
-                    }
+                    let mut chunk = recycle_rx
+                        .try_recv()
+                        .unwrap_or_else(|_| Vec::with_capacity(4096));
+                    chunk.clear();
+                    chunk.extend_from_slice(i16_samples);
 
-                    // Write audio data (i16 format)
-                    if let Ok(mut guard) = writer_clone.try_lock() {
-                        if let Some(writer) = guard.as_mut() {
-                            for &sample in i16_samples {
-                                if let Err(e) = writer.write_sample(sample) {
-                                    if let Ok(mut error_guard) = error_clone.lock() {
-                                        *error_guard =
-                                            Some(format!("Failed to write audio sample: {}", e));
-                                    }
-                                    break;
-                                }
-                            }
+                    match writer_tx_clone.try_send(WriterMsg::Chunk(chunk)) {
+                        Ok(()) => {}
+                        Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
+                            dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
+                            chunk.clear();
+                            let _ = recycle_tx_for_drop.send(chunk);
                         }
+                        Err(TrySendError::Full(WriterMsg::Finalize)) => {}
+                        Err(TrySendError::Disconnected(_)) => {}
                     }
                 }
             };
 
             let stream = match config.sample_format() {
                 cpal::SampleFormat::F32 => {
-                    let process_clone = process_audio.clone();
+                    let process_audio = process_audio;
+                    let mut i16_scratch: Vec<i16> = Vec::with_capacity(4096);
                     device
                         .build_input_stream(
                             &config.config(),
                             move |data: &[f32], _: &_| {
                                 // Convert F32 to I16 with proper clamping to avoid distortion
-                                let i16_samples: Vec<i16> = data
-                                    .iter()
-                                    .map(|&sample| {
-                                        // Clamp to avoid overflow and use 32767.0 for symmetric conversion
-                                        let clamped = sample.clamp(-1.0, 1.0);
-                                        (clamped * 32767.0) as i16
-                                    })
-                                    .collect();
+                                i16_scratch.clear();
+                                i16_scratch.extend(data.iter().map(|&sample| f32_to_i16(sample)));
 
                                 // Process audio
-                                process_clone(data, &i16_samples);
+                                process_audio(data, &i16_scratch);
                             },
                             err_fn,
                             None,
@@ -325,17 +376,18 @@ impl AudioRecorder {
                         .map_err(|e| e.to_string())?
                 }
                 cpal::SampleFormat::I16 => {
-                    let process_clone = process_audio.clone();
+                    let process_audio = process_audio;
+                    let mut f32_scratch: Vec<f32> = Vec::with_capacity(4096);
                     device
                         .build_input_stream(
                             &config.config(),
                             move |data: &[i16], _: &_| {
                                 // Convert I16 to F32 for processing
-                                let f32_samples: Vec<f32> =
-                                    data.iter().map(|&x| x as f32 / i16::MAX as f32).collect();
+                                f32_scratch.clear();
+                                f32_scratch.extend(data.iter().map(|&sample| i16_to_f32(sample)));
 
                                 // Process audio
-                                process_clone(&f32_samples, data);
+                                process_audio(&f32_scratch, data);
                             },
                             err_fn,
                             None,
@@ -343,22 +395,23 @@ impl AudioRecorder {
                         .map_err(|e| e.to_string())?
                 }
                 cpal::SampleFormat::U16 => {
+                    let process_audio = process_audio;
+                    let mut f32_scratch: Vec<f32> = Vec::with_capacity(4096);
+                    let mut i16_scratch: Vec<i16> = Vec::with_capacity(4096);
                     device
                         .build_input_stream(
                             &config.config(),
                             move |data: &[u16], _: &_| {
                                 // Convert U16 to F32 for processing
-                                let f32_samples: Vec<f32> = data
-                                    .iter()
-                                    .map(|&x| (x as f32 - 32768.0) / 32768.0)
-                                    .collect();
+                                f32_scratch.clear();
+                                f32_scratch.extend(data.iter().map(|&sample| u16_to_f32(sample)));
 
                                 // Convert U16 to I16 for writing
-                                let i16_samples: Vec<i16> =
-                                    data.iter().map(|&x| (x as i32 - 32768) as i16).collect();
+                                i16_scratch.clear();
+                                i16_scratch.extend(data.iter().map(|&sample| u16_to_i16(sample)));
 
                                 // Process audio
-                                process_audio(&f32_samples, &i16_samples);
+                                process_audio(&f32_scratch, &i16_scratch);
                             },
                             err_fn,
                             None,
@@ -392,6 +445,7 @@ impl AudioRecorder {
                         "Drain timeout: proceeding with finalization after {}ms",
                         drain_start.elapsed().as_millis()
                     );
+                    callback_drained.store(true, Ordering::SeqCst);
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(5));
@@ -432,6 +486,13 @@ impl AudioRecorder {
                 log::info!("Audio stream stopped and cleaned up");
             }
 
+            let _ = writer_tx.send(WriterMsg::Finalize);
+            drop(writer_tx);
+            let writer_result = match writer_handle.join() {
+                Ok(result) => result,
+                Err(_) => Err("Writer thread panicked".to_string()),
+            };
+
             // Check if any errors occurred during recording
             if let Ok(guard) = error_occurred.lock() {
                 if let Some(error) = &*guard {
@@ -439,12 +500,7 @@ impl AudioRecorder {
                 }
             }
 
-            // Take the writer out of the mutex to finalize it
-            if let Ok(mut guard) = writer.lock() {
-                if let Some(w) = guard.take() {
-                    w.finalize().map_err(|e| e.to_string())?;
-                }
-            }
+            writer_result?;
 
             // Return appropriate message based on stop reason
             match stop_reason {
@@ -610,6 +666,33 @@ mod tests {
 
         handle.join().expect("Callback thread should not panic");
         assert!(callback_drained.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_f32_to_i16_clamps_at_unit_bounds() {
+        assert_eq!(f32_to_i16(1.5), 32767);
+        assert_eq!(f32_to_i16(1.0), 32767);
+        assert_eq!(f32_to_i16(0.0), 0);
+        assert_eq!(f32_to_i16(-1.0), -32767);
+        assert_eq!(f32_to_i16(-1.5), -32767);
+    }
+
+    #[test]
+    fn test_u16_to_i16_midpoint_and_symmetry() {
+        assert_eq!(u16_to_i16(32768), 0);
+        assert_eq!(u16_to_i16(32769), 1);
+        assert_eq!(u16_to_i16(32767), -1);
+        assert_eq!(u16_to_i16(u16::MAX), i16::MAX);
+        assert_eq!(u16_to_i16(0), i16::MIN);
+    }
+
+    #[test]
+    fn test_u16_to_f32_midpoint_and_symmetry() {
+        assert_eq!(u16_to_f32(32768), 0.0);
+        assert_eq!(u16_to_f32(0), -1.0);
+        assert!((u16_to_f32(u16::MAX) - (32767.0 / 32768.0)).abs() < f32::EPSILON);
+        assert_eq!(u16_to_f32(32769), 1.0 / 32768.0);
+        assert_eq!(u16_to_f32(32767), -1.0 / 32768.0);
     }
 
     #[test]

@@ -156,16 +156,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Log application startup
     log_lifecycle_event("APPLICATION_START", Some(app_version), None);
 
-    // Load .env file if it exists (for development)
-    log_start("ENV_FILE_LOAD");
-    match dotenv::dotenv() {
-        Ok(path) => {
-            log_file_operation("LOAD", &format!("{:?}", path), true, None, None);
-            println!("Loaded .env file from: {:?}", path);
-        }
-        Err(e) => {
-            log::info!("📄 No .env file found or error loading it: {}", e);
-            println!("No .env file found or error loading it: {}", e);
+    #[cfg(debug_assertions)]
+    {
+        // Load .env file if it exists (development builds only)
+        log_start("ENV_FILE_LOAD");
+        match dotenv::dotenv() {
+            Ok(path) => {
+                log_file_operation("LOAD", &format!("{:?}", path), true, None, None);
+            }
+            Err(e) => {
+                log::info!("📄 No .env file found or error loading it: {}", e);
+            }
         }
     }
 

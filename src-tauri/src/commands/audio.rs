@@ -372,6 +372,56 @@ pub(crate) fn reconcile_transcription_history_entry(
     }
 }
 
+fn parse_history_key(key: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(key)
+        .ok()
+        .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+}
+
+pub(crate) fn page_history_keys(mut keys: Vec<String>, limit: usize) -> Vec<String> {
+    keys.sort_unstable_by(|a, b| match (parse_history_key(a), parse_history_key(b)) {
+        (Some(a_timestamp), Some(b_timestamp)) => {
+            b_timestamp.cmp(&a_timestamp).then_with(|| b.cmp(a))
+        }
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => b.cmp(a),
+    });
+    keys.truncate(limit);
+    keys
+}
+
+pub(crate) fn is_duplicate_transcription(
+    latest_key: &str,
+    latest: &serde_json::Value,
+    text: &str,
+    model: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let same_text = latest
+        .get("text")
+        .and_then(|x| x.as_str())
+        .map(|s| s == text)
+        .unwrap_or(false);
+    let same_model = latest
+        .get("model")
+        .and_then(|x| x.as_str())
+        .map(|s| s == model)
+        .unwrap_or(false);
+    let within_window = chrono::DateTime::parse_from_rfc3339(latest_key)
+        .ok()
+        .and_then(|t| {
+            t.with_timezone(&chrono::Utc)
+                .signed_duration_since(now)
+                .num_seconds()
+                .checked_abs()
+        })
+        .map(|secs| secs <= 2)
+        .unwrap_or(false);
+
+    same_text && same_model && within_window
+}
+
 #[derive(Debug, Clone)]
 enum TranscriptionFailure {
     Local(String),
@@ -645,12 +695,14 @@ where
             let gpu_result = gpu_client
                 .transcribe(
                     app,
-                    model_path,
-                    audio_path,
-                    language,
-                    translate,
-                    initial_prompt,
-                    &mode,
+                    crate::whisper::gpu_sidecar::GpuTranscribeRequest {
+                        model_path,
+                        audio_path,
+                        language,
+                        translate,
+                        initial_prompt,
+                        mode: &mode,
+                    },
                 )
                 .await;
 
@@ -1158,7 +1210,7 @@ mod tests {
             "recordings/failure.wav"
         );
         assert_eq!(row["model"].as_str().unwrap(), "base.en");
-        assert_eq!(row["can_retry_from_history"].as_bool().unwrap(), true);
+        assert!(row["can_retry_from_history"].as_bool().unwrap());
         assert_ne!(
             row["text"].as_str().unwrap(),
             "Remote server unreachable - re-transcribe to get text"
@@ -2082,6 +2134,12 @@ pub async fn start_recording(
         recording_start.elapsed().as_millis()
     );
     log_state_transition("RECORDING", "idle", "starting", true, None);
+    // Clear any stale cancellation from a previous attempt. From this point
+    // on, a cancellation request targets THIS start attempt and must win.
+    {
+        let app_state = app.state::<AppState>();
+        app_state.clear_cancellation();
+    }
     update_recording_state(&app, RecordingState::Starting, None);
     // Ensure transition actually happened; if blocked, abort early
     if !matches!(
@@ -2429,8 +2487,43 @@ pub async fn start_recording(
 
     // Now perform async operations after mutex is released
 
-    // Clear cancellation flag for new recording
-    app_state.clear_cancellation();
+    // If cancellation was requested while we were starting (e.g. Escape
+    // during slow device init), abort instead of committing to Recording.
+    if app_state.is_cancellation_requested() {
+        log::info!("Cancellation requested during start; aborting before Recording state");
+        let recorder_state_handle = app.state::<RecorderState>();
+        let stop_result = recorder_state_handle
+            .inner()
+            .0
+            .lock()
+            .map_err(|e| format!("Failed to acquire recorder lock: {}", e))
+            .and_then(|mut recorder| {
+                if recorder.is_recording() {
+                    recorder.stop_recording()
+                } else {
+                    Ok(String::new())
+                }
+            });
+
+        clear_pending_stop_after_start(&app_state);
+        MEDIA_CONTROLLER.resume_if_we_paused();
+
+        if let Ok(mut path_guard) = app_state.current_recording_path.lock() {
+            if let Some(path) = path_guard.take() {
+                if let Err(error) = std::fs::remove_file(&path) {
+                    log::warn!(
+                        "Failed to remove cancelled recording file {}: {}",
+                        path.display(),
+                        error
+                    );
+                }
+            }
+        }
+
+        update_recording_state(&app, RecordingState::Idle, None);
+        stop_result?;
+        return Err("Recording start cancelled".to_string());
+    }
 
     // Second PTT guard: check again right before committing to Recording state.
     // Audio capture has already started; if PTT key was released between the first
@@ -3250,46 +3343,44 @@ pub async fn stop_recording(
                 ActiveEngineSelection::Parakeet { model_name } => {
                     let parakeet_manager = app_for_task.state::<ParakeetManager>();
                     if let Err(e) = parakeet_manager.load_model(&app_for_task, model_name).await {
-                        let message = format!("Parakeet model load failed: {e}");
-                        update_recording_state(
-                            &app_for_task,
-                            RecordingState::Error,
-                            Some(message.clone()),
-                        );
-                        pill_toast(&app_for_task, &message, 1500);
-                        return;
-                    }
+                        Err(TranscriptionFailure::Local(format!(
+                            "Parakeet model load failed: {e}"
+                        )))
+                    } else {
+                        let custom_vocabulary =
+                            compile_parakeet_custom_vocabulary_for_transcription(
+                                &app_for_task,
+                                language_for_task.as_deref(),
+                            );
 
-                    let custom_vocabulary = compile_parakeet_custom_vocabulary_for_transcription(
-                        &app_for_task,
-                        language_for_task.as_deref(),
-                    );
-
-                    match parakeet_manager
-                        .transcribe_with_custom_vocabulary(
-                            &app_for_task,
-                            model_name,
-                            audio_path_clone.clone(),
-                            language_for_task.clone(),
-                            translate_to_english,
-                            custom_vocabulary,
-                        )
-                        .await
-                    {
-                        Ok(ParakeetResponse::Transcription {
-                            text,
-                            segments,
-                            language,
-                            duration,
-                        }) => Ok(TranscriptionResult::new(&transcription_job_for_task, text)
-                            .with_transcript_language(language)
-                            .with_segments(parakeet_segments_to_transcription_segments(segments))
-                            .with_audio_duration_ms(seconds_to_duration_ms(duration))),
-                        Ok(other) => {
-                            let message = format!("Unexpected Parakeet response: {:?}", other);
-                            Err(TranscriptionFailure::Local(message))
+                        match parakeet_manager
+                            .transcribe_with_custom_vocabulary(
+                                &app_for_task,
+                                model_name,
+                                audio_path_clone.clone(),
+                                language_for_task.clone(),
+                                translate_to_english,
+                                custom_vocabulary,
+                            )
+                            .await
+                        {
+                            Ok(ParakeetResponse::Transcription {
+                                text,
+                                segments,
+                                language,
+                                duration,
+                            }) => Ok(TranscriptionResult::new(&transcription_job_for_task, text)
+                                .with_transcript_language(language)
+                                .with_segments(parakeet_segments_to_transcription_segments(
+                                    segments,
+                                ))
+                                .with_audio_duration_ms(seconds_to_duration_ms(duration))),
+                            Ok(other) => {
+                                let message = format!("Unexpected Parakeet response: {:?}", other);
+                                Err(TranscriptionFailure::Local(message))
+                            }
+                            Err(e) => Err(TranscriptionFailure::Local(e.to_string())),
                         }
-                        Err(e) => Err(TranscriptionFailure::Local(e.to_string())),
                     }
                 }
                 ActiveEngineSelection::Soniox { .. } => {
@@ -3943,45 +4034,14 @@ pub async fn save_transcription_with_recording(
 ) -> Result<(), String> {
     // De-dup guard: skip saving if the most recent entry matches the same text & model within a short window
     if let Ok(store) = app.store("transcriptions") {
-        // Find most recent entry
-        let mut latest: Option<(String, serde_json::Value)> = None;
-        for key in store.keys() {
-            if let Some(value) = store.get(&key) {
-                match &latest {
-                    Some((ts, _)) => {
-                        if key > *ts {
-                            latest = Some((key.to_string(), value));
-                        }
-                    }
-                    None => latest = Some((key.to_string(), value)),
-                }
-            }
-        }
+        let latest_key = page_history_keys(store.keys(), 1).into_iter().next();
 
-        if let Some((ts, v)) = latest {
-            let same_text = v
-                .get("text")
-                .and_then(|x| x.as_str())
-                .map(|s| s == text)
-                .unwrap_or(false);
-            let same_model = v
-                .get("model")
-                .and_then(|x| x.as_str())
-                .map(|s| s == model)
-                .unwrap_or(false);
-            let within_window = chrono::DateTime::parse_from_rfc3339(&ts)
-                .ok()
-                .and_then(|t| {
-                    t.with_timezone(&chrono::Utc)
-                        .signed_duration_since(chrono::Utc::now())
-                        .num_seconds()
-                        .checked_abs()
-                })
-                .map(|secs| secs <= 2)
-                .unwrap_or(false);
-            if same_text && same_model && within_window {
-                log::info!("Skipping duplicate transcription save (same text/model within 2s)");
-                return Ok(());
+        if let Some(key) = latest_key {
+            if let Some(value) = store.get(&key) {
+                if is_duplicate_transcription(&key, &value, &text, &model, chrono::Utc::now()) {
+                    log::info!("Skipping duplicate transcription save (same text/model within 2s)");
+                    return Ok(());
+                }
             }
         }
     }
@@ -4077,18 +4137,21 @@ pub async fn get_transcription_history(
     let store = app.store("transcriptions").map_err(|e| e.to_string())?;
     let current_session_marker = current_retranscription_session_marker();
 
-    let mut entries: Vec<(String, serde_json::Value)> = Vec::new();
+    let limit = limit.unwrap_or(50);
+    let keys = page_history_keys(store.keys(), limit);
+
+    let mut entries: Vec<serde_json::Value> = Vec::with_capacity(limit.min(keys.len()));
     let mut pending_updates: Vec<(String, serde_json::Value)> = Vec::new();
 
-    // Collect all entries, reconciling stale retranscription rows before sorting.
-    for key in store.keys() {
+    // Reconcile only the requested page; stale rows beyond this page are handled lazily.
+    for key in keys {
         if let Some(value) = store.get(&key) {
             let reconciled =
                 reconcile_transcription_history_entry(value.clone(), &current_session_marker);
             if reconciled != value {
-                pending_updates.push((key.to_string(), reconciled.clone()));
+                pending_updates.push((key, reconciled.clone()));
             }
-            entries.push((key.to_string(), reconciled));
+            entries.push(reconciled);
         }
     }
 
@@ -4109,12 +4172,7 @@ pub async fn get_transcription_history(
         }
     }
 
-    entries.sort_by(|a, b| b.0.cmp(&a.0));
-
-    let limit = limit.unwrap_or(50);
-    entries.truncate(limit);
-
-    Ok(entries.into_iter().map(|(_, v)| v).collect())
+    Ok(entries)
 }
 
 /// Get the total count of transcriptions in history

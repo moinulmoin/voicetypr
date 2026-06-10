@@ -100,6 +100,8 @@ git add -A && git commit -m "feat: description"
 7. **Large lib.rs**: Main Rust entry point at 96KB; navigate via module imports
 8. **Sidecar builds**: Parakeet Swift sidecar built via `build.rs` during `tauri build`
 
+9. **Windows CI is compile-only for Rust tests**: `cargo test --no-run` — Windows runtime behavior (hotkeys, Vulkan sidecar) needs manual smoke on a real machine.
+
 ## Key Files
 
 - `src-tauri/src/lib.rs` — Main Rust entry, command registration

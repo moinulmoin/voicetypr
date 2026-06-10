@@ -1,7 +1,7 @@
 #![cfg_attr(not(target_os = "windows"), allow(dead_code, unused_imports))]
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,7 @@ use std::os::windows::process::CommandExt as _;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const SIDECAR_ABORT_ERROR: &str = "Vulkan sidecar request aborted";
 const DEFAULT_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(180);
 const MIN_TRANSCRIPTION_TIMEOUT_SECS: u64 = 180;
 const MAX_TRANSCRIPTION_TIMEOUT_SECS: u64 = 30 * 60;
@@ -252,10 +253,21 @@ impl Drop for GpuSidecarProcess {
     }
 }
 
+pub struct GpuTranscribeRequest<'a> {
+    pub model_path: &'a Path,
+    pub audio_path: &'a Path,
+    pub language: Option<&'a str>,
+    pub translate: bool,
+    pub initial_prompt: Option<&'a str>,
+    pub mode: &'a str,
+}
+
 pub struct GpuSidecarClient {
     next_id: AtomicU64,
     process: AsyncMutex<Option<GpuSidecarProcess>>,
     status: AsyncRwLock<AccelerationRuntimeStatus>,
+    abort_requested: AtomicBool,
+    abort_notify: tokio::sync::Notify,
 }
 
 impl Default for GpuSidecarClient {
@@ -270,6 +282,8 @@ impl GpuSidecarClient {
             next_id: AtomicU64::new(1),
             process: AsyncMutex::new(None),
             status: AsyncRwLock::new(AccelerationRuntimeStatus::default()),
+            abort_requested: AtomicBool::new(false),
+            abort_notify: tokio::sync::Notify::new(),
         }
     }
 
@@ -278,12 +292,19 @@ impl GpuSidecarClient {
     }
 
     pub async fn abort_active_process(&self) {
-        let mut guard = self.process.lock().await;
-        if let Some(process) = guard.as_mut() {
-            log::info!("Aborting active Whisper Vulkan sidecar process");
-            process.kill_and_wait().await;
+        self.abort_requested.store(true, Ordering::SeqCst);
+        self.abort_notify.notify_waiters();
+
+        if let Ok(mut guard) =
+            tokio::time::timeout(Duration::from_millis(250), self.process.lock()).await
+        {
+            if let Some(process) = guard.as_mut() {
+                log::info!("Aborting active Whisper Vulkan sidecar process");
+                process.kill_and_wait().await;
+            }
+            guard.take();
+            self.abort_requested.store(false, Ordering::SeqCst);
         }
-        guard.take();
     }
 
     pub async fn set_cpu_status(&self, mode: &str, message: impl Into<String>) {
@@ -381,20 +402,22 @@ impl GpuSidecarClient {
     pub async fn transcribe(
         &self,
         app: &AppHandle,
-        model_path: &Path,
-        audio_path: &Path,
-        language: Option<&str>,
-        translate: bool,
-        initial_prompt: Option<&str>,
-        mode: &str,
+        request: GpuTranscribeRequest<'_>,
     ) -> Result<WhisperTranscriptionOutput, String> {
-        let model_path = model_path
-            .to_str()
-            .ok_or_else(|| format!("Model path contains invalid UTF-8: {:?}", model_path))?;
-        let audio_path = audio_path
-            .to_str()
-            .ok_or_else(|| format!("Audio path contains invalid UTF-8: {:?}", audio_path))?;
+        let model_path = request.model_path.to_str().ok_or_else(|| {
+            format!(
+                "Model path contains invalid UTF-8: {:?}",
+                request.model_path
+            )
+        })?;
+        let audio_path = request.audio_path.to_str().ok_or_else(|| {
+            format!(
+                "Audio path contains invalid UTF-8: {:?}",
+                request.audio_path
+            )
+        })?;
         let id = self.next_request_id();
+        let mode = request.mode;
 
         match self
             .send(
@@ -403,9 +426,9 @@ impl GpuSidecarClient {
                     id,
                     model_path,
                     audio_path,
-                    language,
-                    translate,
-                    initial_prompt,
+                    language: request.language,
+                    translate: request.translate,
+                    initial_prompt: request.initial_prompt,
                 },
             )
             .await
@@ -462,22 +485,47 @@ impl GpuSidecarClient {
         request: &SidecarRequest<'_>,
     ) -> Result<SidecarResponse, String> {
         let mut guard = self.process.lock().await;
+        self.abort_requested.store(false, Ordering::SeqCst);
         if guard.is_none() {
             guard.replace(GpuSidecarProcess::spawn(app).await?);
         }
 
         let result = match guard.as_mut() {
-            Some(process) => process.request(request).await,
+            Some(process) => {
+                let abort_notified = self.abort_notify.notified();
+                tokio::pin!(abort_notified);
+                if self.abort_requested.load(Ordering::SeqCst) {
+                    Err(SIDECAR_ABORT_ERROR.to_string())
+                } else {
+                    tokio::select! {
+                        biased;
+                        _ = &mut abort_notified => Err(SIDECAR_ABORT_ERROR.to_string()),
+                        res = process.request(request) => res,
+                    }
+                }
+            }
             None => Err("Vulkan sidecar was not started".to_string()),
         };
 
         let response = match result {
-            Ok(response) => response,
+            Ok(response) => {
+                if self.abort_requested.swap(false, Ordering::SeqCst) {
+                    if let Some(process) = guard.as_mut() {
+                        process.kill_and_wait().await;
+                    }
+                    guard.take();
+                    return Err(SIDECAR_ABORT_ERROR.to_string());
+                }
+                response
+            }
             Err(error) => {
                 if let Some(process) = guard.as_mut() {
                     process.kill_and_wait().await;
                 }
                 guard.take();
+                if error == SIDECAR_ABORT_ERROR {
+                    self.abort_requested.store(false, Ordering::SeqCst);
+                }
                 return Err(error);
             }
         };
@@ -512,6 +560,16 @@ impl GpuSidecarClient {
 
     fn next_request_id(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    fn abort_pending(&self) -> bool {
+        self.abort_requested.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    fn abort_notified_for_test(&self) -> impl std::future::Future<Output = ()> + '_ {
+        self.abort_notify.notified()
     }
 }
 
@@ -663,11 +721,48 @@ mod tests {
     use super::{
         seconds_to_duration_ms, should_attempt_vulkan_warm_on_preload, sidecar_search_dirs,
         sidecar_segments_to_transcription_segments, transcription_timeout_for_duration,
-        SidecarRequest, SidecarResponse, SidecarSegment, CONTROL_REQUEST_TIMEOUT,
+        GpuSidecarClient, SidecarRequest, SidecarResponse, SidecarSegment, CONTROL_REQUEST_TIMEOUT,
         DEFAULT_TRANSCRIPTION_TIMEOUT, MAX_TRANSCRIPTION_TIMEOUT_SECS,
         MIN_TRANSCRIPTION_TIMEOUT_SECS,
     };
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn abort_sets_flag_and_is_consumed() {
+        let client = GpuSidecarClient::new();
+
+        tokio::time::timeout(Duration::from_secs(1), client.abort_active_process())
+            .await
+            .expect("idle abort should not wait for the full timeout");
+
+        assert!(!client.abort_pending());
+    }
+
+    #[tokio::test]
+    async fn notify_wakes_waiter() {
+        let client = Arc::new(GpuSidecarClient::new());
+        let waiter_client = Arc::clone(&client);
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let waiter = tokio::spawn(async move {
+            let notified = waiter_client.abort_notified_for_test();
+            ready_tx
+                .send(())
+                .expect("waiter readiness signal should send");
+            notified.await;
+        });
+
+        ready_rx
+            .await
+            .expect("waiter readiness signal should be received");
+        client.abort_active_process().await;
+
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("abort notify should wake waiter")
+            .expect("waiter task should complete");
+    }
 
     #[test]
     fn sidecar_search_dirs_do_not_traverse_parent_directories() {

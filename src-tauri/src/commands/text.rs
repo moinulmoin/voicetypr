@@ -152,18 +152,39 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     .await
     .map_err(|e| format!("Task failed: {}", e))?
 }
+/// Minimal clipboard seam so insertion sequencing is unit-testable.
+trait ClipboardOps {
+    fn get_text(&mut self) -> Result<String, String>;
+    fn set_text(&mut self, text: &str) -> Result<(), String>;
+}
 
-fn insert_via_clipboard(
-    text: String,
-    has_accessibility_permission: bool,
-    app_handle: Option<tauri::AppHandle>,
+impl ClipboardOps for Clipboard {
+    fn get_text(&mut self) -> Result<String, String> {
+        Clipboard::get_text(self).map_err(|e| e.to_string())
+    }
+
+    fn set_text(&mut self, text: &str) -> Result<(), String> {
+        Clipboard::set_text(self, text).map_err(|e| e.to_string())
+    }
+}
+
+/// What happened to the paste attempt — decides restore behavior.
+#[derive(Debug, PartialEq)]
+enum PasteOutcome {
+    Pasted,
+    LeftInClipboard,
+    NoPermission,
+}
+
+const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(500);
+
+fn run_clipboard_insertion(
+    clipboard: &mut dyn ClipboardOps,
+    paste: &mut dyn FnMut() -> PasteOutcome,
+    sleep: &mut dyn FnMut(Duration),
+    text: &str,
     keep_transcription_in_clipboard: bool,
-) -> Result<(), String> {
-    // This function handles both copying text to clipboard AND pasting it at cursor
-    // Initialize clipboard
-    let mut clipboard =
-        Clipboard::new().map_err(|e| format!("Failed to initialize clipboard: {}", e))?;
-
+) -> Result<PasteOutcome, String> {
     let previous_clipboard_text = if keep_transcription_in_clipboard {
         None
     } else {
@@ -179,29 +200,75 @@ fn insert_via_clipboard(
         }
     };
 
-    let insertion_result: Result<(), String> = (|| {
-        // Set transcribed text as clipboard content
-        clipboard
-            .set_text(&text)
-            .map_err(|e| format!("Failed to set clipboard: {}", e))?;
+    clipboard
+        .set_text(text)
+        .map_err(|e| format!("Failed to set clipboard: {}", e))?;
 
-        log::info!("Set clipboard content: {}", text);
+    log::info!("Set clipboard content ({} chars)", text.chars().count());
 
-        // Small delay to ensure clipboard is ready
-        thread::sleep(Duration::from_millis(50));
+    sleep(Duration::from_millis(50));
 
-        // Verify clipboard content was set
-        if let Ok(clipboard_check) = clipboard.get_text() {
-            log::info!("Clipboard content verified: {}", clipboard_check);
+    if let Ok(clipboard_check) = clipboard.get_text() {
+        log::info!(
+            "Clipboard content verified ({} chars)",
+            clipboard_check.chars().count()
+        );
+    }
+
+    let outcome = paste();
+
+    match outcome {
+        PasteOutcome::NoPermission => {
+            log::debug!(
+                "Skipping clipboard restoration after paste failure; transcript remains available for manual paste"
+            );
+            Err("No accessibility permission - text copied to clipboard. Please paste manually or grant accessibility permission.".to_string())
         }
+        PasteOutcome::LeftInClipboard => {
+            log::debug!(
+                "Skipping clipboard restoration after paste failure; transcript remains available for manual paste"
+            );
+            Ok(outcome)
+        }
+        PasteOutcome::Pasted => {
+            if !keep_transcription_in_clipboard {
+                if let Some(previous_text) = previous_clipboard_text {
+                    sleep(CLIPBOARD_RESTORE_DELAY);
+                    if let Err(e) = clipboard.set_text(&previous_text) {
+                        log::error!("Failed to restore original clipboard text: {}", e);
+                    } else {
+                        log::debug!("Restored original clipboard text after paste");
+                    }
+                } else {
+                    log::debug!(
+                        "No plain-text clipboard content to restore; leaving clipboard unchanged"
+                    );
+                }
+            }
 
+            Ok(outcome)
+        }
+    }
+}
+
+fn insert_via_clipboard(
+    text: String,
+    has_accessibility_permission: bool,
+    app_handle: Option<tauri::AppHandle>,
+    keep_transcription_in_clipboard: bool,
+) -> Result<(), String> {
+    // This function handles both copying text to clipboard AND pasting it at cursor
+    // Initialize clipboard
+    let mut clipboard =
+        Clipboard::new().map_err(|e| format!("Failed to initialize clipboard: {}", e))?;
+
+    let mut paste = || {
         // Check if we have accessibility permissions before attempting to paste
         if !has_accessibility_permission {
             log::warn!(
                 "No accessibility permission - text copied to clipboard but cannot paste automatically"
             );
-            // Return a specific error so the caller knows it's an accessibility issue
-            return Err("No accessibility permission - text copied to clipboard. Please paste manually or grant accessibility permission.".to_string());
+            return PasteOutcome::NoPermission;
         }
 
         // Try to paste using Cmd+V (macOS) with panic protection
@@ -213,6 +280,7 @@ fn insert_via_clipboard(
         match rdev_result {
             Ok(_) => {
                 log::info!("Successfully pasted with rdev");
+                PasteOutcome::Pasted
             }
             Err(e) => {
                 log::warn!("rdev paste failed: {}, trying AppleScript fallback", e);
@@ -224,6 +292,7 @@ fn insert_via_clipboard(
                 match paste_result {
                     Ok(Ok(_)) => {
                         log::info!("Successfully pasted with AppleScript");
+                        PasteOutcome::Pasted
                     }
                     Ok(Err(e)) => {
                         log::warn!("AppleScript paste failed: {}, text remains in clipboard", e);
@@ -236,6 +305,7 @@ fn insert_via_clipboard(
                             );
                         }
                         // Don't fail - text is still in clipboard for manual paste
+                        PasteOutcome::LeftInClipboard
                     }
                     Err(panic_err) => {
                         log::error!(
@@ -251,35 +321,23 @@ fn insert_via_clipboard(
                             );
                         }
                         // Don't fail - text is still in clipboard for manual paste
+                        PasteOutcome::LeftInClipboard
                     }
                 }
             }
         }
+    };
 
-        Ok(())
-    })();
+    let mut sleep = thread::sleep;
 
-    if !keep_transcription_in_clipboard {
-        if insertion_result.is_ok() {
-            if let Some(previous_text) = previous_clipboard_text {
-                if let Err(e) = clipboard.set_text(&previous_text) {
-                    log::error!("Failed to restore original clipboard text: {}", e);
-                } else {
-                    log::debug!("Restored original clipboard text after paste");
-                }
-            } else {
-                log::debug!(
-                    "No plain-text clipboard content to restore; leaving clipboard unchanged"
-                );
-            }
-        } else {
-            log::debug!(
-                "Skipping clipboard restoration after paste failure; transcript remains available for manual paste"
-            );
-        }
-    }
-
-    insertion_result
+    run_clipboard_insertion(
+        &mut clipboard,
+        &mut paste,
+        &mut sleep,
+        &text,
+        keep_transcription_in_clipboard,
+    )
+    .map(|_| ())
 }
 
 fn try_paste_with_applescript() -> Result<(), String> {
@@ -535,6 +593,202 @@ fn paste_linux() -> Result<(), SimulateError> {
     send_key_event(&EventType::KeyRelease(RdevKey::ControlLeft))?;
     log::debug!("Linux paste simulation completed");
     Ok(())
+}
+
+#[cfg(test)]
+mod clipboard_insertion {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct MockClipboard {
+        current: String,
+        history: Vec<String>,
+        get_text_error: bool,
+        events: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl MockClipboard {
+        fn new(current: &str, events: Rc<RefCell<Vec<String>>>) -> Self {
+            Self {
+                current: current.to_string(),
+                history: Vec::new(),
+                get_text_error: false,
+                events,
+            }
+        }
+
+        fn non_text(events: Rc<RefCell<Vec<String>>>) -> Self {
+            Self {
+                current: String::new(),
+                history: Vec::new(),
+                get_text_error: true,
+                events,
+            }
+        }
+    }
+
+    impl ClipboardOps for MockClipboard {
+        fn get_text(&mut self) -> Result<String, String> {
+            self.events.borrow_mut().push("get".to_string());
+            if self.get_text_error {
+                Err("non-text clipboard".to_string())
+            } else {
+                Ok(self.current.clone())
+            }
+        }
+
+        fn set_text(&mut self, text: &str) -> Result<(), String> {
+            self.events.borrow_mut().push(format!("set:{text}"));
+            self.current = text.to_string();
+            self.history.push(self.current.clone());
+            Ok(())
+        }
+    }
+
+    fn sleep_recorder(
+        events: Rc<RefCell<Vec<String>>>,
+        sleeps: Rc<RefCell<Vec<Duration>>>,
+    ) -> impl FnMut(Duration) {
+        move |duration| {
+            events
+                .borrow_mut()
+                .push(format!("sleep:{}", duration.as_millis()));
+            sleeps.borrow_mut().push(duration);
+        }
+    }
+
+    #[test]
+    fn restores_after_delay_when_pasted() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sleeps = Rc::new(RefCell::new(Vec::new()));
+        let mut clipboard = MockClipboard::new("previous", events.clone());
+        let mut paste = {
+            let events = events.clone();
+            move || {
+                events.borrow_mut().push("paste".to_string());
+                PasteOutcome::Pasted
+            }
+        };
+        let mut sleep = sleep_recorder(events.clone(), sleeps.clone());
+
+        let outcome = run_clipboard_insertion(
+            &mut clipboard,
+            &mut paste,
+            &mut sleep,
+            "transcription",
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(outcome, PasteOutcome::Pasted);
+        assert_eq!(clipboard.current, "previous");
+        assert!(sleeps.borrow().contains(&CLIPBOARD_RESTORE_DELAY));
+
+        let events = events.borrow();
+        let paste_index = events.iter().position(|event| event == "paste").unwrap();
+        let restore_delay_index = events
+            .iter()
+            .position(|event| event == "sleep:500")
+            .unwrap();
+        let restore_index = events
+            .iter()
+            .position(|event| event == "set:previous")
+            .unwrap();
+        assert!(paste_index < restore_delay_index);
+        assert!(restore_delay_index < restore_index);
+    }
+
+    #[test]
+    fn keeps_transcription_when_setting_enabled() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sleeps = Rc::new(RefCell::new(Vec::new()));
+        let mut clipboard = MockClipboard::new("previous", events.clone());
+        let mut paste = || PasteOutcome::Pasted;
+        let mut sleep = sleep_recorder(events, sleeps.clone());
+
+        let outcome = run_clipboard_insertion(
+            &mut clipboard,
+            &mut paste,
+            &mut sleep,
+            "transcription",
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(outcome, PasteOutcome::Pasted);
+        assert_eq!(clipboard.current, "transcription");
+        assert!(!sleeps.borrow().contains(&CLIPBOARD_RESTORE_DELAY));
+    }
+
+    #[test]
+    fn no_restore_when_paste_left_in_clipboard() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sleeps = Rc::new(RefCell::new(Vec::new()));
+        let mut clipboard = MockClipboard::new("previous", events.clone());
+        let mut paste = || PasteOutcome::LeftInClipboard;
+        let mut sleep = sleep_recorder(events, sleeps.clone());
+
+        let outcome = run_clipboard_insertion(
+            &mut clipboard,
+            &mut paste,
+            &mut sleep,
+            "transcription",
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(outcome, PasteOutcome::LeftInClipboard);
+        assert_eq!(clipboard.current, "transcription");
+        assert!(!sleeps.borrow().contains(&CLIPBOARD_RESTORE_DELAY));
+    }
+
+    #[test]
+    fn no_restore_without_permission() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sleeps = Rc::new(RefCell::new(Vec::new()));
+        let mut clipboard = MockClipboard::new("previous", events.clone());
+        let mut paste = || PasteOutcome::NoPermission;
+        let mut sleep = sleep_recorder(events, sleeps.clone());
+
+        let result = run_clipboard_insertion(
+            &mut clipboard,
+            &mut paste,
+            &mut sleep,
+            "transcription",
+            false,
+        );
+
+        assert_eq!(
+            result.unwrap_err(),
+            "No accessibility permission - text copied to clipboard. Please paste manually or grant accessibility permission."
+        );
+        assert_eq!(clipboard.current, "transcription");
+        assert!(!sleeps.borrow().contains(&CLIPBOARD_RESTORE_DELAY));
+    }
+
+    #[test]
+    fn no_previous_text_leaves_clipboard() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sleeps = Rc::new(RefCell::new(Vec::new()));
+        let mut clipboard = MockClipboard::non_text(events.clone());
+        let mut paste = || PasteOutcome::Pasted;
+        let mut sleep = sleep_recorder(events, sleeps.clone());
+
+        let outcome = run_clipboard_insertion(
+            &mut clipboard,
+            &mut paste,
+            &mut sleep,
+            "transcription",
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(outcome, PasteOutcome::Pasted);
+        assert_eq!(clipboard.current, "transcription");
+        assert!(!sleeps.borrow().contains(&CLIPBOARD_RESTORE_DELAY));
+        assert_eq!(clipboard.history, vec!["transcription"]);
+    }
 }
 
 #[cfg(test)]

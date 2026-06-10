@@ -195,15 +195,6 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   ask: vi.fn(() => Promise.resolve(true)), // Default to confirming dialogs
 }));
 
-// Mock global shortcut plugin
-vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
-  GlobalShortcutExt: vi.fn(),
-  ShortcutState: {
-    Pressed: 'pressed',
-    Released: 'released',
-  },
-}));
-
 // Mock OS plugin for platform detection
 vi.mock('@tauri-apps/plugin-os', () => ({
   type: vi.fn(() => 'macos'), // Default to macOS for tests

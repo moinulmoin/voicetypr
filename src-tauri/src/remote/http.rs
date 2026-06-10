@@ -21,7 +21,7 @@ const CONTEXT_HEADER: &str = "X-VoiceTypr-Context";
 
 const MAX_AUDIO_BODY_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
 const MAX_CONTEXT_HEADER_BYTES: usize = 4096;
-const MAX_CONTEXT_HEADER_ENCODED_BYTES: usize = (MAX_CONTEXT_HEADER_BYTES + 2) / 3 * 4;
+const MAX_CONTEXT_HEADER_ENCODED_BYTES: usize = MAX_CONTEXT_HEADER_BYTES.div_ceil(3) * 4;
 const MAX_CONTROL_BODY_BYTES: u64 = 4 * 1024;
 
 /// Trait for server context (allows mocking in tests)
@@ -104,6 +104,18 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
         .and(warp::header::optional::<String>(CONTEXT_HEADER))
         .and(warp::body::content_length_limit(MAX_AUDIO_BODY_BYTES))
         .and(warp::body::bytes())
+        .map(
+            |auth_key, content_type, spoken_language, transcription_task, request_context, body| {
+                TranscribeRequestParts {
+                    auth_key,
+                    content_type,
+                    spoken_language,
+                    transcription_task,
+                    request_context,
+                    body,
+                }
+            },
+        )
         .and(with_context(ctx))
         .and(with_transcription_guard(transcription_guard))
         .and_then(handle_transcribe)
@@ -393,17 +405,30 @@ fn decode_context_header(encoded_context: Option<String>) -> Option<String> {
     }
 }
 
-/// Handle POST /api/v1/transcribe
-async fn handle_transcribe<T: ServerContext + 'static>(
+struct TranscribeRequestParts {
     auth_key: Option<String>,
     content_type: String,
     spoken_language: Option<String>,
     transcription_task: Option<String>,
     request_context: Option<String>,
     body: bytes::Bytes,
+}
+
+/// Handle POST /api/v1/transcribe
+async fn handle_transcribe<T: ServerContext + 'static>(
+    parts: TranscribeRequestParts,
     ctx: Arc<RwLock<T>>,
     transcription_guard: Arc<Semaphore>,
 ) -> Result<impl Reply, Rejection> {
+    let TranscribeRequestParts {
+        auth_key,
+        content_type,
+        spoken_language,
+        transcription_task,
+        request_context,
+        body,
+    } = parts;
+
     let audio_size_kb = body.len() as f64 / 1024.0;
     let (server_name, model_name, required_password) = {
         let ctx = ctx.read().await;
@@ -467,14 +492,24 @@ async fn handle_transcribe<T: ServerContext + 'static>(
 
     let request_context = decode_context_header(request_context);
 
-    // Perform transcription
-    let ctx = ctx.read().await;
-    match ctx.transcribe_with_context(
-        &body,
-        spoken_language.as_deref(),
-        transcription_task.as_deref(),
-        request_context.as_deref(),
-    ) {
+    // Perform transcription on a blocking thread: transcribe_with_context is
+    // synchronous CPU work (full Whisper/Parakeet run) and must not pin a
+    // runtime worker.
+    let ctx_for_blocking = ctx.clone();
+    let body_for_blocking = body.clone();
+    let transcription_outcome = tokio::task::spawn_blocking(move || {
+        let guard = ctx_for_blocking.blocking_read();
+        guard.transcribe_with_context(
+            &body_for_blocking,
+            spoken_language.as_deref(),
+            transcription_task.as_deref(),
+            request_context.as_deref(),
+        )
+    })
+    .await
+    .unwrap_or_else(|join_err| Err(format!("transcription task failed: {join_err}")));
+
+    match transcription_outcome {
         Ok(result) => {
             let response = TranscribeResponse {
                 text: result.raw_text,
@@ -838,7 +873,7 @@ mod tests {
             .path("/api/v1/transcribe")
             .header("Content-Type", "audio/wav")
             .header(CONTEXT_HEADER, encoded_context)
-            .body(b"audio".to_vec())
+            .body(b"audio")
             .reply(&routes)
             .await;
 
@@ -858,7 +893,7 @@ mod tests {
             .method("POST")
             .path("/api/v1/transcribe")
             .header("Content-Type", "audio/wav")
-            .body(b"audio".to_vec())
+            .body(b"audio")
             .reply(&routes)
             .await;
 
@@ -880,7 +915,7 @@ mod tests {
             .path("/api/v1/transcribe")
             .header("Content-Type", "audio/wav")
             .header(CONTEXT_HEADER, oversized_context)
-            .body(b"audio".to_vec())
+            .body(b"audio")
             .reply(&routes)
             .await;
 
@@ -901,7 +936,7 @@ mod tests {
             .path("/api/v1/transcribe")
             .header("Content-Type", "audio/wav")
             .header(CONTEXT_HEADER, "not-valid-base64!")
-            .body(b"audio".to_vec())
+            .body(b"audio")
             .reply(&routes)
             .await;
 
@@ -992,7 +1027,7 @@ mod tests {
             .method("POST")
             .path("/api/v1/transcribe")
             .header("Content-Type", "audio/wav")
-            .body(b"audio".to_vec())
+            .body(b"audio")
             .reply(&routes)
             .await;
 
@@ -1036,7 +1071,7 @@ mod tests {
                 client
                     .post(&url)
                     .header("Content-Type", "audio/wav")
-                    .body(b"audio".to_vec())
+                    .body(b"audio".as_slice())
                     .timeout(Duration::from_secs(5))
                     .send()
                     .await
@@ -1069,6 +1104,54 @@ mod tests {
 
         let _ = shutdown_tx.send(());
         let _ = tokio::time::timeout(Duration::from_secs(5), server_handle).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn transcribe_runs_off_runtime_worker() {
+        let context = Arc::new(RwLock::new(DelayedMockContext::new(300)));
+        let routes = create_routes(context.clone());
+
+        let transcribe_routes = routes.clone();
+        let started_at = std::time::Instant::now();
+        let transcribe_handle = tokio::spawn(async move {
+            warp::test::request()
+                .method("POST")
+                .path("/api/v1/transcribe")
+                .header("Content-Type", "audio/wav")
+                .body(b"audio")
+                .reply(&transcribe_routes)
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_millis(150), async {
+            loop {
+                if context.read().await.request_counter.load(Ordering::SeqCst) > 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("transcription should start without pinning the runtime worker");
+
+        let status_response = tokio::time::timeout(
+            Duration::from_millis(150),
+            warp::test::request()
+                .method("GET")
+                .path("/api/v1/status")
+                .reply(&routes),
+        )
+        .await
+        .expect("status route should respond while transcription is in flight");
+
+        assert_eq!(status_response.status(), 200);
+        assert!(
+            started_at.elapsed() < Duration::from_millis(150),
+            "status route waited for blocking transcription to finish"
+        );
+
+        let transcribe_response = transcribe_handle.await.expect("transcribe task panicked");
+        assert_eq!(transcribe_response.status(), 200);
     }
 
     #[tokio::test]

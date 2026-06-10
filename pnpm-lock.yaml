@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  hono: 4.12.21
+
 importers:
 
   .:
@@ -30,9 +33,6 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0
       '@tauri-apps/plugin-dialog':
-        specifier: ^2.3.0
-        version: 2.3.0
-      '@tauri-apps/plugin-global-shortcut':
         specifier: ^2.3.0
         version: 2.3.0
       '@tauri-apps/plugin-notification':
@@ -80,9 +80,6 @@ importers:
       react-error-boundary:
         specifier: ^6.1.1
         version: 6.1.1(react@19.2.6)
-      shadcn:
-        specifier: ^4.7.0
-        version: 4.7.0(@types/node@25.8.0)(typescript@6.0.3)
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
@@ -159,6 +156,9 @@ importers:
       jsdom:
         specifier: ^29.1.1
         version: 29.1.1(@noble/hashes@1.8.0)
+      shadcn:
+        specifier: ^4.7.0
+        version: 4.7.0(@types/node@25.8.0)(typescript@6.0.3)
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
@@ -175,8 +175,8 @@ importers:
   sidecar/formatting-engine:
     dependencies:
       '@earendil-works/pi-ai':
-        specifier: ^0.75.4
-        version: 0.75.4(@modelcontextprotocol/sdk@1.29.0(zod@4.1.12))(ws@8.20.1)(zod@4.1.12)
+        specifier: ^0.79.1
+        version: 0.79.1(@modelcontextprotocol/sdk@1.29.0(zod@4.1.12))(ws@8.20.1)(zod@4.1.12)
     devDependencies:
       '@types/node':
         specifier: ^24.3.0
@@ -587,8 +587,8 @@ packages:
     resolution: {integrity: sha512-qlQFhHUjhRDybrinqLAD0MClVZDOrsq80O8eD5iSjz3Qa/4f3Jg7SQrOaSobrRyP1QaWIYLGtGpj2c7H0D8NUw==}
     hasBin: true
 
-  '@earendil-works/pi-ai@0.75.4':
-    resolution: {integrity: sha512-m/w8Hh3vQ0rAycwJiJWdzkypkn4295f4eq/966lDRy8aX5sk6bgYXH8TQmL16TO7Uwc7MbJG0QoyFHgX8RqXUQ==}
+  '@earendil-works/pi-ai@0.79.1':
+    resolution: {integrity: sha512-UnORwrcsTNLm4StEvoM8iEom0u87Te7BXEWxhec3iNXygWD6eEBosUoq9ddcveqtj/QpUZBMPWUu81cCtZxzkQ==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
@@ -997,7 +997,7 @@ packages:
     resolution: {integrity: sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw==}
     engines: {node: '>=18.14.1'}
     peerDependencies:
-      hono: ^4
+      hono: 4.12.21
 
   '@humanfs/core@0.19.1':
     resolution: {integrity: sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA==}
@@ -2232,9 +2232,6 @@ packages:
   '@tauri-apps/plugin-dialog@2.3.0':
     resolution: {integrity: sha512-ylSBvYYShpGlKKh732ZuaHyJ5Ie1JR71QCXewCtsRLqGdc8Is4xWdz6t43rzXyvkItM9syNPMvFVcvjgEy+/GA==}
 
-  '@tauri-apps/plugin-global-shortcut@2.3.0':
-    resolution: {integrity: sha512-WbAz0ElhpP+0kzQZRScdCC7UQ7OPH8PAn//fsBNu7+ywihsnVSVOg1L9YhieAtLNtAlnmFI69Yl5AGaA3ge5IQ==}
-
   '@tauri-apps/plugin-notification@2.3.3':
     resolution: {integrity: sha512-Zw+ZH18RJb41G4NrfHgIuofJiymusqN+q8fGUIIV7vyCH+5sSn5coqRv/MWB9qETsUs97vmU045q7OyseCV3Qg==}
 
@@ -3429,8 +3426,8 @@ packages:
   hermes-parser@0.25.1:
     resolution: {integrity: sha512-6pEjquH3rqaI6cYAXYPcz9MS4rY6R4ngRgrgfDshRptUZIc3lw0MCIJIGDj9++mfySOuPTHB4nrSW99BCvOPIA==}
 
-  hono@4.12.19:
-    resolution: {integrity: sha512-xa3eYXYXx68XTT4hZ7dRzsXBhaq85ToSrlUJNoR0gwz/1Ap/CNwX47wfvV7pc/xWhjKVVkLT7zBJy8chhNguqQ==}
+  hono@4.12.21:
+    resolution: {integrity: sha512-uV63apnb0kyPtAUwoWgaGh9HyIFcv8lgmzPZSiTBQAFOFGIzka5EZ1dZocmGnn0XdX0+XTqJ6Tqv7selMuGLRQ==}
     engines: {node: '>=16.9.0'}
 
   hosted-git-info@7.0.2:
@@ -5683,12 +5680,13 @@ snapshots:
       which: 4.0.0
       yocto-spinner: 1.2.0
 
-  '@earendil-works/pi-ai@0.75.4(@modelcontextprotocol/sdk@1.29.0(zod@4.1.12))(ws@8.20.1)(zod@4.1.12)':
+  '@earendil-works/pi-ai@0.79.1(@modelcontextprotocol/sdk@1.29.0(zod@4.1.12))(ws@8.20.1)(zod@4.1.12)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@4.1.12)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
       '@google/genai': 1.52.0(@modelcontextprotocol/sdk@1.29.0(zod@4.1.12))
       '@mistralai/mistralai': 2.2.1
+      '@smithy/node-http-handler': 4.7.3
       http-proxy-agent: 7.0.2
       https-proxy-agent: 7.0.6
       openai: 6.26.0(ws@8.20.1)(zod@4.1.12)
@@ -5960,9 +5958,9 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@hono/node-server@1.19.14(hono@4.12.19)':
+  '@hono/node-server@1.19.14(hono@4.12.21)':
     dependencies:
-      hono: 4.12.19
+      hono: 4.12.21
 
   '@humanfs/core@0.19.1': {}
 
@@ -6036,7 +6034,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.29.0(zod@3.25.76)':
     dependencies:
-      '@hono/node-server': 1.19.14(hono@4.12.19)
+      '@hono/node-server': 1.19.14(hono@4.12.21)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -6046,7 +6044,7 @@ snapshots:
       eventsource-parser: 3.0.8
       express: 5.2.1
       express-rate-limit: 8.5.2(express@5.2.1)
-      hono: 4.12.19
+      hono: 4.12.21
       jose: 6.2.3
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -6058,7 +6056,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.29.0(zod@4.1.12)':
     dependencies:
-      '@hono/node-server': 1.19.14(hono@4.12.19)
+      '@hono/node-server': 1.19.14(hono@4.12.21)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -6068,7 +6066,7 @@ snapshots:
       eventsource-parser: 3.0.8
       express: 5.2.1
       express-rate-limit: 8.5.2(express@5.2.1)
-      hono: 4.12.19
+      hono: 4.12.21
       jose: 6.2.3
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -7190,10 +7188,6 @@ snapshots:
       '@tauri-apps/api': 2.6.0
 
   '@tauri-apps/plugin-dialog@2.3.0':
-    dependencies:
-      '@tauri-apps/api': 2.6.0
-
-  '@tauri-apps/plugin-global-shortcut@2.3.0':
     dependencies:
       '@tauri-apps/api': 2.6.0
 
@@ -8643,7 +8637,7 @@ snapshots:
     dependencies:
       hermes-estree: 0.25.1
 
-  hono@4.12.19: {}
+  hono@4.12.21: {}
 
   hosted-git-info@7.0.2:
     dependencies:
@@ -9410,7 +9404,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.1
-      '@types/node': 24.12.4
+      '@types/node': 25.8.0
       long: 5.3.2
 
   proxy-addr@2.0.7:

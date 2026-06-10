@@ -668,7 +668,11 @@ impl Transcriber {
         let mut segments = Vec::with_capacity(num_segments as usize);
         for (i, segment) in state.as_iter().enumerate() {
             let segment_text = segment.to_string();
-            log::info!("[TRANSCRIPTION_DEBUG] Segment {}: '{}'", i, segment_text);
+            log::debug!(
+                "[TRANSCRIPTION_DEBUG] Segment {}: {} chars",
+                i,
+                segment_text.chars().count()
+            );
             text.push_str(&segment_text);
             text.push(' ');
             segments.push(crate::transcription::TranscriptionSegment {
