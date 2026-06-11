@@ -66,8 +66,11 @@ pub(crate) fn map_http_status(
     let body = body.unwrap_or_default().to_ascii_lowercase();
     let error = match status.as_u16() {
         401 | 403 => AiProviderError::InvalidApiKey,
-        400 | 404 if body.contains("model") => AiProviderError::InvalidModel,
+        400 if body.contains("api_key_invalid") || body.contains("api key not valid") => {
+            AiProviderError::InvalidApiKey
+        }
         429 => AiProviderError::RateLimited,
+        400 | 404 if body.contains("model") => AiProviderError::InvalidModel,
         500..=599 => AiProviderError::ServiceUnavailable,
         _ => AiProviderError::BadResponse,
     };
@@ -127,9 +130,21 @@ fn map_webc_error(error: &genai::webc::Error) -> MappedAiProviderError {
 }
 
 fn retry_after_from_headers(headers: &HeaderMap) -> Option<Duration> {
-    headers
+    let value = headers
         .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_secs)
+        .and_then(|value| value.to_str().ok())?;
+
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+
+    chrono::DateTime::parse_from_rfc2822(value)
+        .ok()
+        .map(|retry_at| {
+            retry_at
+                .with_timezone(&chrono::Utc)
+                .signed_duration_since(chrono::Utc::now())
+                .to_std()
+                .unwrap_or(Duration::ZERO)
+        })
 }

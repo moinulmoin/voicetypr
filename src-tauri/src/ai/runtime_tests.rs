@@ -278,6 +278,220 @@ mod tests {
         assert!(request.headers.get(AUTHORIZATION).is_none());
     }
 
+    #[tokio::test]
+    async fn ai_runtime_maps_gemini_api_key_invalid_400_to_invalid_api_key() {
+        let case = ProviderCase {
+            id: PROVIDER_GEMINI,
+            model: "gemini-3-flash-preview",
+        };
+        let server = MockServer::start().await;
+        mount_sequence(
+            &server,
+            case.id,
+            vec![error_response(
+                400,
+                r#"{"error":{"message":"API key not valid. API_KEY_INVALID for model lookup"}}"#,
+            )],
+        )
+        .await;
+        let executor = executor_for(case, &server, true, false);
+
+        let error = executor
+            .polish(request(case, 1_000, None), CancellationToken::new())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, AiProviderError::InvalidApiKey);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ai_runtime_does_not_retry_retry_after_beyond_remaining_budget() {
+        let case = ProviderCase {
+            id: PROVIDER_CUSTOM,
+            model: "custom-model",
+        };
+        let server = MockServer::start().await;
+        mount_sequence(
+            &server,
+            case.id,
+            vec![
+                retry_after_response(429, "rate limited", "2"),
+                ok_response(case.id, "should not be used"),
+            ],
+        )
+        .await;
+        let executor = executor_for(case, &server, true, false);
+        let started = Instant::now();
+
+        let error = executor
+            .polish(request(case, 150, None), CancellationToken::new())
+            .await
+            .unwrap_err();
+
+        let elapsed = started.elapsed();
+        assert!(matches!(
+            error,
+            AiProviderError::Timeout | AiProviderError::RateLimited
+        ));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        assert!(elapsed < Duration::from_millis(300), "elapsed={elapsed:?}");
+    }
+
+    #[tokio::test]
+    async fn ai_runtime_retries_429_without_retry_after_immediately() {
+        let case = ProviderCase {
+            id: PROVIDER_CUSTOM,
+            model: "custom-model",
+        };
+        let server = MockServer::start().await;
+        mount_sequence(
+            &server,
+            case.id,
+            vec![
+                error_response(429, "rate limited"),
+                ok_response(case.id, "polished"),
+            ],
+        )
+        .await;
+        let executor = executor_for(case, &server, true, false);
+        let started = Instant::now();
+
+        let result = executor
+            .polish(request(case, 1_000, None), CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert_eq!(result.output_text, "polished");
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert!(started.elapsed() < Duration::from_millis(300));
+    }
+
+    #[tokio::test]
+    async fn ai_runtime_retries_after_http_date_retry_after_within_budget() {
+        let case = ProviderCase {
+            id: PROVIDER_CUSTOM,
+            model: "custom-model",
+        };
+        let server = MockServer::start().await;
+        mount_sequence(
+            &server,
+            case.id,
+            vec![
+                retry_after_response(
+                    429,
+                    "rate limited",
+                    &http_date_after(Duration::from_secs(2)),
+                ),
+                ok_response(case.id, "polished"),
+            ],
+        )
+        .await;
+        let executor = executor_for(case, &server, true, false);
+        let started = Instant::now();
+
+        let result = executor
+            .polish(request(case, 3_500, None), CancellationToken::new())
+            .await
+            .unwrap();
+
+        let elapsed = started.elapsed();
+        assert_eq!(result.output_text, "polished");
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert!(elapsed >= Duration::from_millis(500), "elapsed={elapsed:?}");
+    }
+
+    #[tokio::test]
+    async fn ai_runtime_cancels_during_retry_after_backoff() {
+        let case = ProviderCase {
+            id: PROVIDER_CUSTOM,
+            model: "custom-model",
+        };
+        let server = MockServer::start().await;
+        mount_sequence(
+            &server,
+            case.id,
+            vec![
+                retry_after_response(429, "rate limited", "2"),
+                ok_response(case.id, "should not be used"),
+            ],
+        )
+        .await;
+        let executor = executor_for(case, &server, true, false);
+        let token = CancellationToken::new();
+        let child = token.clone();
+        let request = request(case, 5_000, None);
+        let started = Instant::now();
+        let handle = tokio::spawn(async move { executor.polish(request, child).await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        token.cancel();
+
+        let error = handle.await.unwrap().unwrap_err();
+
+        assert_eq!(error, AiProviderError::Canceled);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn ai_runtime_shared_executor_handles_concurrent_polish_calls_independently() {
+        let case = ProviderCase {
+            id: PROVIDER_CUSTOM,
+            model: "custom-model",
+        };
+        let server = MockServer::start().await;
+        mount_sequence(
+            &server,
+            case.id,
+            vec![
+                ok_response(case.id, "polished one"),
+                ok_response(case.id, "polished two"),
+            ],
+        )
+        .await;
+        let executor = executor_for(case, &server, true, false);
+        let first = executor.clone();
+        let second = executor.clone();
+        let first_request = request(case, 1_000, None);
+        let second_request = request(case, 1_000, None);
+
+        let (first_result, second_result) = tokio::join!(
+            first.polish(first_request, CancellationToken::new()),
+            second.polish(second_request, CancellationToken::new())
+        );
+
+        let mut outputs = vec![
+            first_result.unwrap().output_text,
+            second_result.unwrap().output_text,
+        ];
+        outputs.sort();
+        assert_eq!(outputs, vec!["polished one", "polished two"]);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn ai_runtime_response_just_after_budget_expiry_times_out() {
+        let case = ProviderCase {
+            id: PROVIDER_CUSTOM,
+            model: "custom-model",
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex(path_for_provider(case.id)))
+            .respond_with(ok_response(case.id, "late").set_delay(Duration::from_millis(120)))
+            .mount(&server)
+            .await;
+        let executor = executor_for(case, &server, true, false);
+
+        let error = executor
+            .polish(request(case, 100, None), CancellationToken::new())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, AiProviderError::Timeout);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
     async fn mount_sequence(
         server: &MockServer,
         provider_id: &str,
@@ -367,6 +581,16 @@ mod tests {
 
     fn error_response(status: u16, body: &str) -> ResponseTemplate {
         ResponseTemplate::new(status).set_body_string(body.to_string())
+    }
+
+    fn retry_after_response(status: u16, body: &str, retry_after: &str) -> ResponseTemplate {
+        error_response(status, body).insert_header("Retry-After", retry_after)
+    }
+
+    fn http_date_after(duration: Duration) -> String {
+        let retry_at = chrono::Utc::now()
+            + chrono::Duration::from_std(duration).expect("test duration fits chrono");
+        retry_at.format("%a, %d %b %Y %H:%M:%S GMT").to_string()
     }
 
     fn path_for_provider(provider_id: &str) -> &'static str {

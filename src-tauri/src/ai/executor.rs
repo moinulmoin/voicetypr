@@ -108,8 +108,9 @@ impl AiExecutor {
         remaining: Duration,
     ) -> Result<String, MappedAiProviderError> {
         tokio::select! {
-            _ = cancellation_token.cancelled() => Err(MappedAiProviderError::new(AiProviderError::Canceled)),
+            biased;
             _ = tokio::time::sleep(remaining) => Err(MappedAiProviderError::new(AiProviderError::Timeout)),
+            _ = cancellation_token.cancelled() => Err(MappedAiProviderError::new(AiProviderError::Canceled)),
             result = self.execute_once(request) => result,
         }
     }

@@ -67,6 +67,13 @@ const enabledAISettings = {
   },
 }
 
+const providerListResponse = [
+  { id: 'openai', name: 'OpenAI' },
+  { id: 'gemini', name: 'Google Gemini' },
+  { id: 'anthropic', name: 'Anthropic' },
+  { id: 'custom', name: 'Custom (OpenAI-compatible)' },
+]
+
 let rejectWritingSettingsUpdate = false
 let aiSettingsResponse = baseAISettings
 
@@ -95,6 +102,9 @@ describe('EnhancementsSection', () => {
     aiSettingsResponse = baseAISettings
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(false)
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'list_ai_providers') {
+        return Promise.resolve(providerListResponse)
+      }
       if (cmd === 'get_settings') {
         return Promise.resolve(baseAppSettings)
       }
@@ -151,6 +161,9 @@ describe('EnhancementsSection', () => {
       expect(screen.getByText('Voice Commands')).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Dictation (no AI)' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /Code \(requires AI formatting\)/i })).toBeInTheDocument()
+      expect(screen.getByText('OpenAI')).toBeInTheDocument()
+      expect(screen.getByText('Google Gemini')).toBeInTheDocument()
+      expect(invoke).toHaveBeenCalledWith('list_ai_providers')
     })
   })
 
@@ -208,6 +221,9 @@ describe('EnhancementsSection', () => {
 
   it('hides specific language selection when Personal Dictation is loaded', async () => {
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
+      if (cmd === 'list_ai_providers') {
+        return Promise.resolve(providerListResponse)
+      }
       if (cmd === 'get_settings') {
         return Promise.resolve({
           ...baseAppSettings,
@@ -267,6 +283,9 @@ describe('EnhancementsSection', () => {
       providerId === 'openai',
     )
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'list_ai_providers') {
+        return Promise.resolve(providerListResponse)
+      }
       if (cmd === 'get_settings') {
         return Promise.resolve(baseAppSettings)
       }
@@ -317,6 +336,9 @@ describe('EnhancementsSection', () => {
       providerId === 'openai',
     )
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'list_ai_providers') {
+        return Promise.resolve(providerListResponse)
+      }
       if (cmd === 'get_enhancement_options') {
         return Promise.resolve({ preset: 'Writing' })
       }
@@ -484,6 +506,9 @@ describe('EnhancementsSection', () => {
     })
 
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'list_ai_providers') {
+        return Promise.resolve(providerListResponse)
+      }
       if (cmd === 'get_settings') {
         return Promise.resolve(baseAppSettings)
       }
@@ -656,6 +681,9 @@ describe('EnhancementsSection', () => {
 
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
       (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === 'list_ai_providers') {
+          return Promise.resolve(providerListResponse)
+        }
         if (cmd === 'get_settings') {
           return Promise.resolve(baseAppSettings)
         }
@@ -769,6 +797,9 @@ describe('EnhancementsSection', () => {
     let saveCount = 0
 
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'list_ai_providers') {
+        return Promise.resolve(providerListResponse)
+      }
       if (cmd === 'get_settings') {
         return Promise.resolve(baseAppSettings)
       }

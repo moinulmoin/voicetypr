@@ -1,4 +1,9 @@
+use crate::ai::contract::AiPolishRequest;
+use crate::ai::error::{user_facing_message, AiProviderError};
+use crate::ai::executor::AiExecutor;
+use crate::ai::genai_runtime::AiKeyResolver;
 use crate::ai::openai::{is_unsupported_token_parameter_error, model_uses_max_completion_tokens};
+use crate::ai::providers::{launch_providers, recommended_models, PROVIDER_CUSTOM};
 use crate::ai::EnhancementOptions;
 use crate::commands::audio::pill_toast;
 use crate::commands::settings::{
@@ -6,17 +11,13 @@ use crate::commands::settings::{
     normalize_transcription_task, task_uses_translate_to_english,
     FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT, TRANSCRIPTION_TASK_TRANSCRIBE,
 };
-use crate::formatting::messages::{FormattingCommand, FormattingResponse, PROTOCOL_VERSION};
-use crate::formatting::FormattingClient;
 use crate::secure_store;
 use crate::writing::{load_writing_settings, save_writing_settings, WritingSettings};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
-use tauri::Manager;
+use std::sync::{Arc, Mutex};
 use tauri_plugin_store::StoreExt;
 
 // In-memory cache for API keys to avoid system password prompts
@@ -24,21 +25,19 @@ use tauri_plugin_store::StoreExt;
 static API_KEY_CACHE: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-static FORMATTING_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
-
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const CUSTOM_BASE_URL_KEY: &str = "ai_custom_base_url";
 const CUSTOM_NO_AUTH_KEY: &str = "ai_custom_no_auth";
 const LEGACY_OPENAI_BASE_URL_KEY: &str = "ai_openai_base_url";
 const LEGACY_OPENAI_NO_AUTH_KEY: &str = "ai_openai_no_auth";
 
-/// AI provider key names stored in the secure store
-const AI_PROVIDER_KEYS: &[&str] = &[
-    "ai_api_key_gemini",
-    "ai_api_key_openai",
-    "ai_api_key_anthropic",
-    "ai_api_key_custom",
-];
+fn ai_provider_key_names() -> Vec<String> {
+    launch_providers()
+        .into_iter()
+        .filter(|provider| provider.requires_api_key || provider.id == PROVIDER_CUSTOM)
+        .map(|provider| format!("ai_api_key_{}", provider.id))
+        .collect()
+}
 
 /// Populate the in-memory API key cache from the secure store.
 /// Called during backend startup BEFORE startup validation checks run.
@@ -46,12 +45,12 @@ const AI_PROVIDER_KEYS: &[&str] = &[
 /// perform_startup_checks() without waiting for the frontend to warm the cache.
 pub fn warm_ai_key_cache_from_secure_store(app: &tauri::AppHandle) {
     if let Ok(mut cache) = API_KEY_CACHE.lock() {
-        for key_name in AI_PROVIDER_KEYS {
+        for key_name in ai_provider_key_names() {
             // Skip if already cached (e.g. from a prior call or concurrent frontend warm)
-            if cache.contains_key(*key_name) {
+            if cache.contains_key(&key_name) {
                 continue;
             }
-            match secure_store::secure_get(app, key_name) {
+            match secure_store::secure_get(app, &key_name) {
                 Ok(Some(value)) => {
                     cache.insert(key_name.to_string(), value);
                     log::info!("Warmed API key cache from secure store: {}", key_name);
@@ -500,129 +499,72 @@ pub async fn validate_ai_api_key(
     } = args;
     validate_provider_name(&provider)?;
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Failed to build validation client: {}", e))?;
-    let provided_key = api_key.unwrap_or_default();
-
-    match provider.as_str() {
-        "openai" | "custom" => {
-            let store = app.store("settings").map_err(|e| e.to_string())?;
-            let inferred_no_auth = provider == "custom"
-                && (no_auth.unwrap_or(false) || provided_key.trim().is_empty());
-            let base = base_url
-                .or_else(|| {
-                    if provider == "custom" {
-                        store
-                            .get(CUSTOM_BASE_URL_KEY)
-                            .and_then(|v| v.as_str().map(|s| s.to_string()))
-                            .or_else(|| {
-                                store
-                                    .get(LEGACY_OPENAI_BASE_URL_KEY)
-                                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                            })
-                    } else {
-                        store
-                            .get(LEGACY_OPENAI_BASE_URL_KEY)
-                            .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    }
-                })
-                .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
-            let validate_model = model.unwrap_or_else(|| "gpt-5-nano".to_string());
-            let allow_chat_probe_fallback = provider == "custom";
-            let auth_header = if inferred_no_auth {
-                None
-            } else {
-                let key = provided_key.trim();
-                if key.is_empty() {
-                    return Err("API key is required".to_string());
-                }
-                Some(format!("Bearer {}", key))
-            };
-
-            run_openai_probe_request(
-                &client,
-                &base,
-                &validate_model,
-                auth_header.as_deref(),
-                allow_chat_probe_fallback,
-            )
-            .await
-            .map_err(|error| {
-                log::error!(
-                    "OpenAI-compatible validation failed: provider={} base_url={} model={} error={}",
-                    provider,
-                    base,
-                    validate_model,
-                    error
-                );
-                error
-            })
-        }
-        "gemini" => {
-            let key = provided_key.trim();
-            if key.is_empty() {
-                return Err("API key is required".to_string());
-            }
-            let response = client
-                .get("https://generativelanguage.googleapis.com/v1beta/models")
-                .query(&[("key", key)])
-                .send()
-                .await
-                .map_err(|e| format!("Network error validating Gemini API key: {}", e))?;
-            let status = response.status();
-            if status.is_success() {
-                Ok(())
-            } else if matches!(status.as_u16(), 400 | 401 | 403) {
-                Err("Invalid Gemini API key".to_string())
-            } else {
-                let snippet: String = response
-                    .text()
-                    .await
-                    .unwrap_or_default()
-                    .chars()
-                    .take(500)
-                    .collect();
-                Err(format!(
-                    "Unexpected Gemini validation response HTTP {}: {}",
-                    status, snippet
-                ))
-            }
-        }
-        "anthropic" => {
-            let key = provided_key.trim();
-            if key.is_empty() {
-                return Err("API key is required".to_string());
-            }
-            let response = client
-                .get("https://api.anthropic.com/v1/models")
-                .header("x-api-key", key)
-                .header("anthropic-version", "2023-06-01")
-                .send()
-                .await
-                .map_err(|e| format!("Network error validating Anthropic API key: {}", e))?;
-            let status = response.status();
-            if status.is_success() {
-                Ok(())
-            } else if matches!(status.as_u16(), 401 | 403) {
-                Err("Invalid Anthropic API key".to_string())
-            } else {
-                let snippet: String = response
-                    .text()
-                    .await
-                    .unwrap_or_default()
-                    .chars()
-                    .take(500)
-                    .collect();
-                Err(format!(
-                    "Unexpected Anthropic validation response HTTP {}: {}",
-                    status, snippet
-                ))
-            }
-        }
-        _ => Err("Unsupported provider".to_string()),
+    let provider_is_supported = launch_providers()
+        .iter()
+        .any(|candidate| candidate.id == provider);
+    if !provider_is_supported {
+        return Err(user_facing_message(&AiProviderError::UnsupportedProvider).to_string());
     }
+
+    let provided_key = api_key.unwrap_or_default();
+    let no_auth =
+        provider == PROVIDER_CUSTOM && (no_auth.unwrap_or(false) || provided_key.trim().is_empty());
+    if !no_auth && provided_key.trim().is_empty() {
+        return Err(user_facing_message(&AiProviderError::MissingApiKey).to_string());
+    }
+
+    let validation_model = model
+        .filter(|candidate| !candidate.trim().is_empty())
+        .or_else(|| {
+            recommended_models(&provider)
+                .into_iter()
+                .find(|candidate| candidate.recommended)
+                .map(|candidate| candidate.model_id)
+        })
+        .unwrap_or_else(|| "gpt-5-nano".to_string());
+    let custom_base_url = if provider == PROVIDER_CUSTOM {
+        base_url
+            .filter(|candidate| !candidate.trim().is_empty())
+            .or_else(|| custom_base_url_from_settings(&app))
+            .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string())
+    } else {
+        DEFAULT_OPENAI_BASE_URL.to_string()
+    };
+
+    let validation_provider = provider.clone();
+    let validation_key = provided_key.trim().to_string();
+    let key_resolver: AiKeyResolver = Arc::new(move |provider_id| {
+        if provider_id == validation_provider && !validation_key.is_empty() {
+            Some(validation_key.clone())
+        } else {
+            None
+        }
+    });
+    let http_client = reqwest::Client::builder()
+        .build()
+        .map_err(|error| format!("Failed to build validation client: {error}"))?;
+    let executor = AiExecutor::new(http_client, key_resolver, custom_base_url, no_auth);
+    let request = AiPolishRequest {
+        provider_id: provider.clone(),
+        model_id: validation_model,
+        input_text: "ok".to_string(),
+        prompt: "Reply with exactly: ok".to_string(),
+        timeout_ms: 10_000,
+        reasoning_effort: None,
+    };
+
+    executor
+        .polish(request, tokio_util::sync::CancellationToken::new())
+        .await
+        .map(|_| ())
+        .map_err(|error| {
+            log::warn!(
+                "AI provider validation failed: provider={} category={}",
+                provider,
+                user_facing_message(&error)
+            );
+            user_facing_message(&error).to_string()
+        })
 }
 
 /// Test an OpenAI-compatible endpoint without saving or caching anything.
@@ -901,6 +843,177 @@ pub async fn update_writing_settings(
     Ok(())
 }
 
+fn custom_base_url_from_settings(app: &tauri::AppHandle) -> Option<String> {
+    app.store("settings").ok().and_then(|store| {
+        store
+            .get(CUSTOM_BASE_URL_KEY)
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .or_else(|| {
+                store
+                    .get(LEGACY_OPENAI_BASE_URL_KEY)
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+            })
+    })
+}
+
+fn custom_no_auth_from_settings(app: &tauri::AppHandle, has_key: bool) -> bool {
+    app.store("settings")
+        .ok()
+        .and_then(|store| {
+            store
+                .get(CUSTOM_NO_AUTH_KEY)
+                .and_then(|v| v.as_bool())
+                .or_else(|| {
+                    store
+                        .get(LEGACY_OPENAI_NO_AUTH_KEY)
+                        .and_then(|v| v.as_bool())
+                })
+        })
+        .unwrap_or(!has_key)
+}
+
+fn selected_ai_provider_and_model(
+    app: &tauri::AppHandle,
+) -> Result<(String, String), AiProviderError> {
+    let store = app
+        .store("settings")
+        .map_err(|_| AiProviderError::Internal)?;
+    let provider = store
+        .get("ai_provider")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+    let model = store
+        .get("ai_model")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+    if provider.is_empty() || model.is_empty() {
+        return Err(AiProviderError::InvalidModel);
+    }
+    Ok((provider, model))
+}
+
+fn executor_for_provider(
+    app: &tauri::AppHandle,
+    selected_provider: &str,
+) -> Result<(AiExecutor, String), AiProviderError> {
+    let cache = API_KEY_CACHE
+        .lock()
+        .map_err(|_| AiProviderError::Internal)?;
+    let openai_key = cache.get("ai_api_key_openai").cloned();
+    let custom_key = cache.get("ai_api_key_custom").cloned();
+    let selected_key = cache
+        .get(&format!("ai_api_key_{}", selected_provider))
+        .cloned();
+    drop(cache);
+
+    let (runtime_provider, custom_base_url, custom_no_auth, keys) = if selected_provider == "openai"
+    {
+        if let Some(key) = openai_key {
+            let mut keys = HashMap::new();
+            keys.insert("openai".to_string(), key);
+            (
+                "openai".to_string(),
+                DEFAULT_OPENAI_BASE_URL.to_string(),
+                false,
+                keys,
+            )
+        } else if let Some(base_url) = custom_base_url_from_settings(app) {
+            let has_key = custom_key.is_some();
+            let mut keys = HashMap::new();
+            if let Some(key) = custom_key {
+                keys.insert(PROVIDER_CUSTOM.to_string(), key);
+            }
+            (
+                PROVIDER_CUSTOM.to_string(),
+                base_url,
+                custom_no_auth_from_settings(app, has_key),
+                keys,
+            )
+        } else {
+            return Err(AiProviderError::MissingApiKey);
+        }
+    } else if selected_provider == PROVIDER_CUSTOM {
+        let has_key = custom_key.is_some();
+        let mut keys = HashMap::new();
+        if let Some(key) = custom_key {
+            keys.insert(PROVIDER_CUSTOM.to_string(), key);
+        }
+        (
+            PROVIDER_CUSTOM.to_string(),
+            custom_base_url_from_settings(app)
+                .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string()),
+            custom_no_auth_from_settings(app, has_key),
+            keys,
+        )
+    } else {
+        let key = selected_key.ok_or(AiProviderError::MissingApiKey)?;
+        let mut keys = HashMap::new();
+        keys.insert(selected_provider.to_string(), key);
+        (
+            selected_provider.to_string(),
+            DEFAULT_OPENAI_BASE_URL.to_string(),
+            false,
+            keys,
+        )
+    };
+
+    if runtime_provider == PROVIDER_CUSTOM && !custom_no_auth && !keys.contains_key(PROVIDER_CUSTOM)
+    {
+        return Err(AiProviderError::MissingApiKey);
+    }
+
+    let key_resolver: AiKeyResolver = Arc::new(move |provider_id| keys.get(provider_id).cloned());
+    let http_client = reqwest::Client::builder()
+        .build()
+        .map_err(|_| AiProviderError::Internal)?;
+    Ok((
+        AiExecutor::new(http_client, key_resolver, custom_base_url, custom_no_auth),
+        runtime_provider,
+    ))
+}
+
+async fn polish_text_with_prompt_typed(
+    app: &tauri::AppHandle,
+    text: &str,
+    model: String,
+    provider: String,
+    prompt: String,
+) -> Result<String, AiProviderError> {
+    let (executor, runtime_provider) = executor_for_provider(app, &provider)?;
+    let request = AiPolishRequest {
+        provider_id: runtime_provider.clone(),
+        model_id: model,
+        input_text: text.to_string(),
+        prompt,
+        timeout_ms: 30_000,
+        reasoning_effort: None,
+    };
+    let result = executor
+        .polish(request, tokio_util::sync::CancellationToken::new())
+        .await?;
+    log::info!(
+        "Text enhanced successfully via {} (original: {}, enhanced: {}, duration_ms: {})",
+        result.provider_id,
+        text.len(),
+        result.output_text.len(),
+        result.duration_ms
+    );
+    Ok(result.output_text)
+}
+
+pub async fn polish_text_typed(
+    app: &tauri::AppHandle,
+    text: &str,
+    options: &crate::ai::EnhancementOptions,
+    output_language: Option<&str>,
+    context: Option<&str>,
+) -> Result<String, crate::ai::error::AiProviderError> {
+    let (provider, model) = selected_ai_provider_and_model(app)?;
+    let prompt =
+        crate::ai::prompts::build_enhancement_prompt(text, context, options, output_language);
+    polish_text_with_prompt_typed(app, text, model, provider, prompt).await
+}
+
 pub(crate) async fn enhance_transcription_internal(
     text: String,
     transcript_language: Option<String>,
@@ -910,7 +1023,6 @@ pub(crate) async fn enhance_transcription_internal(
     preset_override: Option<crate::ai::prompts::EnhancementPreset>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    // Quick validation
     if text.trim().is_empty() {
         log::debug!("Skipping enhancement for empty text");
         return Ok(text);
@@ -946,130 +1058,19 @@ pub(crate) async fn enhance_transcription_internal(
         return Ok(text);
     }
 
-    let store = app.store("settings").map_err(|e| e.to_string())?;
-    let provider = store
-        .get("ai_provider")
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_default(); // Empty by default
-
-    let model = store
-        .get("ai_model")
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "".to_string()); // Empty by default
-
-    if model.is_empty() || provider.is_empty() {
-        log::warn!(
-            "AI enhancement enabled but no model/provider selected. Provider: {}",
-            provider
-        );
-        if force_formatting {
-            return Err("AI formatting requires a selected provider and model".to_string());
-        }
-        return Ok(text);
-    }
-
-    // Determine provider-specific config
-    let (factory_provider, api_key, options): (String, String, HashMap<String, serde_json::Value>) =
-        if provider == "openai" {
-            let cache = API_KEY_CACHE.lock().map_err(|e| {
-                log::error!("Failed to access API key cache: {}", e);
-                "Failed to access cache".to_string()
-            })?;
-
-            let openai_cached = cache.get("ai_api_key_openai").cloned();
-            let custom_cached = cache.get("ai_api_key_custom").cloned();
-            drop(cache);
-
-            if let Some(cached) = openai_cached {
-                let mut opts = std::collections::HashMap::new();
-                opts.insert(
-                    "base_url".into(),
-                    serde_json::Value::String(DEFAULT_OPENAI_BASE_URL.to_string()),
-                );
-                opts.insert("no_auth".into(), serde_json::Value::Bool(false));
-
-                ("openai".to_string(), cached, opts)
-            } else if let Some(legacy_base_url) = store
-                .get(LEGACY_OPENAI_BASE_URL_KEY)
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-            {
-                log::warn!("Using legacy OpenAI-compatible configuration for openai provider");
-                let mut opts = std::collections::HashMap::new();
-                opts.insert(
-                    "base_url".into(),
-                    serde_json::Value::String(legacy_base_url),
-                );
-                opts.insert(
-                    "no_auth".into(),
-                    serde_json::Value::Bool(custom_cached.is_none()),
-                );
-
-                (
-                    "openai".to_string(),
-                    custom_cached.unwrap_or_default(),
-                    opts,
-                )
-            } else {
-                log::error!(
-                "API key not found in cache for OpenAI provider. Cache keys unavailable for OpenAI path"
+    let (provider, model) = match selected_ai_provider_and_model(&app) {
+        Ok(selection) => selection,
+        Err(error) => {
+            log::warn!(
+                "AI enhancement skipped: category={}",
+                user_facing_message(&error)
             );
-                return Err("API key not found in cache".to_string());
+            if force_formatting {
+                return Err(user_facing_message(&error).to_string());
             }
-        } else if provider == "custom" {
-            let base_url = store
-                .get(CUSTOM_BASE_URL_KEY)
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .or_else(|| {
-                    store
-                        .get(LEGACY_OPENAI_BASE_URL_KEY)
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                })
-                .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
-
-            let cache = API_KEY_CACHE.lock().map_err(|e| {
-                log::error!("Failed to access API key cache: {}", e);
-                "Failed to access cache".to_string()
-            })?;
-
-            let cached = cache.get("ai_api_key_custom").cloned();
-
-            if cached.is_some() {
-                log::info!("Using cached API key for custom provider");
-            } else {
-                log::warn!("No cached API key found for custom provider, using no-auth mode");
-                log::debug!(
-                    "Available cache keys: {:?}",
-                    cache.keys().collect::<Vec<_>>()
-                );
-            }
-            drop(cache);
-
-            let mut opts = std::collections::HashMap::new();
-            opts.insert("base_url".into(), serde_json::Value::String(base_url));
-            opts.insert("no_auth".into(), serde_json::Value::Bool(cached.is_none()));
-
-            ("openai".to_string(), cached.unwrap_or_default(), opts)
-        } else {
-            // Pi AI registry providers other than OpenAI-compatible providers
-            // use the generic ai_api_key_{provider} cache key. We intentionally
-            // skip save-time validation here; first use surfaces auth/model errors.
-            let cache = API_KEY_CACHE
-                .lock()
-                .map_err(|_| "Failed to access cache".to_string())?;
-            let key_name = format!("ai_api_key_{}", provider);
-            let api_key = cache.get(&key_name).cloned().ok_or_else(|| {
-                log::error!(
-                    "API key not found in cache for provider: {}. Cache keys: {:?}",
-                    provider,
-                    cache.keys().collect::<Vec<_>>()
-                );
-                "API key not found in cache".to_string()
-            })?;
-
-            (provider.clone(), api_key, std::collections::HashMap::new())
-        };
-
-    drop(store); // Release lock before async operation
+            return Ok(text);
+        }
+    };
 
     let language = if let Some(output_language) = output_language_override {
         Some(output_language)
@@ -1116,7 +1117,7 @@ pub(crate) async fn enhance_transcription_internal(
         );
 
         if final_text_language == FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT {
-            if let Some(transcript_language) = transcript_language.clone() {
+            if let Some(transcript_language) = transcript_language {
                 Some(transcript_language)
             } else if task_uses_translate_to_english(&transcription_task) {
                 Some("en".to_string())
@@ -1136,7 +1137,6 @@ pub(crate) async fn enhance_transcription_internal(
         enhancement_options,
         language
     );
-
     let prompt = crate::ai::prompts::build_enhancement_prompt(
         &text,
         context_override.as_deref(),
@@ -1144,66 +1144,16 @@ pub(crate) async fn enhance_transcription_internal(
         language.as_deref(),
     );
 
-    let custom_base_url = options
-        .get("base_url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let no_auth = options
-        .get("no_auth")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let sidecar_provider = if provider == "custom"
-        || custom_base_url
-            .as_deref()
-            .is_some_and(|base| base.trim_end_matches('/') != DEFAULT_OPENAI_BASE_URL)
-    {
-        "custom".to_string()
-    } else {
-        sidecar_provider_for(&factory_provider).to_string()
-    };
-
-    let command = FormattingCommand::Format {
-        id: next_formatting_request_id("format"),
-        protocol_version: PROTOCOL_VERSION,
-        provider: sidecar_provider,
-        model,
-        prompt,
-        system_prompt: Some(
-            "You are a careful text formatter. Return only the cleaned text requested by the user instructions."
-                .to_string(),
-        ),
-        api_key: if api_key.is_empty() { None } else { Some(api_key) },
-        no_auth,
-        custom_base_url,
-        timeout_ms: 30_000,
-    };
-
-    match app.state::<FormattingClient>().send(&app, &command).await {
-        Ok(FormattingResponse::Formatted {
-            text: enhanced_text,
-            ..
-        }) => {
-            log::info!(
-                "Text enhanced successfully (original: {}, enhanced: {})",
-                text.len(),
-                enhanced_text.len()
+    match polish_text_with_prompt_typed(&app, &text, model, provider, prompt).await {
+        Ok(enhanced_text) => Ok(enhanced_text),
+        Err(error) => {
+            log::warn!(
+                "AI formatting failed: category={}",
+                user_facing_message(&error)
             );
-            Ok(enhanced_text)
-        }
-        Ok(other) => {
-            log::error!("Unexpected formatting sidecar response: {:?}", other);
             pill_toast(&app, "Formatting failed", 1500);
             if force_formatting {
-                Err("Unexpected formatting response".to_string())
-            } else {
-                Ok(text)
-            }
-        }
-        Err(e) => {
-            log::error!("AI formatting failed: {}", e);
-            pill_toast(&app, "Formatting failed", 1500);
-            if force_formatting {
-                Err(e.to_string())
+                Err(user_facing_message(&error).to_string())
             } else {
                 Ok(text)
             }
@@ -1292,11 +1242,7 @@ pub async fn get_openai_config(app: tauri::AppHandle) -> Result<OpenAIConfig, St
     Ok(OpenAIConfig { base_url, no_auth })
 }
 
-// ============================================================================
-// Curated Model List (Static - No API Fetching)
-// ============================================================================
-
-/// A model available from a provider
+/// A model available from a provider.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProviderModel {
     pub id: String,
@@ -1304,85 +1250,15 @@ pub struct ProviderModel {
     pub recommended: bool,
 }
 
-/// Curated list of OpenAI models for text formatting
-/// Using GPT-5 nano/mini with minimal reasoning for fast, cost-effective formatting
-const OPENAI_MODELS: &[(&str, &str, bool)] = &[
-    ("gpt-5-nano", "GPT-5 Nano", true),
-    ("gpt-5-mini", "GPT-5 Mini", true),
-];
-
-/// Curated list of Google Gemini models for text formatting
-/// Using Flash variants - optimized for speed and cost
-const GEMINI_MODELS: &[(&str, &str, bool)] = &[
-    ("gemini-3-flash-preview", "Gemini 3 Flash", true),
-    ("gemini-2.5-flash", "Gemini 2.5 Flash", true),
-    ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite", true),
-];
-
-/// Curated list of Anthropic Claude models for text formatting
-/// Haiku 4.5 (fastest, cheapest) and Sonnet 4.6 (balanced).
-/// Opus is intentionally excluded - too slow/expensive for inline formatting.
-///
-///
-/// The old Rust Anthropic provider accepted `claude-sonnet-4-5` for
-/// back-compat during the 1.12.0/1.12.1 window. That provider is no longer
-/// on the formatting hot path, so we do not re-advertise deprecated IDs here.
-const ANTHROPIC_MODELS: &[(&str, &str, bool)] = &[
-    ("claude-haiku-4-5", "Claude Haiku 4.5", true),
-    ("claude-sonnet-4-6", "Claude Sonnet 4.6", false),
-];
-
-/// Get curated models for a provider (no API call needed)
-fn get_curated_models(provider: &str) -> Vec<ProviderModel> {
-    let models: &[(&str, &str, bool)] = match provider {
-        "openai" => OPENAI_MODELS,
-        "gemini" => GEMINI_MODELS,
-        "anthropic" => ANTHROPIC_MODELS,
-        _ => return vec![],
-    };
-
-    models
-        .iter()
-        .map(|(id, name, recommended)| ProviderModel {
-            id: id.to_string(),
-            name: name.to_string(),
-            recommended: *recommended,
+fn provider_models(provider: &str) -> Vec<ProviderModel> {
+    recommended_models(provider)
+        .into_iter()
+        .map(|model| ProviderModel {
+            id: model.model_id,
+            name: model.label,
+            recommended: model.recommended,
         })
         .collect()
-}
-
-fn sidecar_provider_for(provider: &str) -> &str {
-    match provider {
-        // VoiceTypr settings have historically used `gemini`, while the
-        // Pi AI registry uses `google` for Gemini models.
-        "gemini" => "google",
-        other => other,
-    }
-}
-
-fn voice_provider_for_sidecar(provider: &str) -> &str {
-    match provider {
-        // Keep the public/settings id stable even though Pi AI calls Gemini
-        // `google` internally.
-        "google" => "gemini",
-        other => other,
-    }
-}
-
-fn provider_display_name(provider_id: &str, sidecar_name: &str) -> String {
-    match provider_id {
-        "openai" => "OpenAI".to_string(),
-        "anthropic" => "Anthropic".to_string(),
-        "gemini" => "Google Gemini".to_string(),
-        "custom" => "Custom (OpenAI-compatible)".to_string(),
-        _ if sidecar_name.trim().is_empty() => provider_id.to_string(),
-        _ => sidecar_name.to_string(),
-    }
-}
-
-fn next_formatting_request_id(prefix: &str) -> String {
-    let id = FORMATTING_REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{}-{}", prefix, id)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1391,138 +1267,41 @@ pub struct ProviderInfo {
     pub name: String,
 }
 
+fn provider_infos() -> Vec<ProviderInfo> {
+    launch_providers()
+        .into_iter()
+        .map(|provider| ProviderInfo {
+            id: provider.id,
+            name: provider.label,
+        })
+        .collect()
+}
+
 #[tauri::command]
-pub async fn list_ai_providers(app: tauri::AppHandle) -> Result<Vec<ProviderInfo>, String> {
-    let command = FormattingCommand::ListProviders {
-        id: next_formatting_request_id("providers"),
-        protocol_version: PROTOCOL_VERSION,
-    };
-
-    match app.state::<FormattingClient>().send(&app, &command).await {
-        Ok(FormattingResponse::Providers { providers, .. }) => {
-            let mut mapped = Vec::with_capacity(providers.len());
-            for provider in providers {
-                let provider_id = voice_provider_for_sidecar(&provider.id);
-                let info = ProviderInfo {
-                    id: provider_id.to_string(),
-                    name: provider_display_name(provider_id, &provider.name),
-                };
-                if !mapped
-                    .iter()
-                    .any(|existing: &ProviderInfo| existing.id == info.id)
-                {
-                    mapped.push(info);
-                }
-            }
-            Ok(mapped)
-        }
-        Ok(other) => {
-            log::warn!(
-                "Unexpected provider-list response from formatting sidecar: {:?}",
-                other
-            );
-            Ok(built_in_provider_infos())
-        }
-        Err(error) => {
-            log::warn!(
-                "Formatting sidecar provider listing failed; using built-in providers: {}",
-                error
-            );
-            Ok(built_in_provider_infos())
-        }
-    }
+pub async fn list_ai_providers(_app: tauri::AppHandle) -> Result<Vec<ProviderInfo>, String> {
+    Ok(provider_infos())
 }
 
-fn built_in_provider_infos() -> Vec<ProviderInfo> {
-    vec![
-        ProviderInfo {
-            id: "openai".to_string(),
-            name: "OpenAI".to_string(),
-        },
-        ProviderInfo {
-            id: "anthropic".to_string(),
-            name: "Anthropic".to_string(),
-        },
-        ProviderInfo {
-            id: "gemini".to_string(),
-            name: "Google Gemini".to_string(),
-        },
-        ProviderInfo {
-            id: "custom".to_string(),
-            name: "Custom (OpenAI-compatible)".to_string(),
-        },
-    ]
-}
-
-/// List available models for a provider.
-/// Prefer the Pi AI sidecar registry; fall back to the legacy curated list if the sidecar is unavailable.
+/// List available recommended models for a provider.
 #[tauri::command]
 pub async fn list_provider_models(
     provider: String,
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
 ) -> Result<Vec<ProviderModel>, String> {
     validate_provider_name(&provider)?;
 
-    if provider == "custom" {
+    if provider == PROVIDER_CUSTOM {
         return Ok(Vec::new());
     }
 
-    let sidecar_provider = sidecar_provider_for(&provider);
-    let command = FormattingCommand::ListModels {
-        id: next_formatting_request_id("models"),
-        protocol_version: PROTOCOL_VERSION,
-        provider: sidecar_provider.to_string(),
-    };
-
-    match app.state::<FormattingClient>().send(&app, &command).await {
-        Ok(FormattingResponse::Models { models, .. }) => {
-            let mapped = models
-                .into_iter()
-                .map(|model| ProviderModel {
-                    id: model.id,
-                    name: model.name,
-                    recommended: false,
-                })
-                .collect::<Vec<_>>();
-            log::info!(
-                "Returning {} Pi AI registry models for provider {} via sidecar provider {}",
-                mapped.len(),
-                provider,
-                sidecar_provider
-            );
-            Ok(mapped)
-        }
-        Ok(other) => {
-            log::warn!(
-                "Unexpected model-list response from formatting sidecar: {:?}",
-                other
-            );
-            let models = get_curated_models(&provider);
-            if models.is_empty() {
-                Err(format!(
-                    "Unsupported provider for model listing: {}",
-                    provider
-                ))
-            } else {
-                Ok(models)
-            }
-        }
-        Err(error) => {
-            log::warn!(
-                "Formatting sidecar model listing failed for provider {}; falling back to curated list: {}",
-                provider,
-                error
-            );
-            let models = get_curated_models(&provider);
-            if models.is_empty() {
-                Err(format!(
-                    "Unsupported provider for model listing: {}",
-                    provider
-                ))
-            } else {
-                Ok(models)
-            }
-        }
+    let models = provider_models(&provider);
+    if models.is_empty() {
+        Err(format!(
+            "Unsupported provider for model listing: {}",
+            provider
+        ))
+    } else {
+        Ok(models)
     }
 }
 
@@ -1538,7 +1317,8 @@ mod tests {
         assert!(validate_provider_name("anthropic").is_ok());
         assert!(validate_provider_name("custom").is_ok());
 
-        // Pi AI registry providers are accepted by identifier shape.
+        // Runtime launch table support is enforced separately from loose
+        // identifier validation used by legacy settings paths.
         assert!(validate_provider_name("groq").is_ok());
         assert!(validate_provider_name("azure-openai-responses").is_ok());
         assert!(validate_provider_name("openai_compatible").is_ok());
@@ -1550,42 +1330,13 @@ mod tests {
     }
 
     #[test]
-    fn test_sidecar_provider_mapping() {
-        assert_eq!(sidecar_provider_for("gemini"), "google");
-        assert_eq!(sidecar_provider_for("openai"), "openai");
-        assert_eq!(sidecar_provider_for("anthropic"), "anthropic");
-        assert_eq!(sidecar_provider_for("groq"), "groq");
-    }
-
-    #[test]
-    fn test_voice_provider_mapping() {
-        assert_eq!(voice_provider_for_sidecar("google"), "gemini");
-        assert_eq!(voice_provider_for_sidecar("openai"), "openai");
-        assert_eq!(voice_provider_for_sidecar("anthropic"), "anthropic");
-        assert_eq!(voice_provider_for_sidecar("groq"), "groq");
-    }
-
-    #[test]
-    fn test_provider_display_names_keep_product_ids_stable() {
-        assert_eq!(provider_display_name("gemini", "google"), "Google Gemini");
-        assert_eq!(provider_display_name("openai", "openai"), "OpenAI");
-        assert_eq!(
-            provider_display_name("custom", ""),
-            "Custom (OpenAI-compatible)"
-        );
-        assert_eq!(provider_display_name("groq", "groq"), "groq");
-    }
-
-    #[test]
-    fn test_curated_models() {
-        // OpenAI models
-        let openai_models = get_curated_models("openai");
+    fn test_provider_models_are_contract_backed() {
+        let openai_models = provider_models("openai");
         assert_eq!(openai_models.len(), 2);
         assert!(openai_models.iter().any(|m| m.id == "gpt-5-nano"));
         assert!(openai_models.iter().any(|m| m.id == "gpt-5-mini"));
 
-        // Gemini models
-        let gemini_models = get_curated_models("gemini");
+        let gemini_models = provider_models("gemini");
         assert_eq!(gemini_models.len(), 3);
         assert!(gemini_models
             .iter()
@@ -1595,19 +1346,36 @@ mod tests {
             .iter()
             .any(|m| m.id == "gemini-2.5-flash-lite"));
 
-        // Anthropic models
-        let anthropic_models = get_curated_models("anthropic");
+        let anthropic_models = provider_models("anthropic");
         assert_eq!(anthropic_models.len(), 2);
         assert!(anthropic_models.iter().any(|m| m.id == "claude-haiku-4-5"));
         assert!(anthropic_models.iter().any(|m| m.id == "claude-sonnet-4-6"));
+        assert!(provider_models("custom").is_empty());
+        assert!(provider_models("unknown").is_empty());
+    }
 
-        // The list_provider_models gate uses is_empty() on this return,
-        // so providers without curated models (e.g. "custom", or anything
-        // unknown) get a model-listing error.
-        let custom_models = get_curated_models("custom");
-        assert!(custom_models.is_empty());
-        let unknown_models = get_curated_models("unknown");
-        assert!(unknown_models.is_empty());
+    #[test]
+    fn test_list_command_dto_shape_has_four_launch_providers() {
+        let providers = provider_infos();
+        assert_eq!(providers.len(), 4);
+        assert_eq!(providers[0].id, "openai");
+        assert_eq!(providers[0].name, "OpenAI");
+        assert!(providers
+            .iter()
+            .any(|provider| provider.id == "gemini" && provider.name == "Google Gemini"));
+        assert!(providers.iter().any(
+            |provider| provider.id == "custom" && provider.name == "Custom (OpenAI-compatible)"
+        ));
+    }
+
+    #[test]
+    fn test_warmup_keys_are_derived_from_launch_providers() {
+        let keys = ai_provider_key_names();
+        assert_eq!(keys.len(), 4);
+        assert!(keys.contains(&"ai_api_key_openai".to_string()));
+        assert!(keys.contains(&"ai_api_key_anthropic".to_string()));
+        assert!(keys.contains(&"ai_api_key_gemini".to_string()));
+        assert!(keys.contains(&"ai_api_key_custom".to_string()));
     }
 
     #[test]

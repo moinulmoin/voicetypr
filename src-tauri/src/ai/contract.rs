@@ -36,6 +36,8 @@ pub struct AiPolishResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Reasoning effort is part of the frozen runtime contract; UI construction ships later.
+#[allow(dead_code)]
 pub enum AiReasoningEffort {
     Low,
     Medium,

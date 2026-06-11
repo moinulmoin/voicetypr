@@ -16,10 +16,6 @@ pub struct GenaiRuntime {
 }
 
 impl GenaiRuntime {
-    pub fn new(reqwest_client: reqwest::Client, key_resolver: AiKeyResolver) -> Self {
-        Self::with_endpoint_overrides(reqwest_client, key_resolver, HashMap::new())
-    }
-
     pub fn with_endpoint_overrides(
         reqwest_client: reqwest::Client,
         key_resolver: AiKeyResolver,

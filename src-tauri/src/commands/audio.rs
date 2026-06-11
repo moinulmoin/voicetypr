@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::ai::error::{user_facing_message, AiProviderError};
 use crate::audio::recorder::AudioRecorder;
 use crate::commands::settings::{
     get_settings, normalize_final_text_language, normalize_speech_language_for_model,
@@ -590,6 +591,82 @@ fn build_writing_history_metadata(
         "context_hint": writing_result.context_hint,
     })
 }
+fn ai_failure_category(error: &AiProviderError) -> &'static str {
+    match error {
+        AiProviderError::MissingApiKey => "missing_api_key",
+        AiProviderError::InvalidApiKey => "invalid_api_key",
+        AiProviderError::InvalidModel => "invalid_model",
+        AiProviderError::UnsupportedProvider => "unsupported_provider",
+        AiProviderError::Timeout => "timeout",
+        AiProviderError::Canceled => "canceled",
+        AiProviderError::RateLimited => "rate_limited",
+        AiProviderError::ServiceUnavailable => "service_unavailable",
+        AiProviderError::Network => "network",
+        AiProviderError::BadResponse => "bad_response",
+        AiProviderError::Internal => "internal",
+    }
+}
+
+fn ai_failure_notice(error: &AiProviderError) -> String {
+    format!(
+        "AI polish failed: {}; original text will be used",
+        user_facing_message(error)
+    )
+}
+
+fn ai_failure_payload(error: &AiProviderError) -> serde_json::Value {
+    serde_json::json!({
+        "category": ai_failure_category(error),
+        "message": user_facing_message(error),
+    })
+}
+
+fn is_ai_auth_error(error: &AiProviderError) -> bool {
+    matches!(
+        error,
+        AiProviderError::MissingApiKey | AiProviderError::InvalidApiKey
+    )
+}
+
+fn emit_enhancing_failed(app: &AppHandle, error: &AiProviderError) {
+    if app.webview_windows().is_empty() {
+        return;
+    }
+    let _ = app.emit("enhancing-failed", ai_failure_payload(error));
+}
+
+fn notify_ai_polish_failure(app: &AppHandle, error: &AiProviderError) {
+    emit_enhancing_failed(app, error);
+    pill_toast(app, &ai_failure_notice(error), 1500);
+    if is_ai_auth_error(error) {
+        let _ = emit_to_window(
+            app,
+            "main",
+            "ai-enhancement-auth-error",
+            "Please check your AI API key in settings.",
+        );
+    }
+}
+
+async fn save_ai_polish_fallback_history(
+    app: AppHandle,
+    transcription: &TranscriptionResult,
+    writing_result: &crate::writing::WritingResult,
+) -> Result<(), String> {
+    save_transcription_with_recording(
+        app.clone(),
+        writing_result.final_text.clone(),
+        transcription.model.clone(),
+        None,
+        Some(build_writing_history_metadata(
+            transcription,
+            writing_result,
+        )),
+    )
+    .await?;
+    let _ = emit_to_window(&app, "main", "history-updated", ());
+    Ok(())
+}
 
 fn load_ai_enabled(app: &AppHandle) -> Result<bool, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
@@ -811,9 +888,10 @@ fn transcription_task_header_value(task: crate::transcription::TranscriptionTask
 #[cfg(test)]
 mod tests {
     use super::{
-        build_failed_transcription_row, build_remote_server_error_payload,
-        build_remote_transcription_result, build_remote_upload_transcription_request,
-        build_soniox_create_payload, build_transcription_job, build_writing_history_metadata,
+        ai_failure_category, ai_failure_notice, ai_failure_payload, build_failed_transcription_row,
+        build_remote_server_error_payload, build_remote_transcription_result,
+        build_remote_upload_transcription_request, build_soniox_create_payload,
+        build_transcription_job, build_writing_history_metadata, is_ai_auth_error,
         is_non_speech_transcript, recording_license_state, remote_server_error_pill_message,
         should_hide_pill_when_idle, should_use_active_remote,
         sync_retranscription_failure_metadata, transcription_watchdog_budget, NormalizedTempFile,
@@ -1065,12 +1143,54 @@ mod tests {
             }],
             warnings: vec![],
             context_hint: None,
+            ai_error: None,
         };
 
         let metadata = build_writing_history_metadata(&transcription, &writing_result);
         assert_eq!(metadata["output_language"], "en");
         assert!(metadata.get("raw_text").is_none());
         assert!(metadata.get("final_text").is_none());
+    }
+
+    #[test]
+    fn ai_polish_failure_payload_keeps_enhancing_failed_compatible() {
+        let payload = ai_failure_payload(&crate::ai::error::AiProviderError::RateLimited);
+
+        assert_eq!(payload["category"], "rate_limited");
+        assert_eq!(payload["message"], "rate limited");
+    }
+
+    #[test]
+    fn ai_polish_failure_notice_uses_raw_text_fallback_invariant() {
+        let notice = ai_failure_notice(&crate::ai::error::AiProviderError::BadResponse);
+
+        assert!(notice.contains("bad response"));
+        assert!(notice.contains("original text will be used"));
+    }
+
+    #[test]
+    fn ai_polish_auth_errors_are_detected_for_settings_notice() {
+        assert!(is_ai_auth_error(
+            &crate::ai::error::AiProviderError::MissingApiKey
+        ));
+        assert!(is_ai_auth_error(
+            &crate::ai::error::AiProviderError::InvalidApiKey
+        ));
+        assert!(!is_ai_auth_error(
+            &crate::ai::error::AiProviderError::Timeout
+        ));
+    }
+
+    #[test]
+    fn ai_polish_failure_categories_cover_empty_and_timeout_fallbacks() {
+        assert_eq!(
+            ai_failure_category(&crate::ai::error::AiProviderError::BadResponse),
+            "bad_response"
+        );
+        assert_eq!(
+            ai_failure_category(&crate::ai::error::AiProviderError::Timeout),
+            "timeout"
+        );
     }
 
     #[test]
@@ -3754,7 +3874,24 @@ pub async fn stop_recording(
                         .await
                         {
                             Ok(writing_result) => {
-                                if should_emit_enhancing_for_task {
+                                if let Some(error) = writing_result.ai_error.as_ref() {
+                                    log::warn!(
+                                        "AI polish failed with {}; delivering deterministic text",
+                                        ai_failure_category(error)
+                                    );
+                                    if should_emit_enhancing_for_task {
+                                        emit_enhancing_failed(&app_for_process, error);
+                                    }
+                                    pill_toast(&app_for_process, &ai_failure_notice(error), 1500);
+                                    if is_ai_auth_error(error) {
+                                        let _ = emit_to_window(
+                                            &app_for_process,
+                                            "main",
+                                            "ai-enhancement-auth-error",
+                                            "Please check your AI API key in settings.",
+                                        );
+                                    }
+                                } else if should_emit_enhancing_for_task {
                                     let _ = app_for_process.emit("enhancing-completed", ());
                                 }
 
@@ -3774,101 +3911,21 @@ pub async fn stop_recording(
                             }
                             Err(e) => {
                                 log::warn!("Formatting failed: {}", e);
-
                                 if should_emit_enhancing_for_task {
                                     let _ = app_for_process.emit("enhancing-failed", ());
                                 }
 
-                                // Check error type and create appropriate message
                                 let error_message = e.to_string();
-                                let should_deliver = false;
                                 let user_message =
                                     if error_message.contains("Final output language") {
                                         "Final output language requires AI enhancement"
-                                    } else if error_message.contains("400")
-                                        || error_message.contains("Bad Request")
-                                    {
-                                        "Formatting failed: API key missing or invalid"
-                                    } else if error_message.contains("401")
-                                        || error_message.contains("Unauthorized")
-                                    {
-                                        "Formatting failed: API key unauthorized"
-                                    } else if error_message.contains("429") {
-                                        "Formatting failed: Rate limit exceeded"
-                                    } else if error_message.contains("network")
-                                        || error_message.contains("connection")
-                                    {
-                                        "Formatting failed: Network error"
                                     } else {
-                                        "Formatting failed: Service unavailable"
+                                        "Formatting failed"
                                     };
 
-                                let copy_succeeded =
-                                    match crate::commands::text::copy_text_to_clipboard(
-                                        text_for_process.clone(),
-                                    )
-                                    .await
-                                    {
-                                        Ok(_) => true,
-                                        Err(copy_error) => {
-                                            log::error!(
-                                            "Failed to copy raw transcription after formatting failure: {}",
-                                            copy_error
-                                        );
-                                            false
-                                        }
-                                    };
-                                let user_message = if copy_succeeded {
-                                    format!("{user_message} — original text copied to clipboard")
-                                } else {
-                                    format!("{user_message} — original text could not be copied")
-                                };
+                                pill_toast(&app_for_process, user_message, 1500);
 
-                                // Show pill toast for formatting failure
-                                log::warn!("Formatting failed; showing pill toast");
-                                pill_toast(&app_for_process, &user_message, 1500);
-
-                                // Also notify main window for settings update if needed
-                                if error_message.contains("400")
-                                    || error_message.contains("401")
-                                    || error_message.contains("Bad Request")
-                                    || error_message.contains("Unauthorized")
-                                {
-                                    let _ = emit_to_window(
-                                        &app_for_process,
-                                        "main",
-                                        "ai-enhancement-auth-error",
-                                        "Please check your AI API key in settings.",
-                                    );
-                                }
-
-                                match save_transcription_with_recording(
-                                    app_for_process.clone(),
-                                    text_for_process.clone(),
-                                    model_for_process.clone(),
-                                    recording_file_for_task.clone(),
-                                    None,
-                                )
-                                .await
-                                {
-                                    Ok(_) => {
-                                        let _ = emit_to_window(
-                                            &app_for_process,
-                                            "main",
-                                            "history-updated",
-                                            (),
-                                        );
-                                        log::debug!(
-                                            "Raw transcription saved to history after formatting failure"
-                                        );
-                                    }
-                                    Err(save_error) => log::error!(
-                                        "Failed to save raw transcription after formatting failure: {}",
-                                        save_error
-                                    ),
-                                }
-
-                                (text_for_process.clone(), None, should_deliver)
+                                (text_for_process.clone(), None, false)
                             }
                         };
 
@@ -4678,9 +4735,21 @@ async fn transcribe_audio_file_impl(
         transcription_result.raw_text.len()
     );
     let ai_enabled = load_ai_enabled(&app)?;
-    let writing_result =
-        crate::writing::process_transcription(app.clone(), transcription_result, ai_enabled)
+    let writing_result = crate::writing::process_transcription(
+        app.clone(),
+        transcription_result.clone(),
+        ai_enabled,
+    )
+    .await?;
+    if let Some(error) = writing_result.ai_error.as_ref() {
+        log::warn!(
+            "AI polish failed with {}; returning and saving deterministic upload text",
+            ai_failure_category(error)
+        );
+        notify_ai_polish_failure(&app, error);
+        save_ai_polish_fallback_history(app.clone(), &transcription_result, &writing_result)
             .await?;
+    }
     Ok(writing_result.final_text)
 }
 
@@ -4695,7 +4764,6 @@ pub async fn diarize_audio_file(
     if !audio_path.exists() {
         return Err(format!("Audio file not found: {}", file_path));
     }
-
     let parakeet_manager = app.state::<ParakeetManager>();
     match parakeet_manager
         .diarize(&app, audio_path)
@@ -4951,9 +5019,21 @@ pub async fn transcribe_audio(
     }
 
     let ai_enabled = load_ai_enabled(&app)?;
-    let writing_result =
-        crate::writing::process_transcription(app.clone(), transcription_result, ai_enabled)
+    let writing_result = crate::writing::process_transcription(
+        app.clone(),
+        transcription_result.clone(),
+        ai_enabled,
+    )
+    .await?;
+    if let Some(error) = writing_result.ai_error.as_ref() {
+        log::warn!(
+            "AI polish failed with {}; returning and saving deterministic test transcription text",
+            ai_failure_category(error)
+        );
+        notify_ai_polish_failure(&app, error);
+        save_ai_polish_fallback_history(app.clone(), &transcription_result, &writing_result)
             .await?;
+    }
     Ok(writing_result.final_text)
 }
 

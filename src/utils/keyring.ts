@@ -1,4 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
+
+import type { AiProvider } from '@/types/providers';
 import { emit } from '@tauri-apps/api/event';
 
 /**
@@ -42,6 +44,11 @@ interface SaveApiKeyOptions {
   noAuth?: boolean;
 }
 
+interface AISettingsResponse {
+  enabled?: boolean;
+  model?: string;
+}
+
 // API Key specific helpers
 export const saveApiKey = async (
   provider: string,
@@ -53,6 +60,15 @@ export const saveApiKey = async (
   await invoke('validate_ai_api_key', { args: { provider, apiKey, ...options } });
   await keyringSet(key, apiKey);
   await invoke('cache_ai_api_key', { args: { provider, apiKey } });
+
+  const providerSettings = await invoke<AISettingsResponse>('get_ai_settings_for_provider', {
+    provider,
+  });
+  await invoke('update_ai_settings', {
+    enabled: false,
+    provider,
+    model: options?.model ?? providerSettings.model ?? '',
+  });
 
   console.log(`[Keyring] API key saved and validated for ${provider}`);
   
@@ -85,17 +101,24 @@ export const removeApiKey = async (provider: string): Promise<void> => {
 
 // Load all API keys to backend cache (for app startup)
 export const loadApiKeysToCache = async (): Promise<void> => {
-  const providers = ['gemini', 'openai', 'anthropic', 'custom'];
-  
+  let providers: AiProvider[];
+
+  try {
+    providers = await invoke<AiProvider[]>('list_ai_providers');
+  } catch (error) {
+    console.error('Failed to list AI providers for key cache warmup:', error);
+    return;
+  }
+
   for (const provider of providers) {
     try {
-      const apiKey = await getApiKey(provider);
+      const apiKey = await getApiKey(provider.id);
       if (apiKey) {
-        await invoke('cache_ai_api_key', { args: { provider, apiKey } });
-        console.log(`[Keyring] Loaded ${provider} API key from keyring to cache`);
+        await invoke('cache_ai_api_key', { args: { provider: provider.id, apiKey } });
+        console.log(`[Keyring] Loaded ${provider.id} API key from keyring to cache`);
       }
     } catch (error) {
-      console.error(`Failed to load API key for ${provider}:`, error);
+      console.error(`Failed to load API key for ${provider.id}:`, error);
     }
   }
 };

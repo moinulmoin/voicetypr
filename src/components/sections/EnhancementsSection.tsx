@@ -30,7 +30,8 @@ import {
 } from "@/types/ai";
 import type { WritingSettings } from "@/types/writing";
 import { defaultWritingSettings, mergeWritingSettings } from "@/types/writing";
-import { AI_PROVIDERS } from "@/types/providers";
+import type { AiProvider, AIProviderConfig } from "@/types/providers";
+import { toProviderConfig } from "@/types/providers";
 import { useAllProviderModels } from "@/hooks/useProviderModels";
 import { hasApiKey, removeApiKey, saveApiKey, getApiKey } from "@/utils/keyring";
 import { getErrorMessage } from "@/utils/error";
@@ -66,6 +67,8 @@ export function EnhancementsSection() {
     hasApiKey: false,
     modelsByProvider: {},
   });
+
+  const [providers, setProviders] = useState<AIProviderConfig[]>([]);
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [showOpenAIConfig, setShowOpenAIConfig] = useState(false);
@@ -119,7 +122,11 @@ export function EnhancementsSection() {
 
   const loadAISettings = useCallback(async () => {
     try {
-      const allProviders = AI_PROVIDERS.map((provider) => provider.id);
+      const listedProviders = (await invoke<AiProvider[]>("list_ai_providers")).map(
+        toProviderConfig,
+      );
+      setProviders(listedProviders);
+      const allProviders = listedProviders.map((provider) => provider.id);
       const keyStatus: Record<string, boolean> = {};
 
       await Promise.all(
@@ -563,7 +570,7 @@ export function EnhancementsSection() {
     : getModels(aiSettings.provider).find((model) => model.id === aiSettings.model)?.name ||
       humanizeModelId(aiSettings.model);
 
-  const hasLoadingProviders = AI_PROVIDERS.some((provider) => isModelsLoading(provider.id));
+  const hasLoadingProviders = providers.some((provider) => isModelsLoading(provider.id));
 
   return (
     <div className="h-full min-h-0 flex flex-col">
@@ -645,7 +652,7 @@ export function EnhancementsSection() {
             </div>
 
             <FieldGroup className="gap-3">
-              {AI_PROVIDERS.map((provider) => {
+              {providers.map((provider) => {
                 const isCustomActive = Boolean(
                   provider.isCustom &&
                     aiSettings.provider === "custom" &&
@@ -731,28 +738,36 @@ export function EnhancementsSection() {
             const trimmedModel = model.trim();
             const trimmedKey = apiKey?.trim() || "";
 
+            const existingKey = trimmedKey ? "" : await getApiKey("custom");
+            const validationKey = trimmedKey || existingKey || "";
+            const noAuth = !validationKey;
+
             if (trimmedKey) {
               await saveApiKey("custom", trimmedKey, {
                 baseUrl: trimmedBase,
                 model: trimmedModel,
-              });
-              await invoke("set_openai_config", {
-                args: { baseUrl: trimmedBase, noAuth: false },
+                noAuth: false,
               });
             } else {
               await invoke("validate_ai_api_key", {
                 args: {
                   provider: "custom",
-                  apiKey: "",
+                  apiKey: validationKey,
                   baseUrl: trimmedBase,
                   model: trimmedModel,
-                  noAuth: true,
+                  noAuth,
                 },
               });
-              await invoke("set_openai_config", {
-                args: { baseUrl: trimmedBase, noAuth: true },
-              });
+              if (validationKey) {
+                await invoke("cache_ai_api_key", {
+                  args: { provider: "custom", apiKey: validationKey },
+                });
+              }
             }
+
+            await invoke("set_openai_config", {
+              args: { baseUrl: trimmedBase, noAuth },
+            });
 
             await invoke("update_ai_settings", {
               enabled: aiSettings.enabled,

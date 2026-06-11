@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
+use crate::ai::error::{user_facing_message, AiProviderError};
 use crate::ai::prompts::EnhancementPreset;
 use crate::commands::settings::{
     normalize_final_text_language, normalize_transcription_task,
@@ -232,6 +233,8 @@ pub struct WritingResult {
     pub warnings: Vec<WritingWarning>,
     #[serde(default)]
     pub context_hint: Option<ContextHint>,
+    #[serde(skip)]
+    pub ai_error: Option<AiProviderError>,
 }
 
 pub fn sanitize_writing_settings(settings: WritingSettings) -> WritingSettings {
@@ -1592,12 +1595,7 @@ fn build_ai_context(
         custom_words: custom_words.to_vec(),
         ..WritingSettings::default()
     };
-    compile_context_for_target(
-        &settings,
-        transcript_language,
-        context_hint,
-        ProviderContextTarget::SmartFormatting,
-    )
+    smart_formatting_ai_context(&settings, transcript_language, context_hint)
 }
 
 struct LibraryRulesResult {
@@ -1777,6 +1775,19 @@ fn record_output_language_transform_fallback(
     }
 }
 
+fn smart_formatting_ai_context(
+    settings: &WritingSettings,
+    transcript_language: Option<&str>,
+    context_hint: Option<&ContextHint>,
+) -> Option<String> {
+    compile_context_for_target(
+        settings,
+        transcript_language,
+        context_hint,
+        ProviderContextTarget::SmartFormatting,
+    )
+}
+
 struct SmartFormattingRequest<'a> {
     app: AppHandle,
     text: &'a str,
@@ -1790,25 +1801,31 @@ struct SmartFormattingRequest<'a> {
     warnings: &'a mut Vec<WritingWarning>,
 }
 
-async fn run_smart_formatting(request: SmartFormattingRequest<'_>) -> Result<String, String> {
-    let ai_context = compile_context_for_target(
+async fn run_smart_formatting(
+    request: SmartFormattingRequest<'_>,
+) -> Result<String, AiProviderError> {
+    let options = crate::ai::EnhancementOptions {
+        preset: request.profile.mode.into(),
+    };
+    let ai_context = smart_formatting_ai_context(
         request.settings,
         request.transcript_language.as_deref(),
         request.context_hint,
-        ProviderContextTarget::SmartFormatting,
     );
-    match crate::commands::ai::enhance_transcription_internal(
-        request.text.to_string(),
-        request.transcript_language.clone(),
-        Some(true),
-        Some(request.output_language.clone()),
-        ai_context,
-        Some(request.profile.mode.into()),
-        request.app,
+    match crate::commands::ai::polish_text_typed(
+        &request.app,
+        request.text,
+        &options,
+        Some(request.output_language.as_str()),
+        ai_context.as_deref(),
     )
     .await
     {
         Ok(enhanced) => {
+            if enhanced.trim().is_empty() {
+                return Err(AiProviderError::BadResponse);
+            }
+
             if enhanced != request.text {
                 request.applied_operations.push(AppliedWritingOperation {
                     kind: if request.needs_output_language_transform {
@@ -1855,25 +1872,39 @@ async fn run_smart_formatting(request: SmartFormattingRequest<'_>) -> Result<Str
 }
 
 fn resolve_smart_formatting_outcome(
-    result: Result<String, String>,
+    result: Result<String, AiProviderError>,
     library_text: &str,
     needs_output_language_transform: bool,
+    transcript_language: Option<&str>,
+    output_language: &mut String,
     warnings: &mut Vec<WritingWarning>,
-) -> Result<String, String> {
+) -> (String, Option<AiProviderError>) {
     match result {
-        Ok(text) => Ok(text),
+        Ok(text) => (text, None),
         Err(error) => {
             if needs_output_language_transform {
-                Err(error)
-            } else {
-                warnings.push(WritingWarning {
-                    code: "ai_formatting_failed".to_string(),
-                    message: format!(
-                        "AI formatting failed ({error}); used deterministic text instead"
+                record_output_language_transform_fallback(
+                    warnings,
+                    output_language,
+                    transcript_language,
+                    "output_language_transform_failed",
+                    format!(
+                        "AI formatting failed ({}); output language remains {}",
+                        user_facing_message(&error),
+                        transcript_language.unwrap_or("the transcript language")
                     ),
-                });
-                Ok(library_text.to_string())
+                );
             }
+
+            warnings.push(WritingWarning {
+                code: "ai_formatting_failed".to_string(),
+                message: format!(
+                    "AI formatting failed ({}); used deterministic text instead",
+                    user_facing_message(&error)
+                ),
+            });
+
+            (library_text.to_string(), Some(error))
         }
     }
 }
@@ -1938,6 +1969,7 @@ pub async fn process_transcription(
 
     let should_run_ai = can_run_ai_formatting && !library_result.literal_locked;
 
+    let mut ai_error = None;
     let mut final_text = if library_result.literal_locked {
         if needs_output_language_transform {
             record_output_language_transform_fallback(
@@ -1950,7 +1982,7 @@ pub async fn process_transcription(
         }
         library_result.text.clone()
     } else if should_run_ai {
-        resolve_smart_formatting_outcome(
+        let (text, error) = resolve_smart_formatting_outcome(
             run_smart_formatting(SmartFormattingRequest {
                 app,
                 text: &library_result.text,
@@ -1966,8 +1998,12 @@ pub async fn process_transcription(
             .await,
             &library_result.text,
             needs_output_language_transform,
+            transcript_language.as_deref(),
+            &mut output_language,
             &mut warnings,
-        )?
+        );
+        ai_error = error;
+        text
     } else {
         library_result.text.clone()
     };
@@ -1983,13 +2019,14 @@ pub async fn process_transcription(
 
     Ok(WritingResult {
         raw_text: transcription.raw_text.clone(),
-        ai_applied: should_run_ai && final_text != library_result.text,
+        ai_applied: should_run_ai && ai_error.is_none() && final_text != library_result.text,
         final_text,
         output_language,
         mode: profile.mode,
         applied_operations,
         warnings,
         context_hint,
+        ai_error,
     })
 }
 
@@ -2153,47 +2190,60 @@ mod tests {
     #[test]
     fn test_resolve_smart_formatting_outcome_preserves_success() {
         let mut warnings = Vec::new();
-        let out = resolve_smart_formatting_outcome(
+        let mut output_language = "en".to_string();
+        let (out, error) = resolve_smart_formatting_outcome(
             Ok("formatted".to_string()),
             "library",
             false,
+            None,
+            &mut output_language,
             &mut warnings,
-        )
-        .unwrap();
+        );
 
         assert_eq!(out, "formatted");
+        assert_eq!(error, None);
         assert!(warnings.is_empty());
     }
 
     #[test]
-    fn test_resolve_smart_formatting_outcome_errors_when_translation_required() {
+    fn test_resolve_smart_formatting_outcome_falls_back_when_translation_required() {
         let mut warnings = Vec::new();
-        let err = resolve_smart_formatting_outcome(
-            Err("api down".to_string()),
+        let mut output_language = "fr".to_string();
+        let (out, error) = resolve_smart_formatting_outcome(
+            Err(AiProviderError::Network),
             "library",
             true,
+            Some("en"),
+            &mut output_language,
             &mut warnings,
         );
 
-        assert_eq!(err, Err("api down".to_string()));
-        assert!(warnings.is_empty());
+        assert_eq!(out, "library");
+        assert_eq!(error, Some(AiProviderError::Network));
+        assert_eq!(output_language, "en");
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.code == "output_language_transform_failed"));
     }
 
     #[test]
     fn test_resolve_smart_formatting_outcome_falls_back_without_translation() {
         let mut warnings = Vec::new();
-        let out = resolve_smart_formatting_outcome(
-            Err("api down".to_string()),
+        let mut output_language = "en".to_string();
+        let (out, error) = resolve_smart_formatting_outcome(
+            Err(AiProviderError::Timeout),
             "library text",
             false,
+            None,
+            &mut output_language,
             &mut warnings,
-        )
-        .unwrap();
+        );
 
         assert_eq!(out, "library text");
+        assert_eq!(error, Some(AiProviderError::Timeout));
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].code, "ai_formatting_failed");
-        assert!(warnings[0].message.contains("api down"));
+        assert!(warnings[0].message.contains("timed out"));
     }
 
     #[test]
@@ -2550,6 +2600,30 @@ mod tests {
 
         assert!(match_snippet("insert note", &snippets, Some("en")).is_some());
         assert!(match_snippet("please insert note", &snippets, Some("en")).is_none());
+    }
+
+    #[test]
+    fn test_smart_formatting_ai_context_supplies_custom_words_and_app_hint() {
+        let settings = WritingSettings {
+            custom_words: vec![CustomWord {
+                phrase: "VoiceTypr".to_string(),
+                spoken_form: Some("voice typer".to_string()),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+        let hint = ContextHint {
+            app_name: Some("Mail".to_string()),
+            app_category: Some("email".to_string()),
+        };
+
+        let context = smart_formatting_ai_context(&settings, Some("en"), Some(&hint)).unwrap();
+
+        assert!(context.contains("VoiceTypr"));
+        assert!(context.contains("voice typer"));
+        assert!(context.contains("Mail"));
+        assert!(context.contains("email"));
     }
 
     #[test]

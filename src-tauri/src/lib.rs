@@ -13,7 +13,6 @@ use tauri_plugin_store::StoreExt;
 use crate::utils::logger::*;
 
 mod ai;
-use crate::formatting::messages::{FormattingCommand, PROTOCOL_VERSION};
 mod audio;
 pub mod cli;
 mod commands;
@@ -517,12 +516,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let window_manager = WindowManager::new(app.app_handle().clone());
             app_state.set_window_manager(window_manager);
 
+            migrate_ai_settings_before_key_cache(&app.handle().clone());
+
             // Warm AI API key cache from secure store BEFORE startup checks run.
             // This ensures persisted credentials are visible to perform_startup_checks()
             // without depending on frontend React mount timing.
             crate::commands::ai::warm_ai_key_cache_from_secure_store(&app.handle().clone());
 
-            warm_formatting_sidecar_if_ai_enabled(app.handle().clone());
 
             // Run comprehensive startup checks after state/window manager are ready
             let app_handle = app.handle().clone();
@@ -1407,59 +1407,177 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn warm_formatting_sidecar_if_ai_enabled(app: tauri::AppHandle) {
-    let Some((provider, model)) = app.store("settings").ok().and_then(|store| {
-        let enabled = store
-            .get("ai_enabled")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if !enabled {
-            return None;
-        }
-
-        let provider = store
-            .get("ai_provider")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_default();
-        let model = store
-            .get("ai_model")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_default();
-
-        if provider.is_empty() || model.is_empty() {
-            None
-        } else {
-            Some((provider, model))
-        }
-    }) else {
+fn migrate_ai_settings_before_key_cache(app: &tauri::AppHandle) {
+    let Ok(store) = app.store("settings") else {
+        log::warn!("AI settings migration skipped: settings store unavailable");
         return;
     };
 
-    tauri::async_runtime::spawn(async move {
-        let command = FormattingCommand::Health {
-            id: "startup-health".to_string(),
-            protocol_version: PROTOCOL_VERSION,
-        };
-
-        match app
-            .state::<formatting::FormattingClient>()
-            .send(&app, &command)
-            .await
-        {
-            Ok(response) => log::info!(
-                "Formatting sidecar warmed for AI provider={} model={}: {:?}",
-                provider,
-                model,
-                response
-            ),
-            Err(error) => log::warn!(
-                "Failed to warm formatting sidecar for AI provider={} model={}: {}",
-                provider,
-                model,
-                error
-            ),
+    let mut values = serde_json::Map::new();
+    for key in ["ai_provider", "ai_model", "ai_models_by_provider"] {
+        if let Some(value) = store.get(key) {
+            values.insert(key.to_string(), value.clone());
         }
-    });
+    }
+
+    if migrate_ai_settings_values(&mut values) {
+        for (key, value) in values {
+            store.set(key, value);
+        }
+        if let Err(error) = store.save() {
+            log::warn!("AI settings migration save failed: {}", error);
+        } else {
+            log::info!("AI settings migration applied");
+        }
+    }
+}
+
+fn migrate_ai_settings_values(values: &mut serde_json::Map<String, serde_json::Value>) -> bool {
+    let mut changed = false;
+
+    let provider = values
+        .get("ai_provider")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let migrated_provider = if provider == "google" {
+        changed = true;
+        "gemini".to_string()
+    } else {
+        provider
+    };
+    if values
+        .get("ai_provider")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        != migrated_provider
+    {
+        values.insert(
+            "ai_provider".to_string(),
+            serde_json::Value::String(migrated_provider.clone()),
+        );
+        changed = true;
+    }
+
+    if let Some(models) = values
+        .get_mut("ai_models_by_provider")
+        .and_then(|value| value.as_object_mut())
+    {
+        if let Some(google_model) = models.remove("google") {
+            if !models.contains_key("gemini") {
+                models.insert("gemini".to_string(), google_model);
+            }
+            changed = true;
+        }
+    }
+
+    let current_model = values
+        .get("ai_model")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if !current_model.is_empty()
+        && !ai_model_is_valid_for_provider(&migrated_provider, &current_model)
+    {
+        values.insert(
+            "ai_model".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+        changed = true;
+    }
+
+    changed
+}
+
+fn ai_model_is_valid_for_provider(provider: &str, model: &str) -> bool {
+    if provider == "custom" {
+        return !model.trim().is_empty();
+    }
+    crate::ai::providers::recommended_models(provider)
+        .iter()
+        .any(|candidate| candidate.model_id == model)
+}
+
+// AI settings migration tests live here because startup owns the migration call.
+#[cfg(test)]
+mod ai_settings_migration_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn values(
+        provider: &str,
+        model: &str,
+        models: serde_json::Value,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut values = serde_json::Map::new();
+        values.insert("ai_provider".to_string(), json!(provider));
+        values.insert("ai_model".to_string(), json!(model));
+        values.insert("ai_models_by_provider".to_string(), models);
+        values
+    }
+
+    #[test]
+    fn migrates_google_provider_and_model_memory_to_gemini() {
+        let mut values = values(
+            "google",
+            "gemini-2.5-flash",
+            json!({ "google": "gemini-2.5-flash" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_provider"], json!("gemini"));
+        assert_eq!(
+            values["ai_models_by_provider"],
+            json!({ "gemini": "gemini-2.5-flash" })
+        );
+        assert_eq!(values["ai_model"], json!("gemini-2.5-flash"));
+    }
+
+    #[test]
+    fn migration_keeps_existing_gemini_model_memory() {
+        let mut values = values(
+            "google",
+            "gemini-2.5-flash",
+            json!({ "google": "gemini-3-flash-preview", "gemini": "gemini-2.5-flash" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(
+            values["ai_models_by_provider"],
+            json!({ "gemini": "gemini-2.5-flash" })
+        );
+    }
+
+    #[test]
+    fn migration_clears_invalid_model_without_substitution() {
+        let mut values = values("google", "text-bison", json!({ "google": "text-bison" }));
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_provider"], json!("gemini"));
+        assert_eq!(values["ai_model"], json!(""));
+    }
+
+    #[test]
+    fn migration_keeps_custom_free_text_model() {
+        let mut values = values("custom", "local-model", json!({ "custom": "local-model" }));
+
+        assert!(!migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_model"], json!("local-model"));
+    }
+
+    #[test]
+    fn migration_is_idempotent_after_first_pass() {
+        let mut values = values(
+            "google",
+            "gemini-2.5-flash",
+            json!({ "google": "gemini-2.5-flash" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        let first = values.clone();
+        assert!(!migrate_ai_settings_values(&mut values));
+        assert_eq!(values, first);
+    }
 }
 
 /// Perform essential startup checks
