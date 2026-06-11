@@ -30,7 +30,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 013  | *(reserved: close 004/008 smoke blockers — checklist, no plan file yet)* | P1 | S | 004, 008 | RESERVED — no executable plan file yet |
 | 014  | *(reserved: shared transcription contract stage 1 — executor implementation of plan 012's design)* | P1 | L | 012 | RESERVED — no executable plan file yet |
 | 015  | Pipeline feel — start latency, decode watchdogs, never-lose-speech | P1 | M | 004/008 smoke (soft) | NEEDS-SMOKE |
-| 016  | AI polish Rust-native cutover — current providers, remove Pi sidecar | P1 | M-L | 015 smoke (ship gate) | TODO |
+| 016  | AI polish Rust-native cutover — current providers, remove Pi sidecar | P1 | M-L | 015 smoke (ship gate) | IN PROGRESS — steps 1-6 done at `66344b8` (gates green; live invalid-key/bad-URL smoke passed); step 7 sidecar removal gated on manual smoke items 2-3 (valid-key polish ×2 providers, in-app forced-failure raw-text delivery) |
 | 017  | AI provider catalog + searchable breadth UI | P2 | M | 016 | TODO |
 | 018  | AI provider graduation — OpenRouter, Groq, xAI | P2-P3 | S-M each | 016, 017 | TODO |
 
