@@ -30,7 +30,9 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 013  | *(reserved: close 004/008 smoke blockers — checklist, no plan file yet)* | P1 | S | 004, 008 | RESERVED — no executable plan file yet |
 | 014  | *(reserved: shared transcription contract stage 1 — executor implementation of plan 012's design)* | P1 | L | 012 | RESERVED — no executable plan file yet |
 | 015  | Pipeline feel — start latency, decode watchdogs, never-lose-speech | P1 | M | 004/008 smoke (soft) | NEEDS-SMOKE |
-| 016  | AI polish Rust-native provider layer — replace Pi sidecar | P1 | L | — | TODO |
+| 016  | AI polish Rust-native cutover — current providers, remove Pi sidecar | P1 | M-L | 015 smoke (ship gate) | TODO |
+| 017  | AI provider catalog + searchable breadth UI | P2 | M | 016 | TODO |
+| 018  | AI provider graduation — OpenRouter, Groq, xAI | P2-P3 | S-M each | 016, 017 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | NEEDS-SMOKE (code done, manual
 smoke pending) | BLOCKED (one-line reason) | REJECTED (one-line rationale) |
@@ -49,12 +51,17 @@ RESERVED (number held, no executable plan file yet).
 - 004 and 002 both edit `commands/audio.rs` (different regions) — execute
   serially to avoid merge noise.
 - **015/016 vs 014**: 015 was written against current code at commit
-  `080663b`; 016 was rewritten at `b1a66bf` after the SDK/provider research
-  and now targets a Rust-native AI polish runtime rather than hardening the Pi
-  sidecar. If 014 (contract executor) lands first, 015's watchdog/cancel
-  changes apply at the executor seam instead. 016 must still preserve
-  no-transcript-loss behavior and must not reintroduce the Node/Pi sidecar as a
-  shipped compatibility path.
+  `080663b`; 016 was rewritten at `b1a66bf` after SDK/provider source research
+  and an independent strategy review, then split: 016 ships the Rust-native
+  cutover for the existing four providers and removes the Pi sidecar; 017 adds
+  the generated catalog and breadth UI; 018 graduates OpenRouter/Groq/xAI
+  per-provider. If 014 (contract executor) lands first, 015's watchdog/cancel
+  changes apply at the executor seam instead. 016's executor cutover must not
+  ship before 015's manual smoke completes (shared no-transcript-loss path),
+  and the Node/Pi sidecar must not survive as a shipped compatibility path.
+- **017/018 must not touch executor/runtime policy** — timeout, retry, cancel,
+  and error mapping are owned by 016's modules; breadth plans only change the
+  provider/model *source* and UI.
 
 ## Execution review notes
 
