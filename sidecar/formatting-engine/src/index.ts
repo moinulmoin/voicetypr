@@ -5,6 +5,7 @@ import {
   getModel,
   getModels,
   getProviders,
+  type Context,
   type AssistantMessage,
   type Model,
   type SimpleStreamOptions,
@@ -43,7 +44,7 @@ type Request =
 
 const PROTOCOL_VERSION = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
-
+const RETRY_BACKOFF_MS = 500;
 function writeResponse(response: Record<string, JsonValue>): void {
   stdout.write(`${JSON.stringify(response)}\n`);
 }
@@ -78,8 +79,33 @@ function classifyError(error: unknown): { code: string; retryable: boolean; mess
   if (haystack.includes("timeout") || haystack.includes("aborted")) {
     return { code: "timeout", retryable: true, message: "Formatting timed out" };
   }
-  if (haystack.includes("network") || haystack.includes("fetch failed") || haystack.includes("econn")) {
+  if (
+    haystack.includes("network") ||
+    haystack.includes("fetch failed") ||
+    haystack.includes("econn") ||
+    haystack.includes("service unavailable") ||
+    haystack.includes("server error") ||
+    haystack.includes("internal server error") ||
+    haystack.includes("overloaded") ||
+    haystack.includes("capacity") ||
+    haystack.includes("500") ||
+    haystack.includes("503") ||
+    haystack.includes("502") ||
+    haystack.includes("504") ||
+    haystack.includes("temporarily unavailable") ||
+    haystack.includes("try again") ||
+    haystack.includes("retryable")
+  ) {
     return { code: "network", retryable: true, message: "Network error" };
+  }
+  if (
+    haystack.includes("bad request") ||
+    haystack.includes("400") ||
+    haystack.includes("invalid prompt") ||
+    haystack.includes("invalid request") ||
+    haystack.includes("validation")
+  ) {
+    return { code: "provider_error", retryable: false, message };
   }
   if (haystack.includes("not found") || haystack.includes("unsupported") || haystack.includes("model")) {
     return { code: "unsupported_model", retryable: false, message };
@@ -157,6 +183,46 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function completeSimpleWithRetry(
+  model: Model<any>,
+  request: Context,
+  options: Omit<SimpleStreamOptions, "signal" | "timeoutMs">,
+  timeoutMs: number,
+): Promise<AssistantMessage> {
+  const deadline = Date.now() + timeoutMs;
+  let retryAvailable = true;
+
+  for (;;) {
+    const remainingMs = Math.max(0, deadline - Date.now());
+    if (remainingMs <= 0) {
+      throw new Error("Operation timed out");
+    }
+
+    try {
+      return await withTimeout(
+        completeSimple(model, request, {
+          ...options,
+          signal: AbortSignal.timeout(remainingMs),
+          timeoutMs: remainingMs,
+        }),
+        remainingMs,
+      );
+    } catch (error) {
+      const remainingAfterFailureMs = deadline - Date.now();
+      if (!retryAvailable || !classifyError(error).retryable || remainingAfterFailureMs <= RETRY_BACKOFF_MS) {
+        throw error;
+      }
+
+      retryAvailable = false;
+      await sleep(RETRY_BACKOFF_MS);
+    }
+  }
+}
+
 function resolveApiKey(request: FormatRequest): string {
   const apiKey = request.apiKey?.trim();
   if (request.noAuth) {
@@ -183,27 +249,23 @@ async function handleFormat(request: FormatRequest): Promise<Record<string, Json
   const model = resolveModel(request);
   const timeoutMs = Math.min(Math.max(request.timeoutMs ?? DEFAULT_TIMEOUT_MS, 1_000), 120_000);
   const apiKey = resolveApiKey(request);
-  const options: SimpleStreamOptions = {
+  const options: Omit<SimpleStreamOptions, "signal" | "timeoutMs"> = {
     apiKey,
-    signal: AbortSignal.timeout(timeoutMs),
-    timeoutMs,
     maxRetries: 0,
     maxRetryDelayMs: 0,
     maxTokens: formatMaxTokens(request.prompt, model),
   };
 
-  const response = await withTimeout(
-    completeSimple(
-      model,
-      {
-        systemPrompt:
-          request.systemPrompt ||
-          "You are a careful text formatter. Return only the cleaned text requested by the user instructions.",
-        messages: [{ role: "user", content: request.prompt, timestamp: Date.now() }],
-      },
-      options,
-    ),
-    timeoutMs + 250,
+  const response = await completeSimpleWithRetry(
+    model,
+    {
+      systemPrompt:
+        request.systemPrompt ||
+        "You are a careful text formatter. Return only the cleaned text requested by the user instructions.",
+      messages: [{ role: "user", content: request.prompt, timestamp: Date.now() }],
+    },
+    options,
+    timeoutMs,
   );
 
   assertSuccessfulResponse(response);

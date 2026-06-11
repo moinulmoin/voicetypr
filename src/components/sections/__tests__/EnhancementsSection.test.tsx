@@ -54,6 +54,7 @@ const baseAISettings = {
   provider: '',
   model: '',
   hasApiKey: false,
+  modelsByProvider: {},
 }
 
 const enabledAISettings = {
@@ -61,6 +62,9 @@ const enabledAISettings = {
   provider: 'openai',
   model: 'gpt-5-mini',
   hasApiKey: true,
+  modelsByProvider: {
+    openai: 'gpt-5-mini',
+  },
 }
 
 let rejectWritingSettingsUpdate = false
@@ -850,8 +854,15 @@ describe('EnhancementsSection', () => {
   })
 
 
-  it('clears a stale model when saving an API key for a different provider', async () => {
-    aiSettingsResponse = { ...enabledAISettings, enabled: false }
+  it('restores a remembered model when saving an API key for a different provider', async () => {
+    aiSettingsResponse = {
+      ...enabledAISettings,
+      enabled: false,
+      modelsByProvider: {
+        openai: 'gpt-5-mini',
+        gemini: 'gemini-1.5-flash',
+      },
+    }
     ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
       providerId === 'openai',
     )
@@ -860,6 +871,9 @@ describe('EnhancementsSection', () => {
 
     const geminiHeading = await screen.findByText('Google Gemini')
     const geminiCard = geminiHeading.closest('.p-4')
+    const openAIHeading = await screen.findByText('OpenAI')
+    const openAICard = openAIHeading.closest('.p-4')
+    expect(openAICard).toBeTruthy()
     expect(geminiCard).toBeTruthy()
 
     await user.click(within(geminiCard as HTMLElement).getByRole('button', { name: /add key/i }))
@@ -868,9 +882,9 @@ describe('EnhancementsSection', () => {
 
     await waitFor(() => {
       expect(saveApiKey).toHaveBeenCalledWith('gemini', 'gemini-key')
-      expect(within(geminiCard as HTMLElement).getByRole('button', { name: /select model/i })).toBeInTheDocument()
+      expect(within(geminiCard as HTMLElement).getByRole('button', { name: /gemini 1.5 flash/i })).toBeInTheDocument()
     })
-    expect(screen.queryByRole('button', { name: /gpt-5 mini/i })).not.toBeInTheDocument()
+    expect(within(openAICard as HTMLElement).getByRole('button', { name: /gpt-5 mini/i })).toBeInTheDocument()
   })
 
   it('keeps the selected model when saving an API key for the current provider', async () => {

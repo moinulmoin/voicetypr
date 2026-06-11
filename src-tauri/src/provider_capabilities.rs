@@ -54,8 +54,8 @@ impl ProviderEngine {
                 shareable_remote: true,
                 supports_initial_prompt: false,
                 supports_structured_terms: false,
-                supports_vocabulary_terms: false,
-                supports_translate_task: true,
+                supports_vocabulary_terms: true,
+                supports_translate_task: false,
             },
             Self::Soniox => ProviderCapabilities {
                 shareable_remote: false,
@@ -136,8 +136,8 @@ mod tests {
                 shareable_remote: true,
                 supports_initial_prompt: false,
                 supports_structured_terms: false,
-                supports_vocabulary_terms: false,
-                supports_translate_task: true,
+                supports_vocabulary_terms: true,
+                supports_translate_task: false,
             }
         );
         assert_eq!(
@@ -195,8 +195,21 @@ mod tests {
             vec![ProviderEngine::Whisper, ProviderEngine::Parakeet]
         );
 
-        assert!(engines
+        let vocabulary_terms_engines: Vec<_> = engines
             .iter()
-            .all(|engine| !engine.capabilities().supports_vocabulary_terms));
+            .copied()
+            .filter(|engine| engine.capabilities().supports_vocabulary_terms)
+            .collect();
+        assert_eq!(vocabulary_terms_engines, vec![ProviderEngine::Parakeet]);
+
+        let translate_task_engines: Vec<_> = engines
+            .iter()
+            .copied()
+            .filter(|engine| engine.capabilities().supports_translate_task)
+            .collect();
+        assert_eq!(
+            translate_task_engines,
+            vec![ProviderEngine::Whisper, ProviderEngine::Remote]
+        );
     }
 }

@@ -12,6 +12,8 @@ use tauri_plugin_shell::{
 use thiserror::Error;
 use tokio::sync::RwLockWriteGuard;
 
+// The Node sidecar owns the provider timeout budget (30s by default), including
+// its single provider retry. This timeout is Rust's outer process-hang bound.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(35);
 
 #[derive(Debug, Error)]
@@ -199,6 +201,32 @@ impl FormattingClient {
         };
 
         match response {
+            Err(FormattingSidecarError::Timeout) if command.is_format() => {
+                let old = guard.take();
+                drop(guard);
+                if let Some(sidecar) = old {
+                    sidecar.kill();
+                }
+
+                Err(FormattingSidecarError::Timeout)
+            }
+            Err(
+                error @ (FormattingSidecarError::Terminated
+                | FormattingSidecarError::InvalidResponse),
+            ) if command.is_format() => {
+                let old = guard.take();
+                drop(guard);
+                if let Some(sidecar) = old {
+                    sidecar.kill();
+                }
+
+                let mut guard = self.ensure(app).await?;
+                if let Some(sidecar) = guard.as_mut() {
+                    sidecar.request(command).await
+                } else {
+                    Err(error)
+                }
+            }
             Err(
                 error @ (FormattingSidecarError::Terminated
                 | FormattingSidecarError::Timeout
@@ -210,15 +238,11 @@ impl FormattingClient {
                     sidecar.kill();
                 }
 
-                if matches!(command, FormattingCommand::Format { .. }) {
-                    return Err(error);
-                }
-
                 let mut guard = self.ensure(app).await?;
                 if let Some(sidecar) = guard.as_mut() {
                     sidecar.request(command).await
                 } else {
-                    Err(FormattingSidecarError::Terminated)
+                    Err(error)
                 }
             }
             other => other,

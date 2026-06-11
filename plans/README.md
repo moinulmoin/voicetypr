@@ -30,7 +30,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 013  | *(reserved: close 004/008 smoke blockers — checklist, no plan file yet)* | P1 | S | 004, 008 | RESERVED — no executable plan file yet |
 | 014  | *(reserved: shared transcription contract stage 1 — executor implementation of plan 012's design)* | P1 | L | 012 | RESERVED — no executable plan file yet |
 | 015  | Pipeline feel — start latency, decode watchdogs, never-lose-speech | P1 | M | 004/008 smoke (soft) | NEEDS-SMOKE |
-| 016  | AI polish hardening — key validation, retries, warm sidecar, rule engine | P1 | L | — | TODO |
+| 016  | AI polish Rust-native provider layer — replace Pi sidecar | P1 | L | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | NEEDS-SMOKE (code done, manual
 smoke pending) | BLOCKED (one-line reason) | REJECTED (one-line rationale) |
@@ -48,13 +48,13 @@ RESERVED (number held, no executable plan file yet).
 - 001, 005, 006, 007, 009, 010, 011 are mutually independent.
 - 004 and 002 both edit `commands/audio.rs` (different regions) — execute
   serially to avoid merge noise.
-- **015/016 vs 014**: both are written against current code (commit
-  `080663b`) and run their own drift checks. If 014 (contract executor)
-  lands first, 015's watchdog/cancel changes apply at the executor seam
-  instead — its STOP conditions cover this.
-- 015 and 016 are both P1 reliability work but touch different seams; execute
-  serially only if a branch already changes the same failure-delivery or
-  writing-engine code. Otherwise they can be reviewed independently.
+- **015/016 vs 014**: 015 was written against current code at commit
+  `080663b`; 016 was rewritten at `b1a66bf` after the SDK/provider research
+  and now targets a Rust-native AI polish runtime rather than hardening the Pi
+  sidecar. If 014 (contract executor) lands first, 015's watchdog/cancel
+  changes apply at the executor seam instead. 016 must still preserve
+  no-transcript-loss behavior and must not reintroduce the Node/Pi sidecar as a
+  shipped compatibility path.
 
 ## Execution review notes
 

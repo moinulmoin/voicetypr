@@ -1,7 +1,9 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use active_win_pos_rs::get_active_window;
-use regex::RegexBuilder;
+use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
@@ -498,18 +500,40 @@ fn language_scope_matches(scope: Option<&str>, transcript_language: Option<&str>
     }
 }
 
+fn is_boundary_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
 fn candidate_has_boundaries(text: &str, start: usize, end: usize) -> bool {
     let left_ok = text[..start]
         .chars()
         .last()
-        .map(|ch| !ch.is_alphanumeric())
+        .map(|ch| !is_boundary_word_char(ch))
         .unwrap_or(true);
     let right_ok = text[end..]
         .chars()
         .next()
-        .map(|ch| !ch.is_alphanumeric())
+        .map(|ch| !is_boundary_word_char(ch))
         .unwrap_or(true);
     left_ok && right_ok
+}
+
+fn span_in_protected_token(text: &str, start: usize, end: usize) -> bool {
+    let token_start = text[..start]
+        .char_indices()
+        .rev()
+        .find_map(|(index, ch)| ch.is_whitespace().then_some(index + ch.len_utf8()))
+        .unwrap_or(0);
+    let token_end = text[end..]
+        .char_indices()
+        .find_map(|(index, ch)| ch.is_whitespace().then_some(end + index))
+        .unwrap_or(text.len());
+    let token = &text[token_start..token_end];
+
+    token.contains("://")
+        || token
+            .match_indices('@')
+            .any(|(index, _)| index > 0 && index + 1 < token.len())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -531,6 +555,185 @@ struct LibraryRuleApplication {
 }
 
 #[derive(Clone)]
+struct CompiledReplacementRule {
+    regex: Regex,
+    replacement: String,
+    detail: String,
+    priority: u8,
+    source_form: String,
+    source_kind: LibraryRuleSourceKind,
+    language_scope: Option<String>,
+}
+
+#[derive(Clone)]
+struct CompiledVoiceCommandRule {
+    regex: Regex,
+    phrase: String,
+    output: VoiceCommandOutput,
+    language_scope: Option<String>,
+}
+
+static REPLACEMENT_RULE_CACHE: OnceLock<Mutex<HashMap<String, Arc<Vec<CompiledReplacementRule>>>>> =
+    OnceLock::new();
+static VOICE_COMMAND_RULE_CACHE: OnceLock<
+    Mutex<HashMap<String, Arc<Vec<CompiledVoiceCommandRule>>>>,
+> = OnceLock::new();
+
+fn push_fingerprint_field(fingerprint: &mut String, value: &str) {
+    fingerprint.push_str(&value.len().to_string());
+    fingerprint.push(':');
+    fingerprint.push_str(value);
+    fingerprint.push(';');
+}
+
+fn push_fingerprint_option(fingerprint: &mut String, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            fingerprint.push('S');
+            push_fingerprint_field(fingerprint, value);
+        }
+        None => fingerprint.push_str("N;"),
+    }
+}
+
+fn replacement_rules_fingerprint(
+    replacements: &[TextReplacementRule],
+    custom_words: &[CustomWord],
+) -> String {
+    let mut fingerprint = String::new();
+    for rule in replacements.iter().filter(|rule| rule.enabled) {
+        fingerprint.push_str("R;i;");
+        push_fingerprint_field(&mut fingerprint, &rule.from);
+        push_fingerprint_field(&mut fingerprint, &rule.to);
+        push_fingerprint_option(&mut fingerprint, rule.language.as_deref());
+    }
+    for word in custom_words.iter().filter(|word| word.enabled) {
+        let Some(spoken_form) = word.spoken_form.as_deref() else {
+            continue;
+        };
+        fingerprint.push_str("C;i;");
+        push_fingerprint_field(&mut fingerprint, spoken_form);
+        push_fingerprint_field(&mut fingerprint, &word.phrase);
+        push_fingerprint_option(&mut fingerprint, word.language.as_deref());
+    }
+    fingerprint
+}
+
+fn compiled_replacement_rules(
+    replacements: &[TextReplacementRule],
+    custom_words: &[CustomWord],
+) -> Arc<Vec<CompiledReplacementRule>> {
+    let fingerprint = replacement_rules_fingerprint(replacements, custom_words);
+    let cache = REPLACEMENT_RULE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(compiled) = cache
+        .lock()
+        .expect("replacement rule cache poisoned")
+        .get(&fingerprint)
+    {
+        return Arc::clone(compiled);
+    }
+
+    let mut compiled = Vec::new();
+    for rule in replacements.iter().filter(|rule| rule.enabled) {
+        let Ok(regex) = RegexBuilder::new(&regex::escape(&rule.from))
+            .case_insensitive(true)
+            .build()
+        else {
+            continue;
+        };
+        compiled.push(CompiledReplacementRule {
+            regex,
+            replacement: rule.to.clone(),
+            detail: format!("{} → {}", rule.from, rule.to),
+            priority: 2,
+            source_form: rule.from.clone(),
+            source_kind: LibraryRuleSourceKind::ExplicitReplacement,
+            language_scope: normalize_language_scope(rule.language.as_deref()),
+        });
+    }
+    for word in custom_words.iter().filter(|word| word.enabled) {
+        let Some(spoken_form) = word.spoken_form.as_deref() else {
+            continue;
+        };
+        let Ok(regex) = RegexBuilder::new(&regex::escape(spoken_form))
+            .case_insensitive(true)
+            .build()
+        else {
+            continue;
+        };
+        compiled.push(CompiledReplacementRule {
+            regex,
+            replacement: word.phrase.clone(),
+            detail: format!("{} → {}", spoken_form, word.phrase),
+            priority: 1,
+            source_form: spoken_form.to_string(),
+            source_kind: LibraryRuleSourceKind::CustomWordSpokenForm,
+            language_scope: normalize_language_scope(word.language.as_deref()),
+        });
+    }
+
+    let compiled = Arc::new(compiled);
+    cache
+        .lock()
+        .expect("replacement rule cache poisoned")
+        .insert(fingerprint, Arc::clone(&compiled));
+    compiled
+}
+
+fn voice_command_rules_fingerprint(rules: &[VoiceCommandRule]) -> String {
+    let mut fingerprint = String::new();
+    for rule in rules.iter().filter(|rule| rule.enabled) {
+        fingerprint.push_str("V;i;");
+        push_fingerprint_field(&mut fingerprint, rule.phrase.trim());
+        push_fingerprint_field(&mut fingerprint, rule.output.trim());
+        push_fingerprint_option(&mut fingerprint, rule.language.as_deref());
+    }
+    fingerprint
+}
+
+fn compiled_voice_command_rules(rules: &[VoiceCommandRule]) -> Arc<Vec<CompiledVoiceCommandRule>> {
+    let fingerprint = voice_command_rules_fingerprint(rules);
+    let cache = VOICE_COMMAND_RULE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(compiled) = cache
+        .lock()
+        .expect("voice command rule cache poisoned")
+        .get(&fingerprint)
+    {
+        return Arc::clone(compiled);
+    }
+
+    let mut compiled = Vec::new();
+    for rule in rules.iter().filter(|rule| rule.enabled) {
+        let phrase = rule.phrase.trim();
+        let Some(output) = voice_command_output(rule.output.trim()) else {
+            continue;
+        };
+        if phrase.is_empty() {
+            continue;
+        }
+        let Ok(regex) = RegexBuilder::new(&regex::escape(phrase))
+            .case_insensitive(true)
+            .build()
+        else {
+            continue;
+        };
+        compiled.push(CompiledVoiceCommandRule {
+            regex,
+            phrase: phrase.to_string(),
+            output,
+            language_scope: normalize_language_scope(rule.language.as_deref()),
+        });
+    }
+
+    let compiled = Arc::new(compiled);
+    cache
+        .lock()
+        .expect("voice command rule cache poisoned")
+        .insert(fingerprint, Arc::clone(&compiled));
+    compiled
+}
+
+#[derive(Clone)]
 struct ReplacementCandidate {
     start: usize,
     end: usize,
@@ -548,61 +751,28 @@ fn collect_replacement_candidates(
     custom_words: &[CustomWord],
     transcript_language: Option<&str>,
 ) -> Vec<ReplacementCandidate> {
+    let compiled = compiled_replacement_rules(replacements, custom_words);
     let mut candidates = Vec::new();
 
-    for rule in replacements.iter().filter(|rule| {
-        rule.enabled && language_scope_matches(rule.language.as_deref(), transcript_language)
-    }) {
-        let Ok(regex) = RegexBuilder::new(&regex::escape(&rule.from))
-            .case_insensitive(true)
-            .build()
-        else {
-            continue;
-        };
-
-        for mat in regex.find_iter(text) {
-            if !candidate_has_boundaries(text, mat.start(), mat.end()) {
+    for rule in compiled
+        .iter()
+        .filter(|rule| language_scope_matches(rule.language_scope.as_deref(), transcript_language))
+    {
+        for mat in rule.regex.find_iter(text) {
+            if !candidate_has_boundaries(text, mat.start(), mat.end())
+                || span_in_protected_token(text, mat.start(), mat.end())
+            {
                 continue;
             }
             candidates.push(ReplacementCandidate {
                 start: mat.start(),
                 end: mat.end(),
-                replacement: rule.to.clone(),
-                detail: format!("{} → {}", rule.from, rule.to),
-                priority: 2,
-                source_form: rule.from.clone(),
-                source_kind: LibraryRuleSourceKind::ExplicitReplacement,
-                language_scope: normalize_language_scope(rule.language.as_deref()),
-            });
-        }
-    }
-
-    for word in custom_words.iter().filter(|word| {
-        word.enabled && language_scope_matches(word.language.as_deref(), transcript_language)
-    }) {
-        let Some(spoken_form) = word.spoken_form.as_deref() else {
-            continue;
-        };
-        let Ok(regex) = RegexBuilder::new(&regex::escape(spoken_form))
-            .case_insensitive(true)
-            .build()
-        else {
-            continue;
-        };
-
-        for mat in regex.find_iter(text) {
-            if !candidate_has_boundaries(text, mat.start(), mat.end()) {
-                continue;
-            }
-            candidates.push(ReplacementCandidate {
-                start: mat.start(),
-                end: mat.end(),
-                replacement: word.phrase.clone(),
-                detail: format!("{} → {}", spoken_form, word.phrase),
-                priority: 1,
-                source_form: spoken_form.to_string(),
-                source_kind: LibraryRuleSourceKind::CustomWordSpokenForm,
-                language_scope: normalize_language_scope(word.language.as_deref()),
+                replacement: rule.replacement.clone(),
+                detail: rule.detail.clone(),
+                priority: rule.priority,
+                source_form: rule.source_form.clone(),
+                source_kind: rule.source_kind,
+                language_scope: rule.language_scope.clone(),
             });
         }
     }
@@ -729,11 +899,11 @@ enum VoiceCommandOutput {
     Break(&'static str),
 }
 
-#[derive(Clone, Copy)]
-struct VoiceCommandCandidate<'a> {
+#[derive(Clone)]
+struct VoiceCommandCandidate {
     start: usize,
     end: usize,
-    phrase: &'a str,
+    phrase: String,
     output: VoiceCommandOutput,
 }
 
@@ -764,40 +934,28 @@ fn protected_span_contains(protected_spans: &[(usize, usize)], start: usize, end
         })
 }
 
-fn collect_voice_command_candidates<'a>(
+fn collect_voice_command_candidates(
     text: &str,
-    rules: &'a [VoiceCommandRule],
+    rules: &[VoiceCommandRule],
     transcript_language: Option<&str>,
     protected_spans: &[(usize, usize)],
-) -> Vec<VoiceCommandCandidate<'a>> {
+) -> Vec<VoiceCommandCandidate> {
+    let compiled = compiled_voice_command_rules(rules);
     let mut candidates = Vec::new();
-    for rule in rules {
-        if !rule.enabled || !language_scope_matches(rule.language.as_deref(), transcript_language) {
-            continue;
-        }
-        let phrase = rule.phrase.trim();
-        let Some(output) = voice_command_output(rule.output.trim()) else {
-            continue;
-        };
-        if phrase.is_empty() {
-            continue;
-        }
-        let Ok(regex) = RegexBuilder::new(&regex::escape(phrase))
-            .case_insensitive(true)
-            .build()
-        else {
-            continue;
-        };
-
-        for mat in regex.find_iter(text) {
+    for rule in compiled
+        .iter()
+        .filter(|rule| language_scope_matches(rule.language_scope.as_deref(), transcript_language))
+    {
+        for mat in rule.regex.find_iter(text) {
             if candidate_has_boundaries(text, mat.start(), mat.end())
+                && !span_in_protected_token(text, mat.start(), mat.end())
                 && !protected_span_contains(protected_spans, mat.start(), mat.end())
             {
                 candidates.push(VoiceCommandCandidate {
                     start: mat.start(),
                     end: mat.end(),
-                    phrase,
-                    output,
+                    phrase: rule.phrase.clone(),
+                    output: rule.output,
                 });
             }
         }
@@ -1537,6 +1695,7 @@ fn collect_final_guard_candidates(
         for mat in regex.find_iter(text) {
             if mat.start() == application.target_start
                 && candidate_has_boundaries(text, mat.start(), mat.end())
+                && !span_in_protected_token(text, mat.start(), mat.end())
             {
                 candidates.push(FinalGuardCandidate {
                     start: mat.start(),
@@ -2488,6 +2647,33 @@ mod tests {
     }
 
     #[test]
+    fn test_replacements_protect_word_tokens_urls_and_emails() {
+        let replacements = vec![TextReplacementRule {
+            from: "foo".to_string(),
+            to: "bar".to_string(),
+            language: Some("en".to_string()),
+            enabled: true,
+        }];
+
+        let (protected_text, protected_ops) = apply_text_replacements(
+            "foo_bar https://example.com/foo user@foo.com",
+            &replacements,
+            &[],
+            Some("en"),
+        );
+        assert_eq!(
+            protected_text,
+            "foo_bar https://example.com/foo user@foo.com"
+        );
+        assert!(protected_ops.is_empty());
+
+        let (boundary_text, boundary_ops) =
+            apply_text_replacements("foo foo, (foo) end foo", &replacements, &[], Some("en"));
+        assert_eq!(boundary_text, "bar bar, (bar) end bar");
+        assert_eq!(boundary_ops.len(), 4);
+    }
+
+    #[test]
     fn test_build_ai_context_excludes_disabled_and_wrong_language_terms() {
         let context = build_ai_context(
             &[
@@ -2769,6 +2955,39 @@ mod tests {
     }
 
     #[test]
+    fn test_final_guard_skips_protected_tokens() {
+        let url_provenance = vec![LibraryRuleApplication {
+            source_form: "foo".to_string(),
+            target_text: "bar".to_string(),
+            source_kind: LibraryRuleSourceKind::ExplicitReplacement,
+            language_scope: Some("en".to_string()),
+            start: 0,
+            end: 3,
+            target_start: 20,
+            target_end: 23,
+        }];
+        let (url_text, url_ops) =
+            apply_final_restoration_guard("https://example.com/foo", &url_provenance, false, false);
+        assert_eq!(url_text, "https://example.com/foo");
+        assert!(url_ops.is_empty());
+
+        let email_provenance = vec![LibraryRuleApplication {
+            source_form: "foo".to_string(),
+            target_text: "bar".to_string(),
+            source_kind: LibraryRuleSourceKind::ExplicitReplacement,
+            language_scope: Some("en".to_string()),
+            start: 0,
+            end: 3,
+            target_start: 5,
+            target_end: 8,
+        }];
+        let (email_text, email_ops) =
+            apply_final_restoration_guard("user@foo.com", &email_provenance, false, false);
+        assert_eq!(email_text, "user@foo.com");
+        assert!(email_ops.is_empty());
+    }
+
+    #[test]
     fn test_transcript_cleanup_is_mechanical_only() {
         let cleaned = run_transcript_cleanup_mechanical(" \r\nhello\rworld\tthere\0\u{0008} ");
         assert_eq!(cleaned.as_ref(), "hello\nworld\tthere");
@@ -2947,6 +3166,29 @@ mod tests {
             apply_voice_commands("hello virgule world", &scoped_settings, Some("en"), &[]);
         assert_eq!(language_text, "hello virgule world");
         assert!(language_ops.is_empty());
+    }
+
+    #[test]
+    fn test_voice_commands_skip_protected_tokens() {
+        let settings = WritingSettings {
+            voice_commands: vec![VoiceCommandRule {
+                phrase: "foo".to_string(),
+                output: "comma".to_string(),
+                language: Some("en".to_string()),
+                enabled: true,
+            }],
+            ..WritingSettings::default()
+        };
+
+        let (text, ops) = apply_voice_commands(
+            "foo_bar https://example.com/foo user@foo.com foo",
+            &settings,
+            Some("en"),
+            &[],
+        );
+
+        assert_eq!(text, "foo_bar https://example.com/foo user@foo.com,");
+        assert_eq!(ops.len(), 1);
     }
 
     #[test]

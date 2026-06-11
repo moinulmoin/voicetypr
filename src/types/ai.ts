@@ -78,6 +78,7 @@ export interface AISettings {
   provider: string;
   model: string;
   hasApiKey: boolean;
+  modelsByProvider: Record<string, string>;
   enhancement_options?: EnhancementOptions;
 }
 

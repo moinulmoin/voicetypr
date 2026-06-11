@@ -13,6 +13,7 @@ use tauri_plugin_store::StoreExt;
 use crate::utils::logger::*;
 
 mod ai;
+use crate::formatting::messages::{FormattingCommand, PROTOCOL_VERSION};
 mod audio;
 pub mod cli;
 mod commands;
@@ -60,7 +61,7 @@ use commands::{
         get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
         get_writing_settings, list_ai_providers, list_provider_models, set_openai_config,
         test_openai_endpoint, update_ai_settings, update_enhancement_options,
-        update_writing_settings, validate_and_cache_api_key,
+        update_writing_settings, validate_ai_api_key,
     },
     audio::*,
     clipboard::{copy_image_to_clipboard, save_image_to_file},
@@ -520,6 +521,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // This ensures persisted credentials are visible to perform_startup_checks()
             // without depending on frontend React mount timing.
             crate::commands::ai::warm_ai_key_cache_from_secure_store(&app.handle().clone());
+
+            warm_formatting_sidecar_if_ai_enabled(app.handle().clone());
 
             // Run comprehensive startup checks after state/window manager are ready
             let app_handle = app.handle().clone();
@@ -1306,7 +1309,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_ai_settings,
             get_ai_settings_for_provider,
             cache_ai_api_key,
-            validate_and_cache_api_key,
+            validate_ai_api_key,
             set_openai_config,
             get_openai_config,
             test_openai_endpoint,
@@ -1402,6 +1405,61 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     log_lifecycle_event("APPLICATION_READY", Some(app_version), None);
 
     Ok(())
+}
+
+fn warm_formatting_sidecar_if_ai_enabled(app: tauri::AppHandle) {
+    let Some((provider, model)) = app.store("settings").ok().and_then(|store| {
+        let enabled = store
+            .get("ai_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !enabled {
+            return None;
+        }
+
+        let provider = store
+            .get("ai_provider")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+        let model = store
+            .get("ai_model")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+
+        if provider.is_empty() || model.is_empty() {
+            None
+        } else {
+            Some((provider, model))
+        }
+    }) else {
+        return;
+    };
+
+    tauri::async_runtime::spawn(async move {
+        let command = FormattingCommand::Health {
+            id: "startup-health".to_string(),
+            protocol_version: PROTOCOL_VERSION,
+        };
+
+        match app
+            .state::<formatting::FormattingClient>()
+            .send(&app, &command)
+            .await
+        {
+            Ok(response) => log::info!(
+                "Formatting sidecar warmed for AI provider={} model={}: {:?}",
+                provider,
+                model,
+                response
+            ),
+            Err(error) => log::warn!(
+                "Failed to warm formatting sidecar for AI provider={} model={}: {}",
+                provider,
+                model,
+                error
+            ),
+        }
+    });
 }
 
 /// Perform essential startup checks

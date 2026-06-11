@@ -22,7 +22,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import type { EnhancementOptions, EnhancementPreset } from "@/types/ai";
+import type { AISettings, EnhancementOptions, EnhancementPreset } from "@/types/ai";
 import {
   fromBackendOptions,
   presetRequiresAiFormatting,
@@ -43,12 +43,15 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { HelpCircle } from "lucide-react";
 
-interface AISettings {
-  enabled: boolean;
-  provider: string;
-  model: string;
-  hasApiKey: boolean;
-}
+
+type AISettingsResponse = Omit<AISettings, "modelsByProvider"> & {
+  modelsByProvider?: Record<string, string>;
+};
+
+const normalizeAISettings = (settings: AISettingsResponse): AISettings => ({
+  ...settings,
+  modelsByProvider: settings.modelsByProvider ?? {},
+});
 
 export function EnhancementsSection() {
   const readiness = useReadinessState();
@@ -61,6 +64,7 @@ export function EnhancementsSection() {
     provider: "",
     model: "",
     hasApiKey: false,
+    modelsByProvider: {},
   });
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
@@ -125,11 +129,10 @@ export function EnhancementsSection() {
 
           if ((providerId === "custom" || providerId === "openai") && !isConfigured) {
             try {
-              const providerSettings = await invoke<AISettings>(
-                "get_ai_settings_for_provider",
-                {
+              const providerSettings = normalizeAISettings(
+                await invoke<AISettingsResponse>("get_ai_settings_for_provider", {
                   provider: providerId,
-                },
+                }),
               );
               isConfigured = providerSettings.hasApiKey;
             } catch (error) {
@@ -163,9 +166,14 @@ export function EnhancementsSection() {
         console.error("Failed to load custom config:", error);
       }
 
-      const loadedAISettings = await invoke<AISettings>("get_ai_settings");
-      if (loadedAISettings.provider === "custom") {
-        setCustomModelName(loadedAISettings.model);
+      const loadedAISettings = normalizeAISettings(
+        await invoke<AISettingsResponse>("get_ai_settings"),
+      );
+      const customModel =
+        loadedAISettings.modelsByProvider.custom ||
+        (loadedAISettings.provider === "custom" ? loadedAISettings.model : "");
+      if (customModel) {
+        setCustomModelName(customModel);
       }
       setAISettings(loadedAISettings);
 
@@ -211,19 +219,22 @@ export function EnhancementsSection() {
     });
 
     const unlistenApiKey = listen("api-key-saved", async (event) => {
-      const loadedAISettings = await invoke<AISettings>("get_ai_settings");
-      const provider = (event.payload as { provider?: string }).provider;
-      setAISettings(
-        provider && provider !== loadedAISettings.provider
-          ? {
-              ...loadedAISettings,
-              provider,
-              enabled: false,
-              model: "",
-              hasApiKey: true,
-            }
-          : loadedAISettings,
+      const loadedAISettings = normalizeAISettings(
+        await invoke<AISettingsResponse>("get_ai_settings"),
       );
+      const provider = (event.payload as { provider?: string }).provider;
+      if (!provider || provider === loadedAISettings.provider) {
+        setAISettings(loadedAISettings);
+      } else {
+        const rememberedModel = loadedAISettings.modelsByProvider[provider] || "";
+        setAISettings({
+          ...loadedAISettings,
+          provider,
+          enabled: false,
+          model: rememberedModel,
+          hasApiKey: true,
+        });
+      }
 
       if (provider) {
         setProviderApiKeys((prev) => ({ ...prev, [provider]: true }));
@@ -237,11 +248,10 @@ export function EnhancementsSection() {
 
         if (event.payload.provider === "custom" || event.payload.provider === "openai") {
           try {
-            const providerSettings = await invoke<AISettings>(
-              "get_ai_settings_for_provider",
-              {
+            const providerSettings = normalizeAISettings(
+              await invoke<AISettingsResponse>("get_ai_settings_for_provider", {
                 provider: event.payload.provider,
-              },
+              }),
             );
             providerStillConfigured = providerSettings.hasApiKey;
             setProviderApiKeys((prev) => ({
@@ -443,8 +453,17 @@ export function EnhancementsSection() {
 
     if (providerId === "custom") {
       try {
-        const savedConfig = await invoke<{ baseUrl: string }>("get_openai_config");
+        const [savedConfig, providerSettingsResponse] = await Promise.all([
+          invoke<{ baseUrl: string }>("get_openai_config"),
+          invoke<AISettingsResponse>("get_ai_settings_for_provider", {
+            provider: providerId,
+          }),
+        ]);
+        const providerSettings = normalizeAISettings(providerSettingsResponse);
         setOpenAIDefaultBaseUrl(savedConfig.baseUrl || "https://api.openai.com/v1");
+        if (providerSettings.model) {
+          setCustomModelName(providerSettings.model);
+        }
       } catch (error) {
         console.error("Failed to load custom config:", error);
       }
@@ -459,13 +478,20 @@ export function EnhancementsSection() {
     try {
       const trimmedKey = apiKey.trim();
       await saveApiKey(selectedProvider, trimmedKey);
+      const providerSettings = normalizeAISettings(
+        await invoke<AISettingsResponse>("get_ai_settings_for_provider", {
+          provider: selectedProvider,
+        }),
+      );
+      const rememberedModel = providerSettings.model || "";
       setProviderApiKeys((prev) => ({ ...prev, [selectedProvider]: true }));
       setAISettings((prev) => ({
         ...prev,
         provider: selectedProvider,
         enabled: prev.provider === selectedProvider ? prev.enabled : false,
-        model: prev.provider === selectedProvider ? prev.model : "",
+        model: rememberedModel,
         hasApiKey: true,
+        modelsByProvider: providerSettings.modelsByProvider,
       }));
       setShowApiKeyModal(false);
       toast.success("API key saved securely");
@@ -505,6 +531,10 @@ export function EnhancementsSection() {
         provider: providerId,
         model: modelId,
         hasApiKey: hasKey,
+        modelsByProvider: {
+          ...prev.modelsByProvider,
+          [providerId]: modelId,
+        },
       }));
 
       toast.success("Model selected");
@@ -634,12 +664,9 @@ export function EnhancementsSection() {
                     isActive={isActive}
                     selectedModel={
                       provider.isCustom
-                        ? isCustomActive
-                          ? customModelName
-                          : null
-                        : aiSettings.provider === provider.id
-                          ? aiSettings.model
-                          : null
+                        ? aiSettings.modelsByProvider.custom || customModelName || null
+                        : aiSettings.modelsByProvider[provider.id] ||
+                          (aiSettings.provider === provider.id ? aiSettings.model : null)
                     }
                     onSetupApiKey={() => handleSetupApiKey(provider.id)}
                     onRemoveApiKey={() => handleRemoveApiKey(provider.id)}
@@ -704,10 +731,27 @@ export function EnhancementsSection() {
             const trimmedModel = model.trim();
             const trimmedKey = apiKey?.trim() || "";
 
-            await invoke("set_openai_config", { args: { baseUrl: trimmedBase } });
-
             if (trimmedKey) {
-              await saveApiKey("custom", trimmedKey);
+              await saveApiKey("custom", trimmedKey, {
+                baseUrl: trimmedBase,
+                model: trimmedModel,
+              });
+              await invoke("set_openai_config", {
+                args: { baseUrl: trimmedBase, noAuth: false },
+              });
+            } else {
+              await invoke("validate_ai_api_key", {
+                args: {
+                  provider: "custom",
+                  apiKey: "",
+                  baseUrl: trimmedBase,
+                  model: trimmedModel,
+                  noAuth: true,
+                },
+              });
+              await invoke("set_openai_config", {
+                args: { baseUrl: trimmedBase, noAuth: true },
+              });
             }
 
             await invoke("update_ai_settings", {
@@ -723,6 +767,10 @@ export function EnhancementsSection() {
               provider: "custom",
               model: trimmedModel,
               hasApiKey: true,
+              modelsByProvider: {
+                ...prev.modelsByProvider,
+                custom: trimmedModel,
+              },
             }));
             setProviderApiKeys((prev) => ({ ...prev, custom: true }));
 

@@ -36,21 +36,25 @@ export const keyringHas = async (key: string): Promise<boolean> => {
   return await invoke<boolean>('keyring_has', { key });
 };
 
-// API Key specific helpers
-export const saveApiKey = async (provider: string, apiKey: string): Promise<void> => {
-  const key = `ai_api_key_${provider}`;
-  await keyringSet(key, apiKey);
-  
-  // Cache or validate depending on provider
-  const validated = provider === 'openai';
-  if (validated) {
-    // OpenAI-compatible requires validation (may include no-auth path via separate modal)
-    await invoke('validate_and_cache_api_key', { args: { provider, apiKey } });
-  } else {
-    await invoke('cache_ai_api_key', { args: { provider, apiKey } });
-  }
+interface SaveApiKeyOptions {
+  baseUrl?: string;
+  model?: string;
+  noAuth?: boolean;
+}
 
-  console.log(`[Keyring] API key ${validated ? 'saved and validated' : 'saved and cached'} for ${provider}`);
+// API Key specific helpers
+export const saveApiKey = async (
+  provider: string,
+  apiKey: string,
+  options?: SaveApiKeyOptions,
+): Promise<void> => {
+  const key = `ai_api_key_${provider}`;
+
+  await invoke('validate_ai_api_key', { args: { provider, apiKey, ...options } });
+  await keyringSet(key, apiKey);
+  await invoke('cache_ai_api_key', { args: { provider, apiKey } });
+
+  console.log(`[Keyring] API key saved and validated for ${provider}`);
   
   // Emit event to notify that API key was saved
   await emit('api-key-saved', { provider });

@@ -164,6 +164,36 @@ fn build_openai_probe_payload(
     payload
 }
 
+fn load_models_by_provider<R: tauri::Runtime>(
+    store: &tauri_plugin_store::Store<R>,
+    current_provider: &str,
+    current_model: &str,
+) -> HashMap<String, String> {
+    let mut models_by_provider = store
+        .get("ai_models_by_provider")
+        .and_then(|v| serde_json::from_value::<HashMap<String, String>>(v.clone()).ok())
+        .unwrap_or_default();
+
+    if !current_provider.is_empty()
+        && !current_model.is_empty()
+        && !models_by_provider.contains_key(current_provider)
+    {
+        models_by_provider.insert(current_provider.to_string(), current_model.to_string());
+    }
+
+    models_by_provider
+}
+
+fn remember_provider_model(
+    models_by_provider: &mut HashMap<String, String>,
+    provider: &str,
+    model: &str,
+) {
+    if !provider.is_empty() && !model.is_empty() {
+        models_by_provider.insert(provider.to_string(), model.to_string());
+    }
+}
+
 async fn run_openai_probe_request(
     client: &reqwest::Client,
     base_url: &str,
@@ -291,6 +321,8 @@ pub struct AISettings {
     pub model: String,
     #[serde(rename = "hasApiKey")]
     pub has_api_key: bool,
+    #[serde(rename = "modelsByProvider")]
+    pub models_by_provider: HashMap<String, String>,
 }
 
 // Validation pattern for providers
@@ -327,6 +359,8 @@ pub async fn get_ai_settings(app: tauri::AppHandle) -> Result<AISettings, String
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "".to_string()); // Empty by default
 
+    let models_by_provider = load_models_by_provider(&store, &provider, &model);
+
     // For OpenAI-compatible providers, treat no_auth as having a usable config
     let has_api_key = {
         let cache = API_KEY_CACHE
@@ -340,6 +374,7 @@ pub async fn get_ai_settings(app: tauri::AppHandle) -> Result<AISettings, String
         provider,
         model,
         has_api_key,
+        models_by_provider,
     })
 }
 
@@ -357,10 +392,19 @@ pub async fn get_ai_settings_for_provider(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let model = store
+    let current_provider = store
+        .get("ai_provider")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+    let current_model = store
         .get("ai_model")
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "".to_string()); // Empty by default
+    let models_by_provider = load_models_by_provider(&store, &current_provider, &current_model);
+    let model = models_by_provider
+        .get(&provider)
+        .cloned()
+        .unwrap_or_default();
 
     // For OpenAI-compatible providers, treat no_auth as having a usable config
     let has_api_key = {
@@ -375,6 +419,7 @@ pub async fn get_ai_settings_for_provider(
         provider,
         model,
         has_api_key,
+        models_by_provider,
     })
 }
 
@@ -428,9 +473,9 @@ pub async fn cache_ai_api_key(_app: tauri::AppHandle, args: CacheApiKeyArgs) -> 
     Ok(())
 }
 
-// Validate and save a new API key
+// Validate a new API key or no-auth OpenAI-compatible configuration.
 #[derive(Deserialize)]
-pub struct ValidateAndCacheApiKeyArgs {
+pub struct ValidateAiApiKeyArgs {
     pub provider: String,
     #[serde(alias = "apiKey", alias = "api_key")]
     pub api_key: Option<String>,
@@ -442,11 +487,11 @@ pub struct ValidateAndCacheApiKeyArgs {
 }
 
 #[tauri::command]
-pub async fn validate_and_cache_api_key(
+pub async fn validate_ai_api_key(
     app: tauri::AppHandle,
-    args: ValidateAndCacheApiKeyArgs,
+    args: ValidateAiApiKeyArgs,
 ) -> Result<(), String> {
-    let ValidateAndCacheApiKeyArgs {
+    let ValidateAiApiKeyArgs {
         provider,
         api_key,
         base_url,
@@ -455,106 +500,129 @@ pub async fn validate_and_cache_api_key(
     } = args;
     validate_provider_name(&provider)?;
 
-    let provided_key = api_key.clone().unwrap_or_default();
-    let inferred_no_auth = if provider == "custom" {
-        no_auth.unwrap_or(false) || provided_key.trim().is_empty()
-    } else {
-        false
-    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build validation client: {}", e))?;
+    let provided_key = api_key.unwrap_or_default();
 
-    if provider == "openai" || provider == "custom" {
-        let store = app.store("settings").map_err(|e| e.to_string())?;
-        if let Some(url) = base_url.clone() {
-            if provider == "custom" {
-                store.set(CUSTOM_BASE_URL_KEY, serde_json::Value::String(url));
+    match provider.as_str() {
+        "openai" | "custom" => {
+            let store = app.store("settings").map_err(|e| e.to_string())?;
+            let inferred_no_auth = provider == "custom"
+                && (no_auth.unwrap_or(false) || provided_key.trim().is_empty());
+            let base = base_url
+                .or_else(|| {
+                    if provider == "custom" {
+                        store
+                            .get(CUSTOM_BASE_URL_KEY)
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                            .or_else(|| {
+                                store
+                                    .get(LEGACY_OPENAI_BASE_URL_KEY)
+                                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                            })
+                    } else {
+                        store
+                            .get(LEGACY_OPENAI_BASE_URL_KEY)
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    }
+                })
+                .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
+            let validate_model = model.unwrap_or_else(|| "gpt-5-nano".to_string());
+            let allow_chat_probe_fallback = provider == "custom";
+            let auth_header = if inferred_no_auth {
+                None
             } else {
-                store.set(LEGACY_OPENAI_BASE_URL_KEY, serde_json::Value::String(url));
-            }
-        }
-        store.set(
-            if provider == "custom" {
-                CUSTOM_NO_AUTH_KEY
-            } else {
-                LEGACY_OPENAI_NO_AUTH_KEY
-            },
-            serde_json::Value::Bool(inferred_no_auth),
-        );
-        if let Some(m) = model.clone() {
-            store.set("ai_model", serde_json::Value::String(m));
-        }
-        store
-            .save()
-            .map_err(|e| format!("Failed to save AI settings: {}", e))?;
-    }
-
-    if provider == "openai" || provider == "custom" {
-        let store = app.store("settings").map_err(|e| e.to_string())?;
-
-        let base = base_url
-            .clone()
-            .or_else(|| {
-                if provider == "custom" {
-                    store
-                        .get(CUSTOM_BASE_URL_KEY)
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .or_else(|| {
-                            store
-                                .get(LEGACY_OPENAI_BASE_URL_KEY)
-                                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        })
-                } else {
-                    store
-                        .get(LEGACY_OPENAI_BASE_URL_KEY)
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                let key = provided_key.trim();
+                if key.is_empty() {
+                    return Err("API key is required".to_string());
                 }
-            })
-            .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
-        let validate_model = model.clone().unwrap_or_else(|| "gpt-5-nano".to_string());
-        let allow_chat_probe_fallback = provider == "custom";
+                Some(format!("Bearer {}", key))
+            };
 
-        let client = reqwest::Client::new();
-        let auth_header = if inferred_no_auth {
-            None
-        } else {
+            run_openai_probe_request(
+                &client,
+                &base,
+                &validate_model,
+                auth_header.as_deref(),
+                allow_chat_probe_fallback,
+            )
+            .await
+            .map_err(|error| {
+                log::error!(
+                    "OpenAI-compatible validation failed: provider={} base_url={} model={} error={}",
+                    provider,
+                    base,
+                    validate_model,
+                    error
+                );
+                error
+            })
+        }
+        "gemini" => {
             let key = provided_key.trim();
             if key.is_empty() {
-                return Err(
-                    "API key is required (leave empty to use no authentication)".to_string()
-                );
+                return Err("API key is required".to_string());
             }
-            Some(format!("Bearer {}", key))
-        };
-
-        run_openai_probe_request(
-            &client,
-            &base,
-            &validate_model,
-            auth_header.as_deref(),
-            allow_chat_probe_fallback,
-        )
-        .await
-        .map_err(|error| {
-            log::error!(
-                "OpenAI-compatible validate failed: base_url={} model={} error={}",
-                base,
-                validate_model,
-                error
-            );
-            error
-        })?;
-    } else {
-        return Err("Unsupported provider".to_string());
+            let response = client
+                .get("https://generativelanguage.googleapis.com/v1beta/models")
+                .query(&[("key", key)])
+                .send()
+                .await
+                .map_err(|e| format!("Network error validating Gemini API key: {}", e))?;
+            let status = response.status();
+            if status.is_success() {
+                Ok(())
+            } else if matches!(status.as_u16(), 400 | 401 | 403) {
+                Err("Invalid Gemini API key".to_string())
+            } else {
+                let snippet: String = response
+                    .text()
+                    .await
+                    .unwrap_or_default()
+                    .chars()
+                    .take(500)
+                    .collect();
+                Err(format!(
+                    "Unexpected Gemini validation response HTTP {}: {}",
+                    status, snippet
+                ))
+            }
+        }
+        "anthropic" => {
+            let key = provided_key.trim();
+            if key.is_empty() {
+                return Err("API key is required".to_string());
+            }
+            let response = client
+                .get("https://api.anthropic.com/v1/models")
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01")
+                .send()
+                .await
+                .map_err(|e| format!("Network error validating Anthropic API key: {}", e))?;
+            let status = response.status();
+            if status.is_success() {
+                Ok(())
+            } else if matches!(status.as_u16(), 401 | 403) {
+                Err("Invalid Anthropic API key".to_string())
+            } else {
+                let snippet: String = response
+                    .text()
+                    .await
+                    .unwrap_or_default()
+                    .chars()
+                    .take(500)
+                    .collect();
+                Err(format!(
+                    "Unexpected Anthropic validation response HTTP {}: {}",
+                    status, snippet
+                ))
+            }
+        }
+        _ => Err("Unsupported provider".to_string()),
     }
-
-    if !inferred_no_auth {
-        let mut cache = API_KEY_CACHE
-            .lock()
-            .map_err(|_| "Failed to access cache".to_string())?;
-        cache.insert(format!("ai_api_key_{}", provider), provided_key.clone());
-        log::info!("API key validated and cached for provider: {}", provider);
-    }
-
-    Ok(())
 }
 
 /// Test an OpenAI-compatible endpoint without saving or caching anything.
@@ -702,10 +770,13 @@ pub async fn update_ai_settings(
     }
 
     let store = app.store("settings").map_err(|e| e.to_string())?;
+    let mut models_by_provider = load_models_by_provider(&store, &provider, &model);
+    remember_provider_model(&mut models_by_provider, &provider, &model);
 
     store.set("ai_enabled", json!(enabled));
     store.set("ai_provider", json!(provider));
     store.set("ai_model", json!(model));
+    store.set("ai_models_by_provider", json!(models_by_provider));
     if !enabled {
         store.set(
             "enhancement_options",
