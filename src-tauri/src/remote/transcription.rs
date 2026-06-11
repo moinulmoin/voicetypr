@@ -427,6 +427,7 @@ impl RealTranscriptionContext {
                         audio_path_clone,
                         spoken_language.clone(),
                         translate_to_english,
+                        None,
                     )
                     .await
                     .map_err(|e| format!("Parakeet transcription failed: {}", e))?;

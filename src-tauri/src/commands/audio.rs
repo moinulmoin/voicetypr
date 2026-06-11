@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
@@ -9,6 +9,7 @@ use crate::commands::settings::{
 };
 use crate::license::LicenseState;
 use crate::media::MediaPauseController;
+use crate::parakeet::manager::ParakeetTranscriptionOptions;
 use crate::parakeet::messages::{ParakeetResponse, ParakeetSegment};
 use crate::parakeet::ParakeetManager;
 use crate::remote::client::{
@@ -33,7 +34,7 @@ use once_cell::sync::Lazy;
 use serde_json;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -515,6 +516,33 @@ fn seconds_to_duration_ms(duration_seconds: Option<f32>) -> Option<u64> {
     duration_seconds.map(|seconds| (seconds.max(0.0) * 1000.0) as u64)
 }
 
+fn transcription_watchdog_budget(audio_duration_ms: Option<u64>) -> std::time::Duration {
+    const MIN_SECONDS: u64 = 180;
+    const MAX_SECONDS: u64 = 30 * 60;
+
+    let budget_seconds = audio_duration_ms
+        .map(|duration_ms| duration_ms.saturating_add(999) / 1000)
+        .map(|duration_seconds| duration_seconds.saturating_mul(4).saturating_add(60))
+        .unwrap_or(MIN_SECONDS)
+        .clamp(MIN_SECONDS, MAX_SECONDS);
+
+    std::time::Duration::from_secs(budget_seconds)
+}
+
+fn is_non_speech_transcript(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "" | "[blank_audio]"
+            | "[sound]"
+            | "[music]"
+            | "[noise]"
+            | "[inaudible]"
+            | "(silence)"
+            | "(music)"
+            | "(noise)"
+    )
+}
+
 fn parakeet_segments_to_transcription_segments(
     segments: Vec<ParakeetSegment>,
 ) -> Vec<TranscriptionSegment> {
@@ -673,7 +701,7 @@ async fn transcribe_whisper_with_acceleration<F>(
     should_cancel: F,
 ) -> Result<WhisperTranscriptionOutput, String>
 where
-    F: Fn() -> bool,
+    F: Fn() -> bool + Clone + 'static,
 {
     #[cfg(target_os = "windows")]
     let mode = transcription_acceleration_mode(app).await;
@@ -786,8 +814,9 @@ mod tests {
         build_failed_transcription_row, build_remote_server_error_payload,
         build_remote_transcription_result, build_remote_upload_transcription_request,
         build_soniox_create_payload, build_transcription_job, build_writing_history_metadata,
-        recording_license_state, remote_server_error_pill_message, should_hide_pill_when_idle,
-        should_use_active_remote, sync_retranscription_failure_metadata, NormalizedTempFile,
+        is_non_speech_transcript, recording_license_state, remote_server_error_pill_message,
+        should_hide_pill_when_idle, should_use_active_remote,
+        sync_retranscription_failure_metadata, transcription_watchdog_budget, NormalizedTempFile,
         RecordingLicenseState, TranscriptionFailure, TranscriptionStatus,
     };
     use crate::commands::license::CachedLicense;
@@ -934,6 +963,58 @@ mod tests {
         assert!(without_context.context.is_none());
     }
 
+    #[test]
+    fn transcription_watchdog_budget_defaults_to_minimum_for_unknown_duration() {
+        assert_eq!(
+            transcription_watchdog_budget(None),
+            std::time::Duration::from_secs(180)
+        );
+    }
+
+    #[test]
+    fn transcription_watchdog_budget_floors_to_minimum_for_short_audio() {
+        assert_eq!(
+            transcription_watchdog_budget(Some(10_000)),
+            std::time::Duration::from_secs(180)
+        );
+    }
+
+    #[test]
+    fn transcription_watchdog_budget_scales_duration_and_adds_sixty_seconds() {
+        assert_eq!(
+            transcription_watchdog_budget(Some(60_000)),
+            std::time::Duration::from_secs(300)
+        );
+    }
+
+    #[test]
+    fn transcription_watchdog_budget_ceilings_partial_seconds_and_clamps_maximum() {
+        assert_eq!(
+            transcription_watchdog_budget(Some(60_001)),
+            std::time::Duration::from_secs(304)
+        );
+        assert_eq!(
+            transcription_watchdog_budget(Some(600_000)),
+            std::time::Duration::from_secs(1800)
+        );
+    }
+
+    #[test]
+    fn is_non_speech_transcript_matches_blank_and_noise_tokens() {
+        assert!(is_non_speech_transcript("[SOUND]"));
+        assert!(is_non_speech_transcript("(silence)"));
+        assert!(is_non_speech_transcript("[music]"));
+        assert!(is_non_speech_transcript("  [NOISE]\n"));
+        assert!(is_non_speech_transcript("[InAuDiBlE]"));
+    }
+
+    #[test]
+    fn is_non_speech_transcript_rejects_prose_and_embedded_tokens() {
+        assert!(!is_non_speech_transcript("Please write this down."));
+        assert!(!is_non_speech_transcript(
+            "The intro has [MUSIC] before speech."
+        ));
+    }
     #[test]
     fn remote_transcription_result_preserves_server_metadata() {
         let job = build_transcription_job(
@@ -2161,13 +2242,9 @@ pub async fn start_recording(
             .unwrap_or(true); // Default to true
         if play_sound {
             play_recording_start_sound();
-            // Delay to let sound complete before microphone initialization
-            // This helps with Bluetooth headsets (e.g., AirPods) that switch audio modes
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            log::info!(
-                "⏱️ [REC TIMING] sound played + 300ms delay (+{}ms)",
-                recording_start.elapsed().as_millis()
-            );
+            // Capture first: play the chime concurrently with microphone/device initialization
+            // so we do not lose the first word. Users can disable the sound if a Bluetooth
+            // chime clips the start of capture.
         }
     }
 
@@ -3078,6 +3155,8 @@ pub async fn stop_recording(
         }
     };
 
+    let mut watchdog_audio_duration_ms: Option<u64> = None;
+
     // For Whisper/Parakeet: normalize and duration gate; for Soniox/Remote: skip both
     let audio_path = match &engine_selection {
         ActiveEngineSelection::Soniox { .. } => {
@@ -3137,12 +3216,15 @@ pub async fn stop_recording(
             };
 
             // Duration gate (mode-specific) using normalized file
-            let too_short = (|| -> Result<bool, String> {
+            let duration_gate = (|| -> Result<(bool, u64), String> {
                 let reader = hound::WavReader::open(&normalized_path)
                     .map_err(|e| format!("Failed to open normalized wav: {}", e))?;
                 let spec = reader.spec();
                 let frames = reader.duration() / spec.channels as u32; // mono expected
                 let duration = frames as f32 / spec.sample_rate as f32;
+                let duration_ms = ((frames as u64).saturating_mul(1000))
+                    .saturating_add(spec.sample_rate as u64 - 1)
+                    / spec.sample_rate as u64;
                 log_with_context(
                     log::Level::Info,
                     "NORMALIZED_AUDIO",
@@ -3154,10 +3236,14 @@ pub async fn stop_recording(
                         ("duration_s", format!("{:.2}", duration).as_str()),
                     ],
                 );
-                Ok(duration < min_duration_s_f32)
+                Ok((duration < min_duration_s_f32, duration_ms))
             })();
 
-            if let Ok(true) = too_short {
+            if let Ok((_, duration_ms)) = &duration_gate {
+                watchdog_audio_duration_ms = Some(*duration_ms);
+            }
+
+            if matches!(duration_gate, Ok((true, _))) {
                 // Emit friendly feedback and stop here
                 let _ = emit_to_window(
                     &app,
@@ -3238,6 +3324,7 @@ pub async fn stop_recording(
     let language_for_task = language.clone();
     let selected_model_name_for_task = selected_model_name.clone();
     let transcription_job_for_task = transcription_job.clone();
+    let watchdog_budget = transcription_watchdog_budget(watchdog_audio_duration_ms);
     // Spawn and track the transcription task
     let app_for_task = app.clone();
     let task_handle = tokio::spawn(async move {
@@ -3268,7 +3355,35 @@ pub async fn stop_recording(
             return;
         }
 
-        let transcription_result: Result<TranscriptionResult, TranscriptionFailure> =
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let watchdog_handle = if matches!(
+            &engine_selection_for_task,
+            ActiveEngineSelection::Remote { .. }
+        ) {
+            None
+        } else {
+            let app_for_watchdog = app_for_task.clone();
+            let timed_out_for_watchdog = timed_out.clone();
+            Some(tokio::spawn(async move {
+                tokio::time::sleep(watchdog_budget).await;
+                timed_out_for_watchdog.store(true, AtomicOrdering::SeqCst);
+                let app_state = app_for_watchdog.state::<AppState>();
+                app_state.request_cancellation();
+                log::warn!(
+                    "Live transcription watchdog timed out after {} seconds",
+                    watchdog_budget.as_secs()
+                );
+
+                #[cfg(target_os = "windows")]
+                {
+                    let gpu_client =
+                        app_for_watchdog.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+                    gpu_client.abort_active_process().await;
+                }
+            }))
+        };
+
+        let mut transcription_result: Result<TranscriptionResult, TranscriptionFailure> =
             match &engine_selection_for_task {
                 ActiveEngineSelection::Whisper { model_path, .. } => {
                     let initial_prompt =
@@ -3286,6 +3401,7 @@ pub async fn stop_recording(
                             break;
                         }
 
+                        let cancel_flag = app_state.should_cancel_recording.clone();
                         result = transcribe_whisper_with_acceleration(
                             &app_for_task,
                             model_path,
@@ -3293,7 +3409,7 @@ pub async fn stop_recording(
                             language_for_task.as_deref(),
                             translate_to_english,
                             initial_prompt.as_deref(),
-                            || app_state.is_cancellation_requested(),
+                            move || cancel_flag.load(AtomicOrdering::SeqCst),
                         )
                         .await;
 
@@ -3342,10 +3458,28 @@ pub async fn stop_recording(
                 }
                 ActiveEngineSelection::Parakeet { model_name } => {
                     let parakeet_manager = app_for_task.state::<ParakeetManager>();
-                    if let Err(e) = parakeet_manager.load_model(&app_for_task, model_name).await {
-                        Err(TranscriptionFailure::Local(format!(
-                            "Parakeet model load failed: {e}"
-                        )))
+                    let cancel_flag = app_state.should_cancel_recording.clone();
+                    if let Err(e) = parakeet_manager
+                        .load_model_with_cancel(
+                            &app_for_task,
+                            model_name,
+                            Some(cancel_flag.clone()),
+                        )
+                        .await
+                    {
+                        if cancel_flag.load(AtomicOrdering::SeqCst) {
+                            Err(TranscriptionFailure::Local(
+                                "Transcription cancelled".to_string(),
+                            ))
+                        } else {
+                            Err(TranscriptionFailure::Local(format!(
+                                "Parakeet model load failed: {e}"
+                            )))
+                        }
+                    } else if cancel_flag.load(AtomicOrdering::SeqCst) {
+                        Err(TranscriptionFailure::Local(
+                            "Transcription cancelled".to_string(),
+                        ))
                     } else {
                         let custom_vocabulary =
                             compile_parakeet_custom_vocabulary_for_transcription(
@@ -3358,9 +3492,12 @@ pub async fn stop_recording(
                                 &app_for_task,
                                 model_name,
                                 audio_path_clone.clone(),
-                                language_for_task.clone(),
-                                translate_to_english,
-                                custom_vocabulary,
+                                ParakeetTranscriptionOptions {
+                                    language: language_for_task.clone(),
+                                    translate: translate_to_english,
+                                    custom_vocabulary,
+                                    cancel_flag: Some(cancel_flag.clone()),
+                                },
                             )
                             .await
                         {
@@ -3384,14 +3521,17 @@ pub async fn stop_recording(
                     }
                 }
                 ActiveEngineSelection::Soniox { .. } => {
-                    match soniox_transcribe_async(
-                        &app_for_task,
-                        &audio_path_clone,
-                        language_for_task.as_deref(),
+                    match tokio::time::timeout(
+                        watchdog_budget,
+                        soniox_transcribe_async(
+                            &app_for_task,
+                            &audio_path_clone,
+                            language_for_task.as_deref(),
+                        ),
                     )
                     .await
                     {
-                        Ok(text) => {
+                        Ok(Ok(text)) => {
                             let soniox_job = build_transcription_job(
                                 TranscriptionSource::DesktopRecording,
                                 transcription_job_for_task.engine.clone(),
@@ -3401,7 +3541,10 @@ pub async fn stop_recording(
                             );
                             Ok(TranscriptionResult::new(&soniox_job, text))
                         }
-                        Err(e) => Err(TranscriptionFailure::Local(e)),
+                        Ok(Err(e)) => Err(TranscriptionFailure::Local(e)),
+                        Err(_) => Err(TranscriptionFailure::Local(
+                            "Transcription timed out".to_string(),
+                        )),
                     }
                 }
                 ActiveEngineSelection::Remote {
@@ -3486,6 +3629,20 @@ pub async fn stop_recording(
                 }
             };
 
+        if let Some(handle) = watchdog_handle {
+            if !timed_out.load(AtomicOrdering::SeqCst) {
+                handle.abort();
+            }
+        }
+
+        if timed_out.load(AtomicOrdering::SeqCst) {
+            if let Err(TranscriptionFailure::Local(error)) = &mut transcription_result {
+                if error == "Transcription cancelled" {
+                    *error = "Transcription timed out".to_string();
+                }
+            }
+        }
+
         // Try to save recording to persistent storage BEFORE cleanup
         // On success: use maybe_save_recording (respects save_recordings setting)
         // On recoverable failure (remote server errors): always save to preserve for re-transcription
@@ -3528,10 +3685,7 @@ pub async fn stop_recording(
                 );
 
                 // Check if transcription is empty or just noise
-                if transcription.raw_text.is_empty()
-                    || transcription.raw_text.trim().is_empty()
-                    || transcription.raw_text == "[BLANK_AUDIO]"
-                {
+                if is_non_speech_transcript(&transcription.raw_text) {
                     log::info!("Whisper returned empty transcription - no speech detected");
 
                     // Emit graceful feedback to user via pill toast
@@ -3649,9 +3803,30 @@ pub async fn stop_recording(
                                         "Formatting failed: Service unavailable"
                                     };
 
+                                let copy_succeeded =
+                                    match crate::commands::text::copy_text_to_clipboard(
+                                        text_for_process.clone(),
+                                    )
+                                    .await
+                                    {
+                                        Ok(_) => true,
+                                        Err(copy_error) => {
+                                            log::error!(
+                                            "Failed to copy raw transcription after formatting failure: {}",
+                                            copy_error
+                                        );
+                                            false
+                                        }
+                                    };
+                                let user_message = if copy_succeeded {
+                                    format!("{user_message} — original text copied to clipboard")
+                                } else {
+                                    format!("{user_message} — original text could not be copied")
+                                };
+
                                 // Show pill toast for formatting failure
                                 log::warn!("Formatting failed; showing pill toast");
-                                pill_toast(&app_for_process, user_message, 1500);
+                                pill_toast(&app_for_process, &user_message, 1500);
 
                                 // Also notify main window for settings update if needed
                                 if error_message.contains("400")
@@ -3665,6 +3840,32 @@ pub async fn stop_recording(
                                         "ai-enhancement-auth-error",
                                         "Please check your AI API key in settings.",
                                     );
+                                }
+
+                                match save_transcription_with_recording(
+                                    app_for_process.clone(),
+                                    text_for_process.clone(),
+                                    model_for_process.clone(),
+                                    recording_file_for_task.clone(),
+                                    None,
+                                )
+                                .await
+                                {
+                                    Ok(_) => {
+                                        let _ = emit_to_window(
+                                            &app_for_process,
+                                            "main",
+                                            "history-updated",
+                                            (),
+                                        );
+                                        log::debug!(
+                                            "Raw transcription saved to history after formatting failure"
+                                        );
+                                    }
+                                    Err(save_error) => log::error!(
+                                        "Failed to save raw transcription after formatting failure: {}",
+                                        save_error
+                                    ),
                                 }
 
                                 (text_for_process.clone(), None, should_deliver)
@@ -3782,7 +3983,9 @@ pub async fn stop_recording(
             }
             Err(failure) => {
                 match &failure {
-                    TranscriptionFailure::Local(e) if e.contains("cancelled") => {
+                    TranscriptionFailure::Local(e)
+                        if e.contains("cancelled") || e.contains("Cancelled") =>
+                    {
                         log::info!("Handling transcription cancellation");
                         // For cancellation, hide pill (only if show_pill_indicator is false) and go to Idle
                         if should_hide_pill(&app_for_task).await {
@@ -4357,9 +4560,12 @@ async fn transcribe_audio_file_impl(
                     &app,
                     &model_name,
                     normalized_file.path().to_path_buf(),
-                    Some(language.clone()),
-                    translate_to_english,
-                    custom_vocabulary,
+                    ParakeetTranscriptionOptions {
+                        language: Some(language.clone()),
+                        translate: translate_to_english,
+                        custom_vocabulary,
+                        cancel_flag: None,
+                    },
                 )
                 .await
             {
@@ -4630,9 +4836,12 @@ pub async fn transcribe_audio(
                     &app,
                     &model_name,
                     temp_path.clone(),
-                    Some(language.clone()),
-                    translate_to_english,
-                    custom_vocabulary,
+                    ParakeetTranscriptionOptions {
+                        language: Some(language.clone()),
+                        translate: translate_to_english,
+                        custom_vocabulary,
+                        cancel_flag: None,
+                    },
                 )
                 .await
             {

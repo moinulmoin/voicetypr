@@ -435,7 +435,7 @@ export function AudioUploadSection() {
                                     {segment.speaker_id}
                                   </span>
                                   <span className="font-mono text-muted-foreground">
-                                    {formatTimestamp(segment.start_ms)} - {formatTimestamp(segment.end_ms)}
+                                    {formatTimestamp(segment.start_ms)}–{formatTimestamp(segment.end_ms)}
                                   </span>
                                 </div>
                               ))}

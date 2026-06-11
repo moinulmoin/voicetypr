@@ -254,7 +254,7 @@ impl Transcriber {
         should_cancel: F,
     ) -> Result<String, String>
     where
-        F: Fn() -> bool,
+        F: Fn() -> bool + Clone + 'static,
     {
         self.transcribe_with_metadata(audio_path, language, translate, should_cancel)
             .map(|result| result.raw_text)
@@ -268,7 +268,7 @@ impl Transcriber {
         should_cancel: F,
     ) -> Result<WhisperTranscriptionOutput, String>
     where
-        F: Fn() -> bool,
+        F: Fn() -> bool + Clone + 'static,
     {
         self.transcribe_with_metadata_with_prompt(
             audio_path,
@@ -288,7 +288,7 @@ impl Transcriber {
         should_cancel: F,
     ) -> Result<WhisperTranscriptionOutput, String>
     where
-        F: Fn() -> bool,
+        F: Fn() -> bool + Clone + 'static,
     {
         let transcription_start = Instant::now();
         let audio_path_str = format!("{:?}", audio_path);
@@ -613,6 +613,9 @@ impl Transcriber {
             ],
         );
 
+        let should_cancel_for_abort = should_cancel.clone();
+        params.set_abort_callback_safe(should_cancel_for_abort);
+
         match state.full(params, &resampled_audio) {
             Ok(_) => {
                 let inference_time = inference_start.elapsed();
@@ -633,6 +636,11 @@ impl Transcriber {
                 );
             }
             Err(e) => {
+                if should_cancel() {
+                    log::info!("[TRANSCRIPTION_DEBUG] Whisper inference was cancelled");
+                    return Err("Transcription cancelled".to_string());
+                }
+
                 let error = format!("Whisper inference failed: {}", e);
                 log_failed("WHISPER_INFERENCE", &error);
                 log_with_context(

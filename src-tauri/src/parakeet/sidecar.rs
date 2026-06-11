@@ -107,7 +107,7 @@ impl ParakeetSidecar {
                 }
                 return Err(ParakeetError::SidecarError {
                     code: "cancelled".to_string(),
-                    message: "Download cancelled by user".to_string(),
+                    message: "Cancelled by user".to_string(),
                 });
             }
 

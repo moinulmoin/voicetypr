@@ -26,6 +26,29 @@ pub struct ParakeetModelStatus {
     pub engine: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ParakeetTranscriptionOptions {
+    pub language: Option<String>,
+    pub translate: bool,
+    pub custom_vocabulary: Vec<ParakeetVocabularyTerm>,
+    pub cancel_flag: Option<Arc<AtomicBool>>,
+}
+
+impl ParakeetTranscriptionOptions {
+    pub fn new(
+        language: Option<String>,
+        translate: bool,
+        cancel_flag: Option<Arc<AtomicBool>>,
+    ) -> Self {
+        Self {
+            language,
+            translate,
+            custom_vocabulary: Vec::new(),
+            cancel_flag,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct ParakeetVocabularyStatus {
     pub supported: bool,
@@ -194,7 +217,7 @@ impl ParakeetManager {
                     .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
                 {
                     let _ = self.delete_model(app, model_name).await;
-                    return Err("Download cancelled by user".to_string());
+                    return Err("Cancelled by user".to_string());
                 }
 
                 // Download/load completed for the requested version
@@ -265,6 +288,15 @@ impl ParakeetManager {
     }
 
     pub async fn load_model(&self, app: &AppHandle, model_name: &str) -> Result<(), ParakeetError> {
+        self.load_model_with_cancel(app, model_name, None).await
+    }
+
+    pub async fn load_model_with_cancel(
+        &self,
+        app: &AppHandle,
+        model_name: &str,
+        cancel_flag: Option<Arc<AtomicBool>>,
+    ) -> Result<(), ParakeetError> {
         let Some(definition) = self.get_model_definition(model_name) else {
             return Err(ParakeetError::SpawnError(format!(
                 "Unknown Parakeet model: {model_name}"
@@ -286,7 +318,10 @@ impl ParakeetManager {
             eager_unload: Some(false),
         };
 
-        match self.send_command(app, &command).await? {
+        match self
+            .send_command_with_progress_and_cancel(app, &command, cancel_flag, |_, _| {})
+            .await?
+        {
             ParakeetResponse::Ok { .. } => Ok(()),
             ParakeetResponse::Status {
                 loaded_model,
@@ -360,14 +395,13 @@ impl ParakeetManager {
         audio_path: PathBuf,
         language: Option<String>,
         translate: bool,
+        cancel_flag: Option<Arc<AtomicBool>>,
     ) -> Result<ParakeetResponse, ParakeetError> {
         self.transcribe_with_custom_vocabulary(
             app,
             model_name,
             audio_path,
-            language,
-            translate,
-            Vec::new(),
+            ParakeetTranscriptionOptions::new(language, translate, cancel_flag),
         )
         .await
     }
@@ -377,24 +411,24 @@ impl ParakeetManager {
         app: &AppHandle,
         _model_name: &str,
         audio_path: PathBuf,
-        language: Option<String>,
-        translate: bool,
-        custom_vocabulary: Vec<ParakeetVocabularyTerm>,
+        options: ParakeetTranscriptionOptions,
     ) -> Result<ParakeetResponse, ParakeetError> {
         let command = ParakeetCommand::Transcribe {
             audio_path: audio_path.to_string_lossy().to_string(),
-            language,
-            translate_to_english: translate,
+            language: options.language,
+            translate_to_english: options.translate,
             prompt: None,
             use_word_timestamps: Some(true),
             chunk_duration: None,
             overlap_duration: None,
             attention: None,
             local_attention_context: None,
-            custom_vocabulary: (!custom_vocabulary.is_empty()).then_some(custom_vocabulary),
+            custom_vocabulary: (!options.custom_vocabulary.is_empty())
+                .then_some(options.custom_vocabulary),
         };
 
-        self.send_command(app, &command).await
+        self.send_command_with_progress_and_cancel(app, &command, options.cancel_flag, |_, _| {})
+            .await
     }
 
     pub async fn diarize(
