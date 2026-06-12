@@ -492,3 +492,16 @@ ALL must hold:
   same DTOs — nothing outside `providers.rs` may assume "exactly four".
 - Plan 018 graduates additional providers with its own per-provider acceptance.
 - Future CLI/agent work reuses these contract types and error codes verbatim.
+- Residual debt to carry into 017/018 (tracked, intentional):
+  - `src-tauri/src/ai/contract.rs` has `#[allow(dead_code)]` on
+    `AiReasoningEffort` — reasoning UI is deferred; the runtime already omits
+    unsupported reasoning fields.
+  - Tauri wire DTOs are compatibility shapes `{id,name}` /
+    `{id,name,recommended}`; the full `AiProvider`/`AiModel` contract lives
+    backend-side. Keep the wire shapes stable when 017 swaps the source.
+  - `set_openai_config`/`get_openai_config` now configure the custom
+    OpenAI-compatible endpoint (legacy wire naming) — document, don't rename
+    mid-flight.
+  - `src/types/providers.ts` `PROVIDER_UI_METADATA` is four-provider UI
+    metadata (colors/key URLs), not a provider source of truth; 017 replaces it
+    with catalog/overlay-driven metadata or generic fallbacks.

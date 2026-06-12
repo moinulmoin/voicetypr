@@ -322,6 +322,8 @@ pub struct AISettings {
     pub has_api_key: bool,
     #[serde(rename = "modelsByProvider")]
     pub models_by_provider: HashMap<String, String>,
+    #[serde(rename = "aiModelNeedsReselection")]
+    pub ai_model_needs_reselection: bool,
 }
 
 // Validation pattern for providers
@@ -329,7 +331,7 @@ lazy_static::lazy_static! {
     static ref PROVIDER_REGEX: regex::Regex = regex::Regex::new(r"^[a-zA-Z0-9_-]+$").unwrap();
 }
 
-// Pi AI supports a broad provider registry; validate only the identifier shape here.
+// Providers come from a broad catalog; validate only the identifier shape here.
 // Availability comes from the Rust provider/model catalog in crate::ai::providers.
 fn validate_provider_name(provider: &str) -> Result<(), String> {
     if !PROVIDER_REGEX.is_match(provider) {
@@ -360,6 +362,11 @@ pub async fn get_ai_settings(app: tauri::AppHandle) -> Result<AISettings, String
 
     let models_by_provider = load_models_by_provider(&store, &provider, &model);
 
+    let ai_model_needs_reselection = store
+        .get("ai_model_needs_reselection")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     // For OpenAI-compatible providers, treat no_auth as having a usable config
     let has_api_key = {
         let cache = API_KEY_CACHE
@@ -374,6 +381,7 @@ pub async fn get_ai_settings(app: tauri::AppHandle) -> Result<AISettings, String
         model,
         has_api_key,
         models_by_provider,
+        ai_model_needs_reselection,
     })
 }
 
@@ -413,12 +421,18 @@ pub async fn get_ai_settings_for_provider(
         check_has_api_key(&provider, &store, &cache)
     };
 
+    let ai_model_needs_reselection = store
+        .get("ai_model_needs_reselection")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     Ok(AISettings {
         enabled,
         provider,
         model,
         has_api_key,
         models_by_provider,
+        ai_model_needs_reselection,
     })
 }
 
@@ -719,6 +733,9 @@ pub async fn update_ai_settings(
     store.set("ai_provider", json!(provider));
     store.set("ai_model", json!(model));
     store.set("ai_models_by_provider", json!(models_by_provider));
+    if !model.is_empty() {
+        store.set("ai_model_needs_reselection", json!(false));
+    }
     if !enabled {
         store.set(
             "enhancement_options",

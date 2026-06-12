@@ -55,6 +55,7 @@ const baseAISettings = {
   model: '',
   hasApiKey: false,
   modelsByProvider: {},
+  aiModelNeedsReselection: false,
 }
 
 const enabledAISettings = {
@@ -65,6 +66,7 @@ const enabledAISettings = {
   modelsByProvider: {
     openai: 'gpt-5-mini',
   },
+  aiModelNeedsReselection: false,
 }
 
 const providerListResponse = [
@@ -136,9 +138,13 @@ describe('EnhancementsSection', () => {
         return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' })
       }
       if (cmd === 'update_ai_settings') {
+        const nextAISettings = args as typeof aiSettingsResponse
         aiSettingsResponse = {
           ...aiSettingsResponse,
-          ...(args as typeof aiSettingsResponse),
+          ...nextAISettings,
+          aiModelNeedsReselection: nextAISettings.model
+            ? false
+            : aiSettingsResponse.aiModelNeedsReselection,
         }
         return Promise.resolve(undefined)
       }
@@ -937,6 +943,45 @@ describe('EnhancementsSection', () => {
       expect(within(openAICard as HTMLElement).getByRole('button', { name: /gpt-5 mini/i })).toBeInTheDocument()
     })
   })
+  it('surfaces migrated invalid AI model reselection and clears it when a model is selected', async () => {
+    aiSettingsResponse = {
+      ...enabledAISettings,
+      model: '',
+      modelsByProvider: {},
+      aiModelNeedsReselection: true,
+    }
+    ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
+      providerId === 'openai',
+    )
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    expect(
+      await screen.findByText(
+        'Your previously selected AI model is no longer available. Please choose a model to continue using AI polish.',
+      ),
+    ).toBeInTheDocument()
+
+    const openAIHeading = await screen.findByText('OpenAI')
+    const openAICard = openAIHeading.closest('.p-4')
+    expect(openAICard).toBeTruthy()
+
+    await user.click(within(openAICard as HTMLElement).getByRole('button', { name: /select model/i }))
+    await user.click(await screen.findByRole('menuitem', { name: /gpt-5 mini/i }))
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
+        enabled: true,
+        provider: 'openai',
+        model: 'gpt-5-mini',
+      })
+      expect(aiSettingsResponse.aiModelNeedsReselection).toBe(false)
+      expect(
+        screen.queryByText(/previously selected AI model is no longer available/i),
+      ).not.toBeInTheDocument()
+    })
+  })
+
   it('shows formatting setup guidance in the guide dialog', async () => {
     const user = userEvent.setup()
     renderWithProviders()

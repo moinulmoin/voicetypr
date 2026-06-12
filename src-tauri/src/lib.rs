@@ -1412,7 +1412,12 @@ fn migrate_ai_settings_before_key_cache(app: &tauri::AppHandle) {
     };
 
     let mut values = serde_json::Map::new();
-    for key in ["ai_provider", "ai_model", "ai_models_by_provider"] {
+    for key in [
+        "ai_enabled",
+        "ai_provider",
+        "ai_model",
+        "ai_models_by_provider",
+    ] {
         if let Some(value) = store.get(key) {
             values.insert(key.to_string(), value.clone());
         }
@@ -1474,6 +1479,10 @@ fn migrate_ai_settings_values(values: &mut serde_json::Map<String, serde_json::V
         .and_then(|value| value.as_str())
         .unwrap_or_default()
         .to_string();
+    let ai_enabled = values
+        .get("ai_enabled")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
     if !current_model.is_empty()
         && !ai_model_is_valid_for_provider(&migrated_provider, &current_model)
     {
@@ -1481,6 +1490,12 @@ fn migrate_ai_settings_values(values: &mut serde_json::Map<String, serde_json::V
             "ai_model".to_string(),
             serde_json::Value::String(String::new()),
         );
+        if ai_enabled {
+            values.insert(
+                "ai_model_needs_reselection".to_string(),
+                serde_json::Value::Bool(true),
+            );
+        }
         changed = true;
     }
 
@@ -1507,7 +1522,17 @@ mod ai_settings_migration_tests {
         model: &str,
         models: serde_json::Value,
     ) -> serde_json::Map<String, serde_json::Value> {
+        values_with_enabled(true, provider, model, models)
+    }
+
+    fn values_with_enabled(
+        enabled: bool,
+        provider: &str,
+        model: &str,
+        models: serde_json::Value,
+    ) -> serde_json::Map<String, serde_json::Value> {
         let mut values = serde_json::Map::new();
+        values.insert("ai_enabled".to_string(), json!(enabled));
         values.insert("ai_provider".to_string(), json!(provider));
         values.insert("ai_model".to_string(), json!(model));
         values.insert("ai_models_by_provider".to_string(), models);
@@ -1529,6 +1554,7 @@ mod ai_settings_migration_tests {
             json!({ "gemini": "gemini-2.5-flash" })
         );
         assert_eq!(values["ai_model"], json!("gemini-2.5-flash"));
+        assert_eq!(values.get("ai_model_needs_reselection"), None);
     }
 
     #[test]
@@ -1544,15 +1570,45 @@ mod ai_settings_migration_tests {
             values["ai_models_by_provider"],
             json!({ "gemini": "gemini-2.5-flash" })
         );
+        assert_eq!(values.get("ai_model_needs_reselection"), None);
     }
 
     #[test]
-    fn migration_clears_invalid_model_without_substitution() {
+    fn migration_flags_enabled_invalid_model_for_reselection_without_substitution() {
         let mut values = values("google", "text-bison", json!({ "google": "text-bison" }));
 
         assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_enabled"], json!(true));
         assert_eq!(values["ai_provider"], json!("gemini"));
         assert_eq!(values["ai_model"], json!(""));
+        assert_eq!(values["ai_model_needs_reselection"], json!(true));
+    }
+
+    #[test]
+    fn migration_does_not_flag_disabled_invalid_model() {
+        let mut values = values_with_enabled(
+            false,
+            "google",
+            "text-bison",
+            json!({ "google": "text-bison" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_enabled"], json!(false));
+        assert_eq!(values["ai_provider"], json!("gemini"));
+        assert_eq!(values["ai_model"], json!(""));
+        assert_eq!(values.get("ai_model_needs_reselection"), None);
+    }
+
+    #[test]
+    fn migration_does_not_flag_empty_model() {
+        let mut values = values("google", "", json!({ "google": "" }));
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_enabled"], json!(true));
+        assert_eq!(values["ai_provider"], json!("gemini"));
+        assert_eq!(values["ai_model"], json!(""));
+        assert_eq!(values.get("ai_model_needs_reselection"), None);
     }
 
     #[test]

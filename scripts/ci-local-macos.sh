@@ -18,7 +18,7 @@ require_node_22_19() {
   version="$(node -p "process.versions.node")"
   IFS='.' read -r major minor patch <<< "$version"
   if (( major < 22 || (major == 22 && minor < 19) )); then
-    err "Node >= 22.19.0 required for the formatting SEA sidecar (found v$version)"
+    err "Node >= 22.19.0 required for the frontend build toolchain (found v$version)"
     exit 1
   fi
 }

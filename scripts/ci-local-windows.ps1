@@ -21,7 +21,7 @@ function Require-Node2219() {
     $version = [version]((node -p "process.versions.node") | Select-Object -First 1)
     $minimum = [version]"22.19.0"
     if ($version -lt $minimum) {
-        Write-ErrorMsg "Node >= 22.19.0 required for the formatting SEA sidecar (found v$version)"
+        Write-ErrorMsg "Node >= 22.19.0 required for the frontend build toolchain (found v$version)"
         exit 1
     }
 }

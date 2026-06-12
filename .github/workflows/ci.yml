@@ -31,9 +31,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Formatting sidecar TypeScript check
-        run: pnpm --filter @voicetypr/formatting-engine-sidecar exec tsc --noEmit
-
       - name: Lint
         run: pnpm lint
 

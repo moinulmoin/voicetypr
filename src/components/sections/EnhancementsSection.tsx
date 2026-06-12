@@ -47,6 +47,7 @@ import { HelpCircle } from "lucide-react";
 
 type AISettingsResponse = Omit<AISettings, "modelsByProvider"> & {
   modelsByProvider?: Record<string, string>;
+  aiModelNeedsReselection?: boolean;
 };
 
 const normalizeAISettings = (settings: AISettingsResponse): AISettings => ({
@@ -67,6 +68,7 @@ export function EnhancementsSection() {
     hasApiKey: false,
     modelsByProvider: {},
   });
+  const [aiModelNeedsReselection, setAiModelNeedsReselection] = useState(false);
 
   const [providers, setProviders] = useState<AIProviderConfig[]>([]);
 
@@ -173,15 +175,15 @@ export function EnhancementsSection() {
         console.error("Failed to load custom config:", error);
       }
 
-      const loadedAISettings = normalizeAISettings(
-        await invoke<AISettingsResponse>("get_ai_settings"),
-      );
+      const loadedAISettingsResponse = await invoke<AISettingsResponse>("get_ai_settings");
+      const loadedAISettings = normalizeAISettings(loadedAISettingsResponse);
       const customModel =
         loadedAISettings.modelsByProvider.custom ||
         (loadedAISettings.provider === "custom" ? loadedAISettings.model : "");
       if (customModel) {
         setCustomModelName(customModel);
       }
+      setAiModelNeedsReselection(Boolean(loadedAISettingsResponse.aiModelNeedsReselection));
       setAISettings(loadedAISettings);
 
       if (readiness?.ai_ready && loadedAISettings.provider) {
@@ -543,6 +545,7 @@ export function EnhancementsSection() {
           [providerId]: modelId,
         },
       }));
+      setAiModelNeedsReselection(false);
 
       toast.success("Model selected");
     } catch (error) {
@@ -558,6 +561,9 @@ export function EnhancementsSection() {
       aiSettings.model &&
       (isUsingCustomProvider || providerApiKeys[aiSettings.provider]),
   );
+
+  const showAiModelReselectionNotice =
+    aiModelNeedsReselection && aiSettings.enabled && !aiSettings.model;
 
   const storedFinalTextLanguage = settings?.final_text_language ?? "same_as_transcript";
   const effectiveFinalTextLanguage =
@@ -650,6 +656,13 @@ export function EnhancementsSection() {
                 )}
               </div>
             </div>
+
+            {showAiModelReselectionNotice && (
+              <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                Your previously selected AI model is no longer available. Please choose a model to
+                continue using AI polish.
+              </div>
+            )}
 
             <FieldGroup className="gap-3">
               {providers.map((provider) => {

@@ -57,6 +57,25 @@ this design:
 - The four Plan 016 providers are `production`; everything else enters as
   `experimental` or `hidden` (graduation = Plan 018).
 
+### 1b. Runtime mapping generalization (required seam change)
+
+Breadth is impossible without this, and the original "no executor changes"
+rule was wrong. Today `src-tauri/src/ai/genai_runtime.rs::adapter_kind_for_provider`
+hardcodes only `openai`/`anthropic`/`gemini`, and `src-tauri/src/ai/executor.rs`
+dispatches on `is_native_provider() || PROVIDER_CUSTOM`. To run any catalog
+provider these must become **data-driven**: map each provider's overlay
+`runtime` field (`genai_adapter:<kind>` / `openai_compatible` / `unsupported`)
+to the genai `AdapterKind` or the direct-reqwest path, and dispatch by that
+mapping rather than a hardcoded list.
+
+- ALLOWED in this plan: generalizing the adapter-kind lookup and the executor
+  dispatch to read the catalog runtime field; adding per-provider base-URL /
+  namespace metadata needed to route OpenAI-compatible gateways.
+- FORBIDDEN in this plan: changing the runtime **reliability policy** — total
+  timeout, retry classification, cancellation, error mapping. Those stay
+  exactly as 016 shipped. A provider that needs different reliability handling
+  graduates via Plan 018, not here.
+
 ### 2. Catalog tests
 
 - provider IDs unique; model IDs unique per provider;
@@ -95,7 +114,8 @@ catalog tests → commit. Never part of app startup.
 - [ ] Committed generated catalog + overlay + generator, deterministic, tested.
 - [ ] Static four-provider table replaced; contract types unchanged.
 - [ ] Picker UI grouped/searchable; experimental badged; hidden gated.
-- [ ] No runtime/executor changes in the diff.
+- [ ] Runtime mapping/dispatch is data-driven (deliverable 1b); NO change to
+      executor timeout/retry/cancel/error-mapping policy in the diff.
 - [ ] Full gates pass; manual smoke done or `NEEDS-SMOKE`.
 - [ ] `plans/README.md` updated.
 
@@ -105,5 +125,7 @@ catalog tests → commit. Never part of app startup.
    deterministic filter rule; do not hand-curate one-off lists.
 2. models.dev schema drift breaks the generator — pin to the committed snapshot
    and report; do not chase upstream mid-plan.
-3. Any change requires touching executor/timeout/retry code — that belongs to
-   016/018; stop and report.
+3. A provider needs changes to the runtime **reliability policy** (timeout,
+   retry, cancellation, error mapping) — that belongs to 016/018; stop and
+   report. (Generalizing adapter mapping/dispatch per deliverable 1b is
+   expected and allowed.)

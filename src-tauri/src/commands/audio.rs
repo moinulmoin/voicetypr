@@ -609,7 +609,7 @@ fn ai_failure_category(error: &AiProviderError) -> &'static str {
 
 fn ai_failure_notice(error: &AiProviderError) -> String {
     format!(
-        "AI polish failed: {}; original text will be used",
+        "AI polish failed: {}; inserted unpolished text",
         user_facing_message(error)
     )
 }
@@ -666,6 +666,29 @@ async fn save_ai_polish_fallback_history(
     .await?;
     let _ = emit_to_window(&app, "main", "history-updated", ());
     Ok(())
+}
+
+#[derive(Debug)]
+struct DesktopWritingSuccessPlan {
+    final_text: String,
+    writing_metadata: Option<serde_json::Value>,
+    should_deliver: bool,
+    save_history_entries: usize,
+}
+
+fn plan_desktop_writing_success(
+    transcription: &TranscriptionResult,
+    writing_result: &crate::writing::WritingResult,
+) -> DesktopWritingSuccessPlan {
+    DesktopWritingSuccessPlan {
+        final_text: writing_result.final_text.clone(),
+        writing_metadata: Some(build_writing_history_metadata(
+            transcription,
+            writing_result,
+        )),
+        should_deliver: true,
+        save_history_entries: 1,
+    }
 }
 
 fn load_ai_enabled(app: &AppHandle) -> Result<bool, String> {
@@ -892,8 +915,8 @@ mod tests {
         build_remote_server_error_payload, build_remote_transcription_result,
         build_remote_upload_transcription_request, build_soniox_create_payload,
         build_transcription_job, build_writing_history_metadata, is_ai_auth_error,
-        is_non_speech_transcript, recording_license_state, remote_server_error_pill_message,
-        should_hide_pill_when_idle, should_use_active_remote,
+        is_non_speech_transcript, plan_desktop_writing_success, recording_license_state,
+        remote_server_error_pill_message, should_hide_pill_when_idle, should_use_active_remote,
         sync_retranscription_failure_metadata, transcription_watchdog_budget, NormalizedTempFile,
         RecordingLicenseState, TranscriptionFailure, TranscriptionStatus,
     };
@@ -1153,6 +1176,59 @@ mod tests {
     }
 
     #[test]
+    fn desktop_ai_polish_failure_delivers_saves_once_and_emits_failure() {
+        let transcription = crate::transcription::TranscriptionResult::new(
+            &build_transcription_job(
+                crate::transcription::TranscriptionSource::DesktopRecording,
+                "whisper",
+                "base",
+                Some("en".to_string()),
+                false,
+            ),
+            "raw transcript",
+        )
+        .with_transcript_language(Some("en".to_string()));
+        let writing_result = crate::writing::WritingResult {
+            raw_text: "raw transcript".to_string(),
+            final_text: "deterministic transcript".to_string(),
+            output_language: "en".to_string(),
+            mode: crate::writing::WritingMode::CleanDictation,
+            ai_applied: false,
+            applied_operations: vec![crate::writing::AppliedWritingOperation {
+                kind: crate::writing::WritingOperationKind::Replacement,
+                detail: "Applied replacement".to_string(),
+            }],
+            warnings: vec![crate::writing::WritingWarning {
+                code: "ai_formatting_failed".to_string(),
+                message: "AI formatting failed (timed out); used deterministic text instead"
+                    .to_string(),
+            }],
+            context_hint: None,
+            ai_error: Some(crate::ai::error::AiProviderError::Timeout),
+        };
+
+        let plan = plan_desktop_writing_success(&transcription, &writing_result);
+
+        assert!(plan.should_deliver);
+        assert_eq!(plan.final_text, "deterministic transcript");
+        assert_eq!(plan.save_history_entries, 1);
+        assert_eq!(
+            writing_result.ai_error,
+            Some(crate::ai::error::AiProviderError::Timeout)
+        );
+        assert_eq!(
+            ai_failure_payload(writing_result.ai_error.as_ref().unwrap())["category"].as_str(),
+            Some("timeout")
+        );
+        let metadata = plan.writing_metadata.unwrap();
+        assert_eq!(metadata["ai_applied"].as_bool(), Some(false));
+        assert_eq!(
+            metadata["warnings"][0]["code"].as_str(),
+            Some("ai_formatting_failed")
+        );
+    }
+
+    #[test]
     fn ai_polish_failure_payload_keeps_enhancing_failed_compatible() {
         let payload = ai_failure_payload(&crate::ai::error::AiProviderError::RateLimited);
 
@@ -1161,11 +1237,11 @@ mod tests {
     }
 
     #[test]
-    fn ai_polish_failure_notice_uses_raw_text_fallback_invariant() {
+    fn ai_polish_failure_notice_uses_unpolished_text_fallback_invariant() {
         let notice = ai_failure_notice(&crate::ai::error::AiProviderError::BadResponse);
 
         assert!(notice.contains("bad response"));
-        assert!(notice.contains("original text will be used"));
+        assert!(notice.contains("inserted unpolished text"));
     }
 
     #[test]
@@ -3900,14 +3976,12 @@ pub async fn stop_recording(
                                 } else if !ai_enabled_for_task {
                                     log::debug!("AI enhancement is disabled, using original text");
                                 }
-                                (
-                                    writing_result.final_text.clone(),
-                                    Some(build_writing_history_metadata(
-                                        &transcription_for_process,
-                                        &writing_result,
-                                    )),
-                                    true,
-                                )
+                                let plan = plan_desktop_writing_success(
+                                    &transcription_for_process,
+                                    &writing_result,
+                                );
+                                debug_assert_eq!(plan.save_history_entries, 1);
+                                (plan.final_text, plan.writing_metadata, plan.should_deliver)
                             }
                             Err(e) => {
                                 log::warn!("Formatting failed: {}", e);
@@ -4743,12 +4817,11 @@ async fn transcribe_audio_file_impl(
     .await?;
     if let Some(error) = writing_result.ai_error.as_ref() {
         log::warn!(
-            "AI polish failed with {}; returning and saving deterministic upload text",
+            "AI polish failed with {}; returning deterministic upload text",
             ai_failure_category(error)
         );
         notify_ai_polish_failure(&app, error);
-        save_ai_polish_fallback_history(app.clone(), &transcription_result, &writing_result)
-            .await?;
+        // Upload history is persisted by the frontend after this command returns non-blank text.
     }
     Ok(writing_result.final_text)
 }
