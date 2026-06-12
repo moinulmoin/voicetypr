@@ -87,6 +87,29 @@ Status values: TODO | IN PROGRESS — claimed <by> <date> | DONE | NEEDS-SMOKE
 - **017/018 must not touch executor/runtime policy** — timeout, retry, cancel,
   and error mapping are owned by 016's modules; breadth plans only change the
   provider/model *source* and UI.
+- **AI polish vs cloud STT domain contract (016/017/018 vs 019)** — reviewed
+  2026-06-12 (conflict diff review + oracle), verdict COORDINATE, no blocker:
+  - Provider identity is `(domain, id)` — `openai`/`groq` may exist in both
+    domains but NEVER share runtime, model list, settings rows, validation,
+    or key slots.
+  - Key slots stay per-feature: `ai_api_key_{id}` (polish) vs
+    `stt_api_key_{id}` (transcription). No silent vendor-key sharing; UI/error
+    copy must name the feature (e.g. "OpenAI (Cloud)" for STT).
+  - Ownership: AI polish owns `src-tauri/src/ai/*`, `list_ai_providers`,
+    `ai_provider`/`ai_model`/`ai_models_by_provider`. Cloud STT owns
+    `src-tauri/src/cloud_stt/*`, speech `current_model_engine`/`current_model`.
+    018 must not touch `stt_*`; 019 must not touch `ai_*`.
+  - 017's generated catalog stays an AI-polish artifact; if models.dev later
+    feeds STT, generate a SEPARATE STT artifact — no global provider enum.
+  - **019 pre-merge bar**: must meet 016's runtime reliability bar (owned
+    timeout budget, cancellation, retry-once on transient, typed STT error
+    categories, no raw provider bodies) — STT failure loses the transcript
+    entirely, so the bar is harder than polish. Known in-flight defects found
+    by review 2026-06-12: `commands/model.rs:714` `matches!` on
+    `&CloudProvider` (compile blocker), `commands/settings.rs:305` cloud
+    language normalization broader than provider contracts.
+  - Merge order: reliability-fixed 019 lands first, then 017/018 adapt around
+    the established `stt_*` namespace.
 
 ## Execution review notes
 
