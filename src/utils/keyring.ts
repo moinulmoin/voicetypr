@@ -124,31 +124,23 @@ export const loadApiKeysToCache = async (): Promise<void> => {
 };
 
 // STT (Speech-to-Text) cloud provider keys
-// Soniox support
-const STT_SONIOX_KEY = 'stt_api_key_soniox';
-
-export const saveSttApiKeySoniox = async (apiKey: string): Promise<void> => {
-  // Validate first; only persist to keyring on success
-  await invoke('validate_and_cache_soniox_key', { api_key: apiKey, apiKey });
-  await keyringSet(STT_SONIOX_KEY, apiKey);
-  await emit('stt-key-saved', { provider: 'soniox' });
+export const saveSttApiKey = async (provider: string, apiKey: string): Promise<void> => {
+  // Validate first; only persist on success
+  await invoke('validate_stt_key', { provider, apiKey });
+  await keyringSet(`stt_api_key_${provider}`, apiKey);
+  await emit('stt-key-saved', { provider });
 };
 
-export const getSttApiKeySoniox = async (): Promise<string | null> => {
-  return keyringGet(STT_SONIOX_KEY);
+export const hasSttApiKey = async (provider: string): Promise<boolean> => {
+  return keyringHas(`stt_api_key_${provider}`);
 };
 
-export const hasSttApiKeySoniox = async (): Promise<boolean> => {
-  return keyringHas(STT_SONIOX_KEY);
-};
-
-export const removeSttApiKeySoniox = async (): Promise<void> => {
-  await keyringDelete(STT_SONIOX_KEY);
-  // Clear any backend cache if added in future; call is optional
+export const removeSttApiKey = async (provider: string): Promise<void> => {
+  await keyringDelete(`stt_api_key_${provider}`);
   try {
-    await invoke('clear_soniox_key_cache');
+    await invoke('clear_stt_key_cache', { provider });
   } catch (_) {
-    // best-effort; command may not exist in older builds
+    // best-effort
   }
-  await emit('stt-key-removed', { provider: 'soniox' });
+  await emit('stt-key-removed', { provider });
 };

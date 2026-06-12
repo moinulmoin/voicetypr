@@ -68,17 +68,12 @@ fn delete_connection_password(app: &AppHandle, server_id: &str) -> Result<(), St
 }
 
 fn ensure_sharing_engine_supported(engine: &str) -> Result<(), String> {
-    // Preserve the historical exact-id match: only the canonical "soniox" id is rejected here
-    // (whisper/parakeet/unknown pass through unchanged). The matrix documents *why* Soniox is
-    // rejected (it cannot be shared over the network).
-    let soniox = crate::provider_capabilities::ProviderEngine::Soniox;
-    if engine == soniox.as_str() && !soniox.capabilities().shareable_remote {
+    if crate::cloud_stt::CloudProvider::from_id(engine).is_some() {
         return Err(
-            "Network sharing is not available for Soniox yet. Please select a Whisper or Parakeet model to share."
+            "Network sharing is not available for cloud transcription. Please select a Whisper or Parakeet model to share."
                 .to_string(),
         );
     }
-
     Ok(())
 }
 
@@ -2035,16 +2030,17 @@ mod tests {
     }
 
     #[test]
-    fn test_start_sharing_rejects_soniox() {
-        let result = ensure_sharing_engine_supported("soniox");
-
-        assert_eq!(
-            result,
-            Err(
-                "Network sharing is not available for Soniox yet. Please select a Whisper or Parakeet model to share."
-                    .to_string()
-            )
+    fn test_start_sharing_rejects_cloud_transcription_engines() {
+        let expected = Err(
+            "Network sharing is not available for cloud transcription. Please select a Whisper or Parakeet model to share."
+                .to_string(),
         );
+
+        for engine in [
+            "soniox", "openai", "groq", "deepgram", "cohere", "Soniox", " soniox ",
+        ] {
+            assert_eq!(ensure_sharing_engine_supported(engine), expected.clone());
+        }
     }
 
     #[test]
@@ -2053,9 +2049,6 @@ mod tests {
         assert!(ensure_sharing_engine_supported("parakeet").is_ok());
         assert!(ensure_sharing_engine_supported("remote").is_ok());
         assert!(ensure_sharing_engine_supported("foo").is_ok());
-        // Byte-exact match preserved: non-canonical casing/whitespace is NOT treated as Soniox.
-        assert!(ensure_sharing_engine_supported("Soniox").is_ok());
-        assert!(ensure_sharing_engine_supported(" soniox ").is_ok());
     }
 
     #[test]

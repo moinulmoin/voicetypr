@@ -21,8 +21,8 @@ interface ModelStatusResponse {
 interface RecognitionAvailabilitySnapshot {
   whisper_available: boolean;
   parakeet_available: boolean;
-  soniox_selected: boolean;
-  soniox_ready: boolean;
+  cloud_selected: boolean;
+  cloud_ready: boolean;
   remote_selected: boolean;
   remote_status?: RemoteAvailabilityStatusPayload;
   remote_available: boolean;
@@ -44,8 +44,8 @@ type DerivedAvailabilityState = Omit<ModelAvailabilityState, 'isChecking'>;
 const FALLBACK_AVAILABILITY: RecognitionAvailabilitySnapshot = {
   whisper_available: false,
   parakeet_available: false,
-  soniox_selected: false,
-  soniox_ready: false,
+  cloud_selected: false,
+  cloud_ready: false,
   remote_selected: false,
   remote_status: 'unknown',
   remote_available: false,
@@ -107,7 +107,7 @@ function deriveAvailabilityState(
   const hasLocalReadySource =
     snapshot.whisper_available ||
     snapshot.parakeet_available ||
-    (snapshot.soniox_selected && snapshot.soniox_ready);
+    (snapshot.cloud_selected && snapshot.cloud_ready);
 
   const hasModels = remoteSelected && remoteStatus === 'unknown'
     ? (hasLocalReadySource ? true : null)

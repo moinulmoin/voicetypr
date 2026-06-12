@@ -1218,7 +1218,7 @@ describe("NetworkSharingCard", () => {
 
       expect(screen.getByRole("switch")).toBeDisabled();
       expect(
-        screen.getByText(/Soniox and cloud sources cannot be shared over the network/)
+        screen.getByText(/Cloud sources cannot be shared over the network/)
       ).toBeInTheDocument();
     });
   });

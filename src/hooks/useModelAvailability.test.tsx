@@ -41,8 +41,8 @@ const emitTauriEvent = (eventName: string, payload: unknown) => {
 const unknownRemoteSnapshot = {
   whisper_available: false,
   parakeet_available: false,
-  soniox_selected: false,
-  soniox_ready: false,
+  cloud_selected: false,
+  cloud_ready: false,
   remote_selected: true,
   remote_status: 'unknown',
   remote_available: false,
@@ -52,8 +52,8 @@ const unknownRemoteSnapshot = {
 const onlineRemoteSnapshot = {
   whisper_available: false,
   parakeet_available: false,
-  soniox_selected: false,
-  soniox_ready: false,
+  cloud_selected: false,
+  cloud_ready: false,
   remote_selected: true,
   remote_status: 'online',
   remote_available: true,

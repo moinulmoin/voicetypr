@@ -297,8 +297,8 @@ describe('AudioUploadSection - Essential User Flows', () => {
           return {
             whisper_available: false,
             parakeet_available: false,
-            soniox_selected: false,
-            soniox_ready: false,
+            cloud_selected: false,
+            cloud_ready: false,
             remote_selected: true,
             remote_available: true,
           };
@@ -354,8 +354,8 @@ describe('AudioUploadSection - Essential User Flows', () => {
           return {
             whisper_available: false,
             parakeet_available: false,
-            soniox_selected: false,
-            soniox_ready: false,
+            cloud_selected: false,
+            cloud_ready: false,
             remote_selected: true,
             remote_available: true,
           };
@@ -419,8 +419,8 @@ describe('AudioUploadSection - Essential User Flows', () => {
           return {
             whisper_available: false,
             parakeet_available: false,
-            soniox_selected: true,
-            soniox_ready: true,
+            cloud_selected: true,
+            cloud_ready: true,
             remote_selected: false,
             remote_available: false,
           };
@@ -447,6 +447,71 @@ describe('AudioUploadSection - Essential User Flows', () => {
       expect(invoke).toHaveBeenCalledWith('save_transcription', {
         text: 'Soniox transcript',
         model: 'Soniox (Cloud)'
+      });
+    });
+
+    it('labels Deepgram upload history entries as cloud sources', async () => {
+      const user = userEvent.setup();
+      mockSettings.current_model = 'deepgram';
+      mockSettings.current_model_engine = 'deepgram';
+
+      vi.mocked(open).mockResolvedValue('/audio/deepgram-file.mp3');
+      vi.mocked(invoke).mockImplementation(async (cmd) => {
+        if (cmd === 'get_model_status') {
+          return {
+            models: [
+              {
+                name: 'deepgram',
+                display_name: 'Deepgram',
+                size: 0,
+                url: '',
+                sha256: '',
+                downloaded: true,
+                speed_score: 8,
+                accuracy_score: 9,
+                recommended: false,
+                engine: 'deepgram',
+                kind: 'cloud',
+                requires_setup: false,
+              },
+            ],
+          };
+        }
+        if (cmd === 'get_active_remote_server') {
+          return null;
+        }
+        if (cmd === 'get_recognition_availability_snapshot') {
+          return {
+            whisper_available: false,
+            parakeet_available: false,
+            cloud_selected: true,
+            cloud_ready: true,
+            remote_selected: false,
+            remote_available: false,
+          };
+        }
+        if (cmd === 'transcribe_audio_file') {
+          return 'Deepgram transcript';
+        }
+        return null;
+      });
+
+      render(<AudioUploadSection />);
+
+      const selectButton = await screen.findByRole('button', { name: /select file/i });
+      await user.click(selectButton);
+      await waitFor(() => screen.getByText(/deepgram-file.mp3/));
+
+      const transcribeButton = await screen.findByRole('button', { name: /transcribe/i });
+      await user.click(transcribeButton);
+
+      await waitFor(() => {
+        expect(screen.getByText('Deepgram transcript')).toBeInTheDocument();
+      });
+
+      expect(invoke).toHaveBeenCalledWith('save_transcription', {
+        text: 'Deepgram transcript',
+        model: 'Deepgram (Cloud)'
       });
     });
 
@@ -598,8 +663,8 @@ describe('AudioUploadSection - Essential User Flows', () => {
         return {
           whisper_available: false,
           parakeet_available: false,
-          soniox_selected: false,
-          soniox_ready: false,
+          cloud_selected: false,
+          cloud_ready: false,
           remote_selected: true,
           remote_available: false,
         };

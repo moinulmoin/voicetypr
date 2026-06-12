@@ -229,16 +229,15 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             log::warn!("ParakeetManager not available for tray menu");
         }
 
-        let has_soniox =
-            crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
-        if has_soniox {
-            // Soniox is cloud, put at end with max accuracy score, min speed
-            models.push((
-                "soniox".to_string(),
-                "Soniox (Cloud)".to_string(),
-                u8::MAX,
-                0,
-            ));
+        for provider in crate::cloud_stt::CloudProvider::ALL {
+            if crate::secure_store::secure_has(app, provider.key_name()).unwrap_or(false) {
+                models.push((
+                    provider.id().to_string(),
+                    provider.cloud_label(),
+                    u8::MAX,
+                    0,
+                ));
+            }
         }
 
         // Sort by accuracy_score (descending), then by speed_score (descending) as tiebreaker
@@ -335,41 +334,42 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         }
 
         // Resolve display name for the menu label - prioritize active remote server
-        let (effective_model, resolved_display_name) =
-            if let Some(ref remote_display) = active_remote_display {
-                // Remote server is active - show "ServerName - ModelName"
-                let display = if let Some(ref model) = active_remote_model {
-                    format!("{} - {}", remote_display, model)
-                } else {
-                    remote_display.clone()
-                };
-                ("remote".to_string(), Some(display))
-            } else if onboarding_done && !current_model.is_empty() {
-                let display = if let Some(info) = whisper_models_info.get(&current_model) {
-                    Some(info.display_name.clone())
-                } else if let Some(parakeet_manager) =
-                    app.try_state::<crate::parakeet::ParakeetManager>()
+        let (effective_model, resolved_display_name) = if let Some(ref remote_display) =
+            active_remote_display
+        {
+            // Remote server is active - show "ServerName - ModelName"
+            let display = if let Some(ref model) = active_remote_model {
+                format!("{} - {}", remote_display, model)
+            } else {
+                remote_display.clone()
+            };
+            ("remote".to_string(), Some(display))
+        } else if onboarding_done && !current_model.is_empty() {
+            let display = if let Some(info) = whisper_models_info.get(&current_model) {
+                Some(info.display_name.clone())
+            } else if let Some(parakeet_manager) =
+                app.try_state::<crate::parakeet::ParakeetManager>()
+            {
+                if let Some(pm) = parakeet_manager
+                    .list_models()
+                    .into_iter()
+                    .find(|m| m.name == current_model)
                 {
-                    if let Some(pm) = parakeet_manager
-                        .list_models()
-                        .into_iter()
-                        .find(|m| m.name == current_model)
-                    {
-                        Some(pm.display_name)
-                    } else if current_model == "soniox" {
-                        Some("Soniox (Cloud)".to_string())
-                    } else {
-                        Some(humanize_model_id(&current_model))
-                    }
-                } else if current_model == "soniox" {
-                    Some("Soniox (Cloud)".to_string())
+                    Some(pm.display_name)
+                } else if let Some(p) = crate::cloud_stt::CloudProvider::from_id(&current_model) {
+                    Some(p.cloud_label())
                 } else {
                     Some(humanize_model_id(&current_model))
-                };
-                (current_model.clone(), display)
+                }
+            } else if let Some(p) = crate::cloud_stt::CloudProvider::from_id(&current_model) {
+                Some(p.cloud_label())
             } else {
-                (String::new(), None)
+                Some(humanize_model_id(&current_model))
             };
+            (current_model.clone(), display)
+        } else {
+            (String::new(), None)
+        };
 
         let current_model_display = format_tray_model_label(
             onboarding_done || effective_active_id.is_some(),

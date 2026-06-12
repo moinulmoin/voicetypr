@@ -540,7 +540,7 @@ export function NetworkSharingCard() {
                 Current model cannot be shared
               </p>
               <p className="text-xs text-amber-600 dark:text-amber-500">
-                Soniox and cloud sources cannot be shared over the network. Select a downloaded Whisper or Parakeet model in the Models tab to enable sharing.
+                Cloud sources cannot be shared over the network. Select a downloaded Whisper or Parakeet model in the Models tab to enable sharing.
               </p>
             </div>
           </div>

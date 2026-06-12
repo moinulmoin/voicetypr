@@ -913,10 +913,10 @@ mod tests {
     use super::{
         ai_failure_category, ai_failure_notice, ai_failure_payload, build_failed_transcription_row,
         build_remote_server_error_payload, build_remote_transcription_result,
-        build_remote_upload_transcription_request, build_soniox_create_payload,
-        build_transcription_job, build_writing_history_metadata, is_ai_auth_error,
-        is_non_speech_transcript, plan_desktop_writing_success, recording_license_state,
-        remote_server_error_pill_message, should_hide_pill_when_idle, should_use_active_remote,
+        build_remote_upload_transcription_request, build_transcription_job,
+        build_writing_history_metadata, is_ai_auth_error, is_non_speech_transcript,
+        plan_desktop_writing_success, recording_license_state, remote_server_error_pill_message,
+        should_hide_pill_when_idle, should_use_active_remote,
         sync_retranscription_failure_metadata, transcription_watchdog_budget, NormalizedTempFile,
         RecordingLicenseState, TranscriptionFailure, TranscriptionStatus,
     };
@@ -925,7 +925,6 @@ mod tests {
     use crate::remote::client::{
         calculate_timeout_ms, RemoteClientError, RemoteEndpoint, TranscriptionSource,
     };
-    use crate::writing::{SonioxContext, SonioxContextField};
     use reqwest::StatusCode;
     use std::fs;
 
@@ -937,57 +936,6 @@ mod tests {
             license_key: None,
             expires_at: None,
         })
-    }
-
-    #[test]
-    fn soniox_create_payload_includes_language_and_structured_context() {
-        let payload = build_soniox_create_payload(
-            "file_123",
-            Some(" en "),
-            Some(SonioxContext {
-                general: vec![SonioxContextField {
-                    key: "domain".to_string(),
-                    value: "Software".to_string(),
-                }],
-                terms: vec!["VoiceTypr".to_string(), "Tauri".to_string()],
-                text: Some(
-                    "Spoken forms map to canonical spellings: voice typer -> VoiceTypr."
-                        .to_string(),
-                ),
-            }),
-        );
-
-        assert_eq!(payload["model"].as_str(), Some("stt-async-v3"));
-        assert_eq!(payload["file_id"].as_str(), Some("file_123"));
-        assert_eq!(
-            payload["language_hints"].as_array().unwrap()[0].as_str(),
-            Some("en")
-        );
-        assert_eq!(
-            payload["context"]["terms"].as_array().unwrap()[0].as_str(),
-            Some("VoiceTypr")
-        );
-        assert_eq!(
-            payload["context"]["text"].as_str(),
-            Some("Spoken forms map to canonical spellings: voice typer -> VoiceTypr.")
-        );
-    }
-
-    #[test]
-    fn soniox_create_payload_omits_empty_optional_fields() {
-        let payload = build_soniox_create_payload(
-            "file_123",
-            Some(" "),
-            Some(SonioxContext {
-                general: Vec::new(),
-                terms: Vec::new(),
-                text: None,
-            }),
-        );
-
-        assert_eq!(payload["model"].as_str(), Some("stt-async-v3"));
-        assert!(payload.get("language_hints").is_none());
-        assert!(payload.get("context").is_none());
     }
 
     #[test]
@@ -1912,7 +1860,8 @@ enum ActiveEngineSelection {
     Parakeet {
         model_name: String,
     },
-    Soniox {
+    Cloud {
+        provider: crate::cloud_stt::CloudProvider,
         model_name: String,
     },
     Remote {
@@ -1929,7 +1878,7 @@ impl ActiveEngineSelection {
         match self {
             ActiveEngineSelection::Whisper { .. } => "whisper",
             ActiveEngineSelection::Parakeet { .. } => "parakeet",
-            ActiveEngineSelection::Soniox { .. } => "soniox",
+            ActiveEngineSelection::Cloud { provider, .. } => provider.id(),
             ActiveEngineSelection::Remote { .. } => "remote",
         }
     }
@@ -1938,7 +1887,7 @@ impl ActiveEngineSelection {
         match self {
             ActiveEngineSelection::Whisper { model_name, .. } => model_name,
             ActiveEngineSelection::Parakeet { model_name } => model_name,
-            ActiveEngineSelection::Soniox { model_name } => model_name,
+            ActiveEngineSelection::Cloud { model_name, .. } => model_name,
             ActiveEngineSelection::Remote { server_name, .. } => server_name,
         }
     }
@@ -2023,13 +1972,18 @@ async fn resolve_engine_for_model(
     let parakeet_manager = app.state::<ParakeetManager>();
 
     match engine_hint.map(|e| e.to_lowercase()) {
-        Some(ref engine) if engine == "soniox" => {
-            if crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false) {
-                Ok(ActiveEngineSelection::Soniox {
+        Some(ref engine) if crate::cloud_stt::CloudProvider::from_id(engine).is_some() => {
+            let provider = crate::cloud_stt::CloudProvider::from_id(engine).unwrap();
+            if crate::secure_store::secure_has(app, provider.key_name()).unwrap_or(false) {
+                Ok(ActiveEngineSelection::Cloud {
+                    provider,
                     model_name: model_name.to_string(),
                 })
             } else {
-                Err("Soniox token not configured. Please configure it in Models.".to_string())
+                Err(format!(
+                    "{} key not configured. Please configure it in Models.",
+                    provider.display_name()
+                ))
             }
         }
         Some(ref engine) if engine == "parakeet" => {
@@ -2066,15 +2020,17 @@ async fn resolve_engine_for_model(
         }
         Some(engine) => Err(format!("Unknown model engine '{}'.", engine)),
         None => {
-            if model_name == "soniox" {
-                if crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false) {
-                    return Ok(ActiveEngineSelection::Soniox {
+            if let Some(provider) = crate::cloud_stt::CloudProvider::from_id(model_name) {
+                if crate::secure_store::secure_has(app, provider.key_name()).unwrap_or(false) {
+                    return Ok(ActiveEngineSelection::Cloud {
+                        provider,
                         model_name: model_name.to_string(),
                     });
                 } else {
-                    return Err(
-                        "Soniox token not configured. Please configure it in Models.".to_string(),
-                    );
+                    return Err(format!(
+                        "{} key not configured. Please configure it in Models.",
+                        provider.display_name()
+                    ));
                 }
             }
             if let Some(path) = whisper_state.read().await.get_model_path(model_name) {
@@ -2231,11 +2187,11 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
                     "Selected remote unavailable. Reconnect or choose another source.",
                     "Selected remote unavailable. Reconnect or choose another source.".to_string(),
                 )
-            } else if availability.soniox_selected && !availability.soniox_ready {
+            } else if availability.cloud_selected && !availability.cloud_ready {
                 (
                     "No Speech Recognition Sources",
-                    "Please configure your Soniox token in Models before recording.",
-                    "Soniox token missing".to_string(),
+                    "Please configure your cloud transcription key in Models before recording.",
+                    "Cloud transcription key missing".to_string(),
                 )
             } else {
                 (
@@ -3122,7 +3078,7 @@ pub async fn stop_recording(
         }
     }
 
-    // Decide engine early to optionally skip normalization for Soniox
+    // Decide engine early to optionally skip normalization for cloud providers
     let config = get_recording_config(&app).await.map_err(|e| {
         log::error!("Failed to load recording config: {}", e);
         format!("Configuration error: {}", e)
@@ -3218,28 +3174,33 @@ pub async fn stop_recording(
                     model_name: config.current_model.clone(),
                 }
             }
-            "soniox" => {
+            engine if crate::cloud_stt::CloudProvider::from_id(engine).is_some() => {
+                let provider = crate::cloud_stt::CloudProvider::from_id(engine).unwrap();
                 if config.current_model.is_empty() {
                     return abort_due_to_missing_model(
                         &app,
                         &audio_path,
-                        "No Soniox model selected",
-                        "Please select the Soniox cloud model before recording.",
+                        "No cloud transcription model configured",
+                        "Please choose a cloud transcription model from Models before recording.",
                     )
                     .await;
                 }
 
-                if !crate::secure_store::secure_has(&app, "stt_api_key_soniox").unwrap_or(false) {
+                if !crate::secure_store::secure_has(&app, provider.key_name()).unwrap_or(false) {
                     return abort_due_to_missing_model(
                         &app,
                         &audio_path,
-                        "Soniox token not configured",
-                        "Please configure your Soniox token in Models before recording.",
+                        &format!("{} key not configured", provider.display_name()),
+                        &format!(
+                            "Please configure your {} key in Models before recording.",
+                            provider.display_name()
+                        ),
                     )
                     .await;
                 }
 
-                ActiveEngineSelection::Soniox {
+                ActiveEngineSelection::Cloud {
+                    provider,
                     model_name: config.current_model.clone(),
                 }
             }
@@ -3353,10 +3314,13 @@ pub async fn stop_recording(
 
     let mut watchdog_audio_duration_ms: Option<u64> = None;
 
-    // For Whisper/Parakeet: normalize and duration gate; for Soniox/Remote: skip both
+    // For Whisper/Parakeet: normalize and duration gate; for Cloud/Remote: skip both
     let audio_path = match &engine_selection {
-        ActiveEngineSelection::Soniox { .. } => {
-            log::info!("[RECORD] Soniox selected — skipping normalization");
+        ActiveEngineSelection::Cloud { provider, .. } => {
+            log::info!(
+                "[RECORD] {} selected — skipping normalization",
+                provider.display_name()
+            );
             audio_path
         }
         ActiveEngineSelection::Remote { server_name, .. } => {
@@ -3716,10 +3680,10 @@ pub async fn stop_recording(
                         }
                     }
                 }
-                ActiveEngineSelection::Soniox { .. } => {
+                ActiveEngineSelection::Cloud { provider, .. } => {
                     match tokio::time::timeout(
                         watchdog_budget,
-                        soniox_transcribe_async(
+                        provider.transcribe(
                             &app_for_task,
                             &audio_path_clone,
                             language_for_task.as_deref(),
@@ -3728,14 +3692,14 @@ pub async fn stop_recording(
                     .await
                     {
                         Ok(Ok(text)) => {
-                            let soniox_job = build_transcription_job(
+                            let cloud_job = build_transcription_job(
                                 TranscriptionSource::DesktopRecording,
                                 transcription_job_for_task.engine.clone(),
                                 transcription_job_for_task.model.clone(),
                                 transcription_job_for_task.spoken_language.clone(),
                                 false,
                             );
-                            Ok(TranscriptionResult::new(&soniox_job, text))
+                            Ok(TranscriptionResult::new(&cloud_job, text))
                         }
                         Ok(Err(e)) => Err(TranscriptionFailure::Local(e)),
                         Err(_) => Err(TranscriptionFailure::Local(
@@ -4575,7 +4539,7 @@ async fn transcribe_audio_file_impl(
     let wav_path = audio_path.to_path_buf();
     log::info!("[UPLOAD] Input ready at {:?}", wav_path);
 
-    // Resolve engine (whisper/parakeet/soniox) for the requested model
+    // Resolve engine (whisper/parakeet/cloud) for the requested model
     let engine_selection =
         resolve_engine_for_model(&app, &model_name, model_engine.as_deref()).await?;
     log::info!(
@@ -4633,7 +4597,7 @@ async fn transcribe_audio_file_impl(
         translate_to_english,
     );
 
-    // For Soniox, skip normalization and send original wav_path
+    // For cloud providers, skip normalization and send original wav_path
     let transcription_result = match engine_selection {
         ActiveEngineSelection::Whisper { model_path, .. } => {
             // Normalize to Whisper contract
@@ -4717,16 +4681,27 @@ async fn transcribe_audio_file_impl(
                 }
             }
         }
-        ActiveEngineSelection::Soniox { .. } => {
-            let text = soniox_transcribe_async(&app, &wav_path, Some(&language)).await?;
-            let soniox_job = build_transcription_job(
+        ActiveEngineSelection::Cloud { provider, .. } => {
+            log::debug!("[UPLOAD] Normalizing to WAV for cloud transcription...");
+            let normalized_file = NormalizedTempFile::new({
+                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                let out_path = recordings_dir.join(format!("normalized_{}.wav", ts));
+                crate::ffmpeg::normalize_streaming(&app, &wav_path, &out_path)
+                    .await
+                    .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
+                out_path
+            });
+            let text = provider
+                .transcribe(&app, normalized_file.path(), Some(&language))
+                .await?;
+            let cloud_job = build_transcription_job(
                 TranscriptionSource::AudioFile,
                 transcription_job.engine.clone(),
                 transcription_job.model.clone(),
                 transcription_job.spoken_language.clone(),
                 false,
             );
-            TranscriptionResult::new(&soniox_job, text)
+            TranscriptionResult::new(&cloud_job, text)
         }
         ActiveEngineSelection::Remote {
             server_id,
@@ -4999,16 +4974,18 @@ pub async fn transcribe_audio(
                 Err(err) => return Err(format!("Parakeet transcription failed: {}", err)),
             }
         }
-        ActiveEngineSelection::Soniox { .. } => {
-            let text = soniox_transcribe_async(&app, &temp_path, Some(&language)).await?;
-            let soniox_job = build_transcription_job(
+        ActiveEngineSelection::Cloud { provider, .. } => {
+            let text = provider
+                .transcribe(&app, &temp_path, Some(&language))
+                .await?;
+            let cloud_job = build_transcription_job(
                 TranscriptionSource::AudioBytes,
                 transcription_job.engine.clone(),
                 transcription_job.model.clone(),
                 transcription_job.spoken_language.clone(),
                 false,
             );
-            TranscriptionResult::new(&soniox_job, text)
+            TranscriptionResult::new(&cloud_job, text)
         }
         ActiveEngineSelection::Remote {
             server_id,
@@ -5108,202 +5085,6 @@ pub async fn transcribe_audio(
             .await?;
     }
     Ok(writing_result.final_text)
-}
-
-fn build_soniox_create_payload(
-    file_id: &str,
-    language: Option<&str>,
-    context: Option<crate::writing::SonioxContext>,
-) -> serde_json::Value {
-    let mut payload = serde_json::json!({
-        "model": "stt-async-v3",
-        "file_id": file_id,
-    });
-
-    if let Some(lang) = language.map(str::trim).filter(|lang| !lang.is_empty()) {
-        payload["language_hints"] = serde_json::json!([lang]);
-    }
-
-    if let Some(context) = context {
-        if let Ok(context_value) = serde_json::to_value(context) {
-            if context_value
-                .as_object()
-                .is_some_and(|object| !object.is_empty())
-            {
-                payload["context"] = context_value;
-            }
-        }
-    }
-
-    payload
-}
-
-// Soniox async transcription via v1 Files + Transcriptions flow
-async fn soniox_transcribe_async(
-    app: &AppHandle,
-    wav_path: &Path,
-    language: Option<&str>,
-) -> Result<String, String> {
-    use reqwest::multipart::{Form, Part};
-    use tokio::fs;
-
-    let key = crate::secure_store::secure_get(app, "stt_api_key_soniox")?
-        .ok_or_else(|| "Soniox API key not set".to_string())?;
-
-    let wav_bytes = fs::read(wav_path)
-        .await
-        .map_err(|e| format!("Failed to read audio file: {}", e))?;
-
-    let client = reqwest::Client::new();
-    let base = "https://api.soniox.com/v1";
-
-    // 1) Upload file -> file_id
-    let filename = wav_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("audio.wav");
-    let file_part = Part::bytes(wav_bytes)
-        .file_name(filename.to_string())
-        .mime_str("audio/wav")
-        .map_err(|e| e.to_string())?;
-    let form = Form::new().part("file", file_part);
-
-    let upload_url = format!("{}/files", base);
-    let upload_resp = client
-        .post(&upload_url)
-        .bearer_auth(&key)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| format!("Network error (upload): {}", e))?;
-    if !upload_resp.status().is_success() {
-        let code = upload_resp.status();
-        let body = upload_resp.text().await.unwrap_or_default();
-        let snippet: String = body.chars().take(300).collect();
-        return Err(format!("Soniox upload failed: HTTP {}: {}", code, snippet));
-    }
-    let upload_json: serde_json::Value = upload_resp.json().await.map_err(|e| e.to_string())?;
-    let file_id = upload_json
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing file_id")?
-        .to_string();
-
-    // 2) Create transcription -> transcription_id
-    let soniox_context = match crate::writing::load_writing_settings(app) {
-        Ok(settings) => crate::writing::compile_soniox_context(&settings, language),
-        Err(err) => {
-            log::warn!(
-                "Failed to load writing settings for Soniox context; continuing without context: {err}"
-            );
-            None
-        }
-    };
-    let payload = build_soniox_create_payload(&file_id, language, soniox_context);
-
-    let create_url = format!("{}/transcriptions", base);
-    let create_resp = client
-        .post(&create_url)
-        .bearer_auth(&key)
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Network error (create): {}", e))?;
-    if !create_resp.status().is_success() {
-        let code = create_resp.status();
-        let body = create_resp.text().await.unwrap_or_default();
-        let snippet: String = body.chars().take(300).collect();
-        return Err(format!(
-            "Soniox create transcription failed: HTTP {}: {}",
-            code, snippet
-        ));
-    }
-    let create_json: serde_json::Value = create_resp.json().await.map_err(|e| e.to_string())?;
-    let transcription_id = create_json
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing transcription id")?
-        .to_string();
-
-    // 3) Poll status
-    let status_url = format!("{}/transcriptions/{}", base, transcription_id);
-    let started = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(180);
-    loop {
-        let resp = client
-            .get(&status_url)
-            .bearer_auth(&key)
-            .send()
-            .await
-            .map_err(|e| format!("Network error (status): {}", e))?;
-        if !resp.status().is_success() {
-            let code = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            let snippet: String = body.chars().take(200).collect();
-            return Err(format!("Soniox status failed: HTTP {}: {}", code, snippet));
-        }
-        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-        let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("");
-        match status {
-            "completed" => break,
-            "error" => {
-                let msg = json
-                    .get("error_message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Job failed");
-                return Err(format!("Soniox job failed: {}", msg));
-            }
-            _ => {
-                if started.elapsed() > timeout {
-                    return Err("Soniox transcription timed out".to_string());
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-            }
-        }
-    }
-
-    // 4) Fetch transcript
-    let transcript_url = format!("{}/transcriptions/{}/transcript", base, transcription_id);
-    let resp = client
-        .get(&transcript_url)
-        .bearer_auth(&key)
-        .send()
-        .await
-        .map_err(|e| format!("Network error (transcript): {}", e))?;
-    if !resp.status().is_success() {
-        let code = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        let snippet: String = body.chars().take(200).collect();
-        return Err(format!(
-            "Soniox transcript failed: HTTP {}: {}",
-            code, snippet
-        ));
-    }
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-
-    // Prefer direct text if present, else join tokens
-    if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
-        return Ok(text.to_string());
-    }
-    if let Some(tokens) = json.get("tokens").and_then(|v| v.as_array()) {
-        let mut out = String::new();
-        let mut first = true;
-        for t in tokens {
-            if let Some(txt) = t.get("text").and_then(|v| v.as_str()) {
-                if !first {
-                    out.push(' ');
-                } else {
-                    first = false;
-                }
-                out.push_str(txt);
-            }
-        }
-        if !out.is_empty() {
-            return Ok(out);
-        }
-    }
-    Err("Soniox transcript format not recognized".to_string())
 }
 
 #[tauri::command]

@@ -27,6 +27,7 @@ import { useModelAvailability } from "@/hooks/useModelAvailability";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import { getModelDisplayName } from "@/lib/model-display";
+import { isCloudEngine } from "@/lib/cloudProviders";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useUploadStore } from "@/state/upload";
 
@@ -64,7 +65,7 @@ export function AudioUploadSection() {
   const resolveHistoryModelName = async (remoteServerIdOverride?: string | null) => {
     const effectiveRemoteId = remoteServerIdOverride ?? activeRemoteServer;
     if (!effectiveRemoteId) {
-      return settings?.current_model_engine === 'soniox' ? 'Soniox (Cloud)' : (getModelDisplayName(settings?.current_model) || '');
+      return isCloudEngine(settings?.current_model_engine ?? 'whisper') ? getModelDisplayName(settings?.current_model) || '' : (getModelDisplayName(settings?.current_model) || '');
     }
 
     try {
@@ -116,8 +117,8 @@ export function AudioUploadSection() {
 
   const activeSourceLabel = activeRemoteServer
     ? "Remote VoiceTypr"
-    : settings?.current_model_engine === 'soniox'
-      ? "Soniox (Cloud)"
+    : isCloudEngine(settings?.current_model_engine ?? 'whisper')
+      ? getModelDisplayName(settings?.current_model) || "No source selected"
       : getModelDisplayName(settings?.current_model) || "No source selected";
 
   const handleFileSelect = async () => {
@@ -167,7 +168,7 @@ export function AudioUploadSection() {
     if (!effectiveRemoteSelected && selectedModelAvailable === false) {
       const engine = settings?.current_model_engine || 'whisper';
       toast.error(
-        engine === 'soniox'
+        isCloudEngine(engine)
           ? 'Connect your cloud provider before transcribing audio.'
           : 'Download the selected model before transcribing audio.'
       );

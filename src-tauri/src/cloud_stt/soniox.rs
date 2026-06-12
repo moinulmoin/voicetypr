@@ -1,0 +1,304 @@
+//! Soniox cloud STT: async Files + Transcriptions + poll flow.
+
+use super::common::{self, AuthScheme};
+use std::path::Path;
+use tauri::AppHandle;
+
+pub(super) const MODEL: &str = "stt-async-v3";
+
+const BASE: &str = "https://api.soniox.com/v1";
+
+pub(super) async fn validate_key(key: &str) -> Result<(), String> {
+    common::get_validate(
+        "https://api.soniox.com/v1/models",
+        AuthScheme::Bearer,
+        key,
+        "Soniox",
+    )
+    .await
+    .map_err(|e| e.message("Soniox"))
+}
+
+fn build_create_payload(
+    file_id: &str,
+    language: Option<&str>,
+    context: Option<crate::writing::SonioxContext>,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "model": MODEL,
+        "file_id": file_id,
+    });
+
+    if let Some(lang) = language.map(str::trim).filter(|lang| !lang.is_empty()) {
+        payload["language_hints"] = serde_json::json!([lang]);
+    }
+
+    if let Some(context) = context {
+        if let Ok(context_value) = serde_json::to_value(context) {
+            if context_value
+                .as_object()
+                .is_some_and(|object| !object.is_empty())
+            {
+                payload["context"] = context_value;
+            }
+        }
+    }
+
+    payload
+}
+
+pub(super) async fn transcribe(
+    app: &AppHandle,
+    key: &str,
+    wav_path: &Path,
+    language: Option<&str>,
+) -> Result<String, String> {
+    use reqwest::multipart::{Form, Part};
+    use tokio::fs;
+
+    let wav_bytes = fs::read(wav_path)
+        .await
+        .map_err(|_| common::SttError::BadResponse.message("Soniox"))?;
+
+    let client = common::http_client();
+
+    // 1) Upload file -> file_id
+    let filename = wav_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("audio.wav")
+        .to_string();
+    let upload_url = format!("{}/files", BASE);
+    let upload_resp = common::with_retry(|| {
+        let client = client.clone();
+        let filename = filename.clone();
+        let upload_url = upload_url.clone();
+        let wav_bytes = wav_bytes.clone();
+        async move {
+            let file_part = Part::bytes(wav_bytes)
+                .file_name(filename)
+                .mime_str("audio/wav")
+                .map_err(|_| common::SttError::BadResponse)?;
+            let form = Form::new().part("file", file_part);
+
+            let resp = client
+                .post(&upload_url)
+                .bearer_auth(key)
+                .multipart(form)
+                .send()
+                .await
+                .map_err(|e| common::classify_reqwest_err(&e))?;
+            if resp.status().is_success() {
+                Ok(resp)
+            } else {
+                Err(common::log_http_body(resp, "Soniox upload").await)
+            }
+        }
+    })
+    .await
+    .map_err(|e| e.message("Soniox"))?;
+    let upload_json: serde_json::Value = upload_resp
+        .json()
+        .await
+        .map_err(|_| common::SttError::BadResponse.message("Soniox"))?;
+    let file_id = upload_json
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| common::SttError::BadResponse.message("Soniox"))?
+        .to_string();
+
+    // 2) Create transcription -> transcription_id
+    let soniox_context = match crate::writing::load_writing_settings(app) {
+        Ok(settings) => crate::writing::compile_soniox_context(&settings, language),
+        Err(err) => {
+            log::warn!(
+                "Failed to load writing settings for Soniox context; continuing without context: {err}"
+            );
+            None
+        }
+    };
+    let payload = build_create_payload(&file_id, language, soniox_context);
+
+    let create_url = format!("{}/transcriptions", BASE);
+    let create_resp = common::with_retry(|| {
+        let client = client.clone();
+        let create_url = create_url.clone();
+        let payload = payload.clone();
+        async move {
+            let resp = client
+                .post(&create_url)
+                .bearer_auth(key)
+                .header("Content-Type", "application/json")
+                .json(&payload)
+                .send()
+                .await
+                .map_err(|e| common::classify_reqwest_err(&e))?;
+            if resp.status().is_success() {
+                Ok(resp)
+            } else {
+                Err(common::log_http_body(resp, "Soniox create transcription").await)
+            }
+        }
+    })
+    .await
+    .map_err(|e| e.message("Soniox"))?;
+    let create_json: serde_json::Value = create_resp
+        .json()
+        .await
+        .map_err(|_| common::SttError::BadResponse.message("Soniox"))?;
+    let transcription_id = create_json
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| common::SttError::BadResponse.message("Soniox"))?
+        .to_string();
+
+    // 3) Poll status
+    let status_url = format!("{}/transcriptions/{}", BASE, transcription_id);
+    let started = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(180);
+    loop {
+        let resp = common::with_retry(|| {
+            let client = client.clone();
+            let status_url = status_url.clone();
+            async move {
+                let resp = client
+                    .get(&status_url)
+                    .bearer_auth(key)
+                    .send()
+                    .await
+                    .map_err(|e| common::classify_reqwest_err(&e))?;
+                if resp.status().is_success() {
+                    Ok(resp)
+                } else {
+                    Err(common::log_http_body(resp, "Soniox status").await)
+                }
+            }
+        })
+        .await
+        .map_err(|e| e.message("Soniox"))?;
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|_| common::SttError::BadResponse.message("Soniox"))?;
+        let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        match status {
+            "completed" => break,
+            "error" => {
+                log::warn!("Soniox transcription job failed");
+                return Err(common::SttError::Server.message("Soniox"));
+            }
+            _ => {
+                if started.elapsed() > timeout {
+                    return Err(common::SttError::Timeout.message("Soniox"));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            }
+        }
+    }
+
+    // 4) Fetch transcript
+    let transcript_url = format!("{}/transcriptions/{}/transcript", BASE, transcription_id);
+    let resp = common::with_retry(|| {
+        let client = client.clone();
+        let transcript_url = transcript_url.clone();
+        async move {
+            let resp = client
+                .get(&transcript_url)
+                .bearer_auth(key)
+                .send()
+                .await
+                .map_err(|e| common::classify_reqwest_err(&e))?;
+            if resp.status().is_success() {
+                Ok(resp)
+            } else {
+                Err(common::log_http_body(resp, "Soniox transcript").await)
+            }
+        }
+    })
+    .await
+    .map_err(|e| e.message("Soniox"))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|_| common::SttError::BadResponse.message("Soniox"))?;
+
+    // Prefer direct text if present, else join tokens
+    if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
+        return Ok(text.to_string());
+    }
+    if let Some(tokens) = json.get("tokens").and_then(|v| v.as_array()) {
+        let mut out = String::new();
+        let mut first = true;
+        for t in tokens {
+            if let Some(txt) = t.get("text").and_then(|v| v.as_str()) {
+                if !first {
+                    out.push(' ');
+                } else {
+                    first = false;
+                }
+                out.push_str(txt);
+            }
+        }
+        if !out.is_empty() {
+            return Ok(out);
+        }
+    }
+    Err(common::SttError::BadResponse.message("Soniox"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::writing::{SonioxContext, SonioxContextField};
+
+    #[test]
+    fn create_payload_includes_language_and_structured_context() {
+        let payload = build_create_payload(
+            "file_123",
+            Some(" en "),
+            Some(SonioxContext {
+                general: vec![SonioxContextField {
+                    key: "domain".to_string(),
+                    value: "Software".to_string(),
+                }],
+                terms: vec!["VoiceTypr".to_string(), "Tauri".to_string()],
+                text: Some(
+                    "Spoken forms map to canonical spellings: voice typer -> VoiceTypr."
+                        .to_string(),
+                ),
+            }),
+        );
+
+        assert_eq!(payload["model"].as_str(), Some("stt-async-v3"));
+        assert_eq!(payload["file_id"].as_str(), Some("file_123"));
+        assert_eq!(
+            payload["language_hints"].as_array().unwrap()[0].as_str(),
+            Some("en")
+        );
+        assert_eq!(
+            payload["context"]["terms"].as_array().unwrap()[0].as_str(),
+            Some("VoiceTypr")
+        );
+        assert_eq!(
+            payload["context"]["text"].as_str(),
+            Some("Spoken forms map to canonical spellings: voice typer -> VoiceTypr.")
+        );
+    }
+
+    #[test]
+    fn create_payload_omits_empty_optional_fields() {
+        let payload = build_create_payload(
+            "file_123",
+            Some(" "),
+            Some(SonioxContext {
+                general: Vec::new(),
+                terms: Vec::new(),
+                text: None,
+            }),
+        );
+
+        assert_eq!(payload["model"].as_str(), Some("stt-async-v3"));
+        assert!(payload.get("language_hints").is_none());
+        assert!(payload.get("context").is_none());
+    }
+}

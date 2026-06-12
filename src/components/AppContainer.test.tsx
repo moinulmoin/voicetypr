@@ -211,8 +211,8 @@ describe('AppContainer', () => {
         return Promise.resolve({
           whisper_available: true,
           parakeet_available: true,
-          soniox_selected: false,
-          soniox_ready: false,
+          cloud_selected: false,
+          cloud_ready: false,
           remote_selected: false,
           remote_status: 'online',
           remote_available: true,
@@ -258,8 +258,8 @@ describe('AppContainer', () => {
         return Promise.resolve({
           whisper_available: false,
           parakeet_available: false,
-          soniox_selected: false,
-          soniox_ready: false,
+          cloud_selected: false,
+          cloud_ready: false,
           remote_selected: true,
           remote_status: 'offline',
           remote_available: false,
@@ -346,8 +346,8 @@ describe('AppContainer', () => {
         return Promise.resolve({
           whisper_available: false,
           parakeet_available: false,
-          soniox_selected: false,
-          soniox_ready: false,
+          cloud_selected: false,
+          cloud_ready: false,
           remote_selected: true,
           remote_status: 'unknown',
           remote_available: false,
@@ -384,8 +384,8 @@ describe('AppContainer', () => {
       emitTauriEvent('recognition-availability', {
         whisper_available: false,
         parakeet_available: false,
-        soniox_selected: false,
-        soniox_ready: false,
+        cloud_selected: false,
+        cloud_ready: false,
         remote_selected: true,
         remote_status: 'online',
         remote_available: true,

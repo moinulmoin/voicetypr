@@ -13,6 +13,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import type { SpeechModelEngine } from "@/types"
 import { cn } from "@/lib/utils"
 import { Check, ChevronsUpDown } from "lucide-react"
 import * as React from "react"
@@ -125,7 +126,7 @@ interface LanguageSelectionProps {
   value: string
   onValueChange: (value: string) => void
   className?: string
-  engine?: 'whisper' | 'parakeet' | 'soniox'
+  engine?: SpeechModelEngine
   englishOnly?: boolean
 }
 
@@ -142,6 +143,11 @@ export function LanguageSelection({ value, onValueChange, className, engine = 'w
     'en','es','fr','de','it','pt','nl','ru','zh','ja','ko','ar','hi','tr','pl','sv','no','da','fi','el','cs','ro','hu','sk','uk','he','id','vi','th','ms','tl','fa','ur','bn','ta','te','gu','pa','bg','hr','sr','sl','lv','lt','et','is','ca','gl'
   ]), [])
 
+  // Cohere Transcribe supports 14 languages and does not auto-detect unsupported languages.
+  const cohereAllowed = React.useMemo(() => new Set<string>([
+    'en','de','fr','it','es','pt','el','nl','pl','vi','zh','ar','ja','ko'
+  ]), [])
+
   const displayed = React.useMemo(() => {
     if (englishOnly) {
       return languages.filter(l => l.value === 'en')
@@ -152,8 +158,11 @@ export function LanguageSelection({ value, onValueChange, className, engine = 'w
     if (engine === 'soniox') {
       return languages.filter(l => sonioxAllowed.has(l.value))
     }
+    if (engine === 'cohere') {
+      return languages.filter(l => cohereAllowed.has(l.value))
+    }
     return languages
-  }, [engine, parakeetAllowed, sonioxAllowed, englishOnly])
+  }, [engine, parakeetAllowed, sonioxAllowed, cohereAllowed, englishOnly])
   
   return (
     <Popover open={open} onOpenChange={setOpen}>

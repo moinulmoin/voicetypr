@@ -1,12 +1,13 @@
+import type { SpeechModelEngine } from '@/types';
 import {
-  hasSttApiKeySoniox,
-  removeSttApiKeySoniox,
-  saveSttApiKeySoniox,
+  hasSttApiKey,
+  removeSttApiKey,
+  saveSttApiKey,
 } from '@/utils/keyring';
 
 export interface CloudProviderDefinition {
   id: string;
-  engine: 'soniox';
+  engine: SpeechModelEngine;
   modelName: string;
   displayName: string;
   description: string;
@@ -18,27 +19,71 @@ export interface CloudProviderDefinition {
   setupCta?: string;
 }
 
-const sonioxProvider: CloudProviderDefinition = {
-  id: 'soniox',
-  engine: 'soniox',
-  modelName: 'soniox',
-  displayName: 'Soniox',
-  description: 'High-accuracy cloud transcription via Soniox APIs',
-  providerName: 'Soniox',
-  addKey: async (key: string) => {
-    await saveSttApiKeySoniox(key.trim());
+const cloudProviderDefinitions = [
+  {
+    id: 'soniox',
+    displayName: 'Soniox',
+    providerName: 'Soniox',
+    description: 'High-accuracy cloud transcription via Soniox APIs',
+    docsUrl: 'https://soniox.com/docs/stt/get-started',
   },
-  removeKey: async () => {
-    await removeSttApiKeySoniox();
+  {
+    id: 'openai',
+    displayName: 'OpenAI',
+    providerName: 'OpenAI',
+    description: 'Cloud transcription via OpenAI (gpt-4o-transcribe)',
+    docsUrl: 'https://platform.openai.com/docs/guides/speech-to-text',
   },
-  hasKey: async () => hasSttApiKeySoniox(),
-  docsUrl: 'https://soniox.com/docs/stt/get-started',
-  setupCta: 'Add API Key',
-};
+  {
+    id: 'groq',
+    displayName: 'Groq',
+    providerName: 'Groq',
+    description: 'Fast cloud Whisper transcription via Groq',
+    docsUrl: 'https://console.groq.com/docs/speech-to-text',
+  },
+  {
+    id: 'deepgram',
+    displayName: 'Deepgram',
+    providerName: 'Deepgram',
+    description: 'Production cloud transcription via Deepgram Nova',
+    docsUrl: 'https://developers.deepgram.com/docs/pre-recorded-audio',
+  },
+  {
+    id: 'cohere',
+    displayName: 'Cohere',
+    providerName: 'Cohere',
+    description: 'Cloud transcription via Cohere Transcribe',
+    docsUrl: 'https://docs.cohere.com/docs/transcribe',
+  },
+] as const satisfies ReadonlyArray<
+  Pick<
+    CloudProviderDefinition,
+    'id' | 'displayName' | 'providerName' | 'description' | 'docsUrl'
+  >
+>;
 
-export const CLOUD_PROVIDERS: Record<string, CloudProviderDefinition> = {
-  [sonioxProvider.id]: sonioxProvider,
-};
+export const CLOUD_PROVIDERS: Record<string, CloudProviderDefinition> =
+  Object.fromEntries(
+    cloudProviderDefinitions.map((definition) => [
+      definition.id,
+      {
+        ...definition,
+        engine: definition.id as SpeechModelEngine,
+        modelName: definition.id,
+        addKey: async (key: string) => {
+          await saveSttApiKey(definition.id, key.trim());
+        },
+        removeKey: async () => {
+          await removeSttApiKey(definition.id);
+        },
+        hasKey: async () => hasSttApiKey(definition.id),
+        setupCta: 'Add API Key',
+      },
+    ]),
+  );
 
 export const getCloudProviderByModel = (modelName: string): CloudProviderDefinition | undefined =>
   CLOUD_PROVIDERS[modelName];
+
+export const isCloudEngine = (engine: string): boolean =>
+  Object.values(CLOUD_PROVIDERS).some((provider) => provider.engine === engine);

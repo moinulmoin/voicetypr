@@ -9,6 +9,10 @@ pub enum ProviderEngine {
     Whisper,
     Parakeet,
     Soniox,
+    Openai,
+    Groq,
+    Deepgram,
+    Cohere,
     Remote,
 }
 
@@ -27,6 +31,10 @@ impl ProviderEngine {
             "whisper" => Some(Self::Whisper),
             "parakeet" => Some(Self::Parakeet),
             "soniox" => Some(Self::Soniox),
+            "openai" => Some(Self::Openai),
+            "groq" => Some(Self::Groq),
+            "deepgram" => Some(Self::Deepgram),
+            "cohere" => Some(Self::Cohere),
             "remote" => Some(Self::Remote),
             _ => None,
         }
@@ -37,6 +45,10 @@ impl ProviderEngine {
             Self::Whisper => "whisper",
             Self::Parakeet => "parakeet",
             Self::Soniox => "soniox",
+            Self::Openai => "openai",
+            Self::Groq => "groq",
+            Self::Deepgram => "deepgram",
+            Self::Cohere => "cohere",
             Self::Remote => "remote",
         }
     }
@@ -61,6 +73,13 @@ impl ProviderEngine {
                 shareable_remote: false,
                 supports_initial_prompt: false,
                 supports_structured_terms: true,
+                supports_vocabulary_terms: false,
+                supports_translate_task: false,
+            },
+            Self::Openai | Self::Groq | Self::Deepgram | Self::Cohere => ProviderCapabilities {
+                shareable_remote: false,
+                supports_initial_prompt: false,
+                supports_structured_terms: false,
                 supports_vocabulary_terms: false,
                 supports_translate_task: false,
             },
@@ -89,6 +108,10 @@ mod tests {
             ProviderEngine::Whisper,
             ProviderEngine::Parakeet,
             ProviderEngine::Soniox,
+            ProviderEngine::Openai,
+            ProviderEngine::Groq,
+            ProviderEngine::Deepgram,
+            ProviderEngine::Cohere,
             ProviderEngine::Remote,
         ];
 
@@ -151,6 +174,46 @@ mod tests {
             }
         );
         assert_eq!(
+            ProviderEngine::Openai.capabilities(),
+            ProviderCapabilities {
+                shareable_remote: false,
+                supports_initial_prompt: false,
+                supports_structured_terms: false,
+                supports_vocabulary_terms: false,
+                supports_translate_task: false,
+            }
+        );
+        assert_eq!(
+            ProviderEngine::Groq.capabilities(),
+            ProviderCapabilities {
+                shareable_remote: false,
+                supports_initial_prompt: false,
+                supports_structured_terms: false,
+                supports_vocabulary_terms: false,
+                supports_translate_task: false,
+            }
+        );
+        assert_eq!(
+            ProviderEngine::Deepgram.capabilities(),
+            ProviderCapabilities {
+                shareable_remote: false,
+                supports_initial_prompt: false,
+                supports_structured_terms: false,
+                supports_vocabulary_terms: false,
+                supports_translate_task: false,
+            }
+        );
+        assert_eq!(
+            ProviderEngine::Cohere.capabilities(),
+            ProviderCapabilities {
+                shareable_remote: false,
+                supports_initial_prompt: false,
+                supports_structured_terms: false,
+                supports_vocabulary_terms: false,
+                supports_translate_task: false,
+            }
+        );
+        assert_eq!(
             ProviderEngine::Remote.capabilities(),
             ProviderCapabilities {
                 shareable_remote: false,
@@ -168,6 +231,10 @@ mod tests {
             ProviderEngine::Whisper,
             ProviderEngine::Parakeet,
             ProviderEngine::Soniox,
+            ProviderEngine::Openai,
+            ProviderEngine::Groq,
+            ProviderEngine::Deepgram,
+            ProviderEngine::Cohere,
             ProviderEngine::Remote,
         ];
 

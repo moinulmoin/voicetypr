@@ -36,7 +36,7 @@ import { getErrorMessage } from "@/utils/error";
 import { getCloudProviderByModel } from "@/lib/cloudProviders";
 import { cn } from "@/lib/utils";
 import { getModelDisplayName, humanizeModelId } from "@/lib/model-display";
-import { ModelInfo, isCloudModel, isLocalModel } from "@/types";
+import { ModelInfo, SpeechModelEngine, isCloudModel, isLocalModel } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -144,10 +144,7 @@ export function ModelsSection({
 
   // No header summary line — section titles include counts
 
-  const currentEngine = (settings?.current_model_engine ?? "whisper") as
-    | "whisper"
-    | "parakeet"
-    | "soniox";
+  const currentEngine = (settings?.current_model_engine ?? "whisper") as SpeechModelEngine;
   const currentModelName = settings?.current_model ?? "";
   const languageValue = settings?.speech_language ?? "en";
 

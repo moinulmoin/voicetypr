@@ -716,7 +716,9 @@ mod tests {
 
     #[test]
     fn test_model_engine_valid_values() {
-        let valid_engines = vec!["whisper", "parakeet", "soniox"];
+        let valid_engines = vec![
+            "whisper", "parakeet", "soniox", "openai", "groq", "deepgram", "cohere",
+        ];
 
         for engine in valid_engines {
             let settings = Settings {

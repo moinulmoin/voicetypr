@@ -302,6 +302,17 @@ pub fn normalize_speech_language_for_model(
                 "en".to_string()
             }
         }
+        "cohere" => {
+            const COHERE_SUPPORTED_LANGUAGES: &[&str] = &[
+                "en", "de", "fr", "it", "es", "pt", "el", "nl", "pl", "vi", "zh", "ar", "ja", "ko",
+            ];
+            if COHERE_SUPPORTED_LANGUAGES.contains(&validated) {
+                validated.to_string()
+            } else {
+                "en".to_string()
+            }
+        }
+        "openai" | "groq" | "deepgram" => validated.to_string(),
         _ => validated.to_string(),
     }
 }
@@ -713,7 +724,8 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
     // Preload new model and update tray menu if model changed
     let is_parakeet_engine = settings.current_model_engine == "parakeet";
-    let is_cloud_engine = settings.current_model_engine == "soniox";
+    let is_cloud_engine =
+        crate::cloud_stt::CloudProvider::from_id(&settings.current_model_engine).is_some();
 
     if !settings.current_model.is_empty() && old_model != settings.current_model {
         use crate::commands::model::preload_model;
@@ -1196,10 +1208,10 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
                 model_name
             );
 
-            let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
-            let engine = if model_name == "soniox" {
-                "soniox".to_string()
+            let engine = if let Some(p) = crate::cloud_stt::CloudProvider::from_id(&model_name) {
+                p.id().to_string()
             } else {
+                let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
                 let guard = whisper_state.read().await;
                 if guard.get_models_status().contains_key(&model_name) {
                     "whisper".to_string()
@@ -1244,8 +1256,8 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     // Get current settings
     let mut settings = get_settings(app.clone()).await?;
 
-    let engine = if model_name == "soniox" {
-        "soniox".to_string()
+    let engine = if let Some(p) = crate::cloud_stt::CloudProvider::from_id(&model_name) {
+        p.id().to_string()
     } else {
         let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
         let whisper_has = {

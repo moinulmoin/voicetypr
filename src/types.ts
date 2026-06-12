@@ -1,11 +1,11 @@
-export type SpeechModelEngine = 'whisper' | 'parakeet' | 'soniox';
+export type SpeechModelEngine = 'whisper' | 'parakeet' | 'soniox' | 'openai' | 'groq' | 'deepgram' | 'cohere';
 export type ModelKind = 'local' | 'cloud';
 
 /** A downloaded shareable model exposed by a remote VoiceTypr host. */
 export interface RemoteShareableModel {
   id: string;
   display_name: string;
-  engine: Exclude<SpeechModelEngine, 'soniox'>;
+  engine: Extract<SpeechModelEngine, 'whisper' | 'parakeet'>;
   recommended?: boolean | null;
   speed_score?: number | null;
   accuracy_score?: number | null;
@@ -73,7 +73,7 @@ export interface AppSettings {
   recording_mode?: RecordingMode;
   use_different_ptt_key?: boolean;
   ptt_hotkey?: string;
-  current_model_engine?: 'whisper' | 'parakeet' | 'soniox';
+  current_model_engine?: SpeechModelEngine;
   auto_paste_transcription?: boolean;
   keep_transcription_in_clipboard?: boolean;
   // Audio feedback

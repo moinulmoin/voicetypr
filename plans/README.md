@@ -33,7 +33,6 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 014  | *(reserved: shared transcription contract stage 1 — executor implementation of plan 012's design)* | P1 | L | 012 | RESERVED — no executable plan file yet |
 | 017  | AI provider catalog + searchable breadth UI | P2 | M | 016 | TODO |
 | 018  | AI provider graduation — OpenRouter, Groq, xAI | P2-P3 | S-M each | 016, 017 | TODO |
-| 019  | Cloud STT shortlist — Deepgram, OpenAI, Groq, Cohere Transcribe | P1 | L | — | TODO — authored by a concurrent session 2026-06-12; committed verbatim at `ae0d400`; that session should claim this row before executing |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
@@ -43,6 +42,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 008  | Audio callback: remove allocations + silent chunk drops | `9868fdc` era | NEEDS-SMOKE |
 | 015  | Pipeline feel — start latency, decode watchdogs, never-lose-speech | `b1a66bf` | NEEDS-SMOKE |
 | 016  | AI polish Rust-native cutover — current providers, Pi sidecar removed | `3986b45`..`fb09a61` | NEEDS-SMOKE — steps 1-7 done; sidecar gone; triple-check audit findings fixed + independently re-reviewed; live invalid-key/bad-URL smoke passed; remaining items in SMOKE.md |
+| 019  | Cloud STT shortlist — Soniox + OpenAI/Groq/Deepgram/Cohere | `2026-06-12` (this session) | NEEDS-SMOKE — `cloud_stt` seam + 4 new providers + Soniox migration; clean cutover (no soniox-only residue); pre-merge reliability bar met (owned 120s/15s client, retry-once on transient, typed `SttError` categories, no raw provider bodies); Cohere language restricted to its 14; all automated gates green; real-key desktop smoke in `SMOKE.md` |
 
 ## Archived (closed — `plans/archive/`)
 

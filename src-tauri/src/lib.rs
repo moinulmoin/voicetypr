@@ -15,6 +15,7 @@ use crate::utils::logger::*;
 mod ai;
 mod audio;
 pub mod cli;
+mod cloud_stt;
 mod commands;
 mod ffmpeg;
 mod license;
@@ -91,7 +92,7 @@ use commands::{
     reset::reset_app_data,
     settings::*,
     shortcuts::{get_shortcut_settings, list_shortcut_actions, update_shortcut_settings},
-    stt::{clear_soniox_key_cache, validate_and_cache_soniox_key},
+    stt::{clear_stt_key_cache, validate_stt_key},
     text::*,
     utils::export_transcriptions,
     window::*,
@@ -1325,8 +1326,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             keyring_get,
             keyring_delete,
             keyring_has,
-            validate_and_cache_soniox_key,
-            clear_soniox_key_cache,
+            validate_stt_key,
+            clear_stt_key_cache,
             get_latest_log_for_bug_report,
             get_log_directory,
             open_logs_folder,

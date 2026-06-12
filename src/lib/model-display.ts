@@ -9,6 +9,10 @@ const KNOWN_MODEL_DISPLAY_NAMES: Record<string, string> = {
   'parakeet-tdt-0.6b-v3': 'Parakeet V3',
   'parakeet-tdt-0.6b-v2': 'Parakeet V2 (English)',
   soniox: 'Soniox (Cloud)',
+  openai: 'OpenAI (Cloud)',
+  groq: 'Groq (Cloud)',
+  deepgram: 'Deepgram (Cloud)',
+  cohere: 'Cohere (Cloud)',
 };
 
 function titleCaseToken(token: string) {

@@ -690,29 +690,34 @@ fn convert_parakeet_model(status: ParakeetModelStatus) -> UnifiedModelInfo {
 }
 
 fn collect_cloud_models(app: &AppHandle) -> Vec<UnifiedModelInfo> {
-    const STT_API_KEY_SONIOX: &str = "stt_api_key_soniox";
-    let has_soniox_key = secure_store::secure_has(app, STT_API_KEY_SONIOX).unwrap_or_else(|err| {
-        log::warn!(
-            "[GET_MODEL_STATUS] Failed to check Soniox key presence: {}",
-            err
-        );
-        false
-    });
-
-    vec![UnifiedModelInfo {
-        name: "soniox".to_string(),
-        display_name: "Soniox".to_string(),
-        size: 0,
-        url: String::new(),
-        sha256: String::new(),
-        downloaded: has_soniox_key,
-        speed_score: 8,
-        accuracy_score: 9,
-        recommended: true,
-        engine: "soniox".to_string(),
-        kind: "cloud".to_string(),
-        requires_setup: !has_soniox_key,
-    }]
+    crate::cloud_stt::CloudProvider::ALL
+        .iter()
+        .map(|provider| {
+            let has_key =
+                secure_store::secure_has(app, provider.key_name()).unwrap_or_else(|err| {
+                    log::warn!(
+                        "[GET_MODEL_STATUS] Failed to check {} key presence: {}",
+                        provider.display_name(),
+                        err
+                    );
+                    false
+                });
+            UnifiedModelInfo {
+                name: provider.id().to_string(),
+                display_name: provider.display_name().to_string(),
+                size: 0,
+                url: String::new(),
+                sha256: String::new(),
+                downloaded: has_key,
+                speed_score: provider.speed_score(),
+                accuracy_score: provider.accuracy_score(),
+                recommended: matches!(provider, crate::cloud_stt::CloudProvider::Soniox),
+                engine: provider.id().to_string(),
+                kind: "cloud".to_string(),
+                requires_setup: !has_key,
+            }
+        })
+        .collect()
 }
 
 #[tauri::command]

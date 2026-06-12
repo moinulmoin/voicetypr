@@ -11,8 +11,8 @@ use crate::whisper;
 pub struct RecognitionAvailabilitySnapshot {
     pub whisper_available: bool,
     pub parakeet_available: bool,
-    pub soniox_selected: bool,
-    pub soniox_ready: bool,
+    pub cloud_selected: bool,
+    pub cloud_ready: bool,
     pub remote_selected: bool,
     pub remote_status: ConnectionStatus,
     pub remote_last_checked: u64,
@@ -23,7 +23,7 @@ impl RecognitionAvailabilitySnapshot {
     pub fn any_available(&self) -> bool {
         self.whisper_available
             || self.parakeet_available
-            || (self.soniox_selected && self.soniox_ready)
+            || (self.cloud_selected && self.cloud_ready)
             || self.remote_available
     }
 }
@@ -79,16 +79,15 @@ pub async fn recognition_availability_snapshot(
             false
         };
 
-    let (soniox_selected, soniox_ready) = match app.store("settings") {
+    let (cloud_selected, cloud_ready) = match app.store("settings") {
         Ok(store) => {
             let engine = store
                 .get("current_model_engine")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| "whisper".to_string());
-
-            if engine == "soniox" {
+            if let Some(provider) = crate::cloud_stt::CloudProvider::from_id(&engine) {
                 let has_key =
-                    crate::secure_store::secure_has(app, "stt_api_key_soniox").unwrap_or(false);
+                    crate::secure_store::secure_has(app, provider.key_name()).unwrap_or(false);
                 (true, has_key)
             } else {
                 (false, false)
@@ -108,8 +107,8 @@ pub async fn recognition_availability_snapshot(
     RecognitionAvailabilitySnapshot {
         whisper_available,
         parakeet_available,
-        soniox_selected,
-        soniox_ready,
+        cloud_selected,
+        cloud_ready,
         remote_selected,
         remote_status,
         remote_last_checked,
@@ -191,8 +190,12 @@ pub async fn auto_select_model_if_needed(
         }
     }
 
-    if selection.is_none() && availability.soniox_selected && availability.soniox_ready {
-        selection = Some(("soniox".to_string(), "soniox".to_string()));
+    if selection.is_none() && availability.cloud_selected && availability.cloud_ready {
+        let engine = store
+            .get("current_model_engine")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "whisper".to_string());
+        selection = Some((engine.clone(), engine));
     }
 
     let Some((engine, model)) = selection else {
@@ -288,8 +291,8 @@ mod tests {
         let snapshot = RecognitionAvailabilitySnapshot {
             whisper_available: false,
             parakeet_available: false,
-            soniox_selected: false,
-            soniox_ready: false,
+            cloud_selected: false,
+            cloud_ready: false,
             remote_selected: true,
             remote_status: ConnectionStatus::Online,
             remote_last_checked: 1,
@@ -304,8 +307,8 @@ mod tests {
         let snapshot = RecognitionAvailabilitySnapshot {
             whisper_available: false,
             parakeet_available: false,
-            soniox_selected: false,
-            soniox_ready: false,
+            cloud_selected: false,
+            cloud_ready: false,
             remote_selected: true,
             remote_status: ConnectionStatus::Unknown,
             remote_last_checked: 1,
@@ -320,8 +323,8 @@ mod tests {
         let snapshot = RecognitionAvailabilitySnapshot {
             whisper_available: false,
             parakeet_available: false,
-            soniox_selected: false,
-            soniox_ready: false,
+            cloud_selected: false,
+            cloud_ready: false,
             remote_selected: false,
             remote_status: ConnectionStatus::Unknown,
             remote_last_checked: 0,

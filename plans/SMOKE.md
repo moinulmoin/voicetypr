@@ -60,6 +60,28 @@ Anthropic keys rejected against live endpoints; unreachable custom base URL
 - [ ] 016-S8 Windows build: one real polish call (TLS/proxy path) +
       migration from a pre-cutover settings file (`google` provider id).
 
+## Plan 019 — cloud STT shortlist (code `2026-06-12`, NEEDS-SMOKE)
+
+Requires a real API key per provider. Each provider is one catalog entry with a
+fixed curated model (OpenAI `gpt-4o-transcribe`, Groq `whisper-large-v3-turbo`,
+Deepgram `nova-3`, Cohere `cohere-transcribe-03-2026`, Soniox `stt-async-v3`).
+
+- [ ] 019-S1 For each provider: add API key in Models → provider becomes
+      selectable (no longer "Add API Key"); select it → record → transcript
+      inserts. (Soniox path unchanged; verify it still works post-migration.)
+- [ ] 019-S2 Deepgram specifically (raw-body + `Authorization: Token` path):
+      record → transcript returned (validates the non-OpenAI-compatible flow).
+- [ ] 019-S3 Cohere: a non-supported language clamps to English; supported
+      language transcribes; picker shows only the 14 Cohere languages.
+- [ ] 019-S4 Invalid key for any provider → clean typed error (no raw provider
+      response body leaked in the message); app stays responsive.
+- [ ] 019-S5 Transient failure (e.g. kill network mid-request) → one retry then
+      a clean Timeout/Network error; recording-path returns to idle.
+- [ ] 019-S6 Network sharing tab with a cloud engine selected → "Cloud sources
+      cannot be shared" warning; sharing disabled.
+- [ ] 019-S7 Upload + re-transcribe history flows label the source as
+      "<Provider> (Cloud)".
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are

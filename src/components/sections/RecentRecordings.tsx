@@ -19,6 +19,7 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { getModelDisplayName } from "@/lib/model-display";
+import { isCloudEngine } from "@/lib/cloudProviders";
 import { isMacOS } from "@/lib/platform";
 
 interface SavedConnection {
@@ -100,7 +101,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     }
 
     const modelEngine = settings?.current_model_engine ?? 'whisper';
-    const isCloud = modelEngine === 'soniox';
+    const isCloud = isCloudEngine(modelEngine);
     const displayName = getModelDisplayName(modelName) ?? modelName;
 
     return {
