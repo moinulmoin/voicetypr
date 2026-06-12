@@ -15,7 +15,7 @@
 - **Effort**: M
 - **Risk**: MED (recording start/cancel timing is the app's most
   concurrency-sensitive path; PTT behavior must not regress)
-- **Depends on**: plans/003-recording-state-characterization-tests.md
+- **Depends on**: plans/archive/003-recording-state-characterization-tests.md (DONE)
 - **Category**: bug
 - **Planned at**: commit `41351bd`, 2026-06-10
 

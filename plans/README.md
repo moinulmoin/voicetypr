@@ -11,32 +11,57 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 `pnpm exec vitest run`, `cd src-tauri && cargo test`, `cargo fmt --check`,
 `cargo clippy -- -D warnings`, `pnpm quality-gate`.
 
-## Execution order & status
+## Concurrency protocol (multiple agents/sessions work this repo)
+
+1. **Before executing a plan**: set its row below to
+   `IN PROGRESS — claimed <session/agent> <date>` and commit that one-line
+   change first. A row already IN PROGRESS / NEEDS-SMOKE / DONE / REJECTED is
+   CLAIMED or CLOSED — pick different work.
+2. **NEEDS-SMOKE means code-frozen**: implementation is done, committed, and
+   gate-green; only interactive desktop smoke remains (see `plans/SMOKE.md`).
+   Never re-implement, "improve", or re-audit a NEEDS-SMOKE plan.
+3. **Done/rejected plan files live in `plans/archive/`** — reference material
+   only.
+4. New plan files MUST take the next free number AND add a row here in the
+   same commit, so concurrent sessions see the claim.
+
+## Active plans
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 001  | Stop logging dictated text / clipboard / Whisper segments | P1 | S | — | DONE |
-| 002  | Route Parakeet load failure through shared error recovery | P1 | S | — | DONE |
-| 003  | Characterization tests: recording state machine + cancel flags | P1 | M | — | DONE |
-| 004  | Make cancellation during `Starting` stick | P1 | M | 003 | NEEDS-SMOKE |
-| 005  | GPU-sidecar abort interrupts in-flight request | P1 | M | — | DONE |
-| 006  | Remote transcription off the async runtime worker | P1 | M | — | DONE |
-| 007  | Delay clipboard restore until paste consumed (+ test seam) | P2 | M | — | DONE |
-| 008  | Audio callback: remove allocations + silent chunk drops | P2 | M | 003/004 recommended first | NEEDS-SMOKE |
-| 009  | DX/deps hygiene: CI-parity gate, unused plugin, shadcn, dotenv | P2 | S | — | DONE |
-| 010  | Page transcription-history reads/saves by key order | P2 | M | — | DONE |
-| 011  | Secrets → OS credential storage (investigation-gated) | P2 | M-L | — | REJECTED — unsafe without secret manifest/reset + keychain smoke |
-| 012  | Shared transcription contract — design doc (no code) | P2 | M | best after 002/006 land | DONE |
 | 013  | *(reserved: close 004/008 smoke blockers — checklist, no plan file yet)* | P1 | S | 004, 008 | RESERVED — no executable plan file yet |
 | 014  | *(reserved: shared transcription contract stage 1 — executor implementation of plan 012's design)* | P1 | L | 012 | RESERVED — no executable plan file yet |
-| 015  | Pipeline feel — start latency, decode watchdogs, never-lose-speech | P1 | M | 004/008 smoke (soft) | NEEDS-SMOKE |
-| 016  | AI polish Rust-native cutover — current providers, remove Pi sidecar | P1 | M-L | 015 smoke (ship gate) | NEEDS-SMOKE — steps 1-7 code-done at `057bc6d`; Pi sidecar removed; all automated gates green + live invalid-key/bad-URL smoke passed; deferred (user, end-of-features): manual smoke item 2 valid-key polish ×2 providers + item 3 in-app forced-failure raw-text delivery; 015 smoke remains ship gate |
 | 017  | AI provider catalog + searchable breadth UI | P2 | M | 016 | TODO |
 | 018  | AI provider graduation — OpenRouter, Groq, xAI | P2-P3 | S-M each | 016, 017 | TODO |
+| 019  | Cloud STT shortlist — Deepgram, OpenAI, Groq, Cohere Transcribe | P1 | L | — | TODO — authored by a concurrent session 2026-06-12; committed verbatim at `ae0d400`; that session should claim this row before executing |
 
-Status values: TODO | IN PROGRESS | DONE | NEEDS-SMOKE (code done, manual
-smoke pending) | BLOCKED (one-line reason) | REJECTED (one-line rationale) |
-RESERVED (number held, no executable plan file yet).
+## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
+
+| Plan | Title | Code landed | Status |
+|------|-------|-------------|--------|
+| 004  | Make cancellation during `Starting` stick | `9868fdc` era | NEEDS-SMOKE |
+| 008  | Audio callback: remove allocations + silent chunk drops | `9868fdc` era | NEEDS-SMOKE |
+| 015  | Pipeline feel — start latency, decode watchdogs, never-lose-speech | `b1a66bf` | NEEDS-SMOKE |
+| 016  | AI polish Rust-native cutover — current providers, Pi sidecar removed | `3986b45`..`fb09a61` | NEEDS-SMOKE — steps 1-7 done; sidecar gone; triple-check audit findings fixed + independently re-reviewed; live invalid-key/bad-URL smoke passed; remaining items in SMOKE.md |
+
+## Archived (closed — `plans/archive/`)
+
+| Plan | Title | Outcome |
+|------|-------|---------|
+| 001  | Stop logging dictated text / clipboard / Whisper segments | DONE |
+| 002  | Route Parakeet load failure through shared error recovery | DONE |
+| 003  | Characterization tests: recording state machine + cancel flags | DONE |
+| 005  | GPU-sidecar abort interrupts in-flight request | DONE |
+| 006  | Remote transcription off the async runtime worker | DONE |
+| 007  | Delay clipboard restore until paste consumed (+ test seam) | DONE |
+| 009  | DX/deps hygiene: CI-parity gate, unused plugin, shadcn, dotenv | DONE |
+| 010  | Page transcription-history reads/saves by key order | DONE |
+| 011  | Secrets → OS credential storage | REJECTED — unsafe without secret manifest/reset + keychain smoke (executed, reviewed, reverted) |
+| 012  | Shared transcription contract — design doc (no code) | DONE |
+
+Status values: TODO | IN PROGRESS — claimed <by> <date> | DONE | NEEDS-SMOKE
+(code done, manual smoke pending) | BLOCKED (one-line reason) | REJECTED
+(one-line rationale) | RESERVED (number held, no executable plan file yet).
 
 ## Dependency notes
 
