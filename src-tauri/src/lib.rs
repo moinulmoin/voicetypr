@@ -17,7 +17,6 @@ mod audio;
 pub mod cli;
 mod commands;
 mod ffmpeg;
-mod formatting;
 mod license;
 mod media;
 mod menu;
@@ -384,7 +383,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             app.manage(AsyncMutex::new(TranscriberCache::new()));
             app.manage(crate::whisper::gpu_sidecar::GpuSidecarClient::new());
             log::info!("GPU sidecar client initialized");
-            app.manage(formatting::FormattingClient::new("formatting-sidecar"));
 
             // Initialize remote transcription state
             app.manage(AsyncMutex::new(RemoteServerManager::new()));

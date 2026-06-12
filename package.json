@@ -10,7 +10,6 @@
     "ci:win:full": "powershell -ExecutionPolicy Bypass -File .\\scripts\\ci-local-windows.ps1 -Full",
     "sidecar:ensure-ffmpeg": "node scripts/ensure-ffmpeg-sidecar.cjs",
     "sidecar:build": "bash ./scripts/build-parakeet-sidecar.sh",
-    "sidecar:build-formatting": "pnpm --filter @voicetypr/formatting-engine-sidecar build:sea",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",

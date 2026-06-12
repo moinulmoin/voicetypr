@@ -10,7 +10,6 @@
       "../sidecar/ffmpeg/dist/ffprobe",
       "../sidecar/ffmpeg/dist/ffmpeg.exe",
       "../sidecar/ffmpeg/dist/ffprobe.exe",
-      "../sidecar/dist/formatting-sidecar",
       "../sidecar/whisper-vulkan/dist/whisper-vulkan-sidecar"
     ],
     "windows": {

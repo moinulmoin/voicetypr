@@ -33,15 +33,13 @@
       { "name": "parakeet-sidecar", "sidecar": true },
       { "name": "parakeet-sidecar-aarch64-apple-darwin", "sidecar": true },
       { "name": "ffmpeg", "sidecar": true },
-      { "name": "ffprobe", "sidecar": true },
-      { "name": "formatting-sidecar", "sidecar": true }
+      { "name": "ffprobe", "sidecar": true }
     ] },
     { "identifier": "shell:allow-stdin-write", "allow": [
       { "name": "parakeet-sidecar", "sidecar": true },
       { "name": "parakeet-sidecar-aarch64-apple-darwin", "sidecar": true },
       { "name": "ffmpeg", "sidecar": true },
-      { "name": "ffprobe", "sidecar": true },
-      { "name": "formatting-sidecar", "sidecar": true }
+      { "name": "ffprobe", "sidecar": true }
     ] },
     "macos-permissions:default",
     "autostart:allow-enable",

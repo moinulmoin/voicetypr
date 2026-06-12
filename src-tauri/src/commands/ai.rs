@@ -330,7 +330,7 @@ lazy_static::lazy_static! {
 }
 
 // Pi AI supports a broad provider registry; validate only the identifier shape here.
-// Availability is checked by the sidecar-backed model list/formatting calls.
+// Availability comes from the Rust provider/model catalog in crate::ai::providers.
 fn validate_provider_name(provider: &str) -> Result<(), String> {
     if !PROVIDER_REGEX.is_match(provider) {
         return Err("Invalid provider name format".to_string());

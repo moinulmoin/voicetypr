@@ -1,110 +1,5 @@
 use std::path::Path;
 use std::process::Command;
-use std::time::SystemTime;
-
-fn modified_time(path: &Path) -> Option<SystemTime> {
-    std::fs::metadata(path)
-        .and_then(|meta| meta.modified())
-        .ok()
-}
-
-fn newest_modified_time(path: &Path) -> Option<SystemTime> {
-    if path.is_file() {
-        return modified_time(path);
-    }
-
-    let entries = std::fs::read_dir(path).ok()?;
-    entries
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            newest_modified_time(&entry.path())
-        })
-        .max()
-}
-
-fn formatting_sidecar_inputs_newer_than(binary_path: &Path) -> bool {
-    let Some(binary_mtime) = modified_time(binary_path) else {
-        return true;
-    };
-
-    [
-        Path::new("../package.json"),
-        Path::new("../pnpm-lock.yaml"),
-        Path::new("../pnpm-workspace.yaml"),
-        Path::new("../sidecar/formatting-engine/package.json"),
-        Path::new("../sidecar/formatting-engine/tsconfig.json"),
-        Path::new("../sidecar/formatting-engine/scripts"),
-        Path::new("../sidecar/formatting-engine/src"),
-    ]
-    .iter()
-    .filter_map(|path| newest_modified_time(path))
-    .any(|mtime| mtime > binary_mtime)
-}
-
-fn build_formatting_sidecar(target_triple: &str, binary_path: &Path) {
-    let pnpm = if cfg!(target_os = "windows") {
-        "pnpm.cmd"
-    } else {
-        "pnpm"
-    };
-    let output = Command::new(pnpm)
-        .arg("run")
-        .arg("sidecar:build-formatting")
-        .current_dir("..")
-        .env("TARGET", target_triple)
-        .output();
-
-    match output {
-        Ok(output) if output.status.success() && binary_path.exists() => {
-            println!("cargo:warning=Formatting sidecar built successfully");
-        }
-        Ok(output) => {
-            println!(
-                "cargo:warning=Formatting sidecar build failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            panic!(
-                "Formatting sidecar missing: {}. Run `pnpm run sidecar:build-formatting`.",
-                binary_path.display()
-            );
-        }
-        Err(err) => {
-            panic!(
-                "Failed to run pnpm for formatting sidecar: {}. Run `pnpm run sidecar:build-formatting`.",
-                err
-            );
-        }
-    }
-}
-
-fn ensure_formatting_sidecar() {
-    let target_triple = std::env::var("TARGET").unwrap_or_default();
-    let extension = if target_triple.contains("windows") {
-        ".exe"
-    } else {
-        ""
-    };
-    let binary_name = format!(
-        "../sidecar/dist/formatting-sidecar-{}{}",
-        target_triple, extension
-    );
-    let binary_path = Path::new(&binary_name);
-
-    if !formatting_sidecar_inputs_newer_than(binary_path) {
-        println!(
-            "cargo:warning=Formatting sidecar binary verified at: {}",
-            binary_path.display()
-        );
-        return;
-    }
-
-    if binary_path.exists() {
-        println!("cargo:warning=Formatting sidecar stale; rebuilding Node SEA sidecar...");
-    } else {
-        println!("cargo:warning=Formatting sidecar missing; building Node SEA sidecar...");
-    }
-    build_formatting_sidecar(&target_triple, binary_path);
-}
 
 fn main() {
     // Set the deployment target to match our minimum system version
@@ -222,14 +117,9 @@ fn main() {
         }
     }
 
-    ensure_formatting_sidecar();
     println!("cargo:rerun-if-changed=../package.json");
     println!("cargo:rerun-if-changed=../pnpm-lock.yaml");
     println!("cargo:rerun-if-changed=../pnpm-workspace.yaml");
-    println!("cargo:rerun-if-changed=../sidecar/formatting-engine/src");
-    println!("cargo:rerun-if-changed=../sidecar/formatting-engine/scripts");
-    println!("cargo:rerun-if-changed=../sidecar/formatting-engine/package.json");
-    println!("cargo:rerun-if-changed=../sidecar/formatting-engine/tsconfig.json");
 
     tauri_build::build()
 }
