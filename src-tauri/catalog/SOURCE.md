@@ -2,8 +2,8 @@
 
 - Upstream: https://models.dev/api.json (MIT)
 - Fetched: 2026-06-13
-- Projected snapshot SHA256: 07b3070c48d93a9aeaa9b66604bc10667bd9e2ab077f9633e51f0834c6acd064
-- Providers: 8 | text->text models: 465
+- Projected snapshot SHA256: a47b471c39b260eb5bbcd68aa35b88f81178421c0bdec7acf88ffcb7775bb067
+- Providers: 5 | text->text models: 442
 
 ## Deterministic filter (plan 017, STOP-1 tighter rule)
 A provider is in the catalog IFF it has an entry in `overlay.json` mapping it to a

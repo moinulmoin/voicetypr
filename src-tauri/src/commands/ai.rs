@@ -1410,10 +1410,6 @@ mod tests {
             Some("experimental")
         );
         assert_eq!(
-            by_id("xai").map(|p| p.status.as_str()),
-            Some("experimental")
-        );
-        assert_eq!(
             by_id("openrouter").map(|p| p.status.as_str()),
             Some("experimental")
         );

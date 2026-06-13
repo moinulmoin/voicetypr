@@ -71,10 +71,7 @@ fn adapter_kind_for_provider(provider_id: &str) -> Option<AdapterKind> {
         "Anthropic" => Some(AdapterKind::Anthropic),
         "Gemini" => Some(AdapterKind::Gemini),
         "Groq" => Some(AdapterKind::Groq),
-        "Xai" => Some(AdapterKind::Xai),
         "OpenRouter" => Some(AdapterKind::OpenRouter),
-        "DeepSeek" => Some(AdapterKind::DeepSeek),
-        "Cohere" => Some(AdapterKind::Cohere),
         _ => None,
     }
 }
@@ -85,10 +82,7 @@ fn provider_id_for_adapter(adapter_kind: AdapterKind) -> Option<&'static str> {
         AdapterKind::Anthropic => "Anthropic",
         AdapterKind::Gemini => "Gemini",
         AdapterKind::Groq => "Groq",
-        AdapterKind::Xai => "Xai",
         AdapterKind::OpenRouter => "OpenRouter",
-        AdapterKind::DeepSeek => "DeepSeek",
-        AdapterKind::Cohere => "Cohere",
         _ => return None,
     };
     catalog::provider_for_adapter(adapter_name)
@@ -127,14 +121,9 @@ mod tests {
             namespaced_model("groq", "llama-3.3-70b-versatile"),
             "groq::llama-3.3-70b-versatile"
         );
-        assert_eq!(namespaced_model("xai", "grok-4.3"), "xai::grok-4.3");
         assert_eq!(
             namespaced_model("openrouter", "openai/gpt-4.1-mini"),
             "open_router::openai/gpt-4.1-mini"
-        );
-        assert_eq!(
-            namespaced_model("deepseek", "deepseek-chat"),
-            "deepseek::deepseek-chat"
         );
     }
 
@@ -153,16 +142,7 @@ mod tests {
 
     #[test]
     fn adapter_kind_round_trips_to_provider_id() {
-        for provider_id in [
-            "openai",
-            "anthropic",
-            "gemini",
-            "groq",
-            "xai",
-            "openrouter",
-            "deepseek",
-            "cohere",
-        ] {
+        for provider_id in ["openai", "anthropic", "gemini", "groq", "openrouter"] {
             let kind = adapter_kind_for_provider(provider_id)
                 .unwrap_or_else(|| panic!("{provider_id} should map to a genai adapter"));
             assert_eq!(provider_id_for_adapter(kind), Some(provider_id));
@@ -180,7 +160,6 @@ mod tests {
         };
         // genai drops reasoning_effort for the OpenAI-compatible adapters -> hide the control.
         assert_eq!(supports("groq"), Some(false));
-        assert_eq!(supports("xai"), Some(false));
         assert_eq!(supports("openrouter"), Some(false));
         // native adapters keep reasoning.
         assert_eq!(supports("openai"), Some(true));

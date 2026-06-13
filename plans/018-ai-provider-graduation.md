@@ -6,6 +6,10 @@
 > `OpenRouter DONE / Groq TODO / xAI TODO`.
 >
 > **Prerequisite**: Plans 016 and 017 merged (contract + executor + catalog).
+>
+> **Descope (2026-06-13, per user)**: xAI dropped from this plan; DeepSeek and
+> Cohere (briefly added as `hidden` during 017) removed. Graduation scope is now
+> **OpenRouter and Groq only**. The "xAI" in the title above is historical.
 
 ## Status
 

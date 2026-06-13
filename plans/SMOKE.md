@@ -91,9 +91,9 @@ Anthropic, Google Gemini, Custom) must behave exactly as in plan 016.
       still validate, select, and polish exactly as before the catalog change.
 - [ ] 017-S2 Search filters across provider names AND model ids; clearing
       restores the grouped Recommended/All view.
-- [ ] 017-S3 Advanced toggle: hidden providers (DeepSeek, Cohere) appear only
-      when "Advanced" is on; experimental providers (Groq/xAI/OpenRouter) show
-      the Experimental badge by default.
+- [ ] 017-S3 Experimental providers (Groq, OpenRouter) show the Experimental
+      badge by default. No hidden-tier providers currently, so the Advanced
+      toggle does not appear (it returns only if a hidden provider is added).
 - [ ] 017-S4 Per-provider model memory persists across provider switches.
 
 ## Plan 018 — provider graduation (code `2026-06-13`, experimental; graduate per provider)
@@ -106,7 +106,6 @@ a key it stays `experimental` — acceptable end state, not a failure.
       invalid key → InvalidApiKey error; then flip overlay to production.
 - [ ] 018-Groq real key → `llama-3.3-70b-versatile` (routes `groq::`) polish
       round-trip; reasoning control hidden; then flip to production.
-- [ ] 018-xAI real key → `grok-4.3` (routes `xai::`) polish round-trip; then flip.
 - [ ] 018-common forced failure (cut network mid-polish) → raw-transcript
       fallback + "polish failed" notice; app stays responsive.
 

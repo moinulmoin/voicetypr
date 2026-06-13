@@ -12,28 +12,6 @@
     "snapshot_id": "anthropic",
     "status": "production"
   },
-  "cohere": {
-    "adapter": "Cohere",
-    "auth": "api_key",
-    "namespace": null,
-    "recommended": [
-      "command-a-03-2025"
-    ],
-    "runtime": "genai_adapter",
-    "snapshot_id": "cohere",
-    "status": "hidden"
-  },
-  "deepseek": {
-    "adapter": "DeepSeek",
-    "auth": "api_key",
-    "namespace": "deepseek::",
-    "recommended": [
-      "deepseek-chat"
-    ],
-    "runtime": "genai_adapter",
-    "snapshot_id": "deepseek",
-    "status": "hidden"
-  },
   "gemini": {
     "adapter": "Gemini",
     "auth": "api_key",
@@ -80,17 +58,6 @@
     ],
     "runtime": "genai_adapter",
     "snapshot_id": "openrouter",
-    "status": "experimental"
-  },
-  "xai": {
-    "adapter": "Xai",
-    "auth": "api_key",
-    "namespace": "xai::",
-    "recommended": [
-      "grok-4.3"
-    ],
-    "runtime": "genai_adapter",
-    "snapshot_id": "xai",
     "status": "experimental"
   }
 }

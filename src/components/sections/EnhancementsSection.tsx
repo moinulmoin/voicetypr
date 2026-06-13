@@ -599,6 +599,10 @@ export function EnhancementsSection() {
     () => providers.filter((provider) => showAdvancedProviders || provider.status !== "hidden"),
     [providers, showAdvancedProviders],
   );
+  const hasHiddenProviders = useMemo(
+    () => providers.some((provider) => provider.status === "hidden"),
+    [providers],
+  );
   const providerQuery = providerSearch.trim().toLowerCase();
   const filteredProviders = useMemo(() => {
     if (!providerQuery) {
@@ -717,15 +721,17 @@ export function EnhancementsSection() {
                     className="pl-9"
                   />
                 </div>
-                <Field orientation="horizontal" className="w-auto items-center gap-2">
-                  <FieldTitle className="text-sm">Advanced</FieldTitle>
-                  <Switch
-                    id="advanced-ai-providers"
-                    aria-label="Show advanced AI providers"
-                    checked={showAdvancedProviders}
-                    onCheckedChange={setShowAdvancedProviders}
-                  />
-                </Field>
+                {hasHiddenProviders && (
+                  <Field orientation="horizontal" className="w-auto items-center gap-2">
+                    <FieldTitle className="text-sm">Advanced</FieldTitle>
+                    <Switch
+                      id="advanced-ai-providers"
+                      aria-label="Show advanced AI providers"
+                      checked={showAdvancedProviders}
+                      onCheckedChange={setShowAdvancedProviders}
+                    />
+                  </Field>
+                )}
               </div>
 
               {filteredProviders.length === 0 && (
