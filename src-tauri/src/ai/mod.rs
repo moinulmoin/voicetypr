@@ -1,3 +1,4 @@
+pub mod catalog;
 pub mod contract;
 pub mod error;
 pub mod executor;

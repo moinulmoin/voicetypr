@@ -1,6 +1,6 @@
 use super::contract::{AiPolishRequest, AiReasoningEffort};
 use super::error::{map_genai_error, AiProviderError, MappedAiProviderError};
-use super::providers::{PROVIDER_ANTHROPIC, PROVIDER_GEMINI, PROVIDER_OPENAI};
+use crate::ai::catalog;
 use genai::adapter::AdapterKind;
 use genai::chat::{ChatOptions, ChatRequest, ReasoningEffort};
 use genai::resolver::{AuthData, Endpoint};
@@ -45,7 +45,8 @@ impl GenaiRuntime {
     pub async fn polish(&self, request: &AiPolishRequest) -> Result<String, MappedAiProviderError> {
         let adapter_kind = adapter_kind_for_provider(&request.provider_id)
             .ok_or_else(|| MappedAiProviderError::new(AiProviderError::UnsupportedProvider))?;
-        let model = ModelIden::new(adapter_kind, request.model_id.as_str());
+        let model_str = namespaced_model(&request.provider_id, &request.model_id);
+        let model = ModelIden::new(adapter_kind, model_str);
         let chat_request =
             ChatRequest::from_user(request.input_text.clone()).with_system(request.prompt.clone());
         let options = request.reasoning_effort.map(|effort| {
@@ -65,20 +66,38 @@ impl GenaiRuntime {
 }
 
 fn adapter_kind_for_provider(provider_id: &str) -> Option<AdapterKind> {
-    match provider_id {
-        PROVIDER_OPENAI => Some(AdapterKind::OpenAI),
-        PROVIDER_ANTHROPIC => Some(AdapterKind::Anthropic),
-        PROVIDER_GEMINI => Some(AdapterKind::Gemini),
+    match catalog::adapter_name(provider_id)? {
+        "OpenAI" => Some(AdapterKind::OpenAI),
+        "Anthropic" => Some(AdapterKind::Anthropic),
+        "Gemini" => Some(AdapterKind::Gemini),
+        "Groq" => Some(AdapterKind::Groq),
+        "Xai" => Some(AdapterKind::Xai),
+        "OpenRouter" => Some(AdapterKind::OpenRouter),
+        "DeepSeek" => Some(AdapterKind::DeepSeek),
+        "Cohere" => Some(AdapterKind::Cohere),
         _ => None,
     }
 }
 
 fn provider_id_for_adapter(adapter_kind: AdapterKind) -> Option<&'static str> {
-    match adapter_kind {
-        AdapterKind::OpenAI => Some(PROVIDER_OPENAI),
-        AdapterKind::Anthropic => Some(PROVIDER_ANTHROPIC),
-        AdapterKind::Gemini => Some(PROVIDER_GEMINI),
-        _ => None,
+    let adapter_name = match adapter_kind {
+        AdapterKind::OpenAI => "OpenAI",
+        AdapterKind::Anthropic => "Anthropic",
+        AdapterKind::Gemini => "Gemini",
+        AdapterKind::Groq => "Groq",
+        AdapterKind::Xai => "Xai",
+        AdapterKind::OpenRouter => "OpenRouter",
+        AdapterKind::DeepSeek => "DeepSeek",
+        AdapterKind::Cohere => "Cohere",
+        _ => return None,
+    };
+    catalog::provider_for_adapter(adapter_name)
+}
+
+fn namespaced_model(provider_id: &str, model_id: &str) -> String {
+    match catalog::namespace(provider_id) {
+        Some(namespace) => format!("{namespace}{model_id}"),
+        None => model_id.to_string(),
     }
 }
 
@@ -95,5 +114,77 @@ fn ensure_trailing_slash(base_url: &str) -> String {
         base_url.to_string()
     } else {
         format!("{base_url}/")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn namespaced_model_prefixes_compat_adapters() {
+        assert_eq!(
+            namespaced_model("groq", "llama-3.3-70b-versatile"),
+            "groq::llama-3.3-70b-versatile"
+        );
+        assert_eq!(namespaced_model("xai", "grok-4.3"), "xai::grok-4.3");
+        assert_eq!(
+            namespaced_model("openrouter", "openai/gpt-4.1-mini"),
+            "open_router::openai/gpt-4.1-mini"
+        );
+        assert_eq!(
+            namespaced_model("deepseek", "deepseek-chat"),
+            "deepseek::deepseek-chat"
+        );
+    }
+
+    #[test]
+    fn namespaced_model_leaves_native_adapters_clean() {
+        assert_eq!(namespaced_model("openai", "gpt-5-mini"), "gpt-5-mini");
+        assert_eq!(
+            namespaced_model("anthropic", "claude-haiku-4-5"),
+            "claude-haiku-4-5"
+        );
+        assert_eq!(
+            namespaced_model("gemini", "gemini-2.5-flash"),
+            "gemini-2.5-flash"
+        );
+    }
+
+    #[test]
+    fn adapter_kind_round_trips_to_provider_id() {
+        for provider_id in [
+            "openai",
+            "anthropic",
+            "gemini",
+            "groq",
+            "xai",
+            "openrouter",
+            "deepseek",
+            "cohere",
+        ] {
+            let kind = adapter_kind_for_provider(provider_id)
+                .unwrap_or_else(|| panic!("{provider_id} should map to a genai adapter"));
+            assert_eq!(provider_id_for_adapter(kind), Some(provider_id));
+        }
+    }
+
+    #[test]
+    fn compat_providers_hide_reasoning_control() {
+        let providers = catalog::launch_providers();
+        let supports = |id: &str| {
+            providers
+                .iter()
+                .find(|provider| provider.id == id)
+                .map(|provider| provider.supports_reasoning)
+        };
+        // genai drops reasoning_effort for the OpenAI-compatible adapters -> hide the control.
+        assert_eq!(supports("groq"), Some(false));
+        assert_eq!(supports("xai"), Some(false));
+        assert_eq!(supports("openrouter"), Some(false));
+        // native adapters keep reasoning.
+        assert_eq!(supports("openai"), Some(true));
+        assert_eq!(supports("anthropic"), Some(true));
+        assert_eq!(supports("gemini"), Some(true));
     }
 }

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct AiProvider {
     pub id: String,
     pub label: String,
+    pub status: String,
     pub requires_api_key: bool,
     pub supports_base_url: bool,
     pub supports_reasoning: bool,

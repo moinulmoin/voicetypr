@@ -1,0 +1,96 @@
+{
+  "anthropic": {
+    "adapter": "Anthropic",
+    "auth": "api_key",
+    "label": "Anthropic",
+    "namespace": null,
+    "recommended": [
+      "claude-haiku-4-5",
+      "claude-sonnet-4-5"
+    ],
+    "runtime": "genai_adapter",
+    "snapshot_id": "anthropic",
+    "status": "production"
+  },
+  "cohere": {
+    "adapter": "Cohere",
+    "auth": "api_key",
+    "namespace": null,
+    "recommended": [
+      "command-a-03-2025"
+    ],
+    "runtime": "genai_adapter",
+    "snapshot_id": "cohere",
+    "status": "hidden"
+  },
+  "deepseek": {
+    "adapter": "DeepSeek",
+    "auth": "api_key",
+    "namespace": "deepseek::",
+    "recommended": [
+      "deepseek-chat"
+    ],
+    "runtime": "genai_adapter",
+    "snapshot_id": "deepseek",
+    "status": "hidden"
+  },
+  "gemini": {
+    "adapter": "Gemini",
+    "auth": "api_key",
+    "label": "Google Gemini",
+    "namespace": null,
+    "recommended": [
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite"
+    ],
+    "runtime": "genai_adapter",
+    "snapshot_id": "google",
+    "status": "production"
+  },
+  "groq": {
+    "adapter": "Groq",
+    "auth": "api_key",
+    "namespace": "groq::",
+    "recommended": [
+      "llama-3.3-70b-versatile"
+    ],
+    "runtime": "genai_adapter",
+    "snapshot_id": "groq",
+    "status": "experimental"
+  },
+  "openai": {
+    "adapter": "OpenAI",
+    "auth": "api_key",
+    "label": "OpenAI",
+    "namespace": null,
+    "recommended": [
+      "gpt-5-mini",
+      "gpt-5-nano"
+    ],
+    "runtime": "genai_adapter",
+    "snapshot_id": "openai",
+    "status": "production"
+  },
+  "openrouter": {
+    "adapter": "OpenRouter",
+    "auth": "api_key",
+    "namespace": "open_router::",
+    "recommended": [
+      "openai/gpt-4.1-mini"
+    ],
+    "runtime": "genai_adapter",
+    "snapshot_id": "openrouter",
+    "status": "experimental"
+  },
+  "xai": {
+    "adapter": "Xai",
+    "auth": "api_key",
+    "namespace": "xai::",
+    "recommended": [
+      "grok-4.3"
+    ],
+    "runtime": "genai_adapter",
+    "snapshot_id": "xai",
+    "status": "experimental"
+  }
+}

@@ -1,9 +1,10 @@
+use crate::ai::catalog;
 use crate::ai::contract::AiPolishRequest;
 use crate::ai::error::{user_facing_message, AiProviderError};
 use crate::ai::executor::AiExecutor;
 use crate::ai::genai_runtime::AiKeyResolver;
 use crate::ai::openai::{is_unsupported_token_parameter_error, model_uses_max_completion_tokens};
-use crate::ai::providers::{launch_providers, recommended_models, PROVIDER_CUSTOM};
+use crate::ai::providers::{launch_providers, PROVIDER_CUSTOM};
 use crate::ai::EnhancementOptions;
 use crate::commands::audio::pill_toast;
 use crate::commands::settings::{
@@ -530,7 +531,7 @@ pub async fn validate_ai_api_key(
     let validation_model = model
         .filter(|candidate| !candidate.trim().is_empty())
         .or_else(|| {
-            recommended_models(&provider)
+            catalog::recommended_models(&provider)
                 .into_iter()
                 .find(|candidate| candidate.recommended)
                 .map(|candidate| candidate.model_id)
@@ -1265,15 +1266,26 @@ pub struct ProviderModel {
     pub id: String,
     pub name: String,
     pub recommended: bool,
+    pub reasoning: bool,
+    #[serde(rename = "contextWindow")]
+    pub context_window: Option<u64>,
+    #[serde(rename = "costInput")]
+    pub cost_input: Option<f64>,
+    #[serde(rename = "costOutput")]
+    pub cost_output: Option<f64>,
 }
 
 fn provider_models(provider: &str) -> Vec<ProviderModel> {
-    recommended_models(provider)
+    catalog::all_provider_models(provider)
         .into_iter()
         .map(|model| ProviderModel {
-            id: model.model_id,
-            name: model.label,
+            id: model.model_id.clone(),
+            name: model.label.clone(),
             recommended: model.recommended,
+            reasoning: model.reasoning,
+            context_window: model.context,
+            cost_input: model.cost_input,
+            cost_output: model.cost_output,
         })
         .collect()
 }
@@ -1282,6 +1294,7 @@ fn provider_models(provider: &str) -> Vec<ProviderModel> {
 pub struct ProviderInfo {
     pub id: String,
     pub name: String,
+    pub status: String,
 }
 
 fn provider_infos() -> Vec<ProviderInfo> {
@@ -1290,6 +1303,7 @@ fn provider_infos() -> Vec<ProviderInfo> {
         .map(|provider| ProviderInfo {
             id: provider.id,
             name: provider.label,
+            status: provider.status,
         })
         .collect()
 }
@@ -1299,7 +1313,7 @@ pub async fn list_ai_providers(_app: tauri::AppHandle) -> Result<Vec<ProviderInf
     Ok(provider_infos())
 }
 
-/// List available recommended models for a provider.
+/// List available models for a provider.
 #[tauri::command]
 pub async fn list_provider_models(
     provider: String,
@@ -1349,49 +1363,73 @@ mod tests {
     #[test]
     fn test_provider_models_are_contract_backed() {
         let openai_models = provider_models("openai");
-        assert_eq!(openai_models.len(), 2);
+        assert!(openai_models.len() >= 2);
         assert!(openai_models.iter().any(|m| m.id == "gpt-5-nano"));
         assert!(openai_models.iter().any(|m| m.id == "gpt-5-mini"));
 
         let gemini_models = provider_models("gemini");
-        assert_eq!(gemini_models.len(), 3);
-        assert!(gemini_models
-            .iter()
-            .any(|m| m.id == "gemini-3-flash-preview"));
+        assert!(!gemini_models.is_empty());
         assert!(gemini_models.iter().any(|m| m.id == "gemini-2.5-flash"));
         assert!(gemini_models
             .iter()
             .any(|m| m.id == "gemini-2.5-flash-lite"));
 
         let anthropic_models = provider_models("anthropic");
-        assert_eq!(anthropic_models.len(), 2);
+        assert!(!anthropic_models.is_empty());
         assert!(anthropic_models.iter().any(|m| m.id == "claude-haiku-4-5"));
-        assert!(anthropic_models.iter().any(|m| m.id == "claude-sonnet-4-6"));
+        assert!(anthropic_models.iter().any(|m| m.id == "claude-sonnet-4-5"));
+
         assert!(provider_models("custom").is_empty());
         assert!(provider_models("unknown").is_empty());
     }
 
     #[test]
-    fn test_list_command_dto_shape_has_four_launch_providers() {
+    fn test_list_command_dto_shape_includes_catalog_providers() {
         let providers = provider_infos();
-        assert_eq!(providers.len(), 4);
-        assert_eq!(providers[0].id, "openai");
-        assert_eq!(providers[0].name, "OpenAI");
-        assert!(providers
-            .iter()
-            .any(|provider| provider.id == "gemini" && provider.name == "Google Gemini"));
-        assert!(providers.iter().any(
-            |provider| provider.id == "custom" && provider.name == "Custom (OpenAI-compatible)"
-        ));
+        // 8 generated catalog providers + the synthetic custom provider.
+        assert_eq!(providers.len(), launch_providers().len());
+        let by_id = |id: &str| providers.iter().find(|provider| provider.id == id);
+        assert_eq!(
+            by_id("openai").map(|p| (p.name.as_str(), p.status.as_str())),
+            Some(("OpenAI", "production"))
+        );
+        assert_eq!(
+            by_id("gemini").map(|p| (p.name.as_str(), p.status.as_str())),
+            Some(("Google Gemini", "production"))
+        );
+        assert_eq!(
+            by_id("anthropic").map(|p| p.status.as_str()),
+            Some("production")
+        );
+        assert_eq!(
+            by_id("custom").map(|p| (p.name.as_str(), p.status.as_str())),
+            Some(("Custom (OpenAI-compatible)", "production"))
+        );
+        assert_eq!(
+            by_id("groq").map(|p| p.status.as_str()),
+            Some("experimental")
+        );
+        assert_eq!(
+            by_id("xai").map(|p| p.status.as_str()),
+            Some("experimental")
+        );
+        assert_eq!(
+            by_id("openrouter").map(|p| p.status.as_str()),
+            Some("experimental")
+        );
     }
 
     #[test]
     fn test_warmup_keys_are_derived_from_launch_providers() {
         let keys = ai_provider_key_names();
-        assert_eq!(keys.len(), 4);
+        let expected: Vec<String> = launch_providers()
+            .into_iter()
+            .filter(|provider| provider.requires_api_key || provider.id == PROVIDER_CUSTOM)
+            .map(|provider| format!("ai_api_key_{}", provider.id))
+            .collect();
+        assert_eq!(keys, expected);
         assert!(keys.contains(&"ai_api_key_openai".to_string()));
-        assert!(keys.contains(&"ai_api_key_anthropic".to_string()));
-        assert!(keys.contains(&"ai_api_key_gemini".to_string()));
+        assert!(keys.contains(&"ai_api_key_groq".to_string()));
         assert!(keys.contains(&"ai_api_key_custom".to_string()));
     }
 

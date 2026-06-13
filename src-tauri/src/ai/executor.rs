@@ -2,7 +2,7 @@ use super::contract::{AiPolishRequest, AiPolishResult};
 use super::error::{AiProviderError, MappedAiProviderError};
 use super::genai_runtime::{AiKeyResolver, GenaiRuntime};
 use super::openai_compatible::OpenAiCompatibleRuntime;
-use super::providers::{is_native_provider, PROVIDER_CUSTOM};
+use super::providers::PROVIDER_CUSTOM;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
@@ -119,7 +119,7 @@ impl AiExecutor {
         &self,
         request: &AiPolishRequest,
     ) -> Result<String, MappedAiProviderError> {
-        if is_native_provider(&request.provider_id) {
+        if crate::ai::catalog::is_native_provider(&request.provider_id) {
             self.genai_runtime.polish(request).await
         } else if request.provider_id == PROVIDER_CUSTOM {
             self.custom_runtime.polish(request).await

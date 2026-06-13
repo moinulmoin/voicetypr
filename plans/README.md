@@ -31,8 +31,6 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 |------|-------|----------|--------|------------|--------|
 | 013  | *(reserved: close 004/008 smoke blockers — checklist, no plan file yet)* | P1 | S | 004, 008 | RESERVED — no executable plan file yet |
 | 014  | *(reserved: shared transcription contract stage 1 — executor implementation of plan 012's design)* | P1 | L | 012 | RESERVED — no executable plan file yet |
-| 017  | AI provider catalog + searchable breadth UI | P2 | M | 016 | IN PROGRESS — claimed Main 2026-06-13 |
-| 018  | AI provider graduation — OpenRouter, Groq, xAI | P2-P3 | S-M each | 016, 017 | IN PROGRESS — claimed Main 2026-06-13 |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
@@ -43,6 +41,8 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 015  | Pipeline feel — start latency, decode watchdogs, never-lose-speech | `b1a66bf` | NEEDS-SMOKE |
 | 016  | AI polish Rust-native cutover — current providers, Pi sidecar removed | `3986b45`..`fb09a61` | NEEDS-SMOKE — steps 1-7 done; sidecar gone; triple-check audit findings fixed + independently re-reviewed; live invalid-key/bad-URL smoke passed; remaining items in SMOKE.md |
 | 019  | Cloud STT shortlist — Soniox + OpenAI/Groq/Deepgram/Cohere | `2026-06-12` (this session) | NEEDS-SMOKE — `cloud_stt` seam + 4 new providers + Soniox migration; clean cutover (no soniox-only residue); pre-merge reliability bar met (owned 120s/15s client, retry-once on transient, typed `SttError` categories, no raw provider bodies); Cohere language restricted to its 14; all automated gates green; real-key desktop smoke in `SMOKE.md` |
+| 017  | AI provider catalog + searchable breadth UI | `2026-06-13` (this session) | NEEDS-SMOKE — generated catalog (8 providers / 465 models from a pinned `models.dev` snapshot + overlay) replaces the static 4-provider table; data-driven genai dispatch + `groq::`/`xai::`/`open_router::` namespacing (deliverable 1b), 016 reliability policy untouched; searchable/grouped/badged picker UI (experimental badge, Advanced-gated hidden); all automated gates green; real-key smoke in `SMOKE.md` |
+| 018  | AI provider graduation — OpenRouter, Groq, xAI | `2026-06-13` (this session) | NEEDS-SMOKE — OpenRouter/Groq/xAI shipped `experimental` (catalog + genai namespacing + reasoning-control-hidden + namespacing unit tests); validation/error/timeout/retry inherited from 016 runtime; DeepSeek/Cohere added `hidden`. Per-provider graduation `experimental`→`production` gated on real-key smoke (SMOKE.md): OpenRouter NEEDS-SMOKE / Groq NEEDS-SMOKE / xAI NEEDS-SMOKE |
 
 ## Archived (closed — `plans/archive/`)
 

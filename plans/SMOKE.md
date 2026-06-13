@@ -82,6 +82,34 @@ Deepgram `nova-3`, Cohere `cohere-transcribe-03-2026`, Soniox `stt-async-v3`).
 - [ ] 019-S7 Upload + re-transcribe history flows label the source as
       "<Provider> (Cloud)".
 
+## Plan 017 — AI provider catalog + breadth UI (code `2026-06-13`, NEEDS-SMOKE)
+
+Catalog-driven provider/model picker. The 4 production providers (OpenAI,
+Anthropic, Google Gemini, Custom) must behave exactly as in plan 016.
+
+- [ ] 017-S1 Production unchanged: existing OpenAI/Anthropic/Gemini/Custom keys
+      still validate, select, and polish exactly as before the catalog change.
+- [ ] 017-S2 Search filters across provider names AND model ids; clearing
+      restores the grouped Recommended/All view.
+- [ ] 017-S3 Advanced toggle: hidden providers (DeepSeek, Cohere) appear only
+      when "Advanced" is on; experimental providers (Groq/xAI/OpenRouter) show
+      the Experimental badge by default.
+- [ ] 017-S4 Per-provider model memory persists across provider switches.
+
+## Plan 018 — provider graduation (code `2026-06-13`, experimental; graduate per provider)
+
+Each provider graduates `experimental`→`production` ONLY after its row passes
+with a real key (flip overlay status + `python3 generate.py` + commit). Without
+a key it stays `experimental` — acceptable end state, not a failure.
+
+- [ ] 018-OpenRouter real key → select `openai/gpt-4.1-mini` → polish round-trip;
+      invalid key → InvalidApiKey error; then flip overlay to production.
+- [ ] 018-Groq real key → `llama-3.3-70b-versatile` (routes `groq::`) polish
+      round-trip; reasoning control hidden; then flip to production.
+- [ ] 018-xAI real key → `grok-4.3` (routes `xai::`) polish round-trip; then flip.
+- [ ] 018-common forced failure (cut network mid-polish) → raw-transcript
+      fallback + "polish failed" notice; app stays responsive.
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are

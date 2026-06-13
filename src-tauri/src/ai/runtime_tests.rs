@@ -4,9 +4,7 @@ mod tests {
     use super::super::error::AiProviderError;
     use super::super::executor::AiExecutor;
     use super::super::genai_runtime::AiKeyResolver;
-    use super::super::providers::{
-        PROVIDER_ANTHROPIC, PROVIDER_CUSTOM, PROVIDER_GEMINI, PROVIDER_OPENAI,
-    };
+    use super::super::providers::PROVIDER_CUSTOM;
     use reqwest::header::AUTHORIZATION;
     use serde_json::{json, Value};
     use std::collections::HashMap;
@@ -16,6 +14,10 @@ mod tests {
     use tokio_util::sync::CancellationToken;
     use wiremock::matchers::{method, path_regex};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+    const PROVIDER_OPENAI: &str = "openai";
+    const PROVIDER_ANTHROPIC: &str = "anthropic";
+    const PROVIDER_GEMINI: &str = "gemini";
 
     #[derive(Clone, Copy, Debug)]
     struct ProviderCase {

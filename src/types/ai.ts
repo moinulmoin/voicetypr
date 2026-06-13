@@ -41,6 +41,8 @@ export const presetDisplayLabel = (preset: EnhancementPreset): string => {
 export const defaultPresetForAiEnabled = (aiEnabled: boolean): EnhancementPreset =>
   aiEnabled ? 'CleanDictation' : 'PersonalDictation';
 
+export type AiProviderStatus = 'production' | 'experimental' | 'hidden';
+
 /** Migrate a backend preset value (possibly legacy) to the V2 contract. */
 export const migratePreset = (raw: string, aiEnabled = false): EnhancementPreset => {
   switch (raw) {
@@ -87,6 +89,10 @@ export interface AIModel {
   name: string;
   provider: string;
   description?: string;
+  reasoning?: boolean;
+  contextWindow?: number | null;
+  costInput?: number | null;
+  costOutput?: number | null;
 }
 
 // Helper to convert between frontend camelCase and backend snake_case

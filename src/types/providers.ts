@@ -3,10 +3,16 @@
  * Models are fetched dynamically from provider APIs.
  */
 
+export type AiProviderStatus = "production" | "experimental" | "hidden";
+
 export interface AIProviderModel {
   id: string;
   name: string;
   recommended: boolean;
+  reasoning?: boolean;
+  contextWindow?: number | null;
+  costInput?: number | null;
+  costOutput?: number | null;
 }
 
 // Mirrors Rust `crate::ai::contract::AiProvider`.
@@ -16,6 +22,7 @@ export interface AiProvider {
   id: string;
   label?: string;
   name?: string;
+  status: AiProviderStatus;
   requires_api_key?: boolean;
   requiresApiKey?: boolean;
   supports_base_url?: boolean;
@@ -59,6 +66,7 @@ export function toProviderConfig(provider: AiProvider): AIProviderConfig {
 
   return {
     ...provider,
+    status: provider.status ?? "production",
     name: provider.name ?? provider.label ?? provider.id,
     color: metadata.color,
     apiKeyUrl: metadata.apiKeyUrl,

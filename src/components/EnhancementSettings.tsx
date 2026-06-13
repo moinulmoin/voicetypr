@@ -1103,6 +1103,7 @@ export function EnhancementSettings({
             </FieldDescription>
           </FieldContent>
           <Switch
+            aria-label="Context-aware cleanup"
             checked={writingSettings.context_policy === "app_hint_only"}
             disabled={writingSettingsDisabled}
             onCheckedChange={(checked) =>

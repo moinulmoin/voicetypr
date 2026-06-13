@@ -8,7 +8,15 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 const mockModels = [
-  { id: 'gpt-5-nano', name: 'GPT-5 Nano', recommended: true },
+  {
+    id: 'gpt-5-nano',
+    name: 'GPT-5 Nano',
+    recommended: true,
+    reasoning: true,
+    contextWindow: 400000,
+    costInput: 0.05,
+    costOutput: 0.4,
+  },
   { id: 'gpt-5-mini', name: 'GPT-5 Mini', recommended: true },
 ];
 

@@ -1,7 +1,7 @@
 import { ApiKeyModal } from "@/components/ApiKeyModal";
 import { EnhancementSettings } from "@/components/EnhancementSettings";
 import { OpenAICompatConfigModal } from "@/components/OpenAICompatConfigModal";
-import { ProviderCard } from "@/components/ProviderCard";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -19,6 +19,7 @@ import {
   FieldSet,
   FieldTitle,
 } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
@@ -30,7 +31,7 @@ import {
 } from "@/types/ai";
 import type { WritingSettings } from "@/types/writing";
 import { defaultWritingSettings, mergeWritingSettings } from "@/types/writing";
-import type { AiProvider, AIProviderConfig } from "@/types/providers";
+import type { AiProvider, AIProviderConfig, AIProviderModel } from "@/types/providers";
 import { toProviderConfig } from "@/types/providers";
 import { useAllProviderModels } from "@/hooks/useProviderModels";
 import { hasApiKey, removeApiKey, saveApiKey, getApiKey } from "@/utils/keyring";
@@ -40,9 +41,10 @@ import { useSettings } from "@/contexts/SettingsContext";
 import { humanizeModelId } from "@/lib/model-display";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { HelpCircle } from "lucide-react";
+import { Check, ExternalLink, HelpCircle, Key, Loader2, RefreshCw, Search, Settings2, Star, Trash2 } from "lucide-react";
 
 
 type AISettingsResponse = Omit<AISettings, "modelsByProvider"> & {
@@ -54,6 +56,21 @@ const normalizeAISettings = (settings: AISettingsResponse): AISettings => ({
   ...settings,
   modelsByProvider: settings.modelsByProvider ?? {},
 });
+
+const providerSupportsReasoning = (provider: AIProviderConfig) =>
+  provider.supports_reasoning ?? provider.supportsReasoning ?? false;
+
+const formatModelCost = (model: AIProviderModel) => {
+  if (model.costInput == null && model.costOutput == null) {
+    return null;
+  }
+  const input = model.costInput == null ? "?" : `$${model.costInput}`;
+  const output = model.costOutput == null ? "?" : `$${model.costOutput}`;
+  return `${input}/${output}`;
+};
+
+const modelMatchesQuery = (model: AIProviderModel, query: string) =>
+  model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query);
 
 export function EnhancementsSection() {
   const readiness = useReadinessState();
@@ -71,6 +88,9 @@ export function EnhancementsSection() {
   const [aiModelNeedsReselection, setAiModelNeedsReselection] = useState(false);
 
   const [providers, setProviders] = useState<AIProviderConfig[]>([]);
+
+  const [providerSearch, setProviderSearch] = useState("");
+  const [showAdvancedProviders, setShowAdvancedProviders] = useState(false);
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [showOpenAIConfig, setShowOpenAIConfig] = useState(false);
@@ -193,12 +213,11 @@ export function EnhancementsSection() {
         }));
       }
 
-      const providersWithKeys = allProviders.filter(
-        (providerId) => keyStatus[providerId] && providerId !== "custom",
-      );
-      providersWithKeys.forEach((providerId) => {
-        fetchModels(providerId);
-      });
+      listedProviders
+        .filter((provider) => !provider.isCustom)
+        .forEach((provider) => {
+          fetchModels(provider.id);
+        });
 
       return loadedAISettings;
     } catch (error) {
@@ -576,6 +595,27 @@ export function EnhancementsSection() {
     : getModels(aiSettings.provider).find((model) => model.id === aiSettings.model)?.name ||
       humanizeModelId(aiSettings.model);
 
+  const visibleProviders = useMemo(
+    () => providers.filter((provider) => showAdvancedProviders || provider.status !== "hidden"),
+    [providers, showAdvancedProviders],
+  );
+  const providerQuery = providerSearch.trim().toLowerCase();
+  const filteredProviders = useMemo(() => {
+    if (!providerQuery) {
+      return visibleProviders;
+    }
+
+    return visibleProviders.filter((provider) => {
+      const providerMatches = provider.name.toLowerCase().includes(providerQuery);
+      const customModelMatches =
+        provider.isCustom && customModelName.toLowerCase().includes(providerQuery);
+      const modelsMatch = getModels(provider.id).some((model) =>
+        modelMatchesQuery(model, providerQuery),
+      );
+      return providerMatches || customModelMatches || modelsMatch;
+    });
+  }, [customModelName, getModels, providerQuery, visibleProviders]);
+
   const hasLoadingProviders = providers.some((provider) => isModelsLoading(provider.id));
 
   return (
@@ -665,7 +705,37 @@ export function EnhancementsSection() {
             )}
 
             <FieldGroup className="gap-3">
-              {providers.map((provider) => {
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="relative flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="ai-provider-model-search"
+                    aria-label="Search providers and models"
+                    value={providerSearch}
+                    onChange={(event) => setProviderSearch(event.target.value)}
+                    placeholder="Search providers or models"
+                    className="pl-9"
+                  />
+                </div>
+                <Field orientation="horizontal" className="w-auto items-center gap-2">
+                  <FieldTitle className="text-sm">Advanced</FieldTitle>
+                  <Switch
+                    id="advanced-ai-providers"
+                    aria-label="Show advanced AI providers"
+                    checked={showAdvancedProviders}
+                    onCheckedChange={setShowAdvancedProviders}
+                  />
+                </Field>
+              </div>
+
+              {filteredProviders.length === 0 && (
+                <div className="rounded-lg border border-dashed border-border/70 px-4 py-6 text-center text-sm text-muted-foreground">
+                  No providers or models match your search.
+                </div>
+              )}
+
+              {filteredProviders.map((provider) => {
+                const hasKey = providerApiKeys[provider.id] || false;
                 const isCustomActive = Boolean(
                   provider.isCustom &&
                     aiSettings.provider === "custom" &&
@@ -675,28 +745,222 @@ export function EnhancementsSection() {
                 const isActive = provider.isCustom
                   ? isCustomActive
                   : Boolean(aiSettings.provider === provider.id && aiSettings.enabled);
+                const selectedModel = provider.isCustom
+                  ? aiSettings.modelsByProvider.custom || customModelName || null
+                  : aiSettings.modelsByProvider[provider.id] ||
+                    (aiSettings.provider === provider.id ? aiSettings.model : null);
+                const models = getModels(provider.id);
+                const providerMatches = provider.name.toLowerCase().includes(providerQuery);
+                const displayModels =
+                  providerQuery && !providerMatches
+                    ? models.filter((model) => modelMatchesQuery(model, providerQuery))
+                    : models;
+                const recommendedModels = displayModels.filter((model) => model.recommended);
+                const allModels = displayModels.filter((model) => !model.recommended);
+                const selectedModelData = models.find((model) => model.id === selectedModel);
+                const showModelPicker = !provider.isCustom && (hasKey || Boolean(providerQuery));
+                const modelGroups = ([
+                  ["Recommended", recommendedModels],
+                  ["All", allModels],
+                ] satisfies Array<[string, AIProviderModel[]]>).filter(
+                  ([, groupModels]) => groupModels.length > 0,
+                );
 
                 return (
-                  <ProviderCard
+                  <div
                     key={provider.id}
-                    provider={provider}
-                    hasApiKey={providerApiKeys[provider.id] || false}
-                    isActive={isActive}
-                    selectedModel={
-                      provider.isCustom
-                        ? aiSettings.modelsByProvider.custom || customModelName || null
-                        : aiSettings.modelsByProvider[provider.id] ||
-                          (aiSettings.provider === provider.id ? aiSettings.model : null)
-                    }
-                    onSetupApiKey={() => handleSetupApiKey(provider.id)}
-                    onRemoveApiKey={() => handleRemoveApiKey(provider.id)}
-                    onSelectModel={(modelId) => handleSelectModel(provider.id, modelId)}
-                    models={getModels(provider.id)}
-                    modelsLoading={isModelsLoading(provider.id)}
-                    modelsError={getError(provider.id)}
-                    onRefreshModels={() => fetchModels(provider.id)}
-                    customModelName={provider.isCustom ? customModelName : undefined}
-                  />
+                    className={`rounded-xl border border-border/60 bg-background p-4 transition-all ${
+                      isActive ? "border-primary/50 bg-primary/5" : ""
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex flex-wrap items-center gap-2">
+                          <h3 className={`font-semibold ${provider.color}`}>{provider.name}</h3>
+                          {provider.status === "experimental" && (
+                            <Badge variant="outline" className="border-amber-500/40 text-amber-700 dark:text-amber-300">
+                              Experimental
+                            </Badge>
+                          )}
+                          {provider.status === "hidden" && (
+                            <Badge variant="outline">Advanced</Badge>
+                          )}
+                          {providerSupportsReasoning(provider) && (
+                            <Badge variant="secondary">Reasoning</Badge>
+                          )}
+                          {isActive && (
+                            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                              Active
+                            </span>
+                          )}
+                        </div>
+
+                        {provider.isCustom && hasKey && customModelName && (
+                          <p className="text-sm text-muted-foreground">
+                            Model: <span className="text-foreground">{customModelName}</span>
+                          </p>
+                        )}
+                        {!hasKey && (
+                          <p className="text-sm text-muted-foreground">
+                            {provider.isCustom ? "Configure endpoint to enable" : "Add API key to enable"}
+                          </p>
+                        )}
+                        {showModelPicker && selectedModel && (
+                          <p className="text-sm text-muted-foreground">
+                            Selected model:{" "}
+                            <span className="text-foreground">
+                              {selectedModelData?.name || humanizeModelId(selectedModel)}
+                            </span>
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {hasKey ? (
+                          <>
+                            {provider.isCustom && (
+                              <Button onClick={() => handleSetupApiKey(provider.id)} variant="ghost" size="sm">
+                                <Settings2 className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            {!provider.isCustom && (
+                              <Button
+                                onClick={() => fetchModels(provider.id)}
+                                variant="ghost"
+                                size="sm"
+                                className="text-muted-foreground"
+                                disabled={isModelsLoading(provider.id)}
+                                title={`Refresh ${provider.name} models`}
+                              >
+                                <RefreshCw className={`h-3.5 w-3.5 ${isModelsLoading(provider.id) ? "animate-spin" : ""}`} />
+                              </Button>
+                            )}
+                            <Button
+                              onClick={async () => {
+                                const message = provider.isCustom
+                                  ? `Remove configuration for ${provider.name}?`
+                                  : `Remove API key for ${provider.name}?`;
+                                const confirmed = await ask(message, {
+                                  title: provider.isCustom ? "Remove Configuration" : "Remove API Key",
+                                  kind: "warning",
+                                });
+                                if (confirmed) {
+                                  handleRemoveApiKey(provider.id);
+                                }
+                              }}
+                              variant="ghost"
+                              size="sm"
+                              className="text-muted-foreground hover:text-destructive"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            {!provider.isCustom && provider.apiKeyUrl && (
+                              <Button
+                                onClick={() => window.open(provider.apiKeyUrl, "_blank")}
+                                variant="ghost"
+                                size="sm"
+                                className="text-muted-foreground"
+                                title={`Get ${provider.name} API Key`}
+                              >
+                                <ExternalLink className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            <Button onClick={() => handleSetupApiKey(provider.id)} variant="outline" size="sm">
+                              {provider.isCustom ? (
+                                <>
+                                  <Settings2 className="mr-1.5 h-3.5 w-3.5" />
+                                  Configure
+                                </>
+                              ) : (
+                                <>
+                                  <Key className="mr-1.5 h-3.5 w-3.5" />
+                                  Add Key
+                                </>
+                              )}
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {showModelPicker && (
+                      <div className="mt-3 space-y-3 border-t border-border/50 pt-3">
+                        {isModelsLoading(provider.id) && models.length === 0 && (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Loading models...
+                          </div>
+                        )}
+                        {getError(provider.id) && (
+                          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 px-3 py-2 text-sm text-destructive">
+                            <span>{getError(provider.id)}</span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => fetchModels(provider.id)}
+                              disabled={isModelsLoading(provider.id)}
+                            >
+                              Retry
+                            </Button>
+                          </div>
+                        )}
+                        {!isModelsLoading(provider.id) && !getError(provider.id) && modelGroups.length === 0 && (
+                          <p className="text-sm text-muted-foreground">No models available</p>
+                        )}
+                        {modelGroups.map(([label, groupModels]) => (
+                          <div key={`${provider.id}-${label}`} className="space-y-1.5">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                              {label}
+                            </p>
+                            <div className="grid gap-1.5 md:grid-cols-2">
+                              {groupModels.map((model) => {
+                                const cost = formatModelCost(model);
+                                return (
+                                  <Button
+                                    key={model.id}
+                                    type="button"
+                                    variant={selectedModel === model.id ? "secondary" : "ghost"}
+                                    className="h-auto justify-start px-3 py-2 text-left"
+                                    onClick={() => handleSelectModel(provider.id, model.id)}
+                                    disabled={!hasKey}
+                                    title={hasKey ? undefined : `Add a ${provider.name} API key to select this model`}
+                                  >
+                                    <span className="flex min-w-0 flex-1 items-start gap-2">
+                                      {model.recommended && (
+                                        <Star className="mt-0.5 h-3.5 w-3.5 shrink-0 fill-amber-500 text-amber-500" />
+                                      )}
+                                      <span className="min-w-0">
+                                        <span className="block truncate font-medium">{model.name}</span>
+                                        <span className="block truncate text-xs text-muted-foreground">{model.id}</span>
+                                      </span>
+                                    </span>
+                                    <span className="ml-2 flex shrink-0 items-center gap-1">
+                                      {model.reasoning && (
+                                        <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
+                                          Reasoning
+                                        </Badge>
+                                      )}
+                                      {cost && (
+                                        <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
+                                          {cost}
+                                        </Badge>
+                                      )}
+                                      {selectedModel === model.id && (
+                                        <Check className="h-3.5 w-3.5 text-primary" />
+                                      )}
+                                    </span>
+                                  </Button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </FieldGroup>

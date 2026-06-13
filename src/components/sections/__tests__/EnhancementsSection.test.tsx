@@ -31,18 +31,39 @@ vi.mock('@/utils/keyring', () => ({
   getApiKey: vi.fn().mockResolvedValue(null),
 }))
 
+const providerModels = vi.hoisted(
+  (): Record<string, Array<{
+    id: string
+    name: string
+    recommended: boolean
+    reasoning?: boolean
+    contextWindow?: number | null
+    costInput?: number | null
+    costOutput?: number | null
+  }>> => ({
+    gemini: [{ id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', recommended: true }],
+    openai: [
+      {
+        id: 'gpt-5-mini',
+        name: 'GPT-5 Mini',
+        recommended: true,
+        reasoning: true,
+        contextWindow: 400000,
+        costInput: 0.25,
+        costOutput: 2,
+      },
+      { id: 'gpt-5-nano', name: 'GPT-5 Nano', recommended: false },
+    ],
+    anthropic: [{ id: 'claude-sonnet-4', name: 'Claude Sonnet 4', recommended: true }],
+    groq: [{ id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile', recommended: true }],
+    deepseek: [{ id: 'deepseek-chat', name: 'DeepSeek Chat', recommended: true }],
+  }),
+)
+
 vi.mock('@/hooks/useProviderModels', () => ({
   useAllProviderModels: () => ({
     fetchModels: vi.fn(),
-    getModels: (providerId: string) => {
-      if (providerId === 'gemini') {
-        return [{ id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' }]
-      }
-      if (providerId === 'openai') {
-        return [{ id: 'gpt-5-mini', name: 'GPT-5 Mini' }]
-      }
-      return []
-    },
+    getModels: (providerId: string) => providerModels[providerId] || [],
     isLoading: () => false,
     getError: () => null,
     clearModels: vi.fn(),
@@ -70,10 +91,12 @@ const enabledAISettings = {
 }
 
 const providerListResponse = [
-  { id: 'openai', name: 'OpenAI' },
-  { id: 'gemini', name: 'Google Gemini' },
-  { id: 'anthropic', name: 'Anthropic' },
-  { id: 'custom', name: 'Custom (OpenAI-compatible)' },
+  { id: 'openai', name: 'OpenAI', status: 'production', supportsReasoning: true },
+  { id: 'gemini', name: 'Google Gemini', status: 'production', supportsReasoning: true },
+  { id: 'anthropic', name: 'Anthropic', status: 'production', supportsReasoning: true },
+  { id: 'custom', name: 'Custom (OpenAI-compatible)', status: 'production', supportsBaseUrl: true },
+  { id: 'groq', name: 'Groq', status: 'experimental', supportsReasoning: false },
+  { id: 'deepseek', name: 'DeepSeek', status: 'hidden', supportsReasoning: false },
 ]
 
 let rejectWritingSettingsUpdate = false
@@ -146,12 +169,65 @@ describe('EnhancementsSection', () => {
             ? false
             : aiSettingsResponse.aiModelNeedsReselection,
         }
+
         return Promise.resolve(undefined)
       }
       if (cmd === 'cache_ai_api_key') {
         return Promise.resolve(undefined)
       }
       return Promise.resolve(undefined)
+    })
+  })
+
+  it('renders production providers, experimental badges, and gates hidden providers behind Advanced', async () => {
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    expect(await screen.findByText('OpenAI')).toBeInTheDocument()
+    expect(screen.getByText('Google Gemini')).toBeInTheDocument()
+    expect(screen.getByText('Anthropic')).toBeInTheDocument()
+    expect(screen.getByText('Custom (OpenAI-compatible)')).toBeInTheDocument()
+    expect(screen.getByText('Groq')).toBeInTheDocument()
+    expect(screen.getByText('Experimental')).toBeInTheDocument()
+    expect(screen.queryByText('DeepSeek')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('switch', { name: /show advanced ai providers/i }))
+
+    expect(await screen.findByText('DeepSeek')).toBeInTheDocument()
+  })
+
+  it('filters providers and grouped models by search text', async () => {
+    ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
+      providerId === 'openai' || providerId === 'groq',
+    )
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    await user.type(await screen.findByLabelText('Search providers and models'), 'llama')
+
+    await waitFor(() => {
+      expect(screen.queryByText('OpenAI')).not.toBeInTheDocument()
+      expect(screen.getByText('Groq')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /llama 3\.3 70b versatile/i })).toBeInTheDocument()
+      expect(screen.getByText('Recommended')).toBeInTheDocument()
+    })
+  })
+
+  it('persists selected model from the grouped picker', async () => {
+    ;(hasApiKey as ReturnType<typeof vi.fn>).mockImplementation(async (providerId: string) =>
+      providerId === 'openai',
+    )
+    const user = userEvent.setup()
+    renderWithProviders()
+
+    await user.click(await screen.findByRole('button', { name: /gpt-5 nano/i }))
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
+        enabled: false,
+        provider: 'openai',
+        model: 'gpt-5-nano',
+      })
     })
   })
 
@@ -481,8 +557,8 @@ describe('EnhancementsSection', () => {
   it('saves context-aware cleanup changes', async () => {
     renderWithProviders()
 
-    const switches = await screen.findAllByRole('switch')
-    fireEvent.click(switches[1])
+    const contextSwitch = await screen.findByRole('switch', { name: 'Context-aware cleanup' })
+    fireEvent.click(contextSwitch)
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('update_writing_settings', {
@@ -558,8 +634,7 @@ describe('EnhancementsSection', () => {
 
     renderWithProviders()
 
-    const switches = await screen.findAllByRole('switch')
-    const contextSwitch = switches[1]
+    const contextSwitch = await screen.findByRole('switch', { name: 'Context-aware cleanup' })
     expect(contextSwitch).toBeDisabled()
     fireEvent.click(contextSwitch)
     expect(
@@ -966,8 +1041,7 @@ describe('EnhancementsSection', () => {
     const openAICard = openAIHeading.closest('.p-4')
     expect(openAICard).toBeTruthy()
 
-    await user.click(within(openAICard as HTMLElement).getByRole('button', { name: /select model/i }))
-    await user.click(await screen.findByRole('menuitem', { name: /gpt-5 mini/i }))
+    await user.click(within(openAICard as HTMLElement).getByRole('button', { name: /gpt-5 mini/i }))
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('update_ai_settings', {
