@@ -73,6 +73,7 @@ use commands::{
     reset::reset_app_data,
     settings::*,
     stt::{clear_soniox_key_cache, validate_and_cache_soniox_key},
+    system_info::get_system_specs,
     text::*,
     utils::export_transcriptions,
     window::*,
@@ -1148,6 +1149,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_autostart_status,
             set_autostart,
             get_device_id,
+            get_system_specs,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
