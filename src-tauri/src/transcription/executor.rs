@@ -21,7 +21,8 @@ use tauri::{AppHandle, Manager};
 use tempfile::NamedTempFile;
 
 use crate::commands::audio::{
-    compile_parakeet_custom_vocabulary_for_transcription, resolve_engine_for_model,
+    compile_parakeet_custom_vocabulary_for_transcription,
+    parakeet_segments_to_transcription_segments, resolve_engine_for_model,
     transcribe_whisper_with_acceleration, ActiveEngineSelection,
 };
 use crate::parakeet::manager::{ParakeetManager, ParakeetTranscriptionOptions};
@@ -185,11 +186,12 @@ async fn route(
             {
                 Ok(ParakeetResponse::Transcription {
                     text,
+                    segments,
                     language,
                     duration,
-                    ..
                 }) => Ok(TranscriptionResult::new(job, text)
                     .with_transcript_language(language)
+                    .with_segments(parakeet_segments_to_transcription_segments(segments))
                     .with_audio_duration_ms(duration.map(|s| (s.max(0.0) * 1000.0) as u64))),
                 Ok(ParakeetResponse::Error { code, message, .. }) => Err(TranscriptionError::new(
                     TranscriptionErrorCode::EngineFailed,

@@ -544,7 +544,7 @@ fn is_non_speech_transcript(raw: &str) -> bool {
     )
 }
 
-fn parakeet_segments_to_transcription_segments(
+pub(crate) fn parakeet_segments_to_transcription_segments(
     segments: Vec<ParakeetSegment>,
 ) -> Vec<TranscriptionSegment> {
     segments

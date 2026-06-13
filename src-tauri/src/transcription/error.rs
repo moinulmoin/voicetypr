@@ -74,11 +74,15 @@ pub fn from_remote_client_error(
     let code = match err {
         E::AuthFailed { .. } => TranscriptionErrorCode::Unauthorized,
         E::Timeout { .. } => TranscriptionErrorCode::Timeout,
-        E::ConnectFailed { .. } | E::HttpStatus { .. } => TranscriptionErrorCode::TransportFailed,
-        E::ResponseDecode { .. } | E::ResponseSchema { .. } => {
-            TranscriptionErrorCode::ResponseInvalid
-        }
-        E::RequestBuild { .. } | E::JoinFailed { .. } => TranscriptionErrorCode::Internal,
+        // Per the shared error contract, every remaining remote-client failure
+        // (connect, HTTP status, response decode/schema, request build, task
+        // join) is a transport failure (design doc line 171).
+        E::ConnectFailed { .. }
+        | E::HttpStatus { .. }
+        | E::ResponseDecode { .. }
+        | E::ResponseSchema { .. }
+        | E::RequestBuild { .. }
+        | E::JoinFailed { .. } => TranscriptionErrorCode::TransportFailed,
     };
 
     TranscriptionError::new(code, source, user_message_for_code(code))
@@ -220,7 +224,7 @@ mod tests {
                     detail: "json".to_string(),
                     body: Some("not json".to_string()),
                 },
-                TranscriptionErrorCode::ResponseInvalid,
+                TranscriptionErrorCode::TransportFailed,
                 true,
             ),
             (
@@ -229,7 +233,7 @@ mod tests {
                     detail: "missing text".to_string(),
                     body: None,
                 },
-                TranscriptionErrorCode::ResponseInvalid,
+                TranscriptionErrorCode::TransportFailed,
                 true,
             ),
             (
@@ -237,16 +241,16 @@ mod tests {
                     endpoint,
                     detail: "client".to_string(),
                 },
-                TranscriptionErrorCode::Internal,
-                false,
+                TranscriptionErrorCode::TransportFailed,
+                true,
             ),
             (
                 RemoteClientError::JoinFailed {
                     endpoint,
                     detail: "panic".to_string(),
                 },
-                TranscriptionErrorCode::Internal,
-                false,
+                TranscriptionErrorCode::TransportFailed,
+                true,
             ),
         ];
 
