@@ -518,6 +518,23 @@ impl AudioRecorder {
             .unwrap_or(false)
     }
 
+    /// Returns true if a recording worker exists but its thread has already
+    /// finished. This is the case when the recorder self-terminated (silence
+    /// timeout, device error, or size cap) without `stop_recording` being
+    /// called. Non-consuming: `JoinHandle::is_finished` only borrows, so a
+    /// watchdog can poll this while the handle stays in the mutex.
+    pub fn recording_thread_finished(&self) -> bool {
+        self.recording_handle
+            .lock()
+            .map(|guard| {
+                guard
+                    .as_ref()
+                    .map(|h| h.thread_handle.is_finished())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    }
+
     pub fn take_audio_level_receiver(&mut self) -> Option<mpsc::Receiver<f64>> {
         self.audio_level_receiver
             .lock()
@@ -592,5 +609,52 @@ mod tests {
 
         handle.join().expect("Callback thread should not panic");
         assert!(callback_drained.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn recording_thread_finished_is_false_when_idle() {
+        let recorder = AudioRecorder::new();
+        // No worker started: nothing to observe.
+        assert!(!recorder.recording_thread_finished());
+    }
+
+    #[test]
+    fn recording_thread_finished_is_true_after_worker_self_exits() {
+        let recorder = AudioRecorder::new();
+        let (stop_tx, _stop_rx) = mpsc::channel::<RecorderCommand>();
+        // Worker returns immediately, mimicking a silence/error self-stop.
+        let thread_handle = thread::spawn(|| Ok::<String, String>("stopped".to_string()));
+        let start = Instant::now();
+        while !thread_handle.is_finished() {
+            assert!(
+                start.elapsed() < Duration::from_secs(2),
+                "worker never finished"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        *recorder.recording_handle.lock().unwrap() = Some(RecordingHandle {
+            stop_tx,
+            thread_handle,
+        });
+        // Handle still present but thread done: the orphan condition the watchdog detects.
+        assert!(recorder.recording_thread_finished());
+    }
+
+    #[test]
+    fn recording_thread_finished_is_false_while_worker_runs() {
+        let recorder = AudioRecorder::new();
+        let (stop_tx, stop_rx) = mpsc::channel::<RecorderCommand>();
+        // Worker blocks until told to stop, mimicking an active recording.
+        let thread_handle = thread::spawn(move || {
+            let _ = stop_rx.recv();
+            Ok::<String, String>("stopped".to_string())
+        });
+        *recorder.recording_handle.lock().unwrap() = Some(RecordingHandle {
+            stop_tx,
+            thread_handle,
+        });
+        assert!(!recorder.recording_thread_finished());
+        // Drop signals Stop (see Drop impl), so the worker exits cleanly.
+        drop(recorder);
     }
 }

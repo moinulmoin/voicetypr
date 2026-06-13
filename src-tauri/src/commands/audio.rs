@@ -28,6 +28,25 @@ use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_store::StoreExt;
 
+struct StopInFlightGuard(Arc<AtomicBool>);
+
+impl Drop for StopInFlightGuard {
+    fn drop(&mut self) {
+        self.0.store(false, AtomicOrdering::SeqCst);
+    }
+}
+
+/// When `stop_recording` finds no active recorder, only force the state back to
+/// Idle if a stop/transcribe flow is NOT already in progress. Writing Idle during
+/// Stopping/Transcribing would stomp a flow another caller already started (for
+/// example the recorder watchdog racing a user toggle off).
+fn stop_should_reset_to_idle(current: RecordingState) -> bool {
+    !matches!(
+        current,
+        RecordingState::Stopping | RecordingState::Transcribing
+    )
+}
+
 pub(crate) const PTT_START_ABORTED_AFTER_RELEASE: &str =
     "PTT key released before recording could start";
 const LICENSE_CHECK_TIMEOUT_SECS: u64 = 3;
@@ -465,6 +484,36 @@ mod tests {
         assert!(!is_non_retryable_transcription_error(
             "Whisper inference failed"
         ));
+    }
+
+    #[test]
+    fn stop_in_flight_guard_blocks_duplicates_and_resets_on_drop() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let flag = Arc::new(AtomicBool::new(false));
+        // First entry into stop_recording acquires the flag.
+        assert!(!flag.swap(true, Ordering::SeqCst));
+        {
+            let _guard = super::StopInFlightGuard(flag.clone());
+            // A concurrent duplicate entry sees the flag already set and bails out.
+            assert!(flag.swap(true, Ordering::SeqCst));
+        }
+        // Dropping the guard clears the flag so the next stop can proceed.
+        assert!(!flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn stop_does_not_reset_idle_during_active_flow() {
+        use super::stop_should_reset_to_idle;
+        use crate::RecordingState;
+        // Genuinely stuck/initial states should be reset to Idle.
+        assert!(stop_should_reset_to_idle(RecordingState::Recording));
+        assert!(stop_should_reset_to_idle(RecordingState::Idle));
+        assert!(stop_should_reset_to_idle(RecordingState::Error));
+        // An in-progress stop/transcribe flow must NOT be overridden.
+        assert!(!stop_should_reset_to_idle(RecordingState::Stopping));
+        assert!(!stop_should_reset_to_idle(RecordingState::Transcribing));
     }
 }
 
@@ -1698,6 +1747,17 @@ pub async fn stop_recording(
         ],
     );
 
+    let app_state = app.state::<AppState>();
+    if app_state.stop_in_flight.swap(true, AtomicOrdering::SeqCst) {
+        log::debug!("stop_recording: a stop is already in flight; ignoring duplicate call");
+        return Ok(String::new());
+    }
+    let _stop_guard = StopInFlightGuard(app_state.stop_in_flight.clone());
+    // Capture the state BEFORE the Stopping write below, so the no-recorder
+    // recovery path can distinguish "we entered while Recording" (reset to Idle)
+    // from "another stop/transcribe flow already owns the state" (leave it alone).
+    let entry_state = app_state.get_current_state();
+
     // Update state to stopping
     log_state_transition("RECORDING", "recording", "stopping", true, None);
     update_recording_state(&app, RecordingState::Stopping, None);
@@ -1718,13 +1778,27 @@ pub async fn stop_recording(
             log::warn!("stop_recording called but not currently recording");
             // Don't error - just return empty result, but make sure to reset state
             drop(recorder); // Drop the lock before updating state
-            update_recording_state(&app, RecordingState::Idle, None);
+            if stop_should_reset_to_idle(entry_state) {
+                update_recording_state(&app, RecordingState::Idle, None);
+            } else {
+                log::debug!(
+                    "stop_recording: stop/transcribe already in progress (entry state={:?}); not overriding",
+                    entry_state
+                );
+            }
             return Ok("".to_string());
         }
 
-        let stop_message = recorder
-            .stop_recording()
-            .map_err(|e| format!("Failed to stop recording: {}", e))?;
+        let stop_message = match recorder.stop_recording() {
+            Ok(msg) => msg,
+            Err(e) => {
+                log::error!("Recorder stop returned error: {}", e);
+                drop(recorder); // release the lock before state update
+                update_recording_state(&app, RecordingState::Idle, None);
+                pill_toast(&app, "Recording error", 1500);
+                return Ok(String::new());
+            }
+        };
         log::info!("{}", stop_message);
 
         // Play sound on recording end if enabled
@@ -1772,7 +1846,6 @@ pub async fn stop_recording(
     }
 
     // Clean up ESC state
-    let app_state = app.state::<AppState>();
     app_state
         .esc_pressed_once
         .store(false, std::sync::atomic::Ordering::SeqCst);
