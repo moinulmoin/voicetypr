@@ -30,7 +30,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 013  | *(reserved: close 004/008 smoke blockers — checklist, no plan file yet)* | P1 | S | 004, 008 | RESERVED — no executable plan file yet |
-| 014  | *(reserved: shared transcription contract stage 1 — executor implementation of plan 012's design)* | P1 | L | 012 | RESERVED — no executable plan file yet |
+| 014  | Shared transcription contract — Stage 1 (contract DTOs + executor) | P1 | L | 012 | IN PROGRESS — claimed Main 2026-06-13 |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
