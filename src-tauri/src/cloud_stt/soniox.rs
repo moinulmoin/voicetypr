@@ -47,18 +47,18 @@ fn build_create_payload(
     payload
 }
 
-pub(super) async fn transcribe(
+pub(super) async fn transcribe_typed(
     app: &AppHandle,
     key: &str,
     wav_path: &Path,
     language: Option<&str>,
-) -> Result<String, String> {
+) -> Result<String, common::SttError> {
     use reqwest::multipart::{Form, Part};
     use tokio::fs;
 
     let wav_bytes = fs::read(wav_path)
         .await
-        .map_err(|_| common::SttError::BadResponse.message("Soniox"))?;
+        .map_err(|_| common::SttError::BadResponse)?;
 
     let client = common::http_client();
 
@@ -95,16 +95,15 @@ pub(super) async fn transcribe(
             }
         }
     })
-    .await
-    .map_err(|e| e.message("Soniox"))?;
+    .await?;
     let upload_json: serde_json::Value = upload_resp
         .json()
         .await
-        .map_err(|_| common::SttError::BadResponse.message("Soniox"))?;
+        .map_err(|_| common::SttError::BadResponse)?;
     let file_id = upload_json
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| common::SttError::BadResponse.message("Soniox"))?
+        .ok_or(common::SttError::BadResponse)?
         .to_string();
 
     // 2) Create transcription -> transcription_id
@@ -140,16 +139,15 @@ pub(super) async fn transcribe(
             }
         }
     })
-    .await
-    .map_err(|e| e.message("Soniox"))?;
+    .await?;
     let create_json: serde_json::Value = create_resp
         .json()
         .await
-        .map_err(|_| common::SttError::BadResponse.message("Soniox"))?;
+        .map_err(|_| common::SttError::BadResponse)?;
     let transcription_id = create_json
         .get("id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| common::SttError::BadResponse.message("Soniox"))?
+        .ok_or(common::SttError::BadResponse)?
         .to_string();
 
     // 3) Poll status
@@ -174,22 +172,21 @@ pub(super) async fn transcribe(
                 }
             }
         })
-        .await
-        .map_err(|e| e.message("Soniox"))?;
+        .await?;
         let json: serde_json::Value = resp
             .json()
             .await
-            .map_err(|_| common::SttError::BadResponse.message("Soniox"))?;
+            .map_err(|_| common::SttError::BadResponse)?;
         let status = json.get("status").and_then(|v| v.as_str()).unwrap_or("");
         match status {
             "completed" => break,
             "error" => {
                 log::warn!("Soniox transcription job failed");
-                return Err(common::SttError::Server.message("Soniox"));
+                return Err(common::SttError::Server);
             }
             _ => {
                 if started.elapsed() > timeout {
-                    return Err(common::SttError::Timeout.message("Soniox"));
+                    return Err(common::SttError::Timeout);
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
             }
@@ -215,12 +212,11 @@ pub(super) async fn transcribe(
             }
         }
     })
-    .await
-    .map_err(|e| e.message("Soniox"))?;
+    .await?;
     let json: serde_json::Value = resp
         .json()
         .await
-        .map_err(|_| common::SttError::BadResponse.message("Soniox"))?;
+        .map_err(|_| common::SttError::BadResponse)?;
 
     // Prefer direct text if present, else join tokens
     if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
@@ -243,7 +239,7 @@ pub(super) async fn transcribe(
             return Ok(out);
         }
     }
-    Err(common::SttError::BadResponse.message("Soniox"))
+    Err(common::SttError::BadResponse)
 }
 
 #[cfg(test)]

@@ -728,7 +728,7 @@ pub fn compile_remote_request_context(
     )
 }
 
-fn compile_parakeet_custom_vocabulary_for_transcription(
+pub(crate) fn compile_parakeet_custom_vocabulary_for_transcription(
     app: &AppHandle,
     language: Option<&str>,
 ) -> Vec<crate::parakeet::messages::ParakeetVocabularyTerm> {
@@ -791,7 +791,7 @@ pub(crate) async fn warm_whisper_gpu_sidecar_on_model_preload(
     }
 }
 
-async fn transcribe_whisper_with_acceleration<F>(
+pub(crate) async fn transcribe_whisper_with_acceleration<F>(
     app: &AppHandle,
     model_path: &Path,
     audio_path: &Path,
@@ -1852,7 +1852,7 @@ pub async fn open_recordings_folder(app: AppHandle) -> Result<(), String> {
 }
 
 #[derive(Clone)]
-enum ActiveEngineSelection {
+pub(crate) enum ActiveEngineSelection {
     Whisper {
         model_name: String,
         model_path: PathBuf,
@@ -1874,7 +1874,7 @@ enum ActiveEngineSelection {
 }
 
 impl ActiveEngineSelection {
-    fn engine_name(&self) -> &'static str {
+    pub(crate) fn engine_name(&self) -> &'static str {
         match self {
             ActiveEngineSelection::Whisper { .. } => "whisper",
             ActiveEngineSelection::Parakeet { .. } => "parakeet",
@@ -1883,7 +1883,7 @@ impl ActiveEngineSelection {
         }
     }
 
-    fn model_name(&self) -> &str {
+    pub(crate) fn model_name(&self) -> &str {
         match self {
             ActiveEngineSelection::Whisper { model_name, .. } => model_name,
             ActiveEngineSelection::Parakeet { model_name } => model_name,
@@ -1936,7 +1936,7 @@ fn should_use_active_remote(engine_hint: Option<&str>) -> bool {
     engine_hint.is_none()
 }
 
-async fn resolve_engine_for_model(
+pub(crate) async fn resolve_engine_for_model(
     app: &AppHandle,
     model_name: &str,
     engine_hint: Option<&str>,

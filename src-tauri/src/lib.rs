@@ -30,7 +30,7 @@ mod secure_store;
 mod simple_cache;
 mod state;
 mod state_machine;
-mod transcription;
+pub mod transcription;
 mod utils;
 mod whisper;
 mod window_manager;

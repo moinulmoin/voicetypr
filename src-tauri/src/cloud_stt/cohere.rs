@@ -20,15 +20,13 @@ pub(super) async fn validate_key(key: &str) -> Result<(), String> {
     .map_err(|e| e.message("Cohere"))
 }
 
-pub(super) async fn transcribe(
+pub(super) async fn transcribe_typed(
     _app: &AppHandle,
     key: &str,
     audio_path: &Path,
     language: Option<&str>,
-) -> Result<String, String> {
-    transcribe_at("https://api.cohere.com", key, audio_path, language)
-        .await
-        .map_err(|e| e.message("Cohere"))
+) -> Result<String, common::SttError> {
+    transcribe_at("https://api.cohere.com", key, audio_path, language).await
 }
 
 pub(super) async fn transcribe_at(

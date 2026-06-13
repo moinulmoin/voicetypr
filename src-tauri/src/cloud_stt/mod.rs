@@ -9,7 +9,7 @@
 //! API keys live in the encrypted secure store under `stt_api_key_<id>`.
 
 mod cohere;
-mod common;
+pub(crate) mod common;
 mod deepgram;
 mod groq;
 mod openai;
@@ -133,12 +133,24 @@ impl CloudProvider {
     ) -> Result<String, String> {
         let key = crate::secure_store::secure_get(app, self.key_name())?
             .ok_or_else(|| format!("{} API key not set", self.display_name()))?;
+        self.transcribe_typed(app, &key, audio_path, language)
+            .await
+            .map_err(|e| e.message(self.display_name()))
+    }
+
+    pub(crate) async fn transcribe_typed(
+        self,
+        app: &AppHandle,
+        api_key: &str,
+        audio_path: &Path,
+        language: Option<&str>,
+    ) -> Result<String, common::SttError> {
         match self {
-            Self::Soniox => soniox::transcribe(app, &key, audio_path, language).await,
-            Self::Openai => openai::transcribe(app, &key, audio_path, language).await,
-            Self::Groq => groq::transcribe(app, &key, audio_path, language).await,
-            Self::Deepgram => deepgram::transcribe(app, &key, audio_path, language).await,
-            Self::Cohere => cohere::transcribe(app, &key, audio_path, language).await,
+            Self::Soniox => soniox::transcribe_typed(app, api_key, audio_path, language).await,
+            Self::Openai => openai::transcribe_typed(app, api_key, audio_path, language).await,
+            Self::Groq => groq::transcribe_typed(app, api_key, audio_path, language).await,
+            Self::Deepgram => deepgram::transcribe_typed(app, api_key, audio_path, language).await,
+            Self::Cohere => cohere::transcribe_typed(app, api_key, audio_path, language).await,
         }
     }
 }

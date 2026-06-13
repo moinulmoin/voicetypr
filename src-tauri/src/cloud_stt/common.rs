@@ -12,7 +12,7 @@ pub(super) enum AuthScheme {
 }
 
 #[derive(Debug)]
-pub(super) enum SttError {
+pub(crate) enum SttError {
     Auth,
     ModelUnavailable,
     RateLimited,
@@ -23,7 +23,7 @@ pub(super) enum SttError {
 }
 
 impl SttError {
-    pub(super) fn message(&self, provider_name: &str) -> String {
+    pub(crate) fn message(&self, provider_name: &str) -> String {
         match self {
             Self::Auth => format!("Invalid {} API key", provider_name),
             Self::ModelUnavailable => format!("{}: model unavailable for this key", provider_name),
@@ -57,7 +57,7 @@ pub(super) fn classify_reqwest_err(e: &reqwest::Error) -> SttError {
     }
 }
 
-pub(super) fn is_transient(err: &SttError) -> bool {
+pub(crate) fn is_transient(err: &SttError) -> bool {
     matches!(
         err,
         SttError::RateLimited | SttError::Timeout | SttError::Network | SttError::Server

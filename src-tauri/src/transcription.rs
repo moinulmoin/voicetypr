@@ -1,3 +1,8 @@
+pub mod capabilities;
+pub mod error;
+pub mod executor;
+pub mod request;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

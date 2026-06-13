@@ -19,12 +19,12 @@ pub(super) async fn validate_key(key: &str) -> Result<(), String> {
     .map_err(|e| e.message("Groq"))
 }
 
-pub(super) async fn transcribe(
+pub(super) async fn transcribe_typed(
     _app: &AppHandle,
     key: &str,
     audio_path: &Path,
     language: Option<&str>,
-) -> Result<String, String> {
+) -> Result<String, common::SttError> {
     common::openai_compatible_transcribe(
         BASE,
         key,
@@ -34,5 +34,4 @@ pub(super) async fn transcribe(
         "Groq transcription",
     )
     .await
-    .map_err(|e| e.message("Groq"))
 }
