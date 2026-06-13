@@ -205,3 +205,230 @@ pub(super) async fn openai_compatible_transcribe(
     })
     .await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{get_validate, openai_compatible_transcribe, AuthScheme, SttError};
+    use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tempfile::NamedTempFile;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+    fn audio_file() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"wav").unwrap();
+        file
+    }
+
+    async fn mount_sequence(server: &MockServer, responses: Vec<ResponseTemplate>) {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let responses = Arc::new(responses);
+        Mock::given(method("POST"))
+            .and(path("/audio/transcriptions"))
+            .respond_with(move |_request: &Request| {
+                let index = counter.fetch_add(1, Ordering::SeqCst);
+                responses
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| responses.last().unwrap().clone())
+            })
+            .expect(2)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_transcribe_posts_multipart_and_parses_text() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/audio/transcriptions"))
+            .and(header("authorization", "Bearer k"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": "hello"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let audio = audio_file();
+
+        let text = openai_compatible_transcribe(
+            &server.uri(),
+            "k",
+            "gpt-4o-transcribe",
+            audio.path(),
+            None,
+            "OpenAI transcription",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(text, "hello");
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        let content_type = request
+            .headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        assert!(content_type.starts_with("multipart/form-data; boundary="));
+        let body = String::from_utf8_lossy(&request.body);
+        assert!(body.contains("name=\"model\""));
+        assert!(body.contains("gpt-4o-transcribe"));
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_transcribe_retries_500_once_then_succeeds() {
+        let server = MockServer::start().await;
+        mount_sequence(
+            &server,
+            vec![
+                ResponseTemplate::new(500).set_body_string("temporary"),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "text": "hello"
+                })),
+            ],
+        )
+        .await;
+        let audio = audio_file();
+
+        let text = openai_compatible_transcribe(
+            &server.uri(),
+            "k",
+            "gpt-4o-transcribe",
+            audio.path(),
+            None,
+            "OpenAI transcription",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(text, "hello");
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_transcribe_retries_500_once_then_returns_server_without_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("unique-provider-body"))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let audio = audio_file();
+
+        let error = openai_compatible_transcribe(
+            &server.uri(),
+            "k",
+            "gpt-4o-transcribe",
+            audio.path(),
+            None,
+            "OpenAI transcription",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, SttError::Server));
+        let message = error.message("OpenAI");
+        assert!(!message.contains("unique-provider-body"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_transcribe_does_not_retry_auth_errors() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("bad key"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let audio = audio_file();
+
+        let error = openai_compatible_transcribe(
+            &server.uri(),
+            "k",
+            "gpt-4o-transcribe",
+            audio.path(),
+            None,
+            "OpenAI transcription",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, SttError::Auth));
+        assert_eq!(error.message("OpenAI"), "Invalid OpenAI API key");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_validate_succeeds_on_200() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(header("authorization", "Bearer k"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        get_validate(
+            &format!("{}/models", server.uri()),
+            AuthScheme::Bearer,
+            "k",
+            "Groq",
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_validate_maps_auth_error_without_retry() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = get_validate(
+            &format!("{}/models", server.uri()),
+            AuthScheme::Bearer,
+            "k",
+            "Groq",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, SttError::Auth));
+        assert_eq!(error.message("Groq"), "Invalid Groq API key");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_validate_retries_500_once_then_returns_server() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let error = get_validate(
+            &format!("{}/models", server.uri()),
+            AuthScheme::Bearer,
+            "k",
+            "Groq",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, SttError::Server));
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+}

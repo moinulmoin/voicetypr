@@ -27,18 +27,27 @@ pub(super) async fn transcribe(
     audio_path: &Path,
     language: Option<&str>,
 ) -> Result<String, String> {
+    transcribe_at("https://api.deepgram.com", key, audio_path, language)
+        .await
+        .map_err(|e| e.message("Deepgram"))
+}
+
+pub(super) async fn transcribe_at(
+    base_url: &str,
+    key: &str,
+    audio_path: &Path,
+    language: Option<&str>,
+) -> Result<String, common::SttError> {
     use tokio::fs;
 
     let bytes = fs::read(audio_path)
         .await
-        .map_err(|_| common::SttError::BadResponse.message("Deepgram"))?;
+        .map_err(|_| common::SttError::BadResponse)?;
 
-    let mut url = format!(
-        "https://api.deepgram.com/v1/listen?model={}&smart_format=true",
-        MODEL
-    );
+    let mut url = format!("{}/v1/listen?model={}&smart_format=true", base_url, MODEL);
     if let Some(lang) = language.map(str::trim).filter(|lang| !lang.is_empty()) {
-        url.push_str(&format!("&language={}", lang));
+        url.push_str("&language=");
+        url.push_str(lang);
     }
 
     let client = common::http_client();
@@ -71,5 +80,73 @@ pub(super) async fn transcribe(
         }
     })
     .await
-    .map_err(|e| e.message("Deepgram"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{common, transcribe_at};
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn audio_file() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"wav").unwrap();
+        file
+    }
+
+    #[tokio::test]
+    async fn transcribe_at_posts_token_auth_raw_body_and_parses_nested_transcript() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/listen"))
+            .and(header("authorization", "Token k"))
+            .and(header("content-type", "audio/wav"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": {
+                    "channels": [{
+                        "alternatives": [{
+                            "transcript": "hi"
+                        }]
+                    }]
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let audio = audio_file();
+
+        let text = transcribe_at(&server.uri(), "k", audio.path(), Some("en"))
+            .await
+            .unwrap();
+
+        assert_eq!(text, "hi");
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(!requests[0].body.is_empty());
+        assert_eq!(
+            requests[0].url.query(),
+            Some("model=nova-3&smart_format=true&language=en")
+        );
+    }
+
+    #[tokio::test]
+    async fn transcribe_at_maps_auth_error_without_retry() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/listen"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let audio = audio_file();
+
+        let error = transcribe_at(&server.uri(), "k", audio.path(), None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, common::SttError::Auth));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
 }
