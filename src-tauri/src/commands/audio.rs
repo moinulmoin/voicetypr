@@ -1765,6 +1765,7 @@ pub async fn stop_recording(
     // Cancellation should only happen in cancel_recording command
 
     // Stop recording (lock only within this scope to stay Send)
+    let mut recorder_errored = false;
     log::info!("🛑 Stopping recording...");
     {
         let mut recorder = state
@@ -1793,10 +1794,8 @@ pub async fn stop_recording(
             Ok(msg) => msg,
             Err(e) => {
                 log::error!("Recorder stop returned error: {}", e);
-                drop(recorder); // release the lock before state update
-                update_recording_state(&app, RecordingState::Idle, None);
-                pill_toast(&app, "Recording error", 1500);
-                return Ok(String::new());
+                recorder_errored = true;
+                format!("Recorder stop error: {}", e)
             }
         };
         log::info!("{}", stop_message);
@@ -1858,6 +1857,20 @@ pub async fn stop_recording(
     }
 
     log::debug!("Unregistered ESC key and cleaned up state");
+
+    // If the recorder thread itself errored (device/write failure), the
+    // media-resume and ESC cleanup above have already run. Skip transcription
+    // and reset to Idle instead of wedging or leaking paused media / ESC.
+    if recorder_errored {
+        pill_toast(&app, "Recording error", 1500);
+        if should_hide_pill(&app).await {
+            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                log::error!("Failed to hide pill window: {}", e);
+            }
+        }
+        update_recording_state(&app, RecordingState::Idle, None);
+        return Ok(String::new());
+    }
 
     // Check if cancellation was requested
     if app_state.is_cancellation_requested() {
