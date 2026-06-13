@@ -140,7 +140,7 @@ mod tests {
             .iter()
             .filter(|provider| provider.id != "custom")
             .count();
-        assert!(generated_provider_count >= 5);
+        assert!(generated_provider_count >= 3);
 
         let mut provider_ids = HashSet::new();
         for provider in &catalog.providers {
@@ -215,16 +215,6 @@ mod tests {
                     recommended.model_id
                 );
             }
-        }
-    }
-
-    #[test]
-    fn namespaced_providers_use_double_colon_namespace() {
-        for provider_id in ["groq", "openrouter"] {
-            assert!(
-                namespace(provider_id).is_some_and(|namespace| namespace.ends_with("::")),
-                "{provider_id} should have a genai namespace ending in ::"
-            );
         }
     }
 

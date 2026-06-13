@@ -7,9 +7,11 @@
 >
 > **Prerequisite**: Plans 016 and 017 merged (contract + executor + catalog).
 >
-> **Descope (2026-06-13, per user)**: xAI dropped from this plan; DeepSeek and
-> Cohere (briefly added as `hidden` during 017) removed. Graduation scope is now
-> **OpenRouter and Groq only**. The "xAI" in the title above is historical.
+> **DROPPED (2026-06-13, per user)**: this plan is cancelled. xAI, then Groq and
+> OpenRouter (and the briefly-added DeepSeek/Cohere), were all removed from the
+> catalog. Rationale: they are OpenAI-compatible endpoints already reachable via
+> the **Custom** provider (017), so there is nothing distinct to graduate. The
+> AI-polish surface is OpenAI/Anthropic/Gemini + Custom. Kept for history only.
 
 ## Status
 

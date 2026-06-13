@@ -1405,14 +1405,6 @@ mod tests {
             by_id("custom").map(|p| (p.name.as_str(), p.status.as_str())),
             Some(("Custom (OpenAI-compatible)", "production"))
         );
-        assert_eq!(
-            by_id("groq").map(|p| p.status.as_str()),
-            Some("experimental")
-        );
-        assert_eq!(
-            by_id("openrouter").map(|p| p.status.as_str()),
-            Some("experimental")
-        );
     }
 
     #[test]
@@ -1425,7 +1417,7 @@ mod tests {
             .collect();
         assert_eq!(keys, expected);
         assert!(keys.contains(&"ai_api_key_openai".to_string()));
-        assert!(keys.contains(&"ai_api_key_groq".to_string()));
+        assert!(keys.contains(&"ai_api_key_anthropic".to_string()));
         assert!(keys.contains(&"ai_api_key_custom".to_string()));
     }
 

@@ -25,17 +25,6 @@
     "snapshot_id": "google",
     "status": "production"
   },
-  "groq": {
-    "adapter": "Groq",
-    "auth": "api_key",
-    "namespace": "groq::",
-    "recommended": [
-      "llama-3.3-70b-versatile"
-    ],
-    "runtime": "genai_adapter",
-    "snapshot_id": "groq",
-    "status": "experimental"
-  },
   "openai": {
     "adapter": "OpenAI",
     "auth": "api_key",
@@ -48,16 +37,5 @@
     "runtime": "genai_adapter",
     "snapshot_id": "openai",
     "status": "production"
-  },
-  "openrouter": {
-    "adapter": "OpenRouter",
-    "auth": "api_key",
-    "namespace": "open_router::",
-    "recommended": [
-      "openai/gpt-4.1-mini"
-    ],
-    "runtime": "genai_adapter",
-    "snapshot_id": "openrouter",
-    "status": "experimental"
   }
 }

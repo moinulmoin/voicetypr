@@ -41,8 +41,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 015  | Pipeline feel — start latency, decode watchdogs, never-lose-speech | `b1a66bf` | NEEDS-SMOKE |
 | 016  | AI polish Rust-native cutover — current providers, Pi sidecar removed | `3986b45`..`fb09a61` | NEEDS-SMOKE — steps 1-7 done; sidecar gone; triple-check audit findings fixed + independently re-reviewed; live invalid-key/bad-URL smoke passed; remaining items in SMOKE.md |
 | 019  | Cloud STT shortlist — Soniox + OpenAI/Groq/Deepgram/Cohere | `2026-06-12` (this session) | NEEDS-SMOKE — `cloud_stt` seam + 4 new providers + Soniox migration; clean cutover (no soniox-only residue); pre-merge reliability bar met (owned 120s/15s client, retry-once on transient, typed `SttError` categories, no raw provider bodies); Cohere language restricted to its 14; all automated gates green; real-key desktop smoke in `SMOKE.md` |
-| 017  | AI provider catalog + searchable breadth UI | `2026-06-13` (this session) | NEEDS-SMOKE — generated catalog (5 providers / 442 models from a pinned `models.dev` snapshot + overlay) replaces the static 4-provider table; data-driven genai dispatch + `groq::`/`open_router::` namespacing (deliverable 1b), 016 reliability policy untouched; searchable/grouped picker UI (experimental badge; Advanced toggle appears only when a hidden-tier provider exists); all automated gates green; real-key smoke in `SMOKE.md` |
-| 018  | AI provider graduation — OpenRouter, Groq | `2026-06-13` (this session) | NEEDS-SMOKE — OpenRouter, Groq shipped `experimental` (catalog + genai namespacing + reasoning-control-hidden + namespacing unit tests); validation/error/timeout/retry inherited from 016 runtime. **xAI, DeepSeek, Cohere removed per user 2026-06-13** (out of scope). Per-provider graduation `experimental`→`production` gated on real-key smoke (SMOKE.md): OpenRouter NEEDS-SMOKE / Groq NEEDS-SMOKE |
+| 017  | AI provider catalog + searchable breadth UI | `2026-06-13` (this session) | NEEDS-SMOKE — generated catalog (OpenAI / Anthropic / Google Gemini, 94 models from a pinned `models.dev` snapshot + overlay) replaces the hardcoded per-provider model table; data-driven genai dispatch (deliverable 1b), 016 reliability policy untouched; searchable/grouped picker UI; Custom stays the escape hatch for any other OpenAI-compatible endpoint; all automated gates green; real-key smoke in `SMOKE.md` |
 
 ## Archived (closed — `plans/archive/`)
 
@@ -58,6 +57,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 010  | Page transcription-history reads/saves by key order | DONE |
 | 011  | Secrets → OS credential storage | REJECTED — unsafe without secret manifest/reset + keychain smoke (executed, reviewed, reverted) |
 | 012  | Shared transcription contract — design doc (no code) | DONE |
+| 018  | AI provider graduation — OpenRouter, Groq, xAI | DROPPED (2026-06-13) — Groq/OpenRouter (and earlier xAI/DeepSeek/Cohere) removed per user; OpenAI-compatible providers are served by the Custom escape hatch, so there is nothing to graduate |
 
 Status values: TODO | IN PROGRESS — claimed <by> <date> | DONE | NEEDS-SMOKE
 (code done, manual smoke pending) | BLOCKED (one-line reason) | REJECTED
