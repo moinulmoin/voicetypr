@@ -31,8 +31,8 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 |------|-------|----------|--------|------------|--------|
 | 013  | *(reserved: close 004/008 smoke blockers — checklist, no plan file yet)* | P1 | S | 004, 008 | RESERVED — no executable plan file yet |
 | 014  | *(reserved: shared transcription contract stage 1 — executor implementation of plan 012's design)* | P1 | L | 012 | RESERVED — no executable plan file yet |
-| 017  | AI provider catalog + searchable breadth UI | P2 | M | 016 | TODO |
-| 018  | AI provider graduation — OpenRouter, Groq, xAI | P2-P3 | S-M each | 016, 017 | TODO |
+| 017  | AI provider catalog + searchable breadth UI | P2 | M | 016 | IN PROGRESS — claimed Main 2026-06-13 |
+| 018  | AI provider graduation — OpenRouter, Groq, xAI | P2-P3 | S-M each | 016, 017 | IN PROGRESS — claimed Main 2026-06-13 |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
