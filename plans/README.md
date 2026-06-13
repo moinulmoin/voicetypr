@@ -30,7 +30,6 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 013  | *(reserved: close 004/008 smoke blockers — checklist, no plan file yet)* | P1 | S | 004, 008 | RESERVED — no executable plan file yet |
-| 014  | Shared transcription contract — Stage 1 (contract DTOs + executor) | P1 | L | 012 | IN PROGRESS — claimed Main 2026-06-13 |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
@@ -57,6 +56,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 010  | Page transcription-history reads/saves by key order | DONE |
 | 011  | Secrets → OS credential storage | REJECTED — unsafe without secret manifest/reset + keychain smoke (executed, reviewed, reverted) |
 | 012  | Shared transcription contract — design doc (no code) | DONE |
+| 014  | Shared transcription contract — Stage 1 (DTOs + executor) | DONE (2026-06-13) — additive `transcription/` contract module (request/error/capability DTOs + delegating executor); `Explicit`→Whisper/Parakeet/Cloud delegate to existing helpers; `HostDefault` (Stage 4) + Remote send (Stage 5) typed-deferred; cloud_stt typed-error seam added; no callsite rewired (zero runtime change); gates green (clippy --all-targets, 919 tests). Executor engine dispatch is exercised when a later stage ports callsites. Stages 2-6 are future plans. |
 | 018  | AI provider graduation — OpenRouter, Groq, xAI | DROPPED (2026-06-13) — Groq/OpenRouter (and earlier xAI/DeepSeek/Cohere) removed per user; OpenAI-compatible providers are served by the Custom escape hatch, so there is nothing to graduate |
 
 Status values: TODO | IN PROGRESS — claimed <by> <date> | DONE | NEEDS-SMOKE
