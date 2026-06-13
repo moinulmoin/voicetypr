@@ -16,6 +16,8 @@ pub struct SystemSpecs {
 
 #[tauri::command]
 pub fn get_system_specs() -> SystemSpecs {
+    // new_all() seeds a baseline; the explicit refreshes below keep memory and CPU
+    // data current (per sysinfo's guidance) before we read brand/cores/total.
     let mut sys = System::new_all();
     sys.refresh_memory();
     sys.refresh_cpu_all();

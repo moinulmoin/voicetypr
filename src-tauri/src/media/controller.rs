@@ -300,7 +300,7 @@ fn toggle_media_playback_via_osascript() -> bool {
 impl MediaPauseController {
     fn try_pause_session(
         &self,
-        session: windows::Media::Control::GlobalSystemMediaTransportControlsSession,
+        session: &windows::Media::Control::GlobalSystemMediaTransportControlsSession,
     ) -> bool {
         let source_app_id = session.SourceAppUserModelId().ok().map(|id| id.to_string());
         match session.TryPauseAsync() {
@@ -372,19 +372,12 @@ impl MediaPauseController {
             Some(timeline.Position().ok()?.Duration)
         }
 
-        let mut reported: Vec<GlobalSystemMediaTransportControlsSession> = Vec::new();
-        let mut current_id: Option<String> = None;
+        let mut current_session = manager.GetCurrentSession().ok();
+        let current_id = current_session
+            .as_ref()
+            .and_then(|s| s.SourceAppUserModelId().ok().map(|id| id.to_string()));
 
-        if let Ok(current_session) = manager.GetCurrentSession() {
-            if is_playing(&current_session) {
-                current_id = current_session
-                    .SourceAppUserModelId()
-                    .ok()
-                    .map(|id| id.to_string());
-                reported.push(current_session);
-            }
-        }
-
+        let mut all: Vec<(String, GlobalSystemMediaTransportControlsSession)> = Vec::new();
         if let Ok(sessions) = manager.GetSessions() {
             if let Ok(size) = sessions.Size() {
                 for i in 0..size {
@@ -393,72 +386,80 @@ impl MediaPauseController {
                         Err(_) => continue,
                     };
 
-                    if !is_playing(&session) {
-                        continue;
-                    }
+                    // Keep the session even if its app id is unreadable (id is only
+                    // used for dedup/ordering; resume bookkeeping is re-read on pause),
+                    // so a playing-but-id-less session is still attempted.
+                    let id = session
+                        .SourceAppUserModelId()
+                        .ok()
+                        .map(|id| id.to_string())
+                        .unwrap_or_default();
 
-                    let session_id = session.SourceAppUserModelId().ok().map(|id| id.to_string());
-
-                    if let Some(ref cid) = current_id {
-                        if session_id.as_ref() == Some(cid) {
-                            continue;
-                        }
-                    }
-
-                    reported.push(session);
+                    all.push((id, session));
                 }
             }
         }
 
-        let had_reported_candidates = !reported.is_empty();
-        if had_reported_candidates {
-            log::info!("Media is playing, pausing for recording...");
-            for session in reported {
-                if self.try_pause_session(session) {
-                    return true;
+        if let Some(cid) = current_id.clone() {
+            if !all.iter().any(|(id, _)| id == &cid) {
+                if let Some(session) = current_session.take() {
+                    all.push((cid, session));
                 }
+            }
+        }
+
+        let mut attempted: Vec<usize> = Vec::new();
+        let mut had_reported_candidates = false;
+
+        let mut phase1_order: Vec<usize> = Vec::new();
+        if let Some(ref cid) = current_id {
+            if let Some(idx) = all.iter().position(|(id, _)| id == cid) {
+                phase1_order.push(idx);
+            }
+        }
+        for (idx, (id, _)) in all.iter().enumerate() {
+            if current_id.as_ref() != Some(id) {
+                phase1_order.push(idx);
+            }
+        }
+
+        for &idx in &phase1_order {
+            let session = &all[idx].1;
+            if !is_playing(session) {
+                continue;
+            }
+            if !had_reported_candidates {
+                had_reported_candidates = true;
+                log::info!("Media is playing, pausing for recording...");
+            }
+            attempted.push(idx);
+            if self.try_pause_session(session) {
+                return true;
             }
         }
 
         // Fallback: some sessions occasionally report non-Playing states even while audio is
         // progressing. If we can observe timeline position advancing over a short interval,
         // treat it as playing and pause it.
-        let current_session_id = manager
-            .GetCurrentSession()
-            .ok()
-            .and_then(|s| s.SourceAppUserModelId().ok().map(|id| id.to_string()));
-
-        let mut timeline_probe: Vec<(String, GlobalSystemMediaTransportControlsSession, i64)> =
-            Vec::new();
-
-        if let Ok(sessions) = manager.GetSessions() {
-            if let Ok(size) = sessions.Size() {
-                for i in 0..size {
-                    let session = match sessions.GetAt(i) {
-                        Ok(session) => session,
-                        Err(_) => continue,
-                    };
-
-                    let id = match session.SourceAppUserModelId() {
-                        Ok(id) => id.to_string(),
-                        Err(_) => continue,
-                    };
-
-                    let pos = timeline_position_ticks(&session).unwrap_or(0);
-                    timeline_probe.push((id, session, pos));
-                }
+        let mut timeline_probe: Vec<(usize, i64)> = Vec::new();
+        for (idx, (_, session)) in all.iter().enumerate() {
+            if attempted.contains(&idx) {
+                continue;
             }
+            let pos = timeline_position_ticks(session).unwrap_or(0);
+            timeline_probe.push((idx, pos));
         }
 
-        let mut timeline_candidates: Vec<GlobalSystemMediaTransportControlsSession> = Vec::new();
+        let mut timeline_candidates: Vec<usize> = Vec::new();
+        let had_timeline_probe_entries = !timeline_probe.is_empty();
 
-        if !timeline_probe.is_empty() {
-            if let Some(current_session_id) = current_session_id {
-                if let Some(idx) = timeline_probe
+        if had_timeline_probe_entries {
+            if let Some(ref current_session_id) = current_id {
+                if let Some(pos) = timeline_probe
                     .iter()
-                    .position(|(id, _, _)| id == &current_session_id)
+                    .position(|(idx, _)| all[*idx].0 == *current_session_id)
                 {
-                    let current = timeline_probe.remove(idx);
+                    let current = timeline_probe.remove(pos);
                     timeline_probe.insert(0, current);
                 }
             }
@@ -468,8 +469,9 @@ impl MediaPauseController {
             // 1 tick = 100ns, so 50ms = 500_000 ticks.
             const DELTA_THRESHOLD_TICKS: i64 = 50 * 10_000;
 
-            for (id, session, before) in timeline_probe {
-                let after = timeline_position_ticks(&session).unwrap_or(before);
+            for (idx, before) in timeline_probe {
+                let (id, session) = &all[idx];
+                let after = timeline_position_ticks(session).unwrap_or(before);
                 let delta = after.saturating_sub(before);
 
                 if delta > DELTA_THRESHOLD_TICKS {
@@ -478,12 +480,13 @@ impl MediaPauseController {
                         id,
                         delta / 10_000
                     );
-                    timeline_candidates.push(session);
+                    timeline_candidates.push(idx);
                 }
             }
         }
         let had_timeline_candidates = !timeline_candidates.is_empty();
-        for session in timeline_candidates {
+        for idx in timeline_candidates {
+            let session = &all[idx].1;
             if self.try_pause_session(session) {
                 return true;
             }

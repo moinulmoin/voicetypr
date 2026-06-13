@@ -41,6 +41,10 @@ impl RecorderWatchdog {
         let app = self.app.clone();
 
         let handle = thread::spawn(move || {
+            // One-shot per autonomous termination: dispatch the stop flow once, then
+            // wait until state leaves Recording before re-arming. stop_recording is
+            // idempotent (stop_in_flight) and resets to Idle even on a recorder error,
+            // so a dispatched stop reliably moves state off Recording and re-arms us.
             let mut auto_stop_dispatched = false;
 
             while !stop_flag.load(Ordering::Relaxed) {
@@ -76,6 +80,9 @@ impl RecorderWatchdog {
             }
         });
 
+        // `started` is set before this handle is stored, so a Drop racing an instant
+        // start() may skip the join. Benign: the thread observes the stop flag and
+        // exits within one poll interval; start() runs once at setup, Drop at shutdown.
         if let Ok(mut guard) = self.handle.lock() {
             *guard = Some(handle);
         }
