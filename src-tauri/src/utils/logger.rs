@@ -237,53 +237,6 @@ pub fn log_lifecycle_event(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_create_context() {
-        // Local helper for test
-        fn create_context(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-            pairs
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect()
-        }
-
-        let context = create_context(&[
-            ("model", "base.en"),
-            ("language", "auto"),
-            ("duration", "3.5s"),
-        ]);
-
-        assert_eq!(context.len(), 3);
-        assert_eq!(context.get("model"), Some(&"base.en".to_string()));
-        assert_eq!(context.get("language"), Some(&"auto".to_string()));
-        assert_eq!(context.get("duration"), Some(&"3.5s".to_string()));
-    }
-
-    #[test]
-    fn test_log_context_macro() {
-        // Context is created only if logging is enabled
-        // This prevents unnecessary allocations when logs are filtered
-        let context = log_context! {
-            "operation" => "transcription",
-            "model" => "whisper-base",
-            "duration" => "2.3s"
-        };
-
-        // The context creation depends on log level
-        if log::log_enabled!(log::Level::Debug) {
-            assert_eq!(context.len(), 3);
-            assert_eq!(context.get("operation"), Some(&"transcription".to_string()));
-        } else {
-            // Context is empty when logging is disabled (performance optimization)
-            assert_eq!(context.len(), 0);
-        }
-    }
-}
-
 // ============================================================================
 // SIMPLE LOGGING HELPERS - Phase 1 of simplification
 // ============================================================================
@@ -333,5 +286,52 @@ pub fn log_critical_operation(operation: &str, status: &str, details: Option<&st
         log::info!("⭐ {} - {}: {}", operation, status, d);
     } else {
         log::info!("⭐ {} - {}", operation, status);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_context() {
+        // Local helper for test
+        fn create_context(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        }
+
+        let context = create_context(&[
+            ("model", "base.en"),
+            ("language", "auto"),
+            ("duration", "3.5s"),
+        ]);
+
+        assert_eq!(context.len(), 3);
+        assert_eq!(context.get("model"), Some(&"base.en".to_string()));
+        assert_eq!(context.get("language"), Some(&"auto".to_string()));
+        assert_eq!(context.get("duration"), Some(&"3.5s".to_string()));
+    }
+
+    #[test]
+    fn test_log_context_macro() {
+        // Context is created only if logging is enabled
+        // This prevents unnecessary allocations when logs are filtered
+        let context = log_context! {
+            "operation" => "transcription",
+            "model" => "whisper-base",
+            "duration" => "2.3s"
+        };
+
+        // The context creation depends on log level
+        if log::log_enabled!(log::Level::Debug) {
+            assert_eq!(context.len(), 3);
+            assert_eq!(context.get("operation"), Some(&"transcription".to_string()));
+        } else {
+            // Context is empty when logging is disabled (performance optimization)
+            assert_eq!(context.len(), 0);
+        }
     }
 }

@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod behavior_tests {
 
     #[test]
     fn test_enhancement_prompt_generation() {

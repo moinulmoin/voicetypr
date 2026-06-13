@@ -3,6 +3,7 @@
 //! These tests verify that remote server configurations and connections
 //! can be properly stored and retrieved.
 
+use crate::remote::server::RemoteServerConfig;
 use crate::remote::settings::RemoteSettings;
 
 /// Test creating default remote settings
@@ -132,12 +133,15 @@ fn test_get_active_connection() {
 /// Test serializing and deserializing settings
 #[test]
 fn test_remote_settings_serialization() {
-    let mut settings = RemoteSettings::default();
-
-    // Configure server
-    settings.server_config.enabled = true;
-    settings.server_config.port = 8080;
-    settings.server_config.password = Some("secret123".to_string());
+    let mut settings = RemoteSettings {
+        server_config: RemoteServerConfig {
+            enabled: true,
+            port: 8080,
+            password: Some("secret123".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 
     // Add connections
     let saved1 = settings.add_connection(
@@ -272,8 +276,10 @@ fn test_sharing_was_active_default() {
 /// Test sharing_was_active field persists through serialization
 #[test]
 fn test_sharing_was_active_serialization() {
-    let mut settings = RemoteSettings::default();
-    settings.sharing_was_active = true;
+    let settings = RemoteSettings {
+        sharing_was_active: true,
+        ..Default::default()
+    };
 
     let json = serde_json::to_string(&settings).unwrap();
     let restored: RemoteSettings = serde_json::from_str(&json).unwrap();

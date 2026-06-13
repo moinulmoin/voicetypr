@@ -299,7 +299,7 @@ mod tests {
             "Transcription should not be empty"
         );
         assert!(
-            verify_transcription(&transcribed_text),
+            verify_transcription(transcribed_text),
             "Transcription should contain expected phrases, got: '{}'",
             transcribed_text
         );
@@ -766,7 +766,7 @@ mod tests {
             "[Remote] Transcription should not be empty"
         );
         assert!(
-            verify_transcription(&remote_text),
+            verify_transcription(remote_text),
             "[Remote] Transcription should contain expected phrases, got: '{}'",
             remote_text
         );
@@ -871,7 +871,7 @@ mod tests {
                     .timeout(Duration::from_secs(180)) // Allow time for queued requests
                     .send()
                     .await
-                    .expect(&format!("[Client {}] Failed to send request", i));
+                    .unwrap_or_else(|_| panic!("[Client {}] Failed to send request", i));
 
                 let status = response.status();
                 let elapsed = start.elapsed();
@@ -890,7 +890,7 @@ mod tests {
                 let json: serde_json::Value = response
                     .json()
                     .await
-                    .expect(&format!("[Client {}] Failed to parse JSON", i));
+                    .unwrap_or_else(|_| panic!("[Client {}] Failed to parse JSON", i));
 
                 println!("[Client {}] Completed successfully", i);
                 (i, json, elapsed)

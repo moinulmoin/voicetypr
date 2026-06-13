@@ -1512,129 +1512,6 @@ fn ai_model_is_valid_for_provider(provider: &str, model: &str) -> bool {
         .any(|candidate| candidate.model_id == model)
 }
 
-// AI settings migration tests live here because startup owns the migration call.
-#[cfg(test)]
-mod ai_settings_migration_tests {
-    use super::*;
-    use serde_json::json;
-
-    fn values(
-        provider: &str,
-        model: &str,
-        models: serde_json::Value,
-    ) -> serde_json::Map<String, serde_json::Value> {
-        values_with_enabled(true, provider, model, models)
-    }
-
-    fn values_with_enabled(
-        enabled: bool,
-        provider: &str,
-        model: &str,
-        models: serde_json::Value,
-    ) -> serde_json::Map<String, serde_json::Value> {
-        let mut values = serde_json::Map::new();
-        values.insert("ai_enabled".to_string(), json!(enabled));
-        values.insert("ai_provider".to_string(), json!(provider));
-        values.insert("ai_model".to_string(), json!(model));
-        values.insert("ai_models_by_provider".to_string(), models);
-        values
-    }
-
-    #[test]
-    fn migrates_google_provider_and_model_memory_to_gemini() {
-        let mut values = values(
-            "google",
-            "gemini-2.5-flash",
-            json!({ "google": "gemini-2.5-flash" }),
-        );
-
-        assert!(migrate_ai_settings_values(&mut values));
-        assert_eq!(values["ai_provider"], json!("gemini"));
-        assert_eq!(
-            values["ai_models_by_provider"],
-            json!({ "gemini": "gemini-2.5-flash" })
-        );
-        assert_eq!(values["ai_model"], json!("gemini-2.5-flash"));
-        assert_eq!(values.get("ai_model_needs_reselection"), None);
-    }
-
-    #[test]
-    fn migration_keeps_existing_gemini_model_memory() {
-        let mut values = values(
-            "google",
-            "gemini-2.5-flash",
-            json!({ "google": "gemini-3-flash-preview", "gemini": "gemini-2.5-flash" }),
-        );
-
-        assert!(migrate_ai_settings_values(&mut values));
-        assert_eq!(
-            values["ai_models_by_provider"],
-            json!({ "gemini": "gemini-2.5-flash" })
-        );
-        assert_eq!(values.get("ai_model_needs_reselection"), None);
-    }
-
-    #[test]
-    fn migration_flags_enabled_invalid_model_for_reselection_without_substitution() {
-        let mut values = values("google", "text-bison", json!({ "google": "text-bison" }));
-
-        assert!(migrate_ai_settings_values(&mut values));
-        assert_eq!(values["ai_enabled"], json!(true));
-        assert_eq!(values["ai_provider"], json!("gemini"));
-        assert_eq!(values["ai_model"], json!(""));
-        assert_eq!(values["ai_model_needs_reselection"], json!(true));
-    }
-
-    #[test]
-    fn migration_does_not_flag_disabled_invalid_model() {
-        let mut values = values_with_enabled(
-            false,
-            "google",
-            "text-bison",
-            json!({ "google": "text-bison" }),
-        );
-
-        assert!(migrate_ai_settings_values(&mut values));
-        assert_eq!(values["ai_enabled"], json!(false));
-        assert_eq!(values["ai_provider"], json!("gemini"));
-        assert_eq!(values["ai_model"], json!(""));
-        assert_eq!(values.get("ai_model_needs_reselection"), None);
-    }
-
-    #[test]
-    fn migration_does_not_flag_empty_model() {
-        let mut values = values("google", "", json!({ "google": "" }));
-
-        assert!(migrate_ai_settings_values(&mut values));
-        assert_eq!(values["ai_enabled"], json!(true));
-        assert_eq!(values["ai_provider"], json!("gemini"));
-        assert_eq!(values["ai_model"], json!(""));
-        assert_eq!(values.get("ai_model_needs_reselection"), None);
-    }
-
-    #[test]
-    fn migration_keeps_custom_free_text_model() {
-        let mut values = values("custom", "local-model", json!({ "custom": "local-model" }));
-
-        assert!(!migrate_ai_settings_values(&mut values));
-        assert_eq!(values["ai_model"], json!("local-model"));
-    }
-
-    #[test]
-    fn migration_is_idempotent_after_first_pass() {
-        let mut values = values(
-            "google",
-            "gemini-2.5-flash",
-            json!({ "google": "gemini-2.5-flash" }),
-        );
-
-        assert!(migrate_ai_settings_values(&mut values));
-        let first = values.clone();
-        assert!(!migrate_ai_settings_values(&mut values));
-        assert_eq!(values, first);
-    }
-}
-
 /// Perform essential startup checks
 async fn perform_startup_checks(app: tauri::AppHandle) {
     let checks_start = Instant::now();
@@ -1891,4 +1768,127 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         "✅ Startup checks COMPLETED in {}ms",
         checks_start.elapsed().as_millis()
     );
+}
+
+// AI settings migration tests live here because startup owns the migration call.
+#[cfg(test)]
+mod ai_settings_migration_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn values(
+        provider: &str,
+        model: &str,
+        models: serde_json::Value,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        values_with_enabled(true, provider, model, models)
+    }
+
+    fn values_with_enabled(
+        enabled: bool,
+        provider: &str,
+        model: &str,
+        models: serde_json::Value,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut values = serde_json::Map::new();
+        values.insert("ai_enabled".to_string(), json!(enabled));
+        values.insert("ai_provider".to_string(), json!(provider));
+        values.insert("ai_model".to_string(), json!(model));
+        values.insert("ai_models_by_provider".to_string(), models);
+        values
+    }
+
+    #[test]
+    fn migrates_google_provider_and_model_memory_to_gemini() {
+        let mut values = values(
+            "google",
+            "gemini-2.5-flash",
+            json!({ "google": "gemini-2.5-flash" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_provider"], json!("gemini"));
+        assert_eq!(
+            values["ai_models_by_provider"],
+            json!({ "gemini": "gemini-2.5-flash" })
+        );
+        assert_eq!(values["ai_model"], json!("gemini-2.5-flash"));
+        assert_eq!(values.get("ai_model_needs_reselection"), None);
+    }
+
+    #[test]
+    fn migration_keeps_existing_gemini_model_memory() {
+        let mut values = values(
+            "google",
+            "gemini-2.5-flash",
+            json!({ "google": "gemini-3-flash-preview", "gemini": "gemini-2.5-flash" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(
+            values["ai_models_by_provider"],
+            json!({ "gemini": "gemini-2.5-flash" })
+        );
+        assert_eq!(values.get("ai_model_needs_reselection"), None);
+    }
+
+    #[test]
+    fn migration_flags_enabled_invalid_model_for_reselection_without_substitution() {
+        let mut values = values("google", "text-bison", json!({ "google": "text-bison" }));
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_enabled"], json!(true));
+        assert_eq!(values["ai_provider"], json!("gemini"));
+        assert_eq!(values["ai_model"], json!(""));
+        assert_eq!(values["ai_model_needs_reselection"], json!(true));
+    }
+
+    #[test]
+    fn migration_does_not_flag_disabled_invalid_model() {
+        let mut values = values_with_enabled(
+            false,
+            "google",
+            "text-bison",
+            json!({ "google": "text-bison" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_enabled"], json!(false));
+        assert_eq!(values["ai_provider"], json!("gemini"));
+        assert_eq!(values["ai_model"], json!(""));
+        assert_eq!(values.get("ai_model_needs_reselection"), None);
+    }
+
+    #[test]
+    fn migration_does_not_flag_empty_model() {
+        let mut values = values("google", "", json!({ "google": "" }));
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_enabled"], json!(true));
+        assert_eq!(values["ai_provider"], json!("gemini"));
+        assert_eq!(values["ai_model"], json!(""));
+        assert_eq!(values.get("ai_model_needs_reselection"), None);
+    }
+
+    #[test]
+    fn migration_keeps_custom_free_text_model() {
+        let mut values = values("custom", "local-model", json!({ "custom": "local-model" }));
+
+        assert!(!migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_model"], json!("local-model"));
+    }
+
+    #[test]
+    fn migration_is_idempotent_after_first_pass() {
+        let mut values = values(
+            "google",
+            "gemini-2.5-flash",
+            json!({ "google": "gemini-2.5-flash" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        let first = values.clone();
+        assert!(!migrate_ai_settings_values(&mut values));
+        assert_eq!(values, first);
+    }
 }

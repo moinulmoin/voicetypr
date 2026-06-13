@@ -73,7 +73,7 @@ mod tests {
         assert!(models.contains_key("large-v3"));
 
         // All models should initially be not downloaded
-        for (_, model) in models.iter() {
+        for model in models.values() {
             assert!(!model.downloaded);
         }
     }
@@ -209,7 +209,7 @@ mod tests {
         let valid_models = vec!["base.en", "large-v3", "large-v3-q5_0", "large-v3-turbo"];
 
         for model in &valid_models {
-            assert!(valid_models.contains(&model));
+            assert!(valid_models.contains(model));
         }
 
         // Test invalid model names
@@ -229,7 +229,7 @@ mod tests {
 
         // Initially no models should be downloaded
         let status = manager.get_models_status();
-        for (_, info) in &status {
+        for info in status.values() {
             assert!(!info.downloaded);
         }
 
@@ -263,7 +263,7 @@ mod tests {
         assert!(large.accuracy_score > base_en.accuracy_score); // More accurate
 
         // Verify all scores are in valid range (1-10)
-        for (_, model) in &models {
+        for model in models.values() {
             assert!(model.speed_score >= 1 && model.speed_score <= 10);
             assert!(model.accuracy_score >= 1 && model.accuracy_score <= 10);
         }

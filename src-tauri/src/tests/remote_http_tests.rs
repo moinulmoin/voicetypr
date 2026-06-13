@@ -258,7 +258,7 @@ fn create_test_wav_data() -> Vec<u8> {
     wav.extend_from_slice(&data_size.to_le_bytes());
 
     // Samples (silence)
-    wav.extend(std::iter::repeat(0u8).take(data_size as usize));
+    wav.extend(std::iter::repeat_n(0u8, data_size as usize));
 
     wav
 }

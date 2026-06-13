@@ -29,52 +29,11 @@ impl MockEventCollector {
     pub fn get_events(&self) -> Vec<(String, Value)> {
         self.events.lock().unwrap().clone()
     }
-
-    pub fn clear(&self) {
-        self.events.lock().unwrap().clear();
-    }
-
-    pub fn count(&self) -> usize {
-        self.events.lock().unwrap().len()
-    }
-
-    pub fn find_event(&self, event_name: &str) -> Option<Value> {
-        let events = self.events.lock().unwrap();
-        events
-            .iter()
-            .find(|(name, _)| name == event_name)
-            .map(|(_, payload)| payload.clone())
-    }
 }
 
 #[cfg(test)]
 mod event_emission_tests {
     use super::*;
-    use hound::WavWriter;
-    use tempfile::NamedTempFile;
-
-    /// Helper function to create test WAV files
-    fn create_test_wav(
-        samples: Vec<i16>,
-        sample_rate: u32,
-    ) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
-        let temp_file = NamedTempFile::new()?;
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-
-        let mut writer = WavWriter::create(temp_file.path(), spec)?;
-        for sample in samples {
-            writer.write_sample(sample)?;
-        }
-        writer.finalize()?;
-
-        Ok(temp_file)
-    }
-
     #[test]
     fn test_no_speech_event_emission() {
         log::info!("Testing no-speech-detected event emission after transcription");
@@ -253,7 +212,10 @@ mod event_emission_tests {
             assert_eq!(payload["state"], "error");
             assert!(payload["error"]["type"].is_string());
             assert!(payload["error"]["message"].is_string());
-            assert_eq!(payload["error"]["recoverable"], true);
+            assert_eq!(
+                payload["error"]["recoverable"],
+                serde_json::Value::Bool(true)
+            );
         }
 
         log::info!("✅ Recording state error events emitted correctly");

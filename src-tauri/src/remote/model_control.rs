@@ -23,11 +23,6 @@ pub fn is_model_control_enabled() -> bool {
     MODEL_CONTROL_ENABLED.load(Ordering::SeqCst)
 }
 
-#[cfg(test)]
-pub fn reset_model_control_enabled_for_tests() {
-    MODEL_CONTROL_ENABLED.store(false, Ordering::SeqCst);
-}
-
 pub async fn list_shareable_remote_models(app: &AppHandle) -> Vec<ShareableRemoteModelInfo> {
     let mut models = Vec::new();
 

@@ -6,6 +6,9 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use std::f32::consts::PI;
 use tempfile::NamedTempFile;
 
+type ValidationTestCaseFiles =
+    Result<Vec<(String, NamedTempFile, &'static str)>, Box<dyn std::error::Error>>;
+
 /// Audio test data generator with various audio patterns
 pub struct AudioTestDataGenerator {
     sample_rate: u32,
@@ -23,6 +26,7 @@ impl Default for AudioTestDataGenerator {
     }
 }
 
+#[allow(dead_code)]
 impl AudioTestDataGenerator {
     /// Create a new generator with custom parameters
     pub fn new(sample_rate: u32, channels: u16, bits_per_sample: u16) -> Self {
@@ -110,7 +114,7 @@ impl AudioTestDataGenerator {
         (0..sample_count)
             .flat_map(|i| {
                 let segment = i / speech_segment_size;
-                let sample = if segment % 2 == 0 {
+                let sample = if segment.is_multiple_of(2) {
                     // Speech segments
                     let t = i as f32 / self.sample_rate as f32;
                     ((200.0 * 2.0 * PI * t).sin() * 8000.0) as i16
@@ -233,6 +237,8 @@ impl AudioTestDataGenerator {
 }
 
 /// Fade types for audio generation
+#[allow(dead_code)]
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy)]
 pub enum FadeType {
     FadeIn,
@@ -336,100 +342,91 @@ impl TestAudioScenarios {
 }
 
 /// Batch test data generator for creating multiple test files
-pub struct BatchTestDataGenerator {
-    base_generator: AudioTestDataGenerator,
-}
+pub struct BatchTestDataGenerator;
 
 impl BatchTestDataGenerator {
     pub fn new() -> Self {
-        Self {
-            base_generator: AudioTestDataGenerator::default(),
-        }
+        Self
     }
 
     /// Generate a comprehensive test suite of audio files
     pub fn generate_test_suite(
         &self,
     ) -> Result<Vec<(String, NamedTempFile)>, Box<dyn std::error::Error>> {
-        let mut test_files = Vec::new();
-
-        // Basic validation tests
-        test_files.push((
-            "silent_1s".to_string(),
-            TestAudioScenarios::create_silent_recording(1.0)?,
-        ));
-        test_files.push((
-            "quiet_1s".to_string(),
-            TestAudioScenarios::create_quiet_recording(1.0)?,
-        ));
-        test_files.push((
-            "valid_1s".to_string(),
-            TestAudioScenarios::create_valid_speech_recording(1.0)?,
-        ));
-        test_files.push((
-            "too_short".to_string(),
-            TestAudioScenarios::create_too_short_recording()?,
-        ));
-
-        // Edge cases
-        test_files.push((
-            "clipped_1s".to_string(),
-            TestAudioScenarios::create_clipped_recording(1.0)?,
-        ));
-        test_files.push((
-            "realistic_3s".to_string(),
-            TestAudioScenarios::create_realistic_speech_recording(3.0)?,
-        ));
-        test_files.push((
-            "stereo_1s".to_string(),
-            TestAudioScenarios::create_stereo_recording(1.0)?,
-        ));
-
-        // Performance tests
-        test_files.push((
-            "long_10s".to_string(),
-            TestAudioScenarios::create_long_recording(10.0)?,
-        ));
-        test_files.push((
-            "high_quality_1s".to_string(),
-            TestAudioScenarios::create_high_quality_recording(1.0)?,
-        ));
-
-        // Error handling tests
-        test_files.push((
-            "corrupted".to_string(),
-            TestAudioScenarios::create_corrupted_recording()?,
-        ));
+        let test_files = vec![
+            // Basic validation tests
+            (
+                "silent_1s".to_string(),
+                TestAudioScenarios::create_silent_recording(1.0)?,
+            ),
+            (
+                "quiet_1s".to_string(),
+                TestAudioScenarios::create_quiet_recording(1.0)?,
+            ),
+            (
+                "valid_1s".to_string(),
+                TestAudioScenarios::create_valid_speech_recording(1.0)?,
+            ),
+            (
+                "too_short".to_string(),
+                TestAudioScenarios::create_too_short_recording()?,
+            ),
+            // Edge cases
+            (
+                "clipped_1s".to_string(),
+                TestAudioScenarios::create_clipped_recording(1.0)?,
+            ),
+            (
+                "realistic_3s".to_string(),
+                TestAudioScenarios::create_realistic_speech_recording(3.0)?,
+            ),
+            (
+                "stereo_1s".to_string(),
+                TestAudioScenarios::create_stereo_recording(1.0)?,
+            ),
+            // Performance tests
+            (
+                "long_10s".to_string(),
+                TestAudioScenarios::create_long_recording(10.0)?,
+            ),
+            (
+                "high_quality_1s".to_string(),
+                TestAudioScenarios::create_high_quality_recording(1.0)?,
+            ),
+            // Error handling tests
+            (
+                "corrupted".to_string(),
+                TestAudioScenarios::create_corrupted_recording()?,
+            ),
+        ];
 
         Ok(test_files)
     }
 
     /// Generate specific test cases for audio validation
-    pub fn generate_validation_test_cases(
-        &self,
-    ) -> Result<Vec<(String, NamedTempFile, &'static str)>, Box<dyn std::error::Error>> {
-        let mut test_cases = Vec::new();
-
-        test_cases.push((
-            "silent".to_string(),
-            TestAudioScenarios::create_silent_recording(1.0)?,
-            "should_be_silent",
-        ));
-        test_cases.push((
-            "too_quiet".to_string(),
-            TestAudioScenarios::create_quiet_recording(1.0)?,
-            "should_be_too_quiet",
-        ));
-        test_cases.push((
-            "too_short".to_string(),
-            TestAudioScenarios::create_too_short_recording()?,
-            "should_be_too_short",
-        ));
-        test_cases.push((
-            "valid".to_string(),
-            TestAudioScenarios::create_valid_speech_recording(1.0)?,
-            "should_be_valid",
-        ));
+    pub fn generate_validation_test_cases(&self) -> ValidationTestCaseFiles {
+        let test_cases = vec![
+            (
+                "silent".to_string(),
+                TestAudioScenarios::create_silent_recording(1.0)?,
+                "should_be_silent",
+            ),
+            (
+                "too_quiet".to_string(),
+                TestAudioScenarios::create_quiet_recording(1.0)?,
+                "should_be_too_quiet",
+            ),
+            (
+                "too_short".to_string(),
+                TestAudioScenarios::create_too_short_recording()?,
+                "should_be_too_short",
+            ),
+            (
+                "valid".to_string(),
+                TestAudioScenarios::create_valid_speech_recording(1.0)?,
+                "should_be_valid",
+            ),
+        ];
 
         Ok(test_cases)
     }

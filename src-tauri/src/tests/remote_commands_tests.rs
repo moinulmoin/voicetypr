@@ -100,13 +100,14 @@ fn test_default_port_value() {
     assert_eq!(DEFAULT_PORT, 47842);
 }
 
-#[test]
-fn test_default_port_is_valid() {
-    // Port should be in the dynamic/private port range (49152-65535)
-    // or registered port range (1024-49151)
-    assert!(DEFAULT_PORT > 1023, "Port should not be a well-known port");
-    // u16 type already guarantees port is <= 65535, so no upper bound check needed
-}
+// DEFAULT_PORT must stay outside the privileged/well-known port range (>1023).
+// Enforced at compile time so a regression (e.g. lowering it to 80) fails the build;
+// the u16 type already caps the upper bound at 65535.
+#[allow(clippy::assertions_on_constants)]
+const _: () = assert!(
+    DEFAULT_PORT > 1023,
+    "DEFAULT_PORT must not be a well-known port"
+);
 
 // ============================================================================
 // get_local_ips Tests

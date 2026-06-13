@@ -496,8 +496,8 @@ async fn test_different_ports_work() {
     assert_eq!(manager1.get_port(), Some(47865));
     assert_eq!(manager2.get_port(), Some(47866));
 
-    manager1.stop();
-    manager2.stop();
+    manager1.stop().await;
+    manager2.stop().await;
 }
 
 // ============================================================================

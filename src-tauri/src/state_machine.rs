@@ -156,27 +156,6 @@ impl RecordingStateMachine {
 mod tests {
     use super::*;
 
-    // Test-only helper methods for asserting state machine capabilities
-    trait StateMachineTestHelpers {
-        fn can_start_recording(&self) -> bool;
-        fn can_stop_recording(&self) -> bool;
-        fn can_start_transcription(&self) -> bool;
-    }
-
-    impl StateMachineTestHelpers for RecordingStateMachine {
-        fn can_start_recording(&self) -> bool {
-            matches!(self.current(), RecordingState::Idle)
-        }
-
-        fn can_stop_recording(&self) -> bool {
-            matches!(self.current(), RecordingState::Recording)
-        }
-
-        fn can_start_transcription(&self) -> bool {
-            matches!(self.current(), RecordingState::Stopping)
-        }
-    }
-
     #[test]
     fn test_valid_transitions() {
         let mut sm = RecordingStateMachine::new();

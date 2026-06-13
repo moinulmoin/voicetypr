@@ -299,7 +299,7 @@ mod fallback_selection_tests {
         // First try to find a model similar to the requested one
         if !requested.is_empty() {
             for model in available_models {
-                if model.starts_with(&requested.split('-').next().unwrap_or(requested)) {
+                if model.starts_with(requested.split('-').next().unwrap_or(requested)) {
                     return model.clone();
                 }
             }

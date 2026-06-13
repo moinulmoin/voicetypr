@@ -22,10 +22,10 @@ mod tests {
         );
         assert_eq!(settings.theme, "system");
         assert_eq!(settings.transcription_cleanup_days, None);
-        assert_eq!(settings.launch_at_startup, false);
-        assert_eq!(settings.onboarding_completed, false);
-        assert_eq!(settings.check_updates_automatically, true); // Default to automatic checks only
-        assert_eq!(settings.auto_paste_transcription, true); // Default to true
+        assert!(!settings.launch_at_startup);
+        assert!(!settings.onboarding_completed);
+        assert!(settings.check_updates_automatically); // Default to automatic checks only
+        assert!(settings.auto_paste_transcription); // Default to true
         assert!(!settings.save_recordings);
         assert_eq!(settings.recording_retention_days, Some(30));
     }
@@ -266,14 +266,20 @@ mod tests {
         assert_eq!(value["final_text_language"], "same_as_transcript");
         assert_eq!(value["theme"], "system");
         assert_eq!(value["transcription_cleanup_days"], serde_json::Value::Null);
-        assert_eq!(value["launch_at_startup"], false);
-        assert_eq!(value["onboarding_completed"], false);
+        assert_eq!(value["launch_at_startup"], serde_json::Value::Bool(false));
+        assert_eq!(
+            value["onboarding_completed"],
+            serde_json::Value::Bool(false)
+        );
     }
 
     #[test]
     fn test_hotkey_validation_edge_cases() {
-        // Test empty hotkey (invalid)
-        assert!("".is_empty());
+        let empty_settings = Settings {
+            hotkey: String::new(),
+            ..Settings::default()
+        };
+        assert!(empty_settings.hotkey.is_empty());
 
         // Test very long hotkey (invalid if > 100 chars)
         let long_hotkey = "CommandOrControl+".repeat(10);
