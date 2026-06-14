@@ -73,6 +73,7 @@ use commands::{
     reset::reset_app_data,
     settings::*,
     stt::{clear_soniox_key_cache, validate_and_cache_soniox_key},
+    system_info::get_system_specs,
     text::*,
     utils::export_transcriptions,
     window::*,
@@ -449,6 +450,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             // Initialize recorder state (kept separate for backwards compatibility)
             app.manage(RecorderState(Mutex::new(AudioRecorder::new())));
+
+            let recorder_watchdog =
+                audio::recorder_watchdog::RecorderWatchdog::new(app.app_handle().clone());
+            recorder_watchdog.start();
+            app.manage(recorder_watchdog);
 
             // Create device watcher in deferred state - will be started after mic permission granted
             // This prevents early mic permission prompts from CPAL's input_devices() enumeration
@@ -1143,6 +1149,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_autostart_status,
             set_autostart,
             get_device_id,
+            get_system_specs,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

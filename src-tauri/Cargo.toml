@@ -80,6 +80,7 @@ windows = { version = "0.62", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Media_Control",
     "Foundation",
+    "Win32_Graphics_Dxgi",
 ] }
 
 [dev-dependencies]
