@@ -53,7 +53,9 @@ pub fn get_system_specs() -> SystemSpecs {
 
 #[cfg(target_os = "windows")]
 fn detect_gpus() -> Vec<String> {
-    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
+    };
 
     let mut gpus = Vec::new();
     unsafe {
@@ -66,18 +68,23 @@ fn detect_gpus() -> Vec<String> {
         };
         let mut index = 0u32;
         loop {
-            let adapter = match factory.EnumAdapters(index) {
+            let adapter = match factory.EnumAdapters1(index) {
                 Ok(a) => a,
                 Err(_) => break,
             };
-            if let Ok(desc) = adapter.GetDesc() {
+            index += 1;
+            if let Ok(desc) = adapter.GetDesc1() {
+                // Skip software / basic-render adapters (e.g. "Microsoft Basic Render Driver")
+                // so bug-report specs list only real hardware GPUs.
+                if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32) != 0 {
+                    continue;
+                }
                 let name = String::from_utf16_lossy(&desc.Description);
                 let name = name.trim_end_matches('\u{0}').trim().to_string();
                 if !name.is_empty() {
                     gpus.push(name);
                 }
             }
-            index += 1;
         }
     }
     gpus
