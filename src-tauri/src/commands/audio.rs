@@ -1554,13 +1554,13 @@ pub async fn start_recording(
         }
     }
 
-    // Pause system media if enabled (default: true)
+    // Pause system media if enabled (default: off)
     let mut resume_media_on_error = false;
     if let Ok(store) = app.store("settings") {
         let pause_media = store
             .get("pause_media_during_recording")
             .and_then(|v| v.as_bool())
-            .unwrap_or(true); // Default to true
+            .unwrap_or(false); // Default to off
         if pause_media {
             log::info!("🎵 Pause media during recording is enabled");
             let paused = MEDIA_CONTROLLER.pause_if_playing();

@@ -79,7 +79,7 @@ impl Default for Settings {
             pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
             pill_indicator_position: "bottom-center".to_string(), // Default to bottom center of screen
             pill_indicator_offset: DEFAULT_INDICATOR_OFFSET,
-            pause_media_during_recording: !cfg!(target_os = "macos"),
+            pause_media_during_recording: false, // Default to off; user opts in
             transcription_acceleration: DEFAULT_TRANSCRIPTION_ACCELERATION.to_string(),
             auto_paste_transcription: true, // Default to auto-pasting transcription
         }
