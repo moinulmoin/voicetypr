@@ -1534,7 +1534,9 @@ pub async fn transcribe_remote(
         .with_transcript_language(response.transcript_language)
         .with_processing_duration_ms(Some(response.duration_ms));
     let writing_result =
-        crate::writing::process_transcription(app.clone(), transcription, ai_enabled).await?;
+        crate::writing::process_transcription(app.clone(), transcription, ai_enabled)
+            .await
+            .map_err(|error| error.user_message())?;
     Ok(writing_result.final_text)
 }
 

@@ -59,6 +59,43 @@ impl From<EnhancementPreset> for WritingMode {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum WritingError {
+    TranslationFailed {
+        target_language: String,
+        detail: String,
+    },
+    OutputLanguageRequiresAi,
+    Config(String),
+}
+
+impl WritingError {
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::TranslationFailed {
+                target_language, ..
+            } => format!("Translation to {} failed", target_language),
+            Self::OutputLanguageRequiresAi => {
+                "Final output language requires AI enhancement or native translation".to_string()
+            }
+            Self::Config(message) => message.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for WritingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TranslationFailed { detail, .. } if !detail.is_empty() => {
+                write!(f, "{}: {}", self.user_message(), detail)
+            }
+            _ => f.write_str(&self.user_message()),
+        }
+    }
+}
+
+impl std::error::Error for WritingError {}
+
 impl From<WritingMode> for EnhancementPreset {
     fn from(value: WritingMode) -> Self {
         match value {
@@ -1875,27 +1912,17 @@ fn resolve_smart_formatting_outcome(
     result: Result<String, AiProviderError>,
     library_text: &str,
     needs_output_language_transform: bool,
-    transcript_language: Option<&str>,
-    output_language: &mut String,
+    _transcript_language: Option<&str>,
+    output_language: &str,
     warnings: &mut Vec<WritingWarning>,
-) -> (String, Option<AiProviderError>) {
+) -> Result<(String, Option<AiProviderError>), WritingError> {
     match result {
-        Ok(text) => (text, None),
+        Ok(text) => Ok((text, None)),
+        Err(error) if needs_output_language_transform => Err(WritingError::TranslationFailed {
+            target_language: output_language.to_string(),
+            detail: user_facing_message(&error).to_string(),
+        }),
         Err(error) => {
-            if needs_output_language_transform {
-                record_output_language_transform_fallback(
-                    warnings,
-                    output_language,
-                    transcript_language,
-                    "output_language_transform_failed",
-                    format!(
-                        "AI formatting failed ({}); output language remains {}",
-                        user_facing_message(&error),
-                        transcript_language.unwrap_or("the transcript language")
-                    ),
-                );
-            }
-
             warnings.push(WritingWarning {
                 code: "ai_formatting_failed".to_string(),
                 message: format!(
@@ -1904,7 +1931,7 @@ fn resolve_smart_formatting_outcome(
                 ),
             });
 
-            (library_text.to_string(), Some(error))
+            Ok((library_text.to_string(), Some(error)))
         }
     }
 }
@@ -1913,13 +1940,15 @@ pub async fn process_transcription(
     app: AppHandle,
     transcription: TranscriptionResult,
     ai_enabled: bool,
-) -> Result<WritingResult, String> {
-    let settings = load_writing_settings(&app)?;
+) -> Result<WritingResult, WritingError> {
+    let settings = load_writing_settings(&app).map_err(WritingError::Config)?;
     let should_capture_active_app = settings.context_policy == ContextPolicy::AppHintOnly
         || app_rules_need_active_app(&settings);
     let active_app = capture_active_app_context(should_capture_active_app);
     let context_hint = context_hint_for_policy(settings.context_policy, active_app.as_ref());
-    let profile = load_writing_profile(&app, ai_enabled, &settings, active_app.as_ref()).await?;
+    let profile = load_writing_profile(&app, ai_enabled, &settings, active_app.as_ref())
+        .await
+        .map_err(WritingError::Config)?;
     let transcript_language = transcription.transcript_language.clone().or_else(|| {
         transcription
             .task
@@ -1956,15 +1985,13 @@ pub async fn process_transcription(
     let can_run_ai_formatting = ai_enabled && profile.mode != WritingMode::PersonalDictation;
 
     if needs_output_language_transform && !can_run_ai_formatting && !library_result.literal_locked {
-        return Err(
-            "Final output language requires AI enhancement or native translation".to_string(),
-        );
+        return Err(WritingError::OutputLanguageRequiresAi);
     }
 
     if profile.mode.requires_ai_formatting() && !ai_enabled && !library_result.literal_locked {
-        return Err(
-            "This writing mode requires AI formatting. Enable AI formatting in settings or switch to Personal Dictation.".to_string(),
-        );
+        return Err(WritingError::Config(
+            "This writing mode requires AI formatting. Enable AI formatting in settings or switch to Personal Dictation.".into(),
+        ));
     }
 
     let should_run_ai = can_run_ai_formatting && !library_result.literal_locked;
@@ -1999,9 +2026,9 @@ pub async fn process_transcription(
             &library_result.text,
             needs_output_language_transform,
             transcript_language.as_deref(),
-            &mut output_language,
+            &output_language,
             &mut warnings,
-        );
+        )?;
         ai_error = error;
         text
     } else {
@@ -2190,15 +2217,16 @@ mod tests {
     #[test]
     fn test_resolve_smart_formatting_outcome_preserves_success() {
         let mut warnings = Vec::new();
-        let mut output_language = "en".to_string();
+        let output_language = "en".to_string();
         let (out, error) = resolve_smart_formatting_outcome(
             Ok("formatted".to_string()),
             "library",
             false,
             None,
-            &mut output_language,
+            &output_language,
             &mut warnings,
-        );
+        )
+        .unwrap();
 
         assert_eq!(out, "formatted");
         assert_eq!(error, None);
@@ -2208,36 +2236,46 @@ mod tests {
     #[test]
     fn test_resolve_smart_formatting_outcome_falls_back_when_translation_required() {
         let mut warnings = Vec::new();
-        let mut output_language = "fr".to_string();
-        let (out, error) = resolve_smart_formatting_outcome(
+        let output_language = "fr".to_string();
+        let error = resolve_smart_formatting_outcome(
             Err(AiProviderError::Network),
             "library",
             true,
             Some("en"),
-            &mut output_language,
+            &output_language,
             &mut warnings,
-        );
+        )
+        .unwrap_err();
 
-        assert_eq!(out, "library");
-        assert_eq!(error, Some(AiProviderError::Network));
-        assert_eq!(output_language, "en");
-        assert!(warnings
-            .iter()
-            .any(|warning| warning.code == "output_language_transform_failed"));
+        match error {
+            WritingError::TranslationFailed {
+                target_language,
+                detail,
+            } => {
+                assert_eq!(target_language, "fr");
+                assert_eq!(detail, "network error");
+            }
+            WritingError::OutputLanguageRequiresAi | WritingError::Config(_) => {
+                panic!("expected translation failure")
+            }
+        }
+        assert_eq!(output_language, "fr");
+        assert!(warnings.is_empty());
     }
 
     #[test]
     fn test_resolve_smart_formatting_outcome_falls_back_without_translation() {
         let mut warnings = Vec::new();
-        let mut output_language = "en".to_string();
+        let output_language = "en".to_string();
         let (out, error) = resolve_smart_formatting_outcome(
             Err(AiProviderError::Timeout),
             "library text",
             false,
             None,
-            &mut output_language,
+            &output_language,
             &mut warnings,
-        );
+        )
+        .unwrap();
 
         assert_eq!(out, "library text");
         assert_eq!(error, Some(AiProviderError::Timeout));

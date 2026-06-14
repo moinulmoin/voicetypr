@@ -3947,21 +3947,75 @@ pub async fn stop_recording(
                                 debug_assert_eq!(plan.save_history_entries, 1);
                                 (plan.final_text, plan.writing_metadata, plan.should_deliver)
                             }
-                            Err(e) => {
+                            Err(crate::writing::WritingError::TranslationFailed { .. }) => {
+                                log::warn!("Translation failed after transcription; saving raw transcript to history without delivery");
+                                if should_emit_enhancing_for_task {
+                                    let _ = app_for_process.emit("enhancing-failed", ());
+                                }
+
+                                let saved = save_transcription_with_recording(
+                                    app_for_process.clone(),
+                                    transcription_for_process.raw_text.clone(),
+                                    model_for_process.clone(),
+                                    recording_file_for_task.clone(),
+                                    None,
+                                )
+                                .await;
+
+                                if let Err(save_err) = saved {
+                                    // History save failed: fall back to clipboard so the
+                                    // transcript is never lost (the old path always pasted).
+                                    log::error!(
+                                        "Failed to save raw transcript after translation failure: {}; copying to clipboard",
+                                        save_err
+                                    );
+                                    let message =
+                                        match crate::commands::text::copy_text_to_clipboard(
+                                            transcription_for_process.raw_text.clone(),
+                                        )
+                                        .await
+                                        {
+                                            Ok(_) => "Translation failed - copied to clipboard",
+                                            Err(copy_err) => {
+                                                log::error!(
+                                                "Clipboard fallback also failed after translation failure: {}",
+                                                copy_err
+                                            );
+                                                "Translation failed - transcript could not be saved"
+                                            }
+                                        };
+                                    pill_toast(&app_for_process, message, 6000);
+                                } else {
+                                    pill_toast(
+                                        &app_for_process,
+                                        "Translation failed - saved to history, not pasted",
+                                        6000,
+                                    );
+                                }
+
+                                (text_for_process.clone(), None, false)
+                            }
+                            Err(crate::writing::WritingError::OutputLanguageRequiresAi) => {
+                                log::warn!("Formatting failed: Final output language requires AI enhancement or native translation");
+                                if should_emit_enhancing_for_task {
+                                    let _ = app_for_process.emit("enhancing-failed", ());
+                                }
+
+                                pill_toast(
+                                    &app_for_process,
+                                    "Final output language requires AI enhancement",
+                                    1500,
+                                );
+
+                                (text_for_process.clone(), None, false)
+                            }
+                            Err(crate::writing::WritingError::Config(e)) => {
                                 log::warn!("Formatting failed: {}", e);
                                 if should_emit_enhancing_for_task {
                                     let _ = app_for_process.emit("enhancing-failed", ());
                                 }
 
-                                let error_message = e.to_string();
-                                let user_message =
-                                    if error_message.contains("Final output language") {
-                                        "Final output language requires AI enhancement"
-                                    } else {
-                                        "Formatting failed"
-                                    };
-
-                                pill_toast(&app_for_process, user_message, 1500);
+                                pill_toast(&app_for_process, "Formatting failed", 1500);
 
                                 (text_for_process.clone(), None, false)
                             }
@@ -4789,7 +4843,8 @@ async fn transcribe_audio_file_impl(
         transcription_result.clone(),
         ai_enabled,
     )
-    .await?;
+    .await
+    .map_err(|e| e.user_message())?;
     if let Some(error) = writing_result.ai_error.as_ref() {
         log::warn!(
             "AI polish failed with {}; returning deterministic upload text",
@@ -5074,7 +5129,8 @@ pub async fn transcribe_audio(
         transcription_result.clone(),
         ai_enabled,
     )
-    .await?;
+    .await
+    .map_err(|e| e.user_message())?;
     if let Some(error) = writing_result.ai_error.as_ref() {
         log::warn!(
             "AI polish failed with {}; returning and saving deterministic test transcription text",

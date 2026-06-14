@@ -377,8 +377,9 @@ async fn transcribe_via_remote(
         .get("ai_enabled")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
-    let writing =
-        crate::writing::process_transcription(app.clone(), transcription, ai_enabled).await?;
+    let writing = crate::writing::process_transcription(app.clone(), transcription, ai_enabled)
+        .await
+        .map_err(|error| std::io::Error::other(error.user_message()))?;
 
     Ok(json!({
         "text": writing.final_text,
