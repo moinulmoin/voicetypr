@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::audio::recorder::AudioRecorder;
+use crate::audio::silence_detector::SilenceDetectorEvent;
 use crate::commands::license::{check_license_status_internal, CachedLicense};
 #[cfg(target_os = "windows")]
 use crate::commands::settings::normalize_transcription_acceleration;
@@ -123,37 +124,73 @@ static TOAST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Global media pause controller for pausing/resuming system media during recording
 static MEDIA_CONTROLLER: Lazy<MediaPauseController> = Lazy::new(MediaPauseController::new);
 
+/// Pill toast show/clear action for the unified toast event.
+#[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PillToastAction {
+    Show,
+    Clear,
+}
+
+/// Visual variant for pill toast messages.
+#[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PillToastVariant {
+    Info,
+    Warning,
+}
+
 /// Payload for pill toast messages
 #[derive(serde::Serialize, Clone)]
 pub struct PillToastPayload {
     pub id: u64,
+    pub action: PillToastAction,
     pub message: String,
     pub duration_ms: u64,
+    pub variant: PillToastVariant,
+    pub persistent: bool,
 }
 
-/// Show a toast message on the pill's toast window (above the pill)
-/// This is the single unified API for pill feedback messages.
-/// Uses atomic counter to prevent race conditions with overlapping toasts.
-pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) {
-    let id = TOAST_ID_COUNTER
+fn next_pill_toast_id() -> u64 {
+    TOAST_ID_COUNTER
         .fetch_add(1, AtomicOrdering::SeqCst)
-        .wrapping_add(1);
+        .wrapping_add(1)
+}
 
-    // Show toast window
+/// Returns true when a stale clear may hide the toast window (compare_exchange succeeded).
+pub(crate) fn pill_toast_clear_may_hide_window(toast_id: u64) -> bool {
+    TOAST_ID_COUNTER
+        .compare_exchange(
+            toast_id,
+            toast_id.wrapping_add(1),
+            AtomicOrdering::SeqCst,
+            AtomicOrdering::SeqCst,
+        )
+        .is_ok()
+}
+
+fn emit_pill_toast(
+    app: &AppHandle,
+    id: u64,
+    message: &str,
+    duration_ms: u64,
+    variant: PillToastVariant,
+    persistent: bool,
+) {
     if let Some(toast_window) = app.get_webview_window("toast") {
         let _ = toast_window.show();
 
-        // Backend controls hide timing - only hide if this is still the latest toast
-        let app_clone = app.clone();
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(duration_ms)).await;
-            // Only hide if we're still the latest toast
-            if TOAST_ID_COUNTER.load(AtomicOrdering::SeqCst) == id {
-                if let Some(tw) = app_clone.get_webview_window("toast") {
-                    let _ = tw.hide();
+        if !persistent {
+            let app_clone = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(duration_ms)).await;
+                if TOAST_ID_COUNTER.load(AtomicOrdering::SeqCst) == id {
+                    if let Some(tw) = app_clone.get_webview_window("toast") {
+                        let _ = tw.hide();
+                    }
                 }
-            }
-        });
+            });
+        }
     } else {
         log::warn!(
             "pill_toast: toast window not found, message not shown: {}",
@@ -161,13 +198,58 @@ pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) {
         );
     }
 
-    // Build and emit unified payload
     let payload = PillToastPayload {
         id,
+        action: PillToastAction::Show,
         message: message.to_string(),
         duration_ms,
+        variant,
+        persistent,
     };
 
+    let _ = app.emit("toast", payload);
+}
+
+/// Show a toast message on the pill's toast window (above the pill).
+/// This is the single unified API for pill feedback messages.
+pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) -> u64 {
+    pill_toast_with_variant(app, message, duration_ms, PillToastVariant::Info)
+}
+
+pub fn pill_toast_with_variant(
+    app: &AppHandle,
+    message: &str,
+    duration_ms: u64,
+    variant: PillToastVariant,
+) -> u64 {
+    let id = next_pill_toast_id();
+    emit_pill_toast(app, id, message, duration_ms, variant, false);
+    id
+}
+
+pub fn pill_toast_persistent(app: &AppHandle, message: &str, variant: PillToastVariant) -> u64 {
+    let id = next_pill_toast_id();
+    emit_pill_toast(app, id, message, 0, variant, true);
+    id
+}
+
+pub fn clear_pill_toast(app: &AppHandle, toast_id: u64) {
+    if !pill_toast_clear_may_hide_window(toast_id) {
+        return;
+    }
+
+    if let Some(toast_window) = app.get_webview_window("toast") {
+        let _ = toast_window.hide();
+    }
+
+    let payload = PillToastPayload {
+        id: toast_id,
+        action: PillToastAction::Clear,
+        message: String::new(),
+        duration_ms: 0,
+        variant: PillToastVariant::Info,
+        persistent: false,
+    };
     let _ = app.emit("toast", payload);
 }
 
@@ -421,9 +503,13 @@ mod tests {
 
     use super::{
         cpu_transcription_timeout, is_likely_silence, is_non_retryable_transcription_error,
-        select_best_fallback_model, should_hide_pill_when_idle, NormalizedAudioStats,
-        TRANSCRIPTION_TIMED_OUT,
+        pill_toast_clear_may_hide_window, select_best_fallback_model,
+        should_discard_likely_silence, should_hide_pill_when_idle,
+        silence_state_allows_terminal_event, silence_state_allows_warning_event,
+        NormalizedAudioStats, StopRecordingIntent, TOAST_ID_COUNTER, TRANSCRIPTION_TIMED_OUT,
     };
+    use crate::RecordingState;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn should_hide_pill_when_idle_for_never() {
@@ -514,6 +600,74 @@ mod tests {
         // An in-progress stop/transcribe flow must NOT be overridden.
         assert!(!stop_should_reset_to_idle(RecordingState::Stopping));
         assert!(!stop_should_reset_to_idle(RecordingState::Transcribing));
+    }
+
+    #[test]
+    fn silence_terminal_with_speech_routes_to_stop_and_transcribe() {
+        use crate::audio::silence_detector::SilenceDetectorEvent;
+        assert!(SilenceDetectorEvent::TimeoutWithSpeech.is_terminal());
+        assert!(!should_discard_likely_silence(
+            StopRecordingIntent::LongSilenceWithSpeech
+        ));
+    }
+
+    #[test]
+    fn silence_terminal_without_speech_routes_to_cancel_and_discard() {
+        use crate::audio::silence_detector::SilenceDetectorEvent;
+        assert!(SilenceDetectorEvent::TimeoutNoSpeech.is_terminal());
+        assert!(should_discard_likely_silence(StopRecordingIntent::Normal));
+    }
+
+    #[test]
+    fn silence_warnings_have_no_terminal_action() {
+        use crate::audio::silence_detector::SilenceDetectorEvent;
+        assert!(!SilenceDetectorEvent::DeadMicWarn.is_terminal());
+        assert!(!SilenceDetectorEvent::LongSilenceWarn.is_terminal());
+        assert!(!SilenceDetectorEvent::Clear.is_terminal());
+    }
+
+    #[test]
+    fn speech_timeout_never_discards_likely_silence_audio() {
+        assert!(!should_discard_likely_silence(
+            StopRecordingIntent::LongSilenceWithSpeech
+        ));
+    }
+
+    #[test]
+    fn normal_stop_still_discards_likely_silence_audio() {
+        assert!(should_discard_likely_silence(StopRecordingIntent::Normal));
+    }
+
+    #[test]
+    fn clear_pill_toast_only_clears_matching_current_toast_id() {
+        // Simulate "toast id 7 is the current/newest toast".
+        TOAST_ID_COUNTER.store(7, Ordering::SeqCst);
+        // A stale (older) or not-yet-current id must NOT clear the window.
+        assert!(!pill_toast_clear_may_hide_window(6));
+        assert!(!pill_toast_clear_may_hide_window(8));
+        // The current id clears exactly once and advances the counter.
+        assert!(pill_toast_clear_may_hide_window(7));
+        // After advancing, the same id no longer matches.
+        assert!(!pill_toast_clear_may_hide_window(7));
+    }
+
+    #[test]
+    fn silence_warning_events_only_apply_while_recording_or_starting() {
+        assert!(silence_state_allows_warning_event(
+            RecordingState::Recording
+        ));
+        assert!(silence_state_allows_warning_event(RecordingState::Starting));
+        assert!(!silence_state_allows_warning_event(
+            RecordingState::Stopping
+        ));
+    }
+
+    #[test]
+    fn silence_terminal_events_ignored_after_stop_flow_begins() {
+        assert!(!silence_state_allows_terminal_event(
+            RecordingState::Stopping
+        ));
+        assert!(!silence_state_allows_terminal_event(RecordingState::Idle));
     }
 }
 
@@ -1192,6 +1346,119 @@ pub(crate) fn ptt_key_released(app_state: &AppState) -> bool {
             .load(std::sync::atomic::Ordering::SeqCst)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StopRecordingIntent {
+    Normal,
+    LongSilenceWithSpeech,
+}
+
+fn should_discard_likely_silence(intent: StopRecordingIntent) -> bool {
+    matches!(intent, StopRecordingIntent::Normal)
+}
+
+fn silence_state_allows_warning_event(state: RecordingState) -> bool {
+    matches!(state, RecordingState::Recording | RecordingState::Starting)
+}
+
+fn silence_state_allows_terminal_event(state: RecordingState) -> bool {
+    matches!(state, RecordingState::Recording | RecordingState::Starting)
+}
+
+fn clear_active_silence_toast(app: &AppHandle, active_id: &mut Option<u64>) {
+    if let Some(id) = active_id.take() {
+        clear_pill_toast(app, id);
+    }
+}
+
+fn spawn_silence_event_listener(
+    app: AppHandle,
+    silence_event_rx: std::sync::mpsc::Receiver<SilenceDetectorEvent>,
+) {
+    std::thread::spawn(move || {
+        let mut active_silence_toast_id: Option<u64> = None;
+
+        while let Ok(event) = silence_event_rx.recv() {
+            let recording_state = crate::get_recording_state(&app);
+
+            if event.is_terminal() {
+                if !silence_state_allows_terminal_event(recording_state) {
+                    clear_active_silence_toast(&app, &mut active_silence_toast_id);
+                    break;
+                }
+            } else if !silence_state_allows_warning_event(recording_state) {
+                continue;
+            }
+
+            match event {
+                SilenceDetectorEvent::DeadMicWarn => {
+                    active_silence_toast_id = Some(pill_toast_persistent(
+                        &app,
+                        "No audio detected — check your microphone",
+                        PillToastVariant::Warning,
+                    ));
+                }
+                SilenceDetectorEvent::LongSilenceWarn => {
+                    active_silence_toast_id = Some(pill_toast_persistent(
+                        &app,
+                        "Long silence detected",
+                        PillToastVariant::Warning,
+                    ));
+                }
+                SilenceDetectorEvent::Clear => {
+                    clear_active_silence_toast(&app, &mut active_silence_toast_id);
+                }
+                SilenceDetectorEvent::TimeoutWithSpeech => {
+                    clear_active_silence_toast(&app, &mut active_silence_toast_id);
+                    pill_toast_with_variant(
+                        &app,
+                        "Ended after long silence",
+                        1500,
+                        PillToastVariant::Info,
+                    );
+                    let app_for_stop = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let st = app_for_stop.state::<RecorderState>();
+                        if let Err(e) =
+                            stop_recording_after_long_silence(app_for_stop.clone(), st).await
+                        {
+                            log::error!("Long-silence stop failed: {}", e);
+                        }
+                    });
+                    break;
+                }
+                SilenceDetectorEvent::TimeoutNoSpeech => {
+                    clear_active_silence_toast(&app, &mut active_silence_toast_id);
+                    let app_for_cancel = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        match cancel_recording(app_for_cancel.clone()).await {
+                            Ok(()) => {
+                                pill_toast_with_variant(
+                                    &app_for_cancel,
+                                    "No audio captured",
+                                    1500,
+                                    PillToastVariant::Warning,
+                                );
+                            }
+                            Err(e) => {
+                                log::error!("No-speech timeout cancel failed: {}", e);
+                                pill_toast_with_variant(
+                                    &app_for_cancel,
+                                    "Recording error",
+                                    1500,
+                                    PillToastVariant::Warning,
+                                );
+                            }
+                        }
+                    });
+                    break;
+                }
+            }
+        }
+
+        clear_active_silence_toast(&app, &mut active_silence_toast_id);
+    });
+}
+
 #[tauri::command]
 pub async fn start_recording(
     app: AppHandle,
@@ -1449,15 +1716,15 @@ pub async fn start_recording(
 
         log_file_operation("RECORDING_START", audio_path_str, false, None, None);
 
-        // Start recording and get audio level receiver
-        let audio_level_rx =
+        // Start recording and take side-channel receivers before releasing the lock.
+        let (audio_level_rx, silence_event_rx) =
             match recorder.start_recording(audio_path_str, selected_microphone.clone()) {
                 Ok(_) => {
                     // Verify recording actually started
                     let is_recording = recorder.is_recording();
 
-                    // Get the audio level receiver before potentially dropping recorder
                     let rx = recorder.take_audio_level_receiver();
+                    let silence_rx = recorder.take_silence_event_receiver();
 
                     if !is_recording {
                         drop(recorder); // Release the lock if we're erroring out
@@ -1503,9 +1770,9 @@ pub async fn start_recording(
                         // Monitor system resources at recording start
                         #[cfg(debug_assertions)]
                         system_monitor::log_resources_before_operation("RECORDING_START");
-                    }
 
-                    rx // Return the audio level receiver
+                        (rx, silence_rx)
+                    }
                 }
                 Err(e) => {
                     log_failed("RECORDER_START", &e);
@@ -1548,10 +1815,13 @@ pub async fn start_recording(
         // Release the recorder lock after successful start
         drop(recorder);
 
+        if let Some(silence_event_rx) = silence_event_rx {
+            spawn_silence_event_listener(app.clone(), silence_event_rx);
+        }
+
         // Start audio level monitoring
         if let Some(audio_level_rx) = audio_level_rx {
             let app_for_levels = app.clone();
-            // Use a thread instead of tokio spawn for std::sync::mpsc
             std::thread::spawn(move || {
                 let mut last_emit = std::time::Instant::now();
                 let emit_interval = std::time::Duration::from_millis(100); // Throttle to 10fps
@@ -1730,10 +2000,10 @@ pub async fn start_recording(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn stop_recording(
+async fn stop_recording_internal(
     app: AppHandle,
     state: State<'_, RecorderState>,
+    intent: StopRecordingIntent,
 ) -> Result<String, String> {
     let stop_start = Instant::now();
 
@@ -1820,11 +2090,6 @@ pub async fn stop_recording(
             "RECORDING_STOP",
             stop_start.elapsed().as_millis() as u64,
         );
-
-        // Emit pill toast if recording was stopped due to silence
-        if stop_message.contains("silence") {
-            pill_toast(&app, "No sound detected", 1000);
-        }
     } // MutexGuard dropped here BEFORE any await
 
     // Unregister ESC key
@@ -2245,7 +2510,7 @@ pub async fn stop_recording(
                 return Ok("".to_string());
             }
 
-            if is_likely_silence(audio_stats) {
+            if should_discard_likely_silence(intent) && is_likely_silence(audio_stats) {
                 log::info!(
                     "Normalized audio is below speech threshold: rms={:.6}, peak={:.6}",
                     audio_stats.rms,
@@ -2265,6 +2530,12 @@ pub async fn stop_recording(
                 }
                 update_recording_state(&app, RecordingState::Idle, None);
                 return Ok("".to_string());
+            } else if !should_discard_likely_silence(intent) && is_likely_silence(audio_stats) {
+                log::info!(
+                    "Long-silence stop: keeping audio for transcription despite low metrics: rms={:.6}, peak={:.6}",
+                    audio_stats.rms,
+                    audio_stats.peak
+                );
             }
 
             (normalized_path, Some(audio_stats.duration_s))
@@ -2790,6 +3061,21 @@ pub async fn stop_recording(
 
     // Return immediately so front-end promise resolves before timeout
     Ok(String::new())
+}
+
+#[tauri::command]
+pub async fn stop_recording(
+    app: AppHandle,
+    state: State<'_, RecorderState>,
+) -> Result<String, String> {
+    stop_recording_internal(app, state, StopRecordingIntent::Normal).await
+}
+
+async fn stop_recording_after_long_silence(
+    app: AppHandle,
+    state: State<'_, RecorderState>,
+) -> Result<String, String> {
+    stop_recording_internal(app, state, StopRecordingIntent::LongSilenceWithSpeech).await
 }
 
 /// Get available audio input devices.

@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::level_meter::AudioLevelMeter;
-use super::silence_detector::SilenceDetector;
+use super::silence_detector::{SilenceDetector, SilenceDetectorEvent};
 
 // Type-safe recording size limits
 pub struct RecordingSize;
@@ -30,6 +30,7 @@ impl RecordingSize {
 pub struct AudioRecorder {
     recording_handle: Arc<Mutex<Option<RecordingHandle>>>,
     audio_level_receiver: Arc<Mutex<Option<mpsc::Receiver<f64>>>>,
+    silence_event_receiver: Arc<Mutex<Option<mpsc::Receiver<SilenceDetectorEvent>>>>,
 }
 
 impl Drop for AudioRecorder {
@@ -53,6 +54,13 @@ impl Drop for AudioRecorder {
         } else {
             log::error!("Failed to acquire audio level receiver lock during drop");
         }
+
+        // Clear silence event receiver
+        if let Ok(mut receiver_guard) = self.silence_event_receiver.lock() {
+            receiver_guard.take();
+        } else {
+            log::error!("Failed to acquire silence event receiver lock during drop");
+        }
     }
 }
 
@@ -64,7 +72,6 @@ struct RecordingHandle {
 #[derive(Debug)]
 enum RecorderCommand {
     Stop,
-    StopSilence,
 }
 
 impl AudioRecorder {
@@ -72,6 +79,7 @@ impl AudioRecorder {
         Self {
             recording_handle: Arc::new(Mutex::new(None)),
             audio_level_receiver: Arc::new(Mutex::new(None)),
+            silence_event_receiver: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -96,8 +104,11 @@ impl AudioRecorder {
             return Err("Already recording".to_string());
         }
 
-        // Clear any leftover audio level receiver from previous recordings
+        // Clear any leftover audio level and silence event receivers from previous recordings
         if let Ok(mut guard) = self.audio_level_receiver.lock() {
+            guard.take();
+        }
+        if let Ok(mut guard) = self.silence_event_receiver.lock() {
             guard.take();
         }
 
@@ -108,8 +119,9 @@ impl AudioRecorder {
         // Create audio level channel (f64 for EBU R128 loudness values)
         let (audio_level_tx, audio_level_rx) = mpsc::channel::<f64>();
 
-        // Silence detection config for VAD
-        let silence_duration = Duration::from_secs(10); // 10 seconds of continuous silence
+        // Silence tier events (bounded; realtime callback uses try_send)
+        let (silence_event_tx, silence_event_rx) = mpsc::sync_channel::<SilenceDetectorEvent>(8);
+        let silence_event_tx_clone = silence_event_tx.clone();
 
         // Spawn recording thread
         let thread_handle = thread::spawn(move || -> Result<String, String> {
@@ -162,7 +174,7 @@ impl AudioRecorder {
             }
 
             // Initialize silence detector and level meter
-            let silence_detector = Arc::new(Mutex::new(SilenceDetector::new(silence_duration)));
+            let silence_detector = Arc::new(Mutex::new(SilenceDetector::new()));
 
             let level_meter = Arc::new(Mutex::new(
                 AudioLevelMeter::new(
@@ -219,8 +231,8 @@ impl AudioRecorder {
                 let error_clone = error_occurred.clone();
                 let bytes_clone = bytes_written.clone();
                 let stop_tx_for_size = stop_tx_clone.clone();
-                let stop_tx_for_silence = stop_tx_clone.clone();
                 let silence_detector_clone = silence_detector.clone();
+                let silence_event_tx_for_callback = silence_event_tx_clone.clone();
                 let level_meter_clone = level_meter.clone();
                 let stop_requested_clone = stop_requested.clone();
                 let callback_drained_clone = callback_drained.clone();
@@ -263,11 +275,10 @@ impl AudioRecorder {
                         let _ = meter.process_samples(f32_samples);
                     }
 
-                    // Check for silence
+                    // Emit silence tier transitions (non-blocking; never stops the recorder)
                     if let Ok(mut detector) = silence_detector_clone.try_lock() {
-                        if detector.update(rms) {
-                            // Silence duration exceeded, stop recording
-                            let _ = stop_tx_for_silence.send(RecorderCommand::StopSilence);
+                        if let Some(event) = detector.update(rms) {
+                            let _ = silence_event_tx_for_callback.try_send(event);
                         }
                     }
 
@@ -448,9 +459,6 @@ impl AudioRecorder {
 
             // Return appropriate message based on stop reason
             match stop_reason {
-                Some(RecorderCommand::StopSilence) => {
-                    Ok("Recording stopped due to silence".to_string())
-                }
                 Some(RecorderCommand::Stop) => Ok("Recording stopped by user".to_string()),
                 None => Ok("Recording stopped".to_string()),
             }
@@ -462,11 +470,15 @@ impl AudioRecorder {
             thread_handle,
         });
 
-        // Store the audio level receiver
+        // Store the audio level and silence event receivers
         *self
             .audio_level_receiver
             .lock()
             .map_err(|e| format!("Failed to acquire lock: {}", e))? = Some(audio_level_rx);
+        *self
+            .silence_event_receiver
+            .lock()
+            .map_err(|e| format!("Failed to acquire lock: {}", e))? = Some(silence_event_rx);
 
         Ok(())
     }
@@ -478,8 +490,11 @@ impl AudioRecorder {
             .map_err(|e| format!("Failed to acquire lock: {}", e))?
             .take();
 
-        // Also clear the audio level receiver
+        // Also clear the audio level and silence event receivers
         if let Ok(mut guard) = self.audio_level_receiver.lock() {
+            guard.take();
+        }
+        if let Ok(mut guard) = self.silence_event_receiver.lock() {
             guard.take();
         }
 
@@ -519,8 +534,8 @@ impl AudioRecorder {
     }
 
     /// Returns true if a recording worker exists but its thread has already
-    /// finished. This is the case when the recorder self-terminated (silence
-    /// timeout, device error, or size cap) without `stop_recording` being
+    /// finished. This is the case when the recorder self-terminated (device
+    /// error or size cap) without `stop_recording` being
     /// called. Non-consuming: `JoinHandle::is_finished` only borrows, so a
     /// watchdog can poll this while the handle stays in the mutex.
     pub fn recording_thread_finished(&self) -> bool {
@@ -537,6 +552,13 @@ impl AudioRecorder {
 
     pub fn take_audio_level_receiver(&mut self) -> Option<mpsc::Receiver<f64>> {
         self.audio_level_receiver
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
+    }
+
+    pub fn take_silence_event_receiver(&mut self) -> Option<mpsc::Receiver<SilenceDetectorEvent>> {
+        self.silence_event_receiver
             .lock()
             .ok()
             .and_then(|mut guard| guard.take())
@@ -622,7 +644,7 @@ mod tests {
     fn recording_thread_finished_is_true_after_worker_self_exits() {
         let recorder = AudioRecorder::new();
         let (stop_tx, _stop_rx) = mpsc::channel::<RecorderCommand>();
-        // Worker returns immediately, mimicking a silence/error self-stop.
+        // Worker returns immediately, mimicking a device-error or size-cap self-stop.
         let thread_handle = thread::spawn(|| Ok::<String, String>("stopped".to_string()));
         let start = Instant::now();
         while !thread_handle.is_finished() {
