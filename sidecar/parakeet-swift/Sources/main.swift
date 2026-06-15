@@ -53,7 +53,7 @@ func getArchitectureInfo() -> String {
 // Stdout is our line-delimited JSON protocol, so run library calls with stdout
 // temporarily redirected to stderr and restore it before sending responses.
 @MainActor
-func withLibraryStdoutRedirected<T>(_ operation: () async throws -> T) async throws -> T {
+func withLibraryStdoutRedirected<T>(_ operation: @MainActor () async throws -> T) async throws -> T {
     fflush(stdout)
     let savedStdout = dup(STDOUT_FILENO)
     guard savedStdout >= 0 else {
