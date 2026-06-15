@@ -279,6 +279,38 @@ describe('UpdateService update consent', () => {
     await Promise.all([first, second]);
   });
 
+  it('holds update-check lock while distribution info is pending', async () => {
+    let resolveDistribution!: (info: DistributionInfo) => void;
+    const distributionInfoPromise = new Promise<DistributionInfo>((resolve) => {
+      resolveDistribution = resolve;
+    });
+
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'get_distribution_info') {
+        return distributionInfoPromise;
+      }
+
+      return { state: 'idle' };
+    });
+    vi.mocked(check).mockResolvedValue(null);
+
+    const backgroundCheck = service.checkForUpdatesInBackground();
+    const manualCheck = service.checkForUpdatesManually();
+
+    expect(toast.info).toHaveBeenCalledWith('Update check already in progress');
+    expect(check).not.toHaveBeenCalled();
+
+    resolveDistribution({
+      channel: 'direct',
+      is_store_install: false,
+      package_family_name: null,
+    });
+
+    await Promise.all([backgroundCheck, manualCheck]);
+
+    expect(check).toHaveBeenCalledOnce();
+  });
+
   it('skips direct updater checks for Microsoft Store installs', async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === 'get_distribution_info') {

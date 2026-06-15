@@ -351,6 +351,32 @@ describe('GeneralSettings autostart via backend commands', () => {
     });
   });
 
+  it('shows Metal acceleration without CPU fallback guidance on macOS status', async () => {
+    mockInvoke.mockImplementation((command: string, args?: { enabled?: boolean }) => {
+      if (command === 'get_autostart_status') return Promise.resolve(false);
+      if (command === 'set_autostart') return Promise.resolve(args?.enabled ?? false);
+      if (command === 'get_transcription_acceleration_status') {
+        return Promise.resolve({
+          ...accelerationStatus,
+          effective_backend: 'metal',
+          message: 'This acceleration setting applies to Windows Vulkan builds.',
+          diagnostic_code: 'unsupported_platform',
+        });
+      }
+      return Promise.resolve(false);
+    });
+
+    render(<GeneralSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Using Metal acceleration')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Metal acceleration is active on this Mac.')).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Voicetypr will keep using CPU transcription safely/),
+    ).not.toBeInTheDocument();
+  });
+
   it('checks acceleration status through backend command without showing a false GPU warning', async () => {
     const { toast } = await import('sonner');
     mockInvoke.mockImplementation((command: string, args?: { enabled?: boolean }) => {

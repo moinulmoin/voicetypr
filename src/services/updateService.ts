@@ -215,11 +215,13 @@ export class UpdateService {
       console.log('Update check already in progress');
       return;
     }
-    if (await this.usesStoreUpdates()) {
-      return;
-    }
+
+    this.checkInProgress = true;
     try {
-      this.checkInProgress = true;
+      if (await this.usesStoreUpdates()) {
+        return;
+      }
+
       // Check if we should skip based on last check time
       const lastCheck = localStorage.getItem(LAST_UPDATE_CHECK_KEY);
       if (lastCheck) {
@@ -256,12 +258,14 @@ export class UpdateService {
       toast.info('Update check already in progress');
       return;
     }
-    if (await this.usesStoreUpdates()) {
-      toast.info('Updates are handled by Microsoft Store');
-      return;
-    }
+
+    this.checkInProgress = true;
     try {
-      this.checkInProgress = true;
+      if (await this.usesStoreUpdates()) {
+        toast.info('Updates are handled by Microsoft Store');
+        return;
+      }
+
       toast.info('Checking for updates...');
       
       const update = await check();

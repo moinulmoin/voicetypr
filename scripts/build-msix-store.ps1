@@ -43,7 +43,7 @@ pnpm run sidecar:ensure-ffmpeg
 
 if (-not $SkipGpuSidecarBuild) {
     $env:RUSTFLAGS = "-C target-feature=+crt-static"
-    cargo build --manifest-path sidecar/whisper-vulkan/Cargo.toml --release
+    cargo build --manifest-path sidecar/whisper-vulkan/Cargo.toml --release --target-dir $TargetDir
     if ($LASTEXITCODE -ne 0) { throw "Whisper Vulkan sidecar build failed with exit code $LASTEXITCODE" }
 
     $SidecarOutDir = Join-Path $RepoRoot "sidecar\whisper-vulkan\dist"

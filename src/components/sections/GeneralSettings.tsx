@@ -50,6 +50,15 @@ function isAccelerationStatus(value: unknown): value is AccelerationStatus {
   );
 }
 
+function isMetalOnUnsupportedPlatformStatus(
+  status: AccelerationStatus,
+): boolean {
+  return (
+    status.diagnostic_code === "unsupported_platform" &&
+    status.effective_backend === "metal"
+  );
+}
+
 function getRecommendedActionDescription(action: string): string | undefined {
   switch (action) {
     case "download_model":
@@ -70,9 +79,15 @@ function getAccelerationGuidance(status: AccelerationStatus | null): string {
     return "Voicetypr will test GPU acceleration when needed and keep CPU transcription available.";
   }
 
+  if (isMetalOnUnsupportedPlatformStatus(status)) {
+    return "Metal acceleration is active on this Mac.";
+  }
+
   switch (status.diagnostic_code) {
     case "ready":
       return "GPU acceleration is ready.";
+    case "unsupported_platform":
+      return "GPU acceleration is not available on this platform. Voicetypr will keep using CPU transcription safely.";
     case "vulkan_loader_missing":
     case "vulkan_device_missing":
     case "driver_or_runtime_failed":
