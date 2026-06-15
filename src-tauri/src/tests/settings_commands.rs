@@ -411,6 +411,24 @@ mod tests {
     }
 
     #[test]
+    fn test_pause_media_during_recording_default_off() {
+        // PORT-S4: pause-media-during-recording defaults OFF; users opt in.
+        let settings = Settings::default();
+        assert!(!settings.pause_media_during_recording);
+    }
+
+    #[test]
+    fn test_pause_media_during_recording_roundtrip() {
+        let settings = Settings {
+            pause_media_during_recording: true,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let deserialized: Settings = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.pause_media_during_recording);
+    }
+
+    #[test]
     fn test_sound_settings_can_be_disabled() {
         let settings = Settings {
             play_sound_on_recording: false,

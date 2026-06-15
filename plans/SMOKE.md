@@ -191,6 +191,47 @@ Windows build; the rest run via `pnpm tauri dev` on macOS.
       profile) with acceptable accuracy; confirm Apple-Silicon Metal quality is
       UNCHANGED (still BeamSearch) and the Windows build links OpenMP.
 
+## Automated logic coverage for the ports (what no longer needs a human)
+
+Each port's *decision logic* is now locked by unit tests, so the manual run
+below only confirms the irreducible physical edges (real hardware I/O, ML
+compute, OS event delivery, wall-clock timing) that no headless gate can
+exercise. "Locked" = a regression in that logic fails `cargo test` / `vitest`.
+
+- PORT-S1 — LOCKED: `system_info::tests::{get_system_specs_is_infallible_and_populated,
+  gpu_detection_is_empty_off_windows}`; `crashReport.test.ts` System-table
+  present/absent/GPU-Unknown. RESIDUE: **W** real DXGI adapter names.
+- PORT-S2 — LOCKED: `parakeet::sidecar::tests::parse_response_line_*` (5, incl.
+  noisy-prefix recovery). RESIDUE: Swift stdout fd-redirect over a real session.
+- PORT-S3 — cfg(windows), inspection-only on macOS. RESIDUE: full (GSMTC).
+- PORT-S4 — LOCKED: `settings_commands::tests::test_pause_media_during_recording_{default_off,roundtrip}`.
+- PORT-S5 — LOCKED: `hotkeys::tests::claim_toggle_press_blocks_repeats_until_release`.
+  RESIDUE: **W** real OS key-repeat delivery + the 300 ms wall-clock throttle.
+- PORT-S6 — LOCKED: `recorder_watchdog::tests::*` (wait / dispatch-once /
+  no-double-dispatch / re-arm) + `recorder::tests::recording_thread_finished_*`.
+  RESIDUE: **W** real autonomous stop (device-yank/size-cap) + 250 ms poll timing.
+- PORT-S7 — LOCKED: `recorder::tests::stop_error_is_unfinalized_distinguishes_finalized_from_unfinalized`.
+  RESIDUE: real device-yank producing a finalized WAV.
+- PORT-S8/S9/S10 — LOCKED: `silence_detector::tests::*` (12: tiers, sustained-voice
+  300 ms gating, terminal latching, both paths) + `commands::audio::tests::silence_timeout_with_speech_transcribes_and_no_speech_discards`
+  (never-lose-speech routing). RESIDUE: real mic capture + 60 s capture/stop integration.
+- PORT-S11 — NOT logic-lockable (UI-responsiveness/lock-release property).
+  RESIDUE: real download + observe no freeze.
+- PORT-S12 — LOCKED: `model_commands::tests` dedup + delete-guard;
+  `useModelManagement` double-toast regression test. RESIDUE: real download interactions.
+- PORT-S13 — NOT logic-lockable. RESIDUE: **W** real Vulkan warm + first-transcription latency.
+- PORT-S14 — PARTIAL: the `cpu_profile = !is_apple_silicon` decision is trivial; the
+  Greedy-vs-BeamSearch param *values* are not assertable (whisper-rs `FullParams`
+  exposes no getters). RESIDUE: **W** real CPU speed/accuracy + OpenMP link; Metal
+  path untouched (inspection-confirmed unchanged).
+- Catalog (SHA256/exact-size) — LOCKED: `model_commands::tests` pinned-URL +
+  exact-size accept/reject + 64-hex SHA256 + mismatch-removal + dropped-models.
+
+Irreducible floor (no test on any machine-less gate can cover): real GPU/ANE/Vulkan
+compute, real microphone capture, OS hotkey event delivery, Windows GSMTC media
+sessions, the Swift sidecar fd-redirect, UI-responsiveness, and wall-clock timing
+(300 ms throttle, 250 ms poll, 60 s silence timeout).
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are

@@ -1145,10 +1145,11 @@ mod tests {
         build_translation_failed_history_metadata, build_writing_history_metadata,
         is_ai_auth_error, is_non_speech_transcript, plan_desktop_writing_success,
         recording_license_state, remote_server_error_pill_message, should_hide_pill_when_idle,
-        should_use_active_remote, silence_event_runs_in_state, stop_should_reset_to_idle,
-        sync_retranscription_failure_metadata, toast_clear_is_current,
+        should_use_active_remote, silence_event_runs_in_state, silence_timeout_disposition,
+        stop_should_reset_to_idle, sync_retranscription_failure_metadata, toast_clear_is_current,
         transcription_watchdog_budget, NormalizedTempFile, RecordingLicenseState,
-        StopInFlightGuard, TranscriptionFailure, TranscriptionStatus,
+        SilenceDetectorEvent, SilenceTimeoutDisposition, StopInFlightGuard, TranscriptionFailure,
+        TranscriptionStatus,
     };
     use crate::commands::license::CachedLicense;
     use crate::license::{LicenseState, LicenseStatus};
@@ -1575,6 +1576,29 @@ mod tests {
         assert!(!silence_event_runs_in_state(RecordingState::Transcribing));
         assert!(!silence_event_runs_in_state(RecordingState::Idle));
         assert!(!silence_event_runs_in_state(RecordingState::Error));
+    }
+
+    #[test]
+    fn silence_timeout_with_speech_transcribes_and_no_speech_discards() {
+        // Never-lose-speech: a timeout AFTER captured speech must stop+transcribe,
+        // never discard.
+        assert_eq!(
+            silence_timeout_disposition(SilenceDetectorEvent::TimeoutWithSpeech),
+            Some(SilenceTimeoutDisposition::StopAndTranscribe)
+        );
+        // A timeout with no speech for the whole window discards.
+        assert_eq!(
+            silence_timeout_disposition(SilenceDetectorEvent::TimeoutNoSpeech),
+            Some(SilenceTimeoutDisposition::CancelAndDiscard)
+        );
+        // Non-terminal events carry no terminal disposition.
+        for event in [
+            SilenceDetectorEvent::Clear,
+            SilenceDetectorEvent::DeadMicWarn,
+            SilenceDetectorEvent::LongSilenceWarn,
+        ] {
+            assert_eq!(silence_timeout_disposition(event), None);
+        }
     }
 
     #[test]
@@ -2591,6 +2615,30 @@ fn silence_event_runs_in_state(state: RecordingState) -> bool {
     matches!(state, RecordingState::Recording)
 }
 
+/// Command-layer disposition for a *terminal* silence event. Pure so the
+/// never-lose-speech routing (captured speech ⇒ transcribe, never discard) is
+/// unit-testable without an `AppHandle`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SilenceTimeoutDisposition {
+    /// Speech was captured before the timeout → stop normally so it is
+    /// transcribed. NEVER discarded.
+    StopAndTranscribe,
+    /// No speech for the entire timeout window → cancel and discard.
+    CancelAndDiscard,
+}
+
+fn silence_timeout_disposition(event: SilenceDetectorEvent) -> Option<SilenceTimeoutDisposition> {
+    match event {
+        SilenceDetectorEvent::TimeoutWithSpeech => {
+            Some(SilenceTimeoutDisposition::StopAndTranscribe)
+        }
+        SilenceDetectorEvent::TimeoutNoSpeech => Some(SilenceTimeoutDisposition::CancelAndDiscard),
+        SilenceDetectorEvent::Clear
+        | SilenceDetectorEvent::DeadMicWarn
+        | SilenceDetectorEvent::LongSilenceWarn => None,
+    }
+}
+
 fn clear_active_silence_toast(app: &AppHandle, active_toast_id: &mut Option<u64>) {
     if let Some(toast_id) = active_toast_id.take() {
         clear_pill_toast(app, toast_id);
@@ -2638,50 +2686,58 @@ fn spawn_silence_event_listener(
                         PillToastVariant::Warning,
                     ));
                 }
-                SilenceDetectorEvent::TimeoutWithSpeech => {
+                event @ (SilenceDetectorEvent::TimeoutWithSpeech
+                | SilenceDetectorEvent::TimeoutNoSpeech) => {
                     clear_active_silence_toast(&app, &mut active_silence_toast_id);
-                    pill_toast_with_variant(
-                        &app,
-                        "Ended after long silence",
-                        1500,
-                        PillToastVariant::Info,
-                    );
-                    let app_for_stop = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let recorder_state = app_for_stop.state::<RecorderState>();
-                        if let Err(e) =
-                            stop_recording_after_long_silence(app_for_stop.clone(), recorder_state)
+                    match silence_timeout_disposition(event) {
+                        Some(SilenceTimeoutDisposition::StopAndTranscribe) => {
+                            // Speech captured → stop normally so it is transcribed.
+                            pill_toast_with_variant(
+                                &app,
+                                "Ended after long silence",
+                                1500,
+                                PillToastVariant::Info,
+                            );
+                            let app_for_stop = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let recorder_state = app_for_stop.state::<RecorderState>();
+                                if let Err(e) = stop_recording_after_long_silence(
+                                    app_for_stop.clone(),
+                                    recorder_state,
+                                )
                                 .await
-                        {
-                            log::error!("Long-silence stop failed: {}", e);
+                                {
+                                    log::error!("Long-silence stop failed: {}", e);
+                                }
+                            });
                         }
-                    });
-                    break;
-                }
-                SilenceDetectorEvent::TimeoutNoSpeech => {
-                    clear_active_silence_toast(&app, &mut active_silence_toast_id);
-                    let app_for_cancel = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        match cancel_recording(app_for_cancel.clone()).await {
-                            Ok(()) => {
-                                pill_toast_with_variant(
-                                    &app_for_cancel,
-                                    "No audio captured",
-                                    1500,
-                                    PillToastVariant::Warning,
-                                );
-                            }
-                            Err(e) => {
-                                log::error!("No-speech timeout cancel failed: {}", e);
-                                pill_toast_with_variant(
-                                    &app_for_cancel,
-                                    "Recording error",
-                                    1500,
-                                    PillToastVariant::Warning,
-                                );
-                            }
+                        Some(SilenceTimeoutDisposition::CancelAndDiscard) => {
+                            // No speech the whole window → cancel and discard.
+                            let app_for_cancel = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                match cancel_recording(app_for_cancel.clone()).await {
+                                    Ok(()) => {
+                                        pill_toast_with_variant(
+                                            &app_for_cancel,
+                                            "No audio captured",
+                                            1500,
+                                            PillToastVariant::Warning,
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log::error!("No-speech timeout cancel failed: {}", e);
+                                        pill_toast_with_variant(
+                                            &app_for_cancel,
+                                            "Recording error",
+                                            1500,
+                                            PillToastVariant::Warning,
+                                        );
+                                    }
+                                }
+                            });
                         }
-                    });
+                        None => {}
+                    }
                     break;
                 }
             }
