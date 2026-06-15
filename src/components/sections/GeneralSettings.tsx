@@ -390,7 +390,7 @@ export function GeneralSettings() {
                     </FieldContent>
                     <Switch
                       id="pause-media"
-                      checked={settings.pause_media_during_recording ?? true}
+                      checked={settings.pause_media_during_recording ?? false}
                       onCheckedChange={async (checked) =>
                         await updateSettings({
                           pause_media_during_recording: checked,

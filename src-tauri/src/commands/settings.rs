@@ -97,12 +97,12 @@ impl Default for Settings {
             pill_indicator_mode: "when_recording".to_string(), // Default to showing only when recording
             pill_indicator_position: "bottom-center".to_string(), // Default to bottom center of screen
             pill_indicator_offset: DEFAULT_INDICATOR_OFFSET,
-            pause_media_during_recording: !cfg!(target_os = "macos"),
-            auto_paste_transcription: true, // Default to auto-pasting transcription
-            sharing_port: Some(47842),      // Default network sharing port
-            sharing_password: None,         // No password by default
-            save_recordings: false,         // Default to not saving recordings
-            recording_retention_days: Some(30), // Default cleanup period when saving is enabled
+            pause_media_during_recording: false, // Default to off; user opts in
+            auto_paste_transcription: true,      // Default to auto-pasting transcription
+            sharing_port: Some(47842),           // Default network sharing port
+            sharing_password: None,              // No password by default
+            save_recordings: false,              // Default to not saving recordings
+            recording_retention_days: Some(30),  // Default cleanup period when saving is enabled
         }
     }
 }
