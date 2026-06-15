@@ -1,6 +1,6 @@
 [package]
 name = "voicetypr"
-version = "1.12.10"
+version = "1.13.0"
 description = "open source voice to text transcription app"
 authors = ["moinulmoin"]
 edition = "2021"
@@ -82,6 +82,7 @@ windows = { version = "0.62", features = [
     "Win32_System_LibraryLoader",
     "Media_Control",
     "Foundation",
+    "Win32_Graphics_Dxgi",
 ] }
 
 [dev-dependencies]
