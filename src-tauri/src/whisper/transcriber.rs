@@ -11,6 +11,7 @@ use crate::utils::system_monitor;
 
 pub struct Transcriber {
     context: WhisperContext,
+    cpu_profile: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,8 +55,6 @@ impl Transcriber {
 
         // Configure GPU usage based on platform and features
         let mut ctx_params = WhisperContextParameters::default();
-        #[allow(unused_assignments)] // gpu_used is assigned in multiple conditional blocks
-        let mut gpu_used = false;
 
         // macOS: Try Metal first, fallback to CPU if it fails
         // Note: Metal GPU acceleration only works on Apple Silicon (aarch64), not Intel Macs
@@ -101,24 +100,30 @@ impl Transcriber {
 
             match WhisperContext::new_with_params(model_path_str, ctx_params) {
                 Ok(ctx) => {
-                    #[allow(unused_assignments)]
-                    // This assignment is used later but flagged due to multiple conditional paths
-                    {
-                        gpu_used = true; // Metal GPU acceleration succeeded
-                    }
+                    let cpu_profile = !is_apple_silicon;
                     let init_time = metal_start.elapsed().as_millis();
+                    let backend_type = if cpu_profile { "CPU" } else { "Metal GPU" };
+                    let acceleration = if cpu_profile { "disabled" } else { "enabled" };
 
                     log_performance(
                         "METAL_INIT",
                         init_time as u64,
-                        Some("gpu_acceleration_enabled"),
+                        Some(if cpu_profile {
+                            "cpu_only"
+                        } else {
+                            "gpu_acceleration_enabled"
+                        }),
                     );
                     log_with_context(
                         log::Level::Info,
-                        "🎮 METAL_SUCCESS",
+                        if cpu_profile {
+                            "🎮 CPU_INIT"
+                        } else {
+                            "🎮 METAL_SUCCESS"
+                        },
                         &[
                             ("init_time_ms", init_time.to_string().as_str()),
-                            ("acceleration", "enabled"),
+                            ("acceleration", acceleration),
                         ],
                     );
 
@@ -126,10 +131,13 @@ impl Transcriber {
                     log_with_context(
                         log::Level::Debug,
                         "Transcriber initialized",
-                        &[("backend", "Metal"), ("model_path", model_path_str)],
+                        &[("backend", backend_type), ("model_path", model_path_str)],
                     );
 
-                    return Ok(Self { context: ctx });
+                    return Ok(Self {
+                        context: ctx,
+                        cpu_profile,
+                    });
                 }
                 Err(gpu_err) => {
                     log_with_context(
@@ -171,18 +179,7 @@ impl Transcriber {
             format!("Failed to load model: {}", e)
         })?;
 
-        // Determine backend type for logging
-        let backend_type = if gpu_used {
-            if cfg!(target_os = "windows") {
-                "Vulkan GPU"
-            } else if cfg!(target_os = "macos") {
-                "Metal GPU"
-            } else {
-                "GPU"
-            }
-        } else {
-            "CPU"
-        };
+        let backend_type = "CPU";
 
         let cpu_time = cpu_start.elapsed().as_millis();
 
@@ -191,7 +188,7 @@ impl Transcriber {
             "🎮 WHISPER_BACKEND",
             &[
                 ("backend", backend_type),
-                ("gpu_used", gpu_used.to_string().as_str()),
+                ("gpu_used", "false"),
                 ("init_time_ms", cpu_time.to_string().as_str()),
             ],
         );
@@ -203,7 +200,7 @@ impl Transcriber {
             &[
                 ("backend", backend_type),
                 ("model_path", model_path_str),
-                ("gpu_acceleration", gpu_used.to_string().as_str()),
+                ("gpu_acceleration", "false"),
             ],
         );
 
@@ -231,7 +228,10 @@ impl Transcriber {
             ],
         );
 
-        Ok(Self { context: ctx })
+        Ok(Self {
+            context: ctx,
+            cpu_profile: true,
+        })
     }
 
     #[allow(dead_code)]
@@ -477,11 +477,15 @@ impl Transcriber {
             resampled_audio.len() as f32 / 16_000_f32
         );
 
-        // Create transcription parameters - use BeamSearch for better accuracy
-        let mut params = FullParams::new(SamplingStrategy::BeamSearch {
-            beam_size: 5,
-            patience: -1.0,
-        });
+        let mut params = if self.cpu_profile {
+            log::info!("[PERFORMANCE] Using CPU fast transcription profile");
+            FullParams::new(SamplingStrategy::Greedy { best_of: 1 })
+        } else {
+            FullParams::new(SamplingStrategy::BeamSearch {
+                beam_size: 5,
+                patience: -1.0,
+            })
+        };
 
         // Set language - use centralized validation
         log::info!("[LANGUAGE] Received language: {:?}", language);
@@ -543,7 +547,8 @@ impl Transcriber {
 
         params.set_n_threads(threads);
 
-        params.set_no_context(false); // Enable context for better word recognition
+        params.set_no_context(self.cpu_profile);
+        params.set_no_timestamps(self.cpu_profile);
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -567,8 +572,7 @@ impl Transcriber {
 
         params.set_initial_prompt(initial_prompt.unwrap_or(""));
 
-        // Temperature settings - slight randomness helps avoid repetitive loops
-        params.set_temperature(0.2); // Small amount of randomness instead of deterministic
+        params.set_temperature(if self.cpu_profile { 0.0 } else { 0.2 });
         params.set_temperature_inc(0.2); // Increase by 0.2 on fallback (default)
         params.set_max_initial_ts(1.0); // Limit initial timestamp search
 

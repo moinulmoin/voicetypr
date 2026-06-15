@@ -88,6 +88,7 @@ whisper-rs = { version = "0.16.0" }
 whisper-rs = { version = "0.16.0" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+whisper-rs = { version = "0.16.0", features = ["openmp"] }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
@@ -96,7 +97,6 @@ windows = { version = "0.62", features = [
     "Foundation",
     "Win32_Graphics_Dxgi",
 ] }
-
 [dev-dependencies]
 tempfile = "3.10"
 tokio-test = "0.4"
