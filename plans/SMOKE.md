@@ -123,6 +123,24 @@ executor for local + cloud engines (remote stays inline). This integrates plan
 - [ ] 020-S10 `save_recordings` on: local success saves a recording before temp
       cleanup; re-transcribe that row from History succeeds.
 
+## Failure preservation — recording + retryable row on failure (code `b93a739`, NEEDS-SMOKE)
+
+Genuine transcription failures now preserve the recording + write a retryable
+History row, but ONLY when `save_recordings` is ON (privacy-respecting, uniform
+across local/cloud/remote). Cancellation/too-short never preserved.
+
+- [ ] FP-S1 `save_recordings` ON + force a cloud failure (bad key / kill network
+      mid-request): a "Transcription failed" row appears in History with the
+      recording; "Re-transcribe with current source" on it succeeds after fixing
+      the key/network. Pill guides to History.
+- [ ] FP-S2 `save_recordings` OFF + same cloud failure: NO history row, NO
+      orphaned recording kept (nothing pasted either) — respects the setting.
+- [ ] FP-S3 Remote failure with `save_recordings` OFF: recording is now NOT kept
+      (behavior change — previously always kept); with ON, failed remote row +
+      recording as before.
+- [ ] FP-S4 Cancel mid-transcription and a too-short clip never create a failed
+      row or a kept recording, regardless of `save_recordings`.
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are
