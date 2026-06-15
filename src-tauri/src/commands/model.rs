@@ -932,12 +932,23 @@ pub async fn preload_model(
             .ok_or(format!("Model '{}' not found", model_name))?
     };
 
-    // Load into cache
-    let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
-    let mut cache = cache_state.lock().await;
+    // On Windows with GPU acceleration, warm the Vulkan sidecar so the first transcription
+    // after a manual preload isn't slow. No-op on non-Windows / CPU mode; when it does not
+    // warm, fall through to loading the CPU transcriber cache.
+    if crate::commands::audio::warm_whisper_gpu_sidecar_on_model_preload(&app, &model_path).await {
+        log::info!(
+            "Model '{}' preloaded successfully in Vulkan sidecar",
+            model_name
+        );
+        return Ok(());
+    }
 
-    // This will load the model and cache it
-    cache.get_or_create(&model_path)?;
+    // Load the model into the CPU transcriber cache.
+    {
+        let cache_state = app.state::<AsyncMutex<TranscriberCache>>();
+        let mut cache = cache_state.lock().await;
+        cache.get_or_create(&model_path)?;
+    }
 
     log::info!("Model '{}' preloaded successfully", model_name);
 
