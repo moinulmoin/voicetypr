@@ -118,6 +118,9 @@ impl CancellationToken {
     pub fn new() -> Self {
         Self::default()
     }
+    pub fn from_arc(flag: Arc<AtomicBool>) -> Self {
+        Self(flag)
+    }
 
     pub fn cancel(&self) {
         self.0.store(true, Ordering::SeqCst);
@@ -144,6 +147,7 @@ pub struct TranscriptionRequest {
     pub context: RequestContext,
     pub timeout: TimeoutPolicy,
     pub cancellation: CancellationToken,
+    pub initial_prompt: Option<String>,
 }
 
 impl std::fmt::Debug for CancellationToken {
@@ -205,11 +209,52 @@ mod tests {
             context: RequestContext::default(),
             timeout: TimeoutPolicy::Interactive,
             cancellation: CancellationToken::new(),
+            initial_prompt: None,
         };
 
         assert_eq!(request.source, TranscriptionSource::AudioBytes);
         assert_eq!(request.task, TranscriptionTask::Transcribe);
         assert!(!request.cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn from_arc_shares_cancellation_state() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let token = CancellationToken::from_arc(flag.clone());
+
+        assert!(!token.is_cancelled());
+
+        flag.store(true, Ordering::SeqCst);
+        assert!(token.is_cancelled());
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let token = CancellationToken::from_arc(flag.clone());
+
+        token.cancel();
+        assert!(flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn request_carries_initial_prompt() {
+        let request = TranscriptionRequest {
+            source: TranscriptionSource::AudioBytes,
+            audio: TranscriptionAudio::Bytes {
+                bytes: vec![0, 1, 2, 3],
+                format_hint: Some(AudioFormatHint::Wav),
+            },
+            engine: EngineSelection::Explicit {
+                engine: ProviderEngine::Whisper,
+                model: "base.en".to_string(),
+            },
+            spoken_language: Some("en".to_string()),
+            task: TranscriptionTask::Transcribe,
+            context: RequestContext::default(),
+            timeout: TimeoutPolicy::Interactive,
+            cancellation: CancellationToken::new(),
+            initial_prompt: Some("custom vocab".to_string()),
+        };
+
+        assert_eq!(request.initial_prompt.as_deref(), Some("custom vocab"));
     }
 
     #[test]

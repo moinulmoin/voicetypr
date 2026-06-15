@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::ai::error::{user_facing_message, AiProviderError};
@@ -13,11 +13,18 @@ use crate::media::MediaPauseController;
 use crate::parakeet::manager::ParakeetTranscriptionOptions;
 use crate::parakeet::messages::{ParakeetResponse, ParakeetSegment};
 use crate::parakeet::ParakeetManager;
+use crate::provider_capabilities::ProviderEngine;
 use crate::remote::client::{
     self, timeout_ms_for_wav_file, RemoteClientError, RemoteServerConnection,
     TranscriptionRequest as RemoteTranscriptionRequest, TranscriptionSource as RemoteTimeoutSource,
 };
 use crate::remote::settings::RemoteSettings;
+use crate::transcription::error::TranscriptionErrorCode;
+use crate::transcription::executor::transcribe_with_app;
+use crate::transcription::request::{
+    AudioFormatHint, CancellationToken, CleanupPolicy, EngineSelection, RequestContext,
+    TimeoutPolicy, TranscriptionAudio, TranscriptionRequest,
+};
 use crate::transcription::{
     TranscriptionJob, TranscriptionResult, TranscriptionSegment, TranscriptionSource,
 };
@@ -35,7 +42,7 @@ use once_cell::sync::Lazy;
 use serde_json;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -517,7 +524,7 @@ fn seconds_to_duration_ms(duration_seconds: Option<f32>) -> Option<u64> {
     duration_seconds.map(|seconds| (seconds.max(0.0) * 1000.0) as u64)
 }
 
-fn transcription_watchdog_budget(audio_duration_ms: Option<u64>) -> std::time::Duration {
+pub(crate) fn transcription_watchdog_budget(audio_duration_ms: Option<u64>) -> std::time::Duration {
     const MIN_SECONDS: u64 = 180;
     const MAX_SECONDS: u64 = 30 * 60;
 
@@ -528,6 +535,69 @@ fn transcription_watchdog_budget(audio_duration_ms: Option<u64>) -> std::time::D
         .clamp(MIN_SECONDS, MAX_SECONDS);
 
     std::time::Duration::from_secs(budget_seconds)
+}
+
+/// Build a [`TranscriptionRequest`] for the desktop record→insert hot path from an
+/// already-resolved [`ActiveEngineSelection`]. The desktop owns recording history
+/// and cleanup, so it passes `CleanupPolicy::CallerOwns`; the executor enforces the
+/// interactive timeout/watchdog, Whisper retry, and (idempotent) normalization.
+fn build_desktop_transcription_request(
+    app: &AppHandle,
+    active: &ActiveEngineSelection,
+    job: &TranscriptionJob,
+    spoken_language: Option<String>,
+    audio_path: PathBuf,
+) -> Result<TranscriptionRequest, TranscriptionFailure> {
+    let engine = ProviderEngine::from_engine_str(active.engine_name()).ok_or_else(|| {
+        TranscriptionFailure::Local(format!(
+            "Unknown transcription engine: {}",
+            active.engine_name()
+        ))
+    })?;
+    let initial_prompt = if matches!(active, ActiveEngineSelection::Whisper { .. }) {
+        compile_whisper_initial_prompt(app, spoken_language.as_deref())
+    } else {
+        None
+    };
+    let cancellation =
+        CancellationToken::from_arc(app.state::<AppState>().should_cancel_recording.clone());
+
+    Ok(TranscriptionRequest {
+        source: TranscriptionSource::DesktopRecording,
+        audio: TranscriptionAudio::Path {
+            path: audio_path,
+            format_hint: Some(AudioFormatHint::Wav),
+            cleanup: CleanupPolicy::CallerOwns,
+        },
+        engine: EngineSelection::Explicit {
+            engine,
+            model: active.model_name().to_string(),
+        },
+        spoken_language,
+        task: job.task,
+        context: RequestContext::default(),
+        timeout: TimeoutPolicy::Interactive,
+        cancellation,
+        initial_prompt,
+    })
+}
+
+/// Map the executor's typed [`TranscriptionError`] back onto the desktop's
+/// `TranscriptionFailure`, preserving the existing failure dispatch (cancel /
+/// timeout / generic). Translation failures never reach here — they are a
+/// writing-stage outcome, not a transcription failure.
+fn desktop_failure_from_transcription_error(
+    error: crate::transcription::error::TranscriptionError,
+) -> TranscriptionFailure {
+    let message = match error.code {
+        TranscriptionErrorCode::Cancelled => "Transcription cancelled".to_string(),
+        TranscriptionErrorCode::Timeout => "Transcription timed out".to_string(),
+        _ => match error.detail {
+            Some(detail) if !detail.is_empty() => format!("{}: {}", error.user_message, detail),
+            _ => error.user_message,
+        },
+    };
+    TranscriptionFailure::Local(message)
 }
 
 fn is_non_speech_transcript(raw: &str) -> bool {
@@ -3331,8 +3401,6 @@ pub async fn stop_recording(
         }
     };
 
-    let mut watchdog_audio_duration_ms: Option<u64> = None;
-
     // For Whisper/Parakeet: normalize and duration gate; for Cloud/Remote: skip both
     let audio_path = match &engine_selection {
         ActiveEngineSelection::Cloud { provider, .. } => {
@@ -3418,10 +3486,6 @@ pub async fn stop_recording(
                 Ok((duration < min_duration_s_f32, duration_ms))
             })();
 
-            if let Ok((_, duration_ms)) = &duration_gate {
-                watchdog_audio_duration_ms = Some(*duration_ms);
-            }
-
             if matches!(duration_gate, Ok((true, _))) {
                 // Emit friendly feedback and stop here
                 let _ = emit_to_window(
@@ -3503,7 +3567,6 @@ pub async fn stop_recording(
     let language_for_task = language.clone();
     let selected_model_name_for_task = selected_model_name.clone();
     let transcription_job_for_task = transcription_job.clone();
-    let watchdog_budget = transcription_watchdog_budget(watchdog_audio_duration_ms);
     // Spawn and track the transcription task
     let app_for_task = app.clone();
     let task_handle = tokio::spawn(async move {
@@ -3534,196 +3597,25 @@ pub async fn stop_recording(
             return;
         }
 
-        let timed_out = Arc::new(AtomicBool::new(false));
-        let watchdog_handle = if matches!(
-            &engine_selection_for_task,
-            ActiveEngineSelection::Remote { .. }
-        ) {
-            None
-        } else {
-            let app_for_watchdog = app_for_task.clone();
-            let timed_out_for_watchdog = timed_out.clone();
-            Some(tokio::spawn(async move {
-                tokio::time::sleep(watchdog_budget).await;
-                timed_out_for_watchdog.store(true, AtomicOrdering::SeqCst);
-                let app_state = app_for_watchdog.state::<AppState>();
-                app_state.request_cancellation();
-                log::warn!(
-                    "Live transcription watchdog timed out after {} seconds",
-                    watchdog_budget.as_secs()
-                );
-
-                #[cfg(target_os = "windows")]
-                {
-                    let gpu_client =
-                        app_for_watchdog.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
-                    gpu_client.abort_active_process().await;
-                }
-            }))
-        };
-
-        let mut transcription_result: Result<TranscriptionResult, TranscriptionFailure> =
+        let transcription_result: Result<TranscriptionResult, TranscriptionFailure> =
             match &engine_selection_for_task {
-                ActiveEngineSelection::Whisper { model_path, .. } => {
-                    let initial_prompt =
-                        compile_whisper_initial_prompt(&app_for_task, language_for_task.as_deref());
-
-                    const MAX_RETRIES: u32 = 3;
-                    const RETRY_DELAY_MS: u64 = 500;
-
-                    let mut result = Err("No attempt made".to_string());
-
-                    for attempt in 1..=MAX_RETRIES {
-                        if app_state.is_cancellation_requested() {
-                            log::info!("Transcription cancelled at attempt {}", attempt);
-                            result = Err("Transcription cancelled".to_string());
-                            break;
-                        }
-
-                        let cancel_flag = app_state.should_cancel_recording.clone();
-                        result = transcribe_whisper_with_acceleration(
-                            &app_for_task,
-                            model_path,
-                            &audio_path_clone,
-                            language_for_task.as_deref(),
-                            translate_to_english,
-                            initial_prompt.as_deref(),
-                            move || cancel_flag.load(AtomicOrdering::SeqCst),
-                        )
-                        .await;
-
-                        match &result {
-                            Ok(_) => {
-                                if attempt > 1 {
-                                    log::info!("Transcription succeeded on attempt {}", attempt);
-                                }
-                                break;
-                            }
-                            Err(e) => {
-                                if e == "Transcription cancelled" {
-                                    break;
-                                }
-                                if attempt < MAX_RETRIES {
-                                    log::warn!(
-                                        "Transcription attempt {} failed: {}. Retrying in {}ms...",
-                                        attempt,
-                                        e,
-                                        RETRY_DELAY_MS
-                                    );
-                                    tokio::time::sleep(std::time::Duration::from_millis(
-                                        RETRY_DELAY_MS,
-                                    ))
-                                    .await;
-                                } else {
-                                    log::error!(
-                                        "Transcription failed after {} attempts: {}",
-                                        MAX_RETRIES,
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    result
-                        .map(|output| {
-                            TranscriptionResult::new(&transcription_job_for_task, output.raw_text)
-                                .with_transcript_language(output.transcript_language)
-                                .with_segments(output.segments)
-                                .with_audio_duration_ms(Some(output.audio_duration_ms))
-                                .with_processing_duration_ms(Some(output.processing_duration_ms))
-                        })
-                        .map_err(TranscriptionFailure::Local)
-                }
-                ActiveEngineSelection::Parakeet { model_name } => {
-                    let parakeet_manager = app_for_task.state::<ParakeetManager>();
-                    let cancel_flag = app_state.should_cancel_recording.clone();
-                    if let Err(e) = parakeet_manager
-                        .load_model_with_cancel(
-                            &app_for_task,
-                            model_name,
-                            Some(cancel_flag.clone()),
-                        )
-                        .await
-                    {
-                        if cancel_flag.load(AtomicOrdering::SeqCst) {
-                            Err(TranscriptionFailure::Local(
-                                "Transcription cancelled".to_string(),
-                            ))
-                        } else {
-                            Err(TranscriptionFailure::Local(format!(
-                                "Parakeet model load failed: {e}"
-                            )))
-                        }
-                    } else if cancel_flag.load(AtomicOrdering::SeqCst) {
-                        Err(TranscriptionFailure::Local(
-                            "Transcription cancelled".to_string(),
-                        ))
-                    } else {
-                        let custom_vocabulary =
-                            compile_parakeet_custom_vocabulary_for_transcription(
-                                &app_for_task,
-                                language_for_task.as_deref(),
-                            );
-
-                        match parakeet_manager
-                            .transcribe_with_custom_vocabulary(
-                                &app_for_task,
-                                model_name,
-                                audio_path_clone.clone(),
-                                ParakeetTranscriptionOptions {
-                                    language: language_for_task.clone(),
-                                    translate: translate_to_english,
-                                    custom_vocabulary,
-                                    cancel_flag: Some(cancel_flag.clone()),
-                                },
-                            )
+                // Local + cloud run through the shared transcription executor (plan
+                // 020 Stage 2): it owns normalization, the interactive watchdog /
+                // shared cancel flag, Whisper retry, and the cloud network timeout.
+                ActiveEngineSelection::Whisper { .. }
+                | ActiveEngineSelection::Parakeet { .. }
+                | ActiveEngineSelection::Cloud { .. } => {
+                    match build_desktop_transcription_request(
+                        &app_for_task,
+                        &engine_selection_for_task,
+                        &transcription_job_for_task,
+                        language_for_task.clone(),
+                        audio_path_clone.clone(),
+                    ) {
+                        Ok(request) => transcribe_with_app(&app_for_task, request)
                             .await
-                        {
-                            Ok(ParakeetResponse::Transcription {
-                                text,
-                                segments,
-                                language,
-                                duration,
-                            }) => Ok(TranscriptionResult::new(&transcription_job_for_task, text)
-                                .with_transcript_language(language)
-                                .with_segments(parakeet_segments_to_transcription_segments(
-                                    segments,
-                                ))
-                                .with_audio_duration_ms(seconds_to_duration_ms(duration))),
-                            Ok(other) => {
-                                let message = format!("Unexpected Parakeet response: {:?}", other);
-                                Err(TranscriptionFailure::Local(message))
-                            }
-                            Err(e) => Err(TranscriptionFailure::Local(e.to_string())),
-                        }
-                    }
-                }
-                ActiveEngineSelection::Cloud { provider, .. } => {
-                    match tokio::time::timeout(
-                        watchdog_budget,
-                        provider.transcribe(
-                            &app_for_task,
-                            &audio_path_clone,
-                            language_for_task.as_deref(),
-                        ),
-                    )
-                    .await
-                    {
-                        Ok(Ok(text)) => {
-                            let cloud_job = build_transcription_job(
-                                TranscriptionSource::DesktopRecording,
-                                transcription_job_for_task.engine.clone(),
-                                transcription_job_for_task.model.clone(),
-                                transcription_job_for_task.spoken_language.clone(),
-                                false,
-                            );
-                            Ok(TranscriptionResult::new(&cloud_job, text))
-                        }
-                        Ok(Err(e)) => Err(TranscriptionFailure::Local(e)),
-                        Err(_) => Err(TranscriptionFailure::Local(
-                            "Transcription timed out".to_string(),
-                        )),
+                            .map_err(desktop_failure_from_transcription_error),
+                        Err(failure) => Err(failure),
                     }
                 }
                 ActiveEngineSelection::Remote {
@@ -3807,20 +3699,6 @@ pub async fn stop_recording(
                     .await
                 }
             };
-
-        if let Some(handle) = watchdog_handle {
-            if !timed_out.load(AtomicOrdering::SeqCst) {
-                handle.abort();
-            }
-        }
-
-        if timed_out.load(AtomicOrdering::SeqCst) {
-            if let Err(TranscriptionFailure::Local(error)) = &mut transcription_result {
-                if error == "Transcription cancelled" {
-                    *error = "Transcription timed out".to_string();
-                }
-            }
-        }
 
         // Try to save recording to persistent storage BEFORE cleanup
         // On success: use maybe_save_recording (respects save_recordings setting)

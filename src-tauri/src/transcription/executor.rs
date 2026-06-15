@@ -12,10 +12,14 @@
 //! - `EngineSelection::HostDefault` (remote-server inbound) — Stage 4.
 //! - `ActiveEngineSelection::Remote` (send-to-peer) — Stage 5 (multipart wire).
 //!
-//! Timeout/watchdog enforcement of [`TimeoutPolicy`] is layered at this seam by
-//! plan 015; Stage 1 carries the policy on the request but does not abort.
+//! `run_with_policy` enforces [`TimeoutPolicy`] at this seam (plan 015): an
+//! interactive watchdog sets the shared cancellation flag on deadline (it never
+//! aborts the blocking decode), Whisper retries, and cloud uses a network timeout.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
 use tempfile::NamedTempFile;
@@ -23,7 +27,7 @@ use tempfile::NamedTempFile;
 use crate::commands::audio::{
     compile_parakeet_custom_vocabulary_for_transcription,
     parakeet_segments_to_transcription_segments, resolve_engine_for_model,
-    transcribe_whisper_with_acceleration, ActiveEngineSelection,
+    transcribe_whisper_with_acceleration, transcription_watchdog_budget, ActiveEngineSelection,
 };
 use crate::parakeet::manager::{ParakeetManager, ParakeetTranscriptionOptions};
 use crate::parakeet::messages::ParakeetResponse;
@@ -32,7 +36,8 @@ use crate::transcription::error::{
     from_local_engine_string, from_stt_error, TranscriptionError, TranscriptionErrorCode,
 };
 use crate::transcription::request::{
-    CleanupPolicy, EngineSelection, TranscriptionAudio, TranscriptionRequest,
+    CancellationToken, CleanupPolicy, EngineSelection, TimeoutPolicy, TranscriptionAudio,
+    TranscriptionRequest,
 };
 use crate::transcription::{
     TranscriptionJob, TranscriptionResult, TranscriptionSource, TranscriptionTask,
@@ -71,7 +76,7 @@ pub async fn transcribe_with_app(
         }
     };
 
-    let outcome = route(app, &active, &job, &input_path, &request).await;
+    let outcome = run_with_policy(app, &request, &active, &job, &input_path).await;
 
     // Apply the caller's cleanup policy to a caller-provided Path input.
     if let Some((path, policy)) = caller_input {
@@ -112,7 +117,7 @@ async fn resolve_active(
     }
 }
 
-async fn route(
+async fn route_once(
     app: &AppHandle,
     active: &ActiveEngineSelection,
     job: &TranscriptionJob,
@@ -125,15 +130,14 @@ async fn route(
 
     match active {
         ActiveEngineSelection::Whisper { model_path, .. } => {
-            let wav = normalize_to_wav(app, input_path, source).await?;
             let token = request.cancellation.clone();
             let output = transcribe_whisper_with_acceleration(
                 app,
                 model_path,
-                wav.path(),
+                input_path,
                 language,
                 translate,
-                None,
+                request.initial_prompt.as_deref(),
                 move || token.is_cancelled(),
             )
             .await
@@ -146,7 +150,6 @@ async fn route(
                 .with_processing_duration_ms(Some(output.processing_duration_ms)))
         }
         ActiveEngineSelection::Parakeet { model_name } => {
-            let wav = normalize_to_wav(app, input_path, source).await?;
             let manager = app.state::<ParakeetManager>();
             let cancel = request.cancellation.as_arc();
 
@@ -179,7 +182,7 @@ async fn route(
                 .transcribe_with_custom_vocabulary(
                     app,
                     model_name,
-                    wav.path().to_path_buf(),
+                    input_path.to_path_buf(),
                     options,
                 )
                 .await
@@ -236,17 +239,239 @@ async fn route(
     }
 }
 
-/// Normalize any input to a 16 kHz mono WAV temp file (deleted on drop).
-async fn normalize_to_wav(
+/// Run one engine attempt under the request's [`TimeoutPolicy`], carrying the
+/// desktop hot-path behaviors plan 015 enforces: a single normalization for local
+/// engines, an interactive watchdog that sets the shared cancellation flag on
+/// deadline (NEVER aborting the blocking decode), Whisper retry, and a network
+/// timeout for cloud.
+async fn run_with_policy(
+    app: &AppHandle,
+    request: &TranscriptionRequest,
+    active: &ActiveEngineSelection,
+    job: &TranscriptionJob,
+    input_path: &Path,
+) -> Result<TranscriptionResult, TranscriptionError> {
+    let source = request.source;
+
+    // Prepare the per-engine attempt input ONCE, before any retry: local engines
+    // need a 16 kHz mono WAV; cloud/remote take the input path as-is.
+    let prepared = match active {
+        ActiveEngineSelection::Whisper { .. } | ActiveEngineSelection::Parakeet { .. } => {
+            Some(prepare_normalized_input(app, input_path, source).await?)
+        }
+        ActiveEngineSelection::Cloud { .. } | ActiveEngineSelection::Remote { .. } => None,
+    };
+    let attempt_path = prepared
+        .as_ref()
+        .map(PreparedInput::path)
+        .unwrap_or(input_path);
+
+    let budget = watchdog_budget_for(attempt_path, &request.timeout);
+
+    match active {
+        // Cloud is network IO: an async timeout that drops the in-flight future is
+        // safe and is the only way to bound a request the provider will not cancel.
+        ActiveEngineSelection::Cloud { .. } => match budget {
+            Some(deadline) => match tokio::time::timeout(
+                deadline,
+                route_once(app, active, job, attempt_path, request),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(timed_out_error(source)),
+            },
+            None => route_once(app, active, job, attempt_path, request).await,
+        },
+        // Local engines run a BLOCKING decode: a sibling watchdog flips the shared
+        // cancel flag on deadline; the engine observes it and aborts cooperatively.
+        // (Remote via the executor is deferred to Stage 5 and returns immediately.)
+        _ => {
+            let timed_out = Arc::new(AtomicBool::new(false));
+            let watchdog = budget.map(|deadline| {
+                spawn_cancel_watchdog(
+                    app,
+                    request.cancellation.clone(),
+                    deadline,
+                    timed_out.clone(),
+                )
+            });
+
+            let result = if matches!(active, ActiveEngineSelection::Whisper { .. }) {
+                run_whisper_with_retry(app, active, job, attempt_path, request).await
+            } else {
+                route_once(app, active, job, attempt_path, request).await
+            };
+
+            if let Some(handle) = watchdog {
+                handle.abort();
+            }
+
+            remap_timed_out(result, timed_out.load(Ordering::SeqCst), source)
+        }
+    }
+}
+
+/// A 16 kHz mono WAV ready for a local engine: either a temp we normalized into
+/// (deleted on drop) or a borrow of a caller input that already conforms.
+enum PreparedInput {
+    Owned(NamedTempFile),
+    AlreadyNormalized(PathBuf),
+}
+
+impl PreparedInput {
+    fn path(&self) -> &Path {
+        match self {
+            PreparedInput::Owned(temp) => temp.path(),
+            PreparedInput::AlreadyNormalized(path) => path.as_path(),
+        }
+    }
+}
+
+/// Prepare a 16 kHz mono WAV for a local engine, skipping ffmpeg when the input
+/// already conforms (e.g. the desktop pre-normalizes before dispatch).
+async fn prepare_normalized_input(
     app: &AppHandle,
     input_path: &Path,
     source: TranscriptionSource,
-) -> Result<NamedTempFile, TranscriptionError> {
+) -> Result<PreparedInput, TranscriptionError> {
+    if is_normalized_wav(input_path) {
+        return Ok(PreparedInput::AlreadyNormalized(input_path.to_path_buf()));
+    }
     let out = NamedTempFile::new().map_err(|e| stage_error(source, "temp create", e))?;
     crate::ffmpeg::normalize_streaming(app, input_path, out.path())
         .await
         .map_err(|e| from_local_engine_string(&e, source))?;
-    Ok(out)
+    Ok(PreparedInput::Owned(out))
+}
+
+/// True if `path` is already a 16 kHz, mono, 16-bit-int WAV — the engine input
+/// contract — so re-normalizing it would be a wasteful no-op.
+fn is_normalized_wav(path: &Path) -> bool {
+    match hound::WavReader::open(path) {
+        Ok(reader) => {
+            let spec = reader.spec();
+            spec.sample_rate == 16_000
+                && spec.channels == 1
+                && spec.bits_per_sample == 16
+                && spec.sample_format == hound::SampleFormat::Int
+        }
+        Err(_) => false,
+    }
+}
+
+/// Duration of a WAV file in milliseconds, or `None` if it cannot be read.
+fn wav_duration_ms(path: &Path) -> Option<u64> {
+    let reader = hound::WavReader::open(path).ok()?;
+    let spec = reader.spec();
+    if spec.sample_rate == 0 || spec.channels == 0 {
+        return None;
+    }
+    let frames = (reader.duration() / spec.channels as u32) as u64;
+    Some(
+        frames
+            .saturating_mul(1000)
+            .saturating_add(spec.sample_rate as u64 - 1)
+            / spec.sample_rate as u64,
+    )
+}
+
+/// The watchdog/timeout budget for an attempt, or `None` to run unbounded.
+fn watchdog_budget_for(attempt_path: &Path, policy: &TimeoutPolicy) -> Option<Duration> {
+    match policy {
+        TimeoutPolicy::None => None,
+        TimeoutPolicy::Explicit(deadline) => Some(*deadline),
+        TimeoutPolicy::Interactive | TimeoutPolicy::Upload => {
+            Some(transcription_watchdog_budget(wav_duration_ms(attempt_path)))
+        }
+    }
+}
+
+/// The plan 015 interactive watchdog: on deadline, set `timed_out` and the shared
+/// cancellation flag (the blocking engines observe it and abort), and on Windows
+/// abort the GPU sidecar. The caller aborts the returned handle if the engine
+/// finishes first.
+fn spawn_cancel_watchdog(
+    app: &AppHandle,
+    cancellation: CancellationToken,
+    budget: Duration,
+    timed_out: Arc<AtomicBool>,
+) -> tokio::task::JoinHandle<()> {
+    #[cfg(target_os = "windows")]
+    let app = app.clone();
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+    tokio::spawn(async move {
+        tokio::time::sleep(budget).await;
+        timed_out.store(true, Ordering::SeqCst);
+        cancellation.cancel();
+        log::warn!(
+            "Transcription watchdog timed out after {} seconds",
+            budget.as_secs()
+        );
+        #[cfg(target_os = "windows")]
+        {
+            app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>()
+                .abort_active_process()
+                .await;
+        }
+    })
+}
+
+/// Whisper desktop parity: retry the engine up to 3 times (500 ms apart),
+/// breaking immediately on cancellation. Normalization is NOT repeated — the
+/// attempt path is prepared once by the caller.
+async fn run_whisper_with_retry(
+    app: &AppHandle,
+    active: &ActiveEngineSelection,
+    job: &TranscriptionJob,
+    attempt_path: &Path,
+    request: &TranscriptionRequest,
+) -> Result<TranscriptionResult, TranscriptionError> {
+    const MAX_RETRIES: u32 = 3;
+    const RETRY_DELAY_MS: u64 = 500;
+    let source = request.source;
+
+    let mut result = route_once(app, active, job, attempt_path, request).await;
+    let mut attempt = 1;
+    while attempt < MAX_RETRIES {
+        match &result {
+            Ok(_) => break,
+            Err(error) if error.code == TranscriptionErrorCode::Cancelled => break,
+            Err(_) => {
+                tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                if request.cancellation.is_cancelled() {
+                    return Err(cancelled(source));
+                }
+                attempt += 1;
+                result = route_once(app, active, job, attempt_path, request).await;
+            }
+        }
+    }
+    result
+}
+
+/// When the watchdog fired, a cancellation is really a timeout — relabel it so
+/// callers surface "timed out" rather than "cancelled".
+fn remap_timed_out(
+    result: Result<TranscriptionResult, TranscriptionError>,
+    timed_out: bool,
+    source: TranscriptionSource,
+) -> Result<TranscriptionResult, TranscriptionError> {
+    match result {
+        Err(error) if timed_out && error.code == TranscriptionErrorCode::Cancelled => {
+            Err(timed_out_error(source))
+        }
+        other => other,
+    }
+}
+
+fn timed_out_error(source: TranscriptionSource) -> TranscriptionError {
+    TranscriptionError::new(
+        TranscriptionErrorCode::Timeout,
+        source,
+        "Transcription timed out",
+    )
 }
 
 fn stage_error(source: TranscriptionSource, what: &str, err: std::io::Error) -> TranscriptionError {
@@ -278,7 +503,17 @@ fn should_delete_input(policy: &CleanupPolicy, success: bool, retryable: bool) -
 #[cfg(test)]
 mod tests {
     use super::should_delete_input;
+    use super::{is_normalized_wav, remap_timed_out, watchdog_budget_for, wav_duration_ms};
+    use crate::transcription::error::{TranscriptionError, TranscriptionErrorCode};
     use crate::transcription::request::CleanupPolicy;
+    use crate::transcription::request::TimeoutPolicy;
+    use crate::transcription::{
+        TranscriptionJob, TranscriptionResult, TranscriptionSource, TranscriptionTask,
+    };
+    use hound::{SampleFormat, WavSpec, WavWriter};
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::NamedTempFile;
 
     const CASES: [(bool, bool); 3] = [(true, false), (false, true), (false, false)];
 
@@ -324,5 +559,112 @@ mod tests {
             false,
             true
         ));
+    }
+
+    fn sample_job() -> TranscriptionJob {
+        TranscriptionJob {
+            source: TranscriptionSource::DesktopRecording,
+            engine: "whisper".to_string(),
+            model: "base".to_string(),
+            spoken_language: None,
+            task: TranscriptionTask::Transcribe,
+        }
+    }
+
+    fn write_wav(path: &Path, sample_rate: u32, channels: u16, secs: f32) {
+        let spec = WavSpec {
+            channels,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut writer = WavWriter::create(path, spec).unwrap();
+        let frames = (secs * sample_rate as f32) as usize;
+        for _ in 0..frames {
+            for _ in 0..channels {
+                writer.write_sample(0i16).unwrap();
+            }
+        }
+        writer.finalize().unwrap();
+    }
+
+    #[test]
+    fn remap_timed_out_relabels_cancelled_as_timeout_only_when_fired() {
+        let err = || {
+            Err::<TranscriptionResult, _>(TranscriptionError::new(
+                TranscriptionErrorCode::Cancelled,
+                TranscriptionSource::DesktopRecording,
+                "Transcription cancelled",
+            ))
+        };
+
+        // Watchdog fired: a cancellation is really a timeout.
+        let remapped = remap_timed_out(err(), true, TranscriptionSource::DesktopRecording);
+        assert_eq!(remapped.unwrap_err().code, TranscriptionErrorCode::Timeout);
+
+        // No watchdog: a real user cancellation stays cancelled.
+        let kept = remap_timed_out(err(), false, TranscriptionSource::DesktopRecording);
+        assert_eq!(kept.unwrap_err().code, TranscriptionErrorCode::Cancelled);
+    }
+
+    #[test]
+    fn remap_timed_out_leaves_non_cancellation_and_success_untouched() {
+        let failed = Err::<TranscriptionResult, _>(TranscriptionError::new(
+            TranscriptionErrorCode::EngineFailed,
+            TranscriptionSource::DesktopRecording,
+            "boom",
+        ));
+        let remapped = remap_timed_out(failed, true, TranscriptionSource::DesktopRecording);
+        assert_eq!(
+            remapped.unwrap_err().code,
+            TranscriptionErrorCode::EngineFailed
+        );
+
+        let ok = Ok(TranscriptionResult::new(&sample_job(), "hi"));
+        let remapped = remap_timed_out(ok, true, TranscriptionSource::DesktopRecording);
+        assert!(remapped.is_ok());
+    }
+
+    #[test]
+    fn is_normalized_wav_accepts_only_16k_mono_s16() {
+        let conforming = NamedTempFile::new().unwrap();
+        write_wav(conforming.path(), 16_000, 1, 0.1);
+        assert!(is_normalized_wav(conforming.path()));
+
+        let wrong_rate = NamedTempFile::new().unwrap();
+        write_wav(wrong_rate.path(), 44_100, 1, 0.1);
+        assert!(!is_normalized_wav(wrong_rate.path()));
+
+        let stereo = NamedTempFile::new().unwrap();
+        write_wav(stereo.path(), 16_000, 2, 0.1);
+        assert!(!is_normalized_wav(stereo.path()));
+
+        assert!(!is_normalized_wav(Path::new("/nonexistent/file.wav")));
+    }
+
+    #[test]
+    fn wav_duration_ms_reads_clip_length() {
+        let tmp = NamedTempFile::new().unwrap();
+        write_wav(tmp.path(), 16_000, 1, 1.0);
+        let ms = wav_duration_ms(tmp.path()).expect("duration");
+        assert!((990..=1010).contains(&ms), "expected ~1000ms, got {ms}");
+        assert!(wav_duration_ms(Path::new("/nonexistent/file.wav")).is_none());
+    }
+
+    #[test]
+    fn watchdog_budget_for_honors_policy() {
+        let tmp = NamedTempFile::new().unwrap();
+        write_wav(tmp.path(), 16_000, 1, 1.0);
+
+        assert!(watchdog_budget_for(tmp.path(), &TimeoutPolicy::None).is_none());
+        assert_eq!(
+            watchdog_budget_for(
+                tmp.path(),
+                &TimeoutPolicy::Explicit(Duration::from_secs(42))
+            ),
+            Some(Duration::from_secs(42))
+        );
+        let budget = watchdog_budget_for(tmp.path(), &TimeoutPolicy::Interactive).unwrap();
+        assert!(budget >= Duration::from_secs(180));
     }
 }
