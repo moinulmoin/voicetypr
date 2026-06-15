@@ -592,6 +592,21 @@ impl AudioRecorder {
             .unwrap_or(false)
     }
 
+    /// Returns true if a recording worker exists but its thread has already
+    /// finished. Non-consuming: the join handle stays stored so the normal
+    /// stop path can still take and join it.
+    pub fn recording_thread_finished(&self) -> bool {
+        self.recording_handle
+            .lock()
+            .map(|guard| {
+                guard
+                    .as_ref()
+                    .map(|handle| handle.thread_handle.is_finished())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    }
+
     pub fn take_audio_level_receiver(&mut self) -> Option<mpsc::Receiver<f64>> {
         self.audio_level_receiver
             .lock()
@@ -607,9 +622,32 @@ impl AudioRecorder {
     }
 }
 
+/// Classifies an error returned by [`AudioRecorder::stop_recording`]. Returns true when the
+/// recording worker did NOT finish (stop timeout or a thread panic), so the WAV writer never
+/// finalized the file and the capture must not be transcribed. A worker that finishes with an
+/// error (e.g. a CPAL device error) finalizes the WAV first, so those return false and the
+/// captured audio can still be recovered.
+pub(crate) fn stop_error_is_unfinalized(error: &str) -> bool {
+    error.contains("failed to stop within timeout") || error.contains("panicked")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_error_is_unfinalized_distinguishes_finalized_from_unfinalized() {
+        // Worker did not finish -> WAV not finalized -> must not transcribe.
+        assert!(stop_error_is_unfinalized(
+            "Recording thread failed to stop within timeout"
+        ));
+        assert!(stop_error_is_unfinalized("Recording thread panicked"));
+        assert!(stop_error_is_unfinalized("Writer thread panicked"));
+        // Worker finished with an error -> WAV finalized -> recoverable, transcribe.
+        assert!(!stop_error_is_unfinalized(
+            "Audio device error: device disconnected"
+        ));
+    }
 
     #[test]
     fn test_recording_size_check() {
@@ -714,5 +752,68 @@ mod tests {
         let result = recorder.wait_for_recording_end().unwrap();
         assert_eq!(result, "Recording stopped due to silence");
         assert!(!recorder.is_recording());
+    }
+
+    #[test]
+    fn stop_recording_surfaces_worker_error_and_clears_handle() {
+        let (stop_tx, _stop_rx) = mpsc::channel::<RecorderCommand>();
+        let thread_handle = thread::spawn(|| Err::<String, String>("device failed".to_string()));
+        let mut recorder = AudioRecorder::new();
+
+        *recorder.recording_handle.lock().unwrap() = Some(RecordingHandle {
+            stop_tx,
+            thread_handle,
+        });
+
+        let err = recorder.stop_recording().unwrap_err();
+        assert_eq!(err, "device failed");
+        assert!(!recorder.is_recording());
+    }
+
+    #[test]
+    fn recording_thread_finished_is_false_when_idle() {
+        let recorder = AudioRecorder::new();
+        assert!(!recorder.recording_thread_finished());
+    }
+
+    #[test]
+    fn recording_thread_finished_is_true_after_worker_self_exits() {
+        let recorder = AudioRecorder::new();
+        let (stop_tx, _stop_rx) = mpsc::channel::<RecorderCommand>();
+        let thread_handle = thread::spawn(|| Ok::<String, String>("stopped".to_string()));
+
+        let start = Instant::now();
+        while !thread_handle.is_finished() {
+            assert!(
+                start.elapsed() < Duration::from_secs(2),
+                "worker never finished"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        *recorder.recording_handle.lock().unwrap() = Some(RecordingHandle {
+            stop_tx,
+            thread_handle,
+        });
+
+        assert!(recorder.recording_thread_finished());
+    }
+
+    #[test]
+    fn recording_thread_finished_is_false_while_worker_runs() {
+        let recorder = AudioRecorder::new();
+        let (stop_tx, stop_rx) = mpsc::channel::<RecorderCommand>();
+        let thread_handle = thread::spawn(move || {
+            let _ = stop_rx.recv();
+            Ok::<String, String>("stopped".to_string())
+        });
+
+        *recorder.recording_handle.lock().unwrap() = Some(RecordingHandle {
+            stop_tx,
+            thread_handle,
+        });
+
+        assert!(!recorder.recording_thread_finished());
+        drop(recorder);
     }
 }

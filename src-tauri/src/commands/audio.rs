@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::ai::error::{user_facing_message, AiProviderError};
@@ -42,7 +42,7 @@ use once_cell::sync::Lazy;
 use serde_json;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -57,6 +57,30 @@ static TOAST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Global media pause controller for pausing/resuming system media during recording
 static MEDIA_CONTROLLER: Lazy<MediaPauseController> = Lazy::new(MediaPauseController::new);
+struct StopInFlightGuard(Arc<AtomicBool>);
+
+impl StopInFlightGuard {
+    fn try_acquire(flag: Arc<AtomicBool>) -> Option<Self> {
+        flag.compare_exchange(false, true, AtomicOrdering::SeqCst, AtomicOrdering::SeqCst)
+            .ok()
+            .map(|_| Self(flag))
+    }
+}
+
+impl Drop for StopInFlightGuard {
+    fn drop(&mut self) {
+        self.0.store(false, AtomicOrdering::SeqCst);
+    }
+}
+
+/// If `stop_recording` finds no active recorder, only force Idle when the
+/// caller entered from a state that is not already owned by stop/transcribe.
+fn stop_should_reset_to_idle(current: RecordingState) -> bool {
+    !matches!(
+        current,
+        RecordingState::Stopping | RecordingState::Transcribing
+    )
+}
 
 /// Payload for pill toast messages
 #[derive(serde::Serialize, Clone)]
@@ -1023,17 +1047,20 @@ mod tests {
         build_translation_failed_history_metadata, build_writing_history_metadata,
         is_ai_auth_error, is_non_speech_transcript, plan_desktop_writing_success,
         recording_license_state, remote_server_error_pill_message, should_hide_pill_when_idle,
-        should_use_active_remote, sync_retranscription_failure_metadata,
+        should_use_active_remote, stop_should_reset_to_idle, sync_retranscription_failure_metadata,
         transcription_watchdog_budget, NormalizedTempFile, RecordingLicenseState,
-        TranscriptionFailure, TranscriptionStatus,
+        StopInFlightGuard, TranscriptionFailure, TranscriptionStatus,
     };
     use crate::commands::license::CachedLicense;
     use crate::license::{LicenseState, LicenseStatus};
     use crate::remote::client::{
         calculate_timeout_ms, RemoteClientError, RemoteEndpoint, TranscriptionSource,
     };
+    use crate::RecordingState;
     use reqwest::StatusCode;
     use std::fs;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
 
     fn cached_license(status: LicenseState) -> CachedLicense {
         CachedLicense::new(LicenseStatus {
@@ -1400,6 +1427,35 @@ mod tests {
                 .and_then(serde_json::Value::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn stop_in_flight_guard_blocks_duplicates_and_resets_on_drop() {
+        let flag = Arc::new(AtomicBool::new(false));
+
+        {
+            let _guard = StopInFlightGuard::try_acquire(flag.clone())
+                .expect("first stop owner should acquire guard");
+            assert!(
+                StopInFlightGuard::try_acquire(flag.clone()).is_none(),
+                "duplicate stop owner must be rejected"
+            );
+        }
+
+        assert!(
+            StopInFlightGuard::try_acquire(flag).is_some(),
+            "dropping the guard should release the stop owner flag"
+        );
+    }
+
+    #[test]
+    fn duplicate_stop_no_recorder_does_not_reset_idle_over_owned_flow() {
+        assert!(stop_should_reset_to_idle(RecordingState::Recording));
+        assert!(stop_should_reset_to_idle(RecordingState::Idle));
+        assert!(stop_should_reset_to_idle(RecordingState::Starting));
+        assert!(stop_should_reset_to_idle(RecordingState::Error));
+        assert!(!stop_should_reset_to_idle(RecordingState::Stopping));
+        assert!(!stop_should_reset_to_idle(RecordingState::Transcribing));
     }
 
     #[test]
@@ -3063,12 +3119,20 @@ pub async fn stop_recording(
         ],
     );
 
+    let app_state = app.state::<AppState>();
+    let Some(_stop_guard) = StopInFlightGuard::try_acquire(app_state.stop_in_flight.clone()) else {
+        log::debug!("stop_recording: a stop is already in flight; ignoring duplicate call");
+        return Ok(String::new());
+    };
+    let entry_state = app_state.get_current_state();
+
     // Update state to stopping
     log_state_transition("RECORDING", "recording", "stopping", true, None);
     update_recording_state(&app, RecordingState::Stopping, None);
     // DO NOT request cancellation here - we want transcription to complete!
     // Cancellation should only happen in cancel_recording command
 
+    let mut stop_unfinalized = false;
     // Stop recording (lock only within this scope to stay Send)
     log::info!("🛑 Stopping recording...");
     {
@@ -3081,15 +3145,29 @@ pub async fn stop_recording(
         // Check if actually recording first
         if !recorder.is_recording() {
             log::warn!("stop_recording called but not currently recording");
-            // Don't error - just return empty result, but make sure to reset state
+            // Don't error - just return empty result; only reset if this stop owns the flow.
             drop(recorder); // Drop the lock before updating state
-            update_recording_state(&app, RecordingState::Idle, None);
-            return Ok("".to_string());
+            if stop_should_reset_to_idle(entry_state) {
+                update_recording_state(&app, RecordingState::Idle, None);
+            } else {
+                log::debug!(
+                    "stop_recording: stop/transcribe already in progress (entry state={:?}); not overriding",
+                    entry_state
+                );
+            }
+            return Ok(String::new());
         }
 
-        let stop_message = recorder
-            .stop_recording()
-            .map_err(|e| format!("Failed to stop recording: {}", e))?;
+        let stop_message = match recorder.stop_recording() {
+            Ok(msg) => msg,
+            Err(e) => {
+                log::error!("Recorder stop returned error: {}", e);
+                if crate::audio::recorder::stop_error_is_unfinalized(&e) {
+                    stop_unfinalized = true;
+                }
+                format!("Recorder stop error: {}", e)
+            }
+        };
         log::info!("{}", stop_message);
 
         // Play sound on recording end if enabled
@@ -3137,7 +3215,6 @@ pub async fn stop_recording(
     }
 
     // Clean up ESC state
-    let app_state = app.state::<AppState>();
     app_state
         .esc_pressed_once
         .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -3150,6 +3227,22 @@ pub async fn stop_recording(
     }
 
     log::debug!("Unregistered ESC key and cleaned up state");
+
+    // A recorder error where the worker FINISHED still finalizes the captured WAV (e.g. a
+    // device error), so we fall through to the normal transcription path below and recover the
+    // speech (never-lose-speech). Only when the worker did NOT finish (stop timeout / thread
+    // panic) is there no usable WAV: surface an error and reset, having already run the
+    // media-resume + ESC cleanup above.
+    if stop_unfinalized {
+        pill_toast(&app, "Recording error", 1500);
+        if should_hide_pill(&app).await {
+            if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
+                log::error!("Failed to hide pill window: {}", e);
+            }
+        }
+        update_recording_state(&app, RecordingState::Idle, None);
+        return Ok(String::new());
+    }
 
     // Check if cancellation was requested
     if app_state.is_cancellation_requested() {

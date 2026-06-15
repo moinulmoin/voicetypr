@@ -598,6 +598,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Initialize recorder state (kept separate for backwards compatibility)
             app.manage(RecorderState(Mutex::new(AudioRecorder::new())));
 
+            let recorder_watchdog =
+                audio::recorder_watchdog::RecorderWatchdog::new(app.app_handle().clone());
+            recorder_watchdog.start();
+            app.manage(recorder_watchdog);
+
             // Create device watcher in deferred state - will be started after mic permission granted
             // This prevents early mic permission prompts from CPAL's input_devices() enumeration
             app.manage(audio::device_watcher::DeviceWatcher::new(app.app_handle().clone()));
