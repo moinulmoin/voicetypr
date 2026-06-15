@@ -10,6 +10,7 @@ interface RawTranscriptionHistoryItem {
   recording_file?: string;
   source_recording_id?: string;
   status?: TranscriptionHistory["status"];
+  writing?: TranscriptionHistory["writing"];
 }
 
 interface TranscriptionAddedEvent {
@@ -19,6 +20,7 @@ interface TranscriptionAddedEvent {
   recording_file?: string;
   source_recording_id?: string;
   status?: TranscriptionHistory["status"];
+  writing?: TranscriptionHistory["writing"];
 }
 
 interface UseTranscriptionHistoryOptions {
@@ -43,6 +45,7 @@ function toHistoryItem(item: RawTranscriptionHistoryItem): TranscriptionHistory 
     recording_file: item.recording_file,
     source_recording_id: item.source_recording_id,
     status: item.status,
+    writing: item.writing,
   };
 }
 
@@ -55,6 +58,7 @@ function fromAddedEvent(item: TranscriptionAddedEvent): TranscriptionHistory {
     recording_file: item.recording_file,
     source_recording_id: item.source_recording_id,
     status: item.status,
+    writing: item.writing,
   };
 }
 

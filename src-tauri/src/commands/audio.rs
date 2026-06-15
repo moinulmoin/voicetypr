@@ -591,6 +591,17 @@ fn build_writing_history_metadata(
         "context_hint": writing_result.context_hint,
     })
 }
+
+/// Metadata marking a history row whose required AI translation failed: the saved
+/// `text` is the raw, untranslated transcript (kept so the user does not lose
+/// their words). The frontend surfaces this as a "translation failed" badge so the
+/// untranslated row is not mistaken for a successful translation.
+fn build_translation_failed_history_metadata(target_language: &str) -> serde_json::Value {
+    serde_json::json!({
+        "translation_failed": true,
+        "target_language": target_language,
+    })
+}
 fn ai_failure_category(error: &AiProviderError) -> &'static str {
     match error {
         AiProviderError::MissingApiKey => "missing_api_key",
@@ -914,11 +925,12 @@ mod tests {
         ai_failure_category, ai_failure_notice, ai_failure_payload, build_failed_transcription_row,
         build_remote_server_error_payload, build_remote_transcription_result,
         build_remote_upload_transcription_request, build_transcription_job,
-        build_writing_history_metadata, is_ai_auth_error, is_non_speech_transcript,
-        plan_desktop_writing_success, recording_license_state, remote_server_error_pill_message,
-        should_hide_pill_when_idle, should_use_active_remote,
-        sync_retranscription_failure_metadata, transcription_watchdog_budget, NormalizedTempFile,
-        RecordingLicenseState, TranscriptionFailure, TranscriptionStatus,
+        build_translation_failed_history_metadata, build_writing_history_metadata,
+        is_ai_auth_error, is_non_speech_transcript, plan_desktop_writing_success,
+        recording_license_state, remote_server_error_pill_message, should_hide_pill_when_idle,
+        should_use_active_remote, sync_retranscription_failure_metadata,
+        transcription_watchdog_budget, NormalizedTempFile, RecordingLicenseState,
+        TranscriptionFailure, TranscriptionStatus,
     };
     use crate::commands::license::CachedLicense;
     use crate::license::{LicenseState, LicenseStatus};
@@ -1121,6 +1133,13 @@ mod tests {
         assert_eq!(metadata["output_language"], "en");
         assert!(metadata.get("raw_text").is_none());
         assert!(metadata.get("final_text").is_none());
+    }
+
+    #[test]
+    fn build_translation_failed_history_metadata_marks_untranslated_row() {
+        let metadata = build_translation_failed_history_metadata("es");
+        assert_eq!(metadata["translation_failed"].as_bool(), Some(true));
+        assert_eq!(metadata["target_language"].as_str(), Some("es"));
     }
 
     #[test]
@@ -3947,7 +3966,10 @@ pub async fn stop_recording(
                                 debug_assert_eq!(plan.save_history_entries, 1);
                                 (plan.final_text, plan.writing_metadata, plan.should_deliver)
                             }
-                            Err(crate::writing::WritingError::TranslationFailed { .. }) => {
+                            Err(crate::writing::WritingError::TranslationFailed {
+                                target_language,
+                                ..
+                            }) => {
                                 log::warn!("Translation failed after transcription; saving raw transcript to history without delivery");
                                 if should_emit_enhancing_for_task {
                                     let _ = app_for_process.emit("enhancing-failed", ());
@@ -3958,7 +3980,9 @@ pub async fn stop_recording(
                                     transcription_for_process.raw_text.clone(),
                                     model_for_process.clone(),
                                     recording_file_for_task.clone(),
-                                    None,
+                                    Some(build_translation_failed_history_metadata(
+                                        &target_language,
+                                    )),
                                 )
                                 .await;
 

@@ -74,6 +74,36 @@ describe("useTranscriptionHistory", () => {
     });
   });
 
+  it("threads translation-failed writing metadata through to history items", async () => {
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation((command: string) => {
+      if (command === "get_transcription_history") {
+        return Promise.resolve([
+          {
+            timestamp: "2026-05-18T10:00:00.000Z",
+            text: "hola mundo",
+            model: "base.en",
+            writing: { translation_failed: true, target_language: "es" },
+          },
+        ]);
+      }
+      if (command === "get_transcription_count") {
+        return Promise.resolve(1);
+      }
+      return Promise.reject(new Error(`Unknown command: ${command}`));
+    });
+
+    const { result } = renderHook(() => useTranscriptionHistory({ limit: 50 }));
+
+    await waitFor(() => {
+      expect(result.current.history).toHaveLength(1);
+    });
+
+    expect(result.current.history[0]?.writing).toEqual({
+      translation_failed: true,
+      target_language: "es",
+    });
+  });
+
   it("prepends unique transcription events and respects the limit", async () => {
     (invoke as ReturnType<typeof vi.fn>).mockImplementation((command: string) => {
       if (command === "get_transcription_history") {

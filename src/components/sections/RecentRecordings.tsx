@@ -571,6 +571,17 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                             )}
                           </div>
                         )}
+                        {/* Translation-failed status bar: saved text is the raw, untranslated transcript */}
+                        {item.writing?.translation_failed && !isFailed && !isInProgress && (
+                          <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 rounded-t-lg">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                            <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                              {item.writing.target_language
+                                ? `Translation to ${item.writing.target_language} failed - saved untranslated`
+                                : 'Translation failed - saved untranslated'}
+                            </span>
+                          </div>
+                        )}
                         <div className="p-4">
                           {/* Text content */}
                           <p className={cn(

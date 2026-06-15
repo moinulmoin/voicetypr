@@ -95,6 +95,14 @@ export interface AppSettings {
   recording_retention_days?: number | null; // null = keep forever
 }
 
+/** Writing-step outcome attached to a history row (mirrors the backend `writing` metadata blob). */
+export interface TranscriptionWritingMeta {
+  /** True when a required AI translation failed and the row holds the raw, untranslated transcript. */
+  translation_failed?: boolean;
+  /** The output language the failed translation targeted. */
+  target_language?: string;
+}
+
 export interface TranscriptionHistory {
   id: string;
   text: string;
@@ -103,6 +111,7 @@ export interface TranscriptionHistory {
   recording_file?: string; // Filename of the saved recording (not full path)
   source_recording_id?: string; // For re-transcriptions, references original transcription
   status?: 'completed' | 'in_progress' | 'failed';
+  writing?: TranscriptionWritingMeta;
 }
 
 export interface LicenseStatus {
