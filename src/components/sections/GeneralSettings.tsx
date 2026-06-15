@@ -565,7 +565,7 @@ export function GeneralSettings() {
                     <FieldContent>
                       <FieldTitle>Save recording audio</FieldTitle>
                       <FieldDescription>
-                        Keeps the original audio files for re-transcription, then automatically deletes them after your chosen period.
+                        Keeps the original audio for re-transcription — including retrying a failed transcription from History — then automatically deletes it after your chosen period. With this off, failed recordings can't be retried.
                       </FieldDescription>
                     </FieldContent>
                     <div className="w-full md:w-auto">

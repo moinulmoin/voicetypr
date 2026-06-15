@@ -451,6 +451,26 @@ impl TranscriptionFailure {
             Self::Remote(error) => remote_client_error_kind(error),
         }
     }
+
+    fn server_error_body(&self) -> Option<&str> {
+        match self {
+            Self::Local(_) => None,
+            Self::Remote(error) => error.server_error_body(),
+        }
+    }
+
+    /// Whether a failed attempt's recording should be preserved for retry: genuine
+    /// engine/network failures, not user cancellation or a too-short clip.
+    fn is_retryable_failure(&self) -> bool {
+        match self {
+            Self::Remote(_) => true,
+            Self::Local(message) => {
+                !message.contains("cancelled")
+                    && !message.contains("Cancelled")
+                    && !message.contains("too short")
+            }
+        }
+    }
 }
 
 fn remote_client_error_kind(error: &RemoteClientError) -> &'static str {
@@ -487,19 +507,19 @@ fn build_remote_server_error_payload(
 }
 
 fn build_failed_transcription_row(
-    error: &RemoteClientError,
+    failure: &TranscriptionFailure,
     model: &str,
     recording_file: &str,
 ) -> serde_json::Value {
     serde_json::json!({
-        "text": "Remote transcription failed - re-transcribe after resolving the issue",
+        "text": "Transcription failed - re-transcribe after resolving the issue",
         "model": model,
         "timestamp": chrono::Utc::now().to_rfc3339(),
         "recording_file": recording_file,
         "status": "failed",
-        "error_kind": remote_client_error_kind(error),
-        "error_detail": error.to_string(),
-        "error_body": error.server_error_body(),
+        "error_kind": failure.error_kind(),
+        "error_detail": failure.message(),
+        "error_body": failure.server_error_body(),
         "can_retry_from_history": true,
     })
 }
@@ -1504,11 +1524,11 @@ mod tests {
     #[test]
     fn failed_history_row_content_is_truthful_and_structured() {
         let row = build_failed_transcription_row(
-            &RemoteClientError::HttpStatus {
+            &TranscriptionFailure::Remote(RemoteClientError::HttpStatus {
                 endpoint: RemoteEndpoint::Transcribe,
                 status: StatusCode::BAD_GATEWAY,
                 body: Some("upstream unavailable".to_string()),
-            },
+            }),
             "base.en",
             "recordings/failure.wav",
         );
@@ -1528,6 +1548,39 @@ mod tests {
         assert_ne!(
             row["text"].as_str().unwrap(),
             "Remote server unreachable - re-transcribe to get text"
+        );
+    }
+
+    #[test]
+    fn failed_history_row_supports_local_engine_failures() {
+        let row = build_failed_transcription_row(
+            &TranscriptionFailure::Local("Transcription timed out".to_string()),
+            "base.en",
+            "recordings/failure.wav",
+        );
+        assert_eq!(row["status"].as_str().unwrap(), "failed");
+        assert_eq!(row["error_kind"].as_str().unwrap(), "local");
+        assert_eq!(
+            row["error_detail"].as_str().unwrap(),
+            "Transcription timed out"
+        );
+        assert!(row["can_retry_from_history"].as_bool().unwrap());
+        assert!(row["error_body"].is_null());
+    }
+
+    #[test]
+    fn is_retryable_failure_excludes_cancellation_and_too_short() {
+        assert!(
+            TranscriptionFailure::Local("Transcription timed out".to_string())
+                .is_retryable_failure()
+        );
+        assert!(TranscriptionFailure::Local("OpenAI error: 500".to_string()).is_retryable_failure());
+        assert!(
+            !TranscriptionFailure::Local("Transcription cancelled".to_string())
+                .is_retryable_failure()
+        );
+        assert!(
+            !TranscriptionFailure::Local("Recording too short".to_string()).is_retryable_failure()
         );
     }
 }
@@ -1719,13 +1772,6 @@ impl RecordingConfig {
 // Implement UnwindSafe traits for panic testing compatibility
 impl UnwindSafe for RecordingConfig {}
 impl RefUnwindSafe for RecordingConfig {}
-
-/// Always save a recording file to persistent storage
-/// This is used for the "preserve recordings on failure" feature
-/// Returns the saved filename (not full path) if saved, None otherwise
-pub async fn save_recording(app: &AppHandle, audio_path: &Path) -> Option<String> {
-    save_recording_internal(app, audio_path, false).await
-}
 
 /// Save a recording file to persistent storage if save_recordings is enabled
 /// Returns the saved filename (not full path) if saved, None otherwise
@@ -3700,16 +3746,17 @@ pub async fn stop_recording(
                 }
             };
 
-        // Try to save recording to persistent storage BEFORE cleanup
-        // On success: use maybe_save_recording (respects save_recordings setting)
-        // On recoverable failure (remote server errors): always save to preserve for re-transcription
+        // Save the recording to persistent storage BEFORE cleanup. A successful
+        // transcription and a genuine (retryable) failure both respect the
+        // `save_recordings` setting via `maybe_save_recording`; user cancellation
+        // and too-short clips are never preserved. The recording is what makes a
+        // failed row re-transcribable from History.
         let recording_file = match &transcription_result {
             Ok(_) => maybe_save_recording(&app_for_task, &audio_path_clone).await,
-            Err(TranscriptionFailure::Remote(_)) => {
-                log::info!("Preserving recording for failed remote transcription");
-                save_recording(&app_for_task, &audio_path_clone).await
+            Err(failure) if failure.is_retryable_failure() => {
+                maybe_save_recording(&app_for_task, &audio_path_clone).await
             }
-            Err(TranscriptionFailure::Local(_)) => None,
+            Err(_) => None,
         };
 
         // Clean up temp file regardless of outcome
@@ -4093,7 +4140,7 @@ pub async fn stop_recording(
                                 let recording_filename = saved_recording.clone();
                                 match save_failed_transcription(
                                     &app_for_history,
-                                    remote_error,
+                                    &failure,
                                     model_name,
                                     recording_filename,
                                 )
@@ -4147,26 +4194,55 @@ pub async fn stop_recording(
                         });
                     }
                     TranscriptionFailure::Local(e) => {
-                        // For other errors, show error state briefly
+                        // Genuine local/cloud failure. If the recording was preserved
+                        // (save_recordings on), write a retryable failed row so the user
+                        // can re-transcribe from History instead of losing the dictation.
+                        let can_retry_from_history =
+                            if let Some(ref saved_recording) = recording_file {
+                                match save_failed_transcription(
+                                    &app_for_task,
+                                    &failure,
+                                    selected_model_name_for_task.clone(),
+                                    saved_recording.clone(),
+                                )
+                                .await
+                                {
+                                    Ok(_) => true,
+                                    Err(save_err) => {
+                                        log::error!(
+                                            "Failed to save failed transcription: {}",
+                                            save_err
+                                        );
+                                        false
+                                    }
+                                }
+                            } else {
+                                false
+                            };
+
                         update_recording_state(
                             &app_for_task,
                             RecordingState::Error,
                             Some(e.clone()),
                         );
 
-                        // Emit error via pill toast
-                        pill_toast(&app_for_task, e, 1500);
+                        if can_retry_from_history {
+                            pill_toast(
+                                &app_for_task,
+                                "Transcription failed. Go to History to re-transcribe, or try again.",
+                                6000,
+                            );
+                        } else {
+                            pill_toast(&app_for_task, e, 1500);
+                        }
 
-                        // Transition back to Idle after a delay
-                        // This ensures we don't get stuck in Error state
+                        // Transition back to Idle after a delay so we don't get stuck.
                         let app_for_reset = app_for_task.clone();
                         tokio::spawn(async move {
                             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                             log::debug!(
                                 "Resetting from Error to Idle state after transcription failure"
                             );
-
-                            // Hide pill window when transitioning to Idle (only if show_pill_indicator is false)
                             if should_hide_pill(&app_for_reset).await {
                                 if let Err(e) =
                                     crate::commands::window::hide_pill_widget(app_for_reset.clone())
@@ -4175,7 +4251,6 @@ pub async fn stop_recording(
                                     log::error!("Failed to hide pill window: {}", e);
                                 }
                             }
-
                             update_recording_state(&app_for_reset, RecordingState::Idle, None);
                         });
                     }
@@ -4343,9 +4418,9 @@ pub async fn save_transcription_with_recording(
 }
 
 /// Save a failed transcription to history with recording file preserved for re-transcription
-pub async fn save_failed_transcription(
+async fn save_failed_transcription(
     app: &AppHandle,
-    error: &RemoteClientError,
+    failure: &TranscriptionFailure,
     model: String,
     recording_file: String,
 ) -> Result<(), String> {
@@ -4353,7 +4428,7 @@ pub async fn save_failed_transcription(
         .store("transcriptions")
         .map_err(|e| format!("Failed to get transcriptions store: {}", e))?;
 
-    let transcription_data = build_failed_transcription_row(error, &model, &recording_file);
+    let transcription_data = build_failed_transcription_row(failure, &model, &recording_file);
     let timestamp = transcription_data["timestamp"]
         .as_str()
         .ok_or_else(|| "Failed to build failed transcription timestamp".to_string())?
