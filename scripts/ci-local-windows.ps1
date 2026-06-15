@@ -1,7 +1,7 @@
 param(
     [switch]$Full,
     [switch]$SkipInstall,
-    [switch]$SkipVulkanCheck,
+    [switch]$GpuSidecar,
     [switch]$Help
 )
 
@@ -30,17 +30,17 @@ if ($Help) {
     Write-Host @"
 Local Windows CI runner
 
-Matches .github/workflows/ci.yml (backend-windows) by default:
+Default checks:
   - cargo check
   - cargo test
+
+Use -GpuSidecar to also compile the bundled optional Vulkan sidecar.
+The main app still builds CPU-safe; the sidecar is the only Vulkan-linked binary.
 
 Usage:
   powershell -ExecutionPolicy Bypass -File .\scripts\ci-local-windows.ps1
   powershell -ExecutionPolicy Bypass -File .\scripts\ci-local-windows.ps1 -Full
-  powershell -ExecutionPolicy Bypass -File .\scripts\ci-local-windows.ps1 -SkipVulkanCheck
-
-Notes:
-  - If Vulkan SDK is required for compilation, install it from https://vulkan.lunarg.com/sdk/home
+  powershell -ExecutionPolicy Bypass -File .\scripts\ci-local-windows.ps1 -GpuSidecar
 "@
     exit 0
 }
@@ -52,19 +52,15 @@ Write-Step "CI (Windows)"
 Write-Info "Repo: $RepoRoot"
 
 Require-Command cargo
-
 Write-Info "cargo: $(cargo -V)"
 
-if (-not $SkipVulkanCheck) {
+if ($GpuSidecar) {
     if ([string]::IsNullOrEmpty($env:VULKAN_SDK) -or -not (Test-Path $env:VULKAN_SDK)) {
-        Write-ErrorMsg "VULKAN_SDK is not set (or points to a missing path). CI installs Vulkan SDK on windows-latest."
+        Write-ErrorMsg "VULKAN_SDK is not set (or points to a missing path). It is required only for the optional GPU sidecar."
         Write-Info "Install Vulkan SDK from: https://vulkan.lunarg.com/sdk/home"
-        Write-Info "Then open a new terminal and ensure VULKAN_SDK is set."
         exit 1
     }
     Write-Success "Vulkan SDK detected: $env:VULKAN_SDK"
-} else {
-    Write-Info "Skipping Vulkan SDK check (-SkipVulkanCheck)"
 }
 
 if ($Full) {
@@ -96,13 +92,20 @@ if ($Full) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
+if ($GpuSidecar) {
+    Write-Step "cargo build Whisper Vulkan sidecar"
+    $env:RUSTFLAGS = "-C target-feature=+crt-static"
+    cargo build --manifest-path sidecar\whisper-vulkan\Cargo.toml --release
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
 Push-Location src-tauri
 try {
-    Write-Step "cargo check (src-tauri)"
+    Write-Step "cargo check (src-tauri CPU-safe main app)"
     cargo check
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    Write-Step "cargo test (src-tauri)"
+    Write-Step "cargo test (src-tauri CPU-safe main app)"
     cargo test
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }

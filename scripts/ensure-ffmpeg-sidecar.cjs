@@ -2,7 +2,7 @@
 // Ensures ffmpeg/ffprobe sidecar binaries exist without relying on system installs.
 // Downloads pinned archives per platform, extracts, and places binaries under sidecar/ffmpeg/dist.
 // macOS (arm64): sidecar/ffmpeg/dist/ffmpeg, ffprobe (+ arch symlinks)
-// Windows (x64): sidecar/ffmpeg/dist/ffmpeg.exe, ffprobe.exe (+ arch copies)
+// Windows (x64): sidecar/ffmpeg/dist/ffmpeg.exe, ffprobe.exe (+ target-triple copies)
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -103,9 +103,62 @@ function verifyChecksum(file, expected, label) {
   console.log(`[ensure-ffmpeg-sidecar] Verified ${label} SHA256: ${actual}`);
 }
 
+const TAURI_CONFIGS = [
+  'src-tauri/tauri.conf.json',
+  'src-tauri/tauri.windows.conf.json',
+];
+
+const OBSOLETE_WINDOWS_DOUBLE_EXTENSION_COPIES = [
+  'ffmpeg.exe-x86_64-pc-windows-msvc.exe',
+  'ffprobe.exe-x86_64-pc-windows-msvc.exe',
+];
+
+function assertExtensionlessExternalBins() {
+  const offenders = [];
+
+  for (const config of TAURI_CONFIGS) {
+    const configPath = path.resolve(__dirname, '..', config);
+    if (!fs.existsSync(configPath)) continue;
+
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    } catch (err) {
+      fail(`Failed to parse ${config}: ${err.message}`);
+    }
+
+    for (const entry of parsed.bundle?.externalBin ?? []) {
+      if (path.win32.basename(entry).toLowerCase().endsWith('.exe')) {
+        offenders.push(`${config}: ${entry}`);
+      }
+    }
+  }
+
+  if (offenders.length > 0) {
+    fail(
+      'Tauri externalBin entries must be extensionless. ' +
+        'Tauri appends the target triple and platform extension itself; .exe entries package as .exe.exe on Windows.\n' +
+        offenders.join('\n')
+    );
+  }
+}
+
+function removeObsoleteDoubleExtensionCopies(distDir) {
+  for (const file of OBSOLETE_WINDOWS_DOUBLE_EXTENSION_COPIES) {
+    const obsoletePath = path.join(distDir, file);
+    if (fs.existsSync(obsoletePath)) {
+      fs.rmSync(obsoletePath, { force: true });
+      console.log(`[ensure-ffmpeg-sidecar] Removed obsolete double-extension sidecar copy: ${file}`);
+    }
+  }
+}
+
+
 (function main() {
   const distDir = path.resolve(__dirname, '..', 'sidecar', 'ffmpeg', 'dist');
   ensureDir(distDir);
+  assertExtensionlessExternalBins();
+  removeObsoleteDoubleExtensionCopies(distDir);
 
   const isMac = process.platform === 'darwin';
   const isWin = process.platform === 'win32';
@@ -239,14 +292,9 @@ function verifyChecksum(file, expected, label) {
     const ffmpegDst = path.join(distDir, 'ffmpeg.exe');
     const ffprobeDst = path.join(distDir, 'ffprobe.exe');
     if (fs.existsSync(ffmpegDst) && fs.existsSync(ffprobeDst)) {
-      // Ensure arch-named copies for bundler compatibility
-      // Some bundlers look for both patterns:
-      //  - ffmpeg-x86_64-pc-windows-msvc.exe
-      //  - ffmpeg.exe-x86_64-pc-windows-msvc.exe
+      // Tauri externalBin entries are extensionless and require target-triple copies.
       ensureCopy(ffmpegDst, path.join(distDir, 'ffmpeg-x86_64-pc-windows-msvc.exe'));
       ensureCopy(ffprobeDst, path.join(distDir, 'ffprobe-x86_64-pc-windows-msvc.exe'));
-      ensureCopy(ffmpegDst, path.join(distDir, 'ffmpeg.exe-x86_64-pc-windows-msvc.exe'));
-      ensureCopy(ffprobeDst, path.join(distDir, 'ffprobe.exe-x86_64-pc-windows-msvc.exe'));
       console.log('[ensure-ffmpeg-sidecar] ffmpeg/ffprobe sidecars present. Copies ensured.');
       return;
     }
@@ -295,8 +343,6 @@ function verifyChecksum(file, expected, label) {
       fs.copyFileSync(srcFfprobe, ffprobeDst);
       ensureCopy(ffmpegDst, path.join(distDir, 'ffmpeg-x86_64-pc-windows-msvc.exe'));
       ensureCopy(ffprobeDst, path.join(distDir, 'ffprobe-x86_64-pc-windows-msvc.exe'));
-      ensureCopy(ffmpegDst, path.join(distDir, 'ffmpeg.exe-x86_64-pc-windows-msvc.exe'));
-      ensureCopy(ffprobeDst, path.join(distDir, 'ffprobe.exe-x86_64-pc-windows-msvc.exe'));
       console.log('[ensure-ffmpeg-sidecar] Installed Windows sidecar binaries by download.');
     } finally {
       cleanupTmp(tmp);

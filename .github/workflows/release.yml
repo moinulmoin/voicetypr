@@ -311,7 +311,7 @@ jobs:
   # ===========================================
   build-windows:
     needs: prepare
-    runs-on: windows-latest
+    runs-on: windows-2022
     env:
       # Short path for whisper.cpp/ggml Vulkan build depth; honored by sidecar and main app builds.
       CARGO_TARGET_DIR: C:\b

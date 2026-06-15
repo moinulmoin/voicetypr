@@ -8,8 +8,6 @@
     "externalBin": [
       "../sidecar/ffmpeg/dist/ffmpeg",
       "../sidecar/ffmpeg/dist/ffprobe",
-      "../sidecar/ffmpeg/dist/ffmpeg.exe",
-      "../sidecar/ffmpeg/dist/ffprobe.exe",
       "../sidecar/whisper-vulkan/dist/whisper-vulkan-sidecar"
     ],
     "windows": {
