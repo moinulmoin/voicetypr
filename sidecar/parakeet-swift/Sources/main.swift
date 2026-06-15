@@ -1,5 +1,36 @@
 import Foundation
+import Darwin
 import FluidAudio
+
+// Keep a duplicate of the real protocol stdout so progress events still reach
+// Tauri while native library calls temporarily redirect STDOUT_FILENO.
+
+let protocolStdoutFileDescriptor = dup(STDOUT_FILENO)
+
+func writeProtocolLine(_ line: String) {
+    let outputFileDescriptor = protocolStdoutFileDescriptor >= 0 ? protocolStdoutFileDescriptor : STDOUT_FILENO
+    var data = Data(line.utf8)
+    data.append(0x0A)
+
+    data.withUnsafeBytes { buffer in
+        guard let baseAddress = buffer.baseAddress else {
+            return
+        }
+
+        var bytesWritten = 0
+        while bytesWritten < buffer.count {
+            let result = Darwin.write(
+                outputFileDescriptor,
+                baseAddress.advanced(by: bytesWritten),
+                buffer.count - bytesWritten
+            )
+            if result <= 0 {
+                return
+            }
+            bytesWritten += result
+        }
+    }
+}
 
 // Helper function to log to stderr (so it doesn't interfere with JSON on stdout)
 func log(_ message: String) {
@@ -16,6 +47,31 @@ func getArchitectureInfo() -> String {
     #else
     return "unknown"
     #endif
+}
+
+// FluidAudio/CoreML can write diagnostics directly to stdout from native code.
+// Stdout is our line-delimited JSON protocol, so run library calls with stdout
+// temporarily redirected to stderr and restore it before sending responses.
+@MainActor
+func withLibraryStdoutRedirected<T>(_ operation: () async throws -> T) async throws -> T {
+    fflush(stdout)
+    let savedStdout = dup(STDOUT_FILENO)
+    guard savedStdout >= 0 else {
+        return try await operation()
+    }
+
+    if dup2(STDERR_FILENO, STDOUT_FILENO) < 0 {
+        close(savedStdout)
+        return try await operation()
+    }
+
+    defer {
+        fflush(stdout)
+        dup2(savedStdout, STDOUT_FILENO)
+        close(savedStdout)
+    }
+
+    return try await operation()
 }
 
 // Log system information for debugging
@@ -292,13 +348,17 @@ struct ParakeetSidecar {
             if forceDownload {
                 log("📥 Force-downloading Parakeet \(version.rawValue.uppercased()) via FluidAudio...")
                 log("🌐 This will download ~500MB. Please wait...")
-                models = try await AsrModels.downloadAndLoad(version: version.asrVersion, progressHandler: progressHandler)
+                models = try await withLibraryStdoutRedirected {
+                    try await AsrModels.downloadAndLoad(version: version.asrVersion, progressHandler: progressHandler)
+                }
                 downloadedVersions.insert(version)
                 log("✅ Download complete for \(version.rawValue.uppercased())")
             } else {
                 log("🔍 Attempting to load Parakeet \(version.rawValue.uppercased()) from cache...")
                 do {
-                    models = try await AsrModels.loadFromCache(version: version.asrVersion, progressHandler: progressHandler)
+                    models = try await withLibraryStdoutRedirected {
+                        try await AsrModels.loadFromCache(version: version.asrVersion, progressHandler: progressHandler)
+                    }
                     downloadedVersions.insert(version)
                     log("✅ Loaded Parakeet \(version.rawValue.uppercased()) from cache")
                 } catch {
@@ -314,7 +374,9 @@ struct ParakeetSidecar {
             log("🔧 Initializing AsrManager...")
             let manager = AsrManager(config: .default)
             log("🔧 Calling manager.loadModels(_:)...")
-            try await manager.loadModels(models)
+            try await withLibraryStdoutRedirected {
+                try await manager.loadModels(models)
+            }
             log("✅ AsrManager initialized successfully")
             asrManager = manager
 
@@ -415,7 +477,9 @@ struct ParakeetSidecar {
 
             // Transcribe the audio file (returns ASRResult)
             var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
-            let result = try await manager.transcribe(fileURL, decoderState: &decoderState)
+            let result = try await withLibraryStdoutRedirected {
+                try await manager.transcribe(fileURL, decoderState: &decoderState)
+            }
 
             let elapsed = Date().timeIntervalSince(startTime)
             log("✅ Transcription complete in \(String(format: "%.2f", elapsed))s")
@@ -623,12 +687,10 @@ struct ParakeetSidecar {
         do {
             let data = try encoder.encode(response)
             if let jsonString = String(data: data, encoding: .utf8) {
-                print(jsonString)
-                fflush(stdout)
+                writeProtocolLine(jsonString)
             }
         } catch {
-            print("{\"type\":\"error\",\"code\":\"serialization_error\",\"message\":\"Failed to serialize response\"}")
-            fflush(stdout)
+            writeProtocolLine("{\"type\":\"error\",\"code\":\"serialization_error\",\"message\":\"Failed to serialize response\"}")
         }
     }
 
