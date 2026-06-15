@@ -23,8 +23,8 @@ against the named plan instead of hot-fixing inline.
       cleanly if `save_recordings` on.
 - [ ] 008-S2 Long recording 3+ min → no unbounded memory growth, transcript
       complete.
-- [ ] 008-S3 Stop variants: hotkey stop, Escape cancel, silence auto-stop →
-      all return to Idle, no leftover temp files.
+- [ ] 008-S3 Stop variants: hotkey stop, Escape cancel → return to Idle, no
+      leftover temp files. (Silence no longer auto-stops — see PORT-S8/S9.)
 - [ ] 008-S4 Device yank: unplug/switch input mid-recording → graceful stop.
       (Safety-critical: misbehavior here is a release blocker.)
 
@@ -140,6 +140,56 @@ across local/cloud/remote). Cancellation/too-short never preserved.
       recording as before.
 - [ ] FP-S4 Cancel mid-transcription and a too-short clip never create a failed
       row or a kept recording, regardless of `save_recordings`.
+
+## Main hotfix-line ports (2026-06-15, NEEDS-SMOKE)
+
+Behavioral re-application of good fixes from the V1 hotfix line (origin/main)
+onto V2; each is reviewer-clean + gate-green and committed. Several are
+Windows-runtime only (marked **W**) and can be verified solely on a real
+Windows build; the rest run via `pnpm tauri dev` on macOS.
+
+- [ ] PORT-S1 (bug report) Submit a bug report → body includes a System table
+      (OS, CPU, RAM, GPU); a spec-collection failure never blocks the report.
+      **W**: GPU shows the real adapter name(s), not "Vulkan0" / "Microsoft
+      Basic Render Driver".
+- [ ] PORT-S2 (parakeet) Parakeet transcription over a long/streaming session →
+      no line-protocol corruption from native sidecar stdout noise.
+- [ ] PORT-S3 (media pause, ON) A player that under-reports pausability (some
+      browsers) is now paused during recording and resumed after; only the
+      player WE paused is resumed (none stranded, none wrongly resumed).
+- [ ] PORT-S4 (media default) Fresh/unset config: pause-media-during-recording
+      defaults to OFF (General settings toggle + actual behavior).
+- [ ] PORT-S5 (**W**, hotkey) Hold the toggle hotkey / OS key-repeat → exactly
+      one stop (no flap/double-stop); a normal press-release still toggles.
+- [ ] PORT-S6 (**W**, recorder) Force an autonomous recorder stop (device yank /
+      size cap) mid-recording → app recovers, no stuck "Recording" lockout, and
+      a NEW recording starts cleanly afterward (RecorderWatchdog).
+- [ ] PORT-S7 (recorder, never-lose-speech) Speak, then yank the input device
+      mid-recording → audio captured BEFORE the fault is transcribed (not
+      discarded). A genuine stop-timeout/hang instead surfaces "Recording error"
+      with no transcribe and full media/ESC cleanup.
+- [ ] PORT-S8 (silence, supersedes 008-S3) Stay silent at start → a
+      non-destructive "No audio detected — check your microphone" warning
+      (NOT an auto-stop); resume speaking → the warning clears and recording
+      continues.
+- [ ] PORT-S9 (silence timeout) Speak then go silent past the 60s timeout →
+      the captured speech is transcribed (never-lose-speech). NO speech for the
+      full timeout → discard/cancel with "No audio captured".
+- [ ] PORT-S10 (silence gating) Brief taps/blips under ~300ms are not counted as
+      speech (no spurious warning-clear); sustained speech clears the warning.
+- [ ] PORT-S11 (models responsive) Start a model download; while downloading,
+      open Models / get status → UI stays responsive (no freeze, no lock).
+- [ ] PORT-S12 (models guards) Click download twice → second rejected ("already
+      in progress") without breaking the first's cancel; delete during a
+      download → rejected and the selected model is unchanged; a failed download
+      shows exactly ONE error (no duplicate toast) and clears the verifying
+      state.
+- [ ] PORT-S13 (**W**, sidecar warm) Manually preload a Whisper model with GPU/
+      auto acceleration → the first transcription after preload is fast (Vulkan
+      sidecar warmed during preload).
+- [ ] PORT-S14 (**W**, CPU perf) Windows CPU Whisper is faster (openmp + Greedy
+      profile) with acceptable accuracy; confirm Apple-Silicon Metal quality is
+      UNCHANGED (still BeamSearch) and the Windows build links OpenMP.
 
 ## Release rule
 
