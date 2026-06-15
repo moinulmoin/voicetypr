@@ -2,10 +2,13 @@
 mod tests {
     use crate::commands::model::{clear_active_download, register_active_download};
     use crate::whisper::manager::{ModelInfo, ModelSize, WhisperManager};
+    use sha2::{Digest, Sha256};
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn test_model_size_validation() {
@@ -173,30 +176,16 @@ mod tests {
         let models_dir = temp_dir.path().join("models");
         std::fs::create_dir_all(&models_dir).unwrap();
 
-        // Create a WhisperManager with known models
-        let manager = WhisperManager::new(models_dir.clone());
+        let mut manager = WhisperManager::new_for_test(models_dir.clone());
 
-        // Create model files for known models only (current catalog)
-        for model_name in ["base.en", "large-v3", "large-v3-turbo"] {
-            let file_path = models_dir.join(format!("{}.bin", model_name));
-            std::fs::write(&file_path, b"dummy model data").unwrap();
-        }
+        std::fs::write(models_dir.join("base.en.bin"), vec![0u8; 1024]).unwrap();
+        std::fs::write(models_dir.join("large-v3.bin"), vec![0u8; 1024]).unwrap();
+        std::fs::write(models_dir.join("unknown.bin"), vec![0u8; 1024]).unwrap();
 
-        // Create a non-model file that should be ignored
-        std::fs::write(models_dir.join("readme.txt"), b"not a model").unwrap();
-
-        // Also create a .bin file that's not a known model - should be ignored
-        std::fs::write(models_dir.join("unknown.bin"), b"unknown model").unwrap();
-
+        manager.refresh_downloaded_status();
         let downloaded = manager.list_downloaded_files();
-
-        // Should only list known models that have .bin files
-        assert_eq!(downloaded.len(), 3);
+        assert_eq!(downloaded.len(), 1);
         assert!(downloaded.contains(&"base.en".to_string()));
-        assert!(downloaded.contains(&"large-v3".to_string()));
-        assert!(downloaded.contains(&"large-v3-turbo".to_string()));
-        assert!(!downloaded.contains(&"readme".to_string()));
-        assert!(!downloaded.contains(&"unknown".to_string()));
     }
 
     #[test]
@@ -259,15 +248,13 @@ mod tests {
 
     #[test]
     fn test_model_validation() {
-        // Test valid model names
-        let valid_models = vec!["base.en", "large-v3", "large-v3-q5_0", "large-v3-turbo"];
+        let valid_models = vec!["base.en", "small.en", "large-v3", "large-v3-turbo"];
 
         for model in &valid_models {
             assert!(valid_models.contains(model));
         }
 
-        // Test invalid model names
-        let invalid_models = vec!["invalid", "large-v2", "tiny.en", "custom"];
+        let invalid_models = vec!["invalid", "large-v2", "tiny.en", "custom", "large-v3-q5_0"];
         for model in &invalid_models {
             assert!(!valid_models.contains(model));
         }
@@ -342,19 +329,142 @@ mod tests {
     }
 
     #[test]
-    fn test_model_urls() {
+    fn test_catalog_uses_pinned_hf_revision_and_sha256() {
         let temp_dir = TempDir::new().unwrap();
         let manager = WhisperManager::new(temp_dir.path().to_path_buf());
         let models = manager.get_models_status();
+        let revision = "5359861c739e955e79d9a303bcbc70fb988958b1";
 
-        // Verify all models have valid Hugging Face URLs
-        for (name, model) in &models {
-            assert!(model.url.starts_with("https://huggingface.co/"));
-            assert!(model.url.contains("whisper.cpp"));
-            assert!(model.url.ends_with(&format!("{}.bin", name)));
+        let expected = [
+            (
+                "base.en",
+                "ggml-base.en.bin",
+                147_964_211,
+                "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+            ),
+            (
+                "small.en",
+                "ggml-small.en.bin",
+                487_614_201,
+                "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+            ),
+            (
+                "large-v3",
+                "ggml-large-v3.bin",
+                3_095_033_483,
+                "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+            ),
+            (
+                "large-v3-turbo",
+                "ggml-large-v3-turbo.bin",
+                1_624_555_275,
+                "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+            ),
+        ];
 
-            // Verify SHA256 field (actually contains SHA1) is 40 characters
-            assert_eq!(model.sha256.len(), 40);
+        assert_eq!(models.len(), expected.len());
+        assert!(!models.contains_key("medium"));
+        assert!(!models.contains_key("large-v3-q5_0"));
+
+        for (name, file_name, size, sha256) in expected {
+            let model = models.get(name).unwrap();
+            assert_eq!(model.size, size);
+            assert_eq!(model.sha256, sha256);
+            assert_eq!(model.sha256.len(), 64);
+            assert!(model.sha256.chars().all(|c| c.is_ascii_hexdigit()));
+            assert_eq!(
+                model.url,
+                format!(
+                    "https://huggingface.co/ggerganov/whisper.cpp/resolve/{}/{}",
+                    revision, file_name
+                )
+            );
         }
+    }
+
+    #[test]
+    fn test_exact_size_status_accepts_only_catalog_size_without_deleting() {
+        let temp_dir = TempDir::new().unwrap();
+        let models_dir = temp_dir.path().join("models");
+        std::fs::create_dir_all(&models_dir).unwrap();
+        let base_path = models_dir.join("base.en.bin");
+
+        let exact_file = std::fs::File::create(&base_path).unwrap();
+        exact_file.set_len(147_964_211).unwrap();
+
+        let mut manager = WhisperManager::new(models_dir.clone());
+        assert!(
+            manager
+                .get_models_status()
+                .get("base.en")
+                .unwrap()
+                .downloaded
+        );
+        assert_eq!(std::fs::metadata(&base_path).unwrap().len(), 147_964_211);
+
+        std::fs::File::create(&base_path)
+            .unwrap()
+            .set_len(148_897_792)
+            .unwrap();
+        manager.refresh_downloaded_status();
+        assert!(
+            !manager
+                .get_models_status()
+                .get("base.en")
+                .unwrap()
+                .downloaded
+        );
+        assert_eq!(std::fs::metadata(&base_path).unwrap().len(), 148_897_792);
+
+        std::fs::File::create(&base_path)
+            .unwrap()
+            .set_len(147_964_210)
+            .unwrap();
+        manager.refresh_downloaded_status();
+        assert!(
+            !manager
+                .get_models_status()
+                .get("base.en")
+                .unwrap()
+                .downloaded
+        );
+        assert_eq!(std::fs::metadata(&base_path).unwrap().len(), 147_964_210);
+    }
+
+    #[tokio::test]
+    async fn test_download_model_file_removes_mismatched_file_before_redownload() {
+        let temp_dir = TempDir::new().unwrap();
+        let models_dir = temp_dir.path().join("models");
+        std::fs::create_dir_all(&models_dir).unwrap();
+        let output_path = models_dir.join("base.en.bin");
+        std::fs::write(&output_path, b"stale file").unwrap();
+
+        let body = vec![42u8; ModelSize::new(10 * 1024 * 1024).unwrap().as_bytes() as usize];
+        let expected_sha256 = format!("{:x}", Sha256::digest(&body));
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/ggml-base.en.bin"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+            .mount(&server)
+            .await;
+
+        let model = ModelInfo {
+            name: "base.en".to_string(),
+            display_name: "Base (English)".to_string(),
+            size: body.len() as u64,
+            url: format!("{}/ggml-base.en.bin", server.uri()),
+            sha256: expected_sha256,
+            downloaded: false,
+            speed_score: 8,
+            accuracy_score: 5,
+            recommended: false,
+        };
+
+        WhisperManager::download_model_file(&model, &output_path, &models_dir, None, |_, _| {})
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(&output_path).unwrap(), body);
     }
 }
