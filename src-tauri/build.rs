@@ -28,9 +28,18 @@ fn main() {
             match output {
                 Ok(output) => {
                     if !output.status.success() {
-                        println!(
-                            "cargo:warning=Swift sidecar build failed: {}",
+                        eprintln!("=== Swift sidecar build FAILED ({}) ===", output.status);
+                        eprintln!(
+                            "--- swift build stdout ---\n{}",
+                            String::from_utf8_lossy(&output.stdout)
+                        );
+                        eprintln!(
+                            "--- swift build stderr ---\n{}",
                             String::from_utf8_lossy(&output.stderr)
+                        );
+                        println!(
+                            "cargo:warning=Swift sidecar build failed ({}); full output above",
+                            output.status
                         );
                         println!("cargo:warning=Continuing build without Parakeet sidecar...");
                     } else {
