@@ -1,13 +1,19 @@
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-interface PillToastPayload {
+export type PillToastAction = "show" | "clear";
+export type PillToastVariant = "info" | "warning";
+
+export interface PillToastPayload {
   id: number;
   message: string;
   duration_ms: number;
+  action?: PillToastAction;
+  variant?: PillToastVariant;
+  persistent?: boolean;
 }
 
-type ToastSeverity = "info" | "success" | "error";
+type ToastSeverity = "info" | "success" | "error" | "warning";
 
 interface ActiveToast {
   id: number;
@@ -19,6 +25,7 @@ const SEVERITY_TREATMENT: Record<ToastSeverity, string> = {
   error: "before:bg-rose-500/80",
   info: "before:bg-sky-500/65",
   success: "before:bg-emerald-500/75",
+  warning: "before:bg-amber-500/80",
 };
 
 function inferSeverity(message: string): ToastSeverity {
@@ -42,10 +49,16 @@ function inferSeverity(message: string): ToastSeverity {
   return "info";
 }
 
+function severityForPayload({ message, variant }: PillToastPayload): ToastSeverity {
+  if (variant === "warning") return "warning";
+  if (variant === "info") return "info";
+  return inferSeverity(message);
+}
+
 export function FeedbackToast() {
   const [toast, setToast] = useState<ActiveToast | null>(null);
   const latestIdRef = useRef(Number.NEGATIVE_INFINITY);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timerRef = useRef<number | null>(null);
 
   const clearTimer = useCallback(() => {
     if (!timerRef.current) return;
@@ -53,19 +66,34 @@ export function FeedbackToast() {
     timerRef.current = null;
   }, []);
 
-  const showMessage = useCallback(
-    ({ duration_ms, id, message }: PillToastPayload) => {
-      if (id < latestIdRef.current) return;
+  const applyPayload = useCallback(
+    (payload: PillToastPayload) => {
+      const action = payload.action ?? "show";
 
-      latestIdRef.current = id;
+      if (action === "clear") {
+        if (payload.id !== latestIdRef.current) return;
+        clearTimer();
+        setToast(null);
+        return;
+      }
+
+      if (payload.id < latestIdRef.current) return;
+
+      latestIdRef.current = payload.id;
       clearTimer();
-      setToast({ id, message, severity: inferSeverity(message) });
+      setToast({
+        id: payload.id,
+        message: payload.message,
+        severity: severityForPayload(payload),
+      });
 
-      timerRef.current = setTimeout(() => {
-        if (latestIdRef.current !== id) return;
+      if (payload.persistent === true) return;
+
+      timerRef.current = window.setTimeout(() => {
+        if (latestIdRef.current !== payload.id) return;
         setToast(null);
         timerRef.current = null;
-      }, duration_ms);
+      }, payload.duration_ms);
     },
     [clearTimer]
   );
@@ -75,7 +103,7 @@ export function FeedbackToast() {
     let unlistenFn: (() => void) | undefined;
 
     void listen<PillToastPayload>("toast", (evt) => {
-      if (isMounted) showMessage(evt.payload);
+      if (isMounted) applyPayload(evt.payload);
     }).then((unlisten) => {
       if (!isMounted) {
         unlisten();
@@ -89,7 +117,7 @@ export function FeedbackToast() {
       unlistenFn?.();
       clearTimer();
     };
-  }, [clearTimer, showMessage]);
+  }, [applyPayload, clearTimer]);
 
   if (!toast) {
     return null;

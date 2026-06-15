@@ -3,6 +3,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::ai::error::{user_facing_message, AiProviderError};
 use crate::audio::recorder::AudioRecorder;
+use crate::audio::silence_detector::SilenceDetectorEvent;
 use crate::commands::settings::{
     get_settings, normalize_final_text_language, normalize_speech_language_for_model,
     normalize_transcription_task, recording_retention_days_from_store, resolve_pill_indicator_mode,
@@ -82,7 +83,21 @@ fn stop_should_reset_to_idle(current: RecordingState) -> bool {
     )
 }
 
-/// Payload for pill toast messages
+#[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PillToastAction {
+    Show,
+    Clear,
+}
+
+#[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PillToastVariant {
+    Info,
+    Warning,
+}
+
+/// Payload for legacy pill toast messages.
 #[derive(serde::Serialize, Clone)]
 pub struct PillToastPayload {
     pub id: u64,
@@ -90,29 +105,61 @@ pub struct PillToastPayload {
     pub duration_ms: u64,
 }
 
-/// Show a toast message on the pill's toast window (above the pill)
-/// This is the single unified API for pill feedback messages.
-/// Uses atomic counter to prevent race conditions with overlapping toasts.
-pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) {
-    let id = TOAST_ID_COUNTER
-        .fetch_add(1, AtomicOrdering::SeqCst)
-        .wrapping_add(1);
+/// Payload emitted to the frontend. Optional fields preserve the legacy
+/// severity-inference path: ordinary `pill_toast` calls emit no explicit variant.
+#[derive(serde::Serialize, Clone)]
+struct PillToastEventPayload {
+    pub id: u64,
+    pub message: String,
+    pub duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<PillToastAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<PillToastVariant>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub persistent: bool,
+}
 
-    // Show toast window
+fn next_toast_id() -> u64 {
+    TOAST_ID_COUNTER
+        .fetch_add(1, AtomicOrdering::SeqCst)
+        .wrapping_add(1)
+}
+
+fn toast_clear_is_current(counter: &AtomicU64, toast_id: u64) -> bool {
+    counter
+        .compare_exchange(
+            toast_id,
+            toast_id.wrapping_add(1),
+            AtomicOrdering::SeqCst,
+            AtomicOrdering::SeqCst,
+        )
+        .is_ok()
+}
+
+fn emit_pill_toast(
+    app: &AppHandle,
+    message: &str,
+    duration_ms: u64,
+    variant: Option<PillToastVariant>,
+    persistent: bool,
+) -> u64 {
+    let id = next_toast_id();
+
     if let Some(toast_window) = app.get_webview_window("toast") {
         let _ = toast_window.show();
 
-        // Backend controls hide timing - only hide if this is still the latest toast
-        let app_clone = app.clone();
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(duration_ms)).await;
-            // Only hide if we're still the latest toast
-            if TOAST_ID_COUNTER.load(AtomicOrdering::SeqCst) == id {
-                if let Some(tw) = app_clone.get_webview_window("toast") {
-                    let _ = tw.hide();
+        if !persistent {
+            let app_clone = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(duration_ms)).await;
+                if TOAST_ID_COUNTER.load(AtomicOrdering::SeqCst) == id {
+                    if let Some(tw) = app_clone.get_webview_window("toast") {
+                        let _ = tw.hide();
+                    }
                 }
-            }
-        });
+            });
+        }
     } else {
         log::warn!(
             "pill_toast: toast window not found, message not shown: {}",
@@ -120,11 +167,62 @@ pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) {
         );
     }
 
-    // Build and emit unified payload
-    let payload = PillToastPayload {
+    let legacy_payload = PillToastPayload {
         id,
         message: message.to_string(),
         duration_ms,
+    };
+    let payload = PillToastEventPayload {
+        id: legacy_payload.id,
+        message: legacy_payload.message,
+        duration_ms: legacy_payload.duration_ms,
+        action: if persistent {
+            Some(PillToastAction::Show)
+        } else {
+            None
+        },
+        variant,
+        persistent,
+    };
+    let _ = app.emit("toast", payload);
+    id
+}
+
+/// Show a toast message on the pill's toast window (above the pill).
+/// Existing call sites intentionally emit no variant, preserving frontend
+/// severity inference.
+pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) -> u64 {
+    emit_pill_toast(app, message, duration_ms, None, false)
+}
+
+pub fn pill_toast_with_variant(
+    app: &AppHandle,
+    message: &str,
+    duration_ms: u64,
+    variant: PillToastVariant,
+) -> u64 {
+    emit_pill_toast(app, message, duration_ms, Some(variant), false)
+}
+
+pub fn pill_toast_persistent(app: &AppHandle, message: &str, variant: PillToastVariant) -> u64 {
+    emit_pill_toast(app, message, 0, Some(variant), true)
+}
+
+pub fn clear_pill_toast(app: &AppHandle, toast_id: u64) {
+    if !toast_clear_is_current(&TOAST_ID_COUNTER, toast_id) {
+        return;
+    }
+
+    if let Some(toast_window) = app.get_webview_window("toast") {
+        let _ = toast_window.hide();
+    }
+    let payload = PillToastEventPayload {
+        id: toast_id,
+        message: String::new(),
+        duration_ms: 0,
+        action: Some(PillToastAction::Clear),
+        variant: None,
+        persistent: false,
     };
 
     let _ = app.emit("toast", payload);
@@ -1047,7 +1145,8 @@ mod tests {
         build_translation_failed_history_metadata, build_writing_history_metadata,
         is_ai_auth_error, is_non_speech_transcript, plan_desktop_writing_success,
         recording_license_state, remote_server_error_pill_message, should_hide_pill_when_idle,
-        should_use_active_remote, stop_should_reset_to_idle, sync_retranscription_failure_metadata,
+        should_use_active_remote, silence_event_runs_in_state, stop_should_reset_to_idle,
+        sync_retranscription_failure_metadata, toast_clear_is_current,
         transcription_watchdog_budget, NormalizedTempFile, RecordingLicenseState,
         StopInFlightGuard, TranscriptionFailure, TranscriptionStatus,
     };
@@ -1059,7 +1158,7 @@ mod tests {
     use crate::RecordingState;
     use reqwest::StatusCode;
     use std::fs;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 
     fn cached_license(status: LicenseState) -> CachedLicense {
@@ -1456,6 +1555,26 @@ mod tests {
         assert!(stop_should_reset_to_idle(RecordingState::Error));
         assert!(!stop_should_reset_to_idle(RecordingState::Stopping));
         assert!(!stop_should_reset_to_idle(RecordingState::Transcribing));
+    }
+
+    #[test]
+    fn stale_clear_pill_toast_cannot_advance_newer_toast_id() {
+        let counter = AtomicU64::new(2);
+
+        assert!(!toast_clear_is_current(&counter, 1));
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+        assert!(toast_clear_is_current(&counter, 2));
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn silence_terminal_events_are_ignored_outside_recording() {
+        assert!(silence_event_runs_in_state(RecordingState::Recording));
+        assert!(!silence_event_runs_in_state(RecordingState::Starting));
+        assert!(!silence_event_runs_in_state(RecordingState::Stopping));
+        assert!(!silence_event_runs_in_state(RecordingState::Transcribing));
+        assert!(!silence_event_runs_in_state(RecordingState::Idle));
+        assert!(!silence_event_runs_in_state(RecordingState::Error));
     }
 
     #[test]
@@ -2468,6 +2587,110 @@ pub(crate) fn clear_pending_stop_after_start(app_state: &AppState) {
         .store(false, std::sync::atomic::Ordering::SeqCst);
 }
 
+fn silence_event_runs_in_state(state: RecordingState) -> bool {
+    matches!(state, RecordingState::Recording)
+}
+
+fn clear_active_silence_toast(app: &AppHandle, active_toast_id: &mut Option<u64>) {
+    if let Some(toast_id) = active_toast_id.take() {
+        clear_pill_toast(app, toast_id);
+    }
+}
+
+async fn stop_recording_after_long_silence(
+    app: AppHandle,
+    state: State<'_, RecorderState>,
+) -> Result<String, String> {
+    stop_recording(app, state).await
+}
+
+fn spawn_silence_event_listener(
+    app: AppHandle,
+    silence_event_rx: std::sync::mpsc::Receiver<SilenceDetectorEvent>,
+) {
+    std::thread::spawn(move || {
+        let mut active_silence_toast_id: Option<u64> = None;
+
+        while let Ok(event) = silence_event_rx.recv() {
+            let current_state = crate::get_recording_state(&app);
+            if !silence_event_runs_in_state(current_state) {
+                clear_active_silence_toast(&app, &mut active_silence_toast_id);
+                break;
+            }
+
+            match event {
+                SilenceDetectorEvent::Clear => {
+                    clear_active_silence_toast(&app, &mut active_silence_toast_id);
+                }
+                SilenceDetectorEvent::DeadMicWarn => {
+                    clear_active_silence_toast(&app, &mut active_silence_toast_id);
+                    active_silence_toast_id = Some(pill_toast_persistent(
+                        &app,
+                        "No audio detected — check your microphone",
+                        PillToastVariant::Warning,
+                    ));
+                }
+                SilenceDetectorEvent::LongSilenceWarn => {
+                    clear_active_silence_toast(&app, &mut active_silence_toast_id);
+                    active_silence_toast_id = Some(pill_toast_persistent(
+                        &app,
+                        "Long silence detected",
+                        PillToastVariant::Warning,
+                    ));
+                }
+                SilenceDetectorEvent::TimeoutWithSpeech => {
+                    clear_active_silence_toast(&app, &mut active_silence_toast_id);
+                    pill_toast_with_variant(
+                        &app,
+                        "Ended after long silence",
+                        1500,
+                        PillToastVariant::Info,
+                    );
+                    let app_for_stop = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let recorder_state = app_for_stop.state::<RecorderState>();
+                        if let Err(e) =
+                            stop_recording_after_long_silence(app_for_stop.clone(), recorder_state)
+                                .await
+                        {
+                            log::error!("Long-silence stop failed: {}", e);
+                        }
+                    });
+                    break;
+                }
+                SilenceDetectorEvent::TimeoutNoSpeech => {
+                    clear_active_silence_toast(&app, &mut active_silence_toast_id);
+                    let app_for_cancel = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        match cancel_recording(app_for_cancel.clone()).await {
+                            Ok(()) => {
+                                pill_toast_with_variant(
+                                    &app_for_cancel,
+                                    "No audio captured",
+                                    1500,
+                                    PillToastVariant::Warning,
+                                );
+                            }
+                            Err(e) => {
+                                log::error!("No-speech timeout cancel failed: {}", e);
+                                pill_toast_with_variant(
+                                    &app_for_cancel,
+                                    "Recording error",
+                                    1500,
+                                    PillToastVariant::Warning,
+                                );
+                            }
+                        }
+                    });
+                    break;
+                }
+            }
+        }
+
+        clear_active_silence_toast(&app, &mut active_silence_toast_id);
+    });
+}
+
 pub(crate) fn ptt_key_released(app_state: &AppState) -> bool {
     let mode = match app_state.recording_mode.lock() {
         Ok(guard) => *guard,
@@ -2707,7 +2930,7 @@ pub async fn start_recording(
         "⏱️ [REC TIMING] acquiring recorder lock (+{}ms)",
         recording_start.elapsed().as_millis()
     );
-    {
+    let (audio_level_rx_to_spawn, silence_event_rx_to_spawn) = {
         let mut recorder = match state.inner().0.lock() {
             Ok(recorder) => recorder,
             Err(e) => {
@@ -2782,8 +3005,8 @@ pub async fn start_recording(
 
         log_file_operation("RECORDING_START", audio_path_str, false, None, None);
 
-        // Start recording and get audio level receiver
-        let audio_level_rx =
+        // Start recording and get side-channel receivers
+        let (audio_level_rx, silence_event_rx) =
             match recorder.start_recording(audio_path_str, selected_microphone.clone()) {
                 Ok(_) => {
                     log::info!(
@@ -2793,8 +3016,9 @@ pub async fn start_recording(
                     // Verify recording actually started
                     let is_recording = recorder.is_recording();
 
-                    // Get the audio level receiver before potentially dropping recorder
-                    let rx = recorder.take_audio_level_receiver();
+                    // Get receivers before potentially dropping recorder
+                    let level_rx = recorder.take_audio_level_receiver();
+                    let silence_rx = recorder.take_silence_event_receiver();
 
                     if !is_recording {
                         drop(recorder); // Release the lock if we're erroring out
@@ -2842,7 +3066,7 @@ pub async fn start_recording(
                         system_monitor::log_resources_before_operation("RECORDING_START");
                     }
 
-                    rx // Return the audio level receiver
+                    (level_rx, silence_rx)
                 }
                 Err(e) => {
                     log_failed("RECORDER_START", &e);
@@ -2884,31 +3108,8 @@ pub async fn start_recording(
 
         // Release the recorder lock after successful start
         drop(recorder);
-
-        // Start audio level monitoring
-        if let Some(audio_level_rx) = audio_level_rx {
-            let app_for_levels = app.clone();
-            // Use a thread instead of tokio spawn for std::sync::mpsc
-            std::thread::spawn(move || {
-                let mut last_emit = std::time::Instant::now();
-                let emit_interval = std::time::Duration::from_millis(100); // Throttle to 10fps
-                let mut last_emitted_level = 0.0f64;
-                const LEVEL_CHANGE_THRESHOLD: f64 = 0.05; // Only emit if change > 5%
-
-                while let Ok(level) = audio_level_rx.recv() {
-                    // Check both time throttling and significant change
-                    let level_changed = (level - last_emitted_level).abs() > LEVEL_CHANGE_THRESHOLD;
-
-                    if last_emit.elapsed() >= emit_interval && level_changed {
-                        // Only emit to pill window - main window doesn't need audio levels
-                        let _ = emit_to_window(&app_for_levels, "pill", "audio-level", level);
-                        last_emit = std::time::Instant::now();
-                        last_emitted_level = level;
-                    }
-                }
-            });
-        }
-    } // MutexGuard dropped here
+        (audio_level_rx, silence_event_rx)
+    }; // MutexGuard dropped here
 
     // Now perform async operations after mutex is released
 
@@ -3019,6 +3220,32 @@ pub async fn start_recording(
             let recorder_state = app_handle.state::<RecorderState>();
             if let Err(e) = stop_recording(app_handle.clone(), recorder_state).await {
                 log::error!("Toggle: pending stop failed: {}", e);
+            }
+        });
+    }
+    if let Some(silence_event_rx) = silence_event_rx_to_spawn {
+        spawn_silence_event_listener(app.clone(), silence_event_rx);
+    }
+
+    if let Some(audio_level_rx) = audio_level_rx_to_spawn {
+        let app_for_levels = app.clone();
+        // Use a thread instead of tokio spawn for std::sync::mpsc
+        std::thread::spawn(move || {
+            let mut last_emit = std::time::Instant::now();
+            let emit_interval = std::time::Duration::from_millis(100); // Throttle to 10fps
+            let mut last_emitted_level = 0.0f64;
+            const LEVEL_CHANGE_THRESHOLD: f64 = 0.05; // Only emit if change > 5%
+
+            while let Ok(level) = audio_level_rx.recv() {
+                // Check both time throttling and significant change
+                let level_changed = (level - last_emitted_level).abs() > LEVEL_CHANGE_THRESHOLD;
+
+                if last_emit.elapsed() >= emit_interval && level_changed {
+                    // Only emit to pill window - main window doesn't need audio levels
+                    let _ = emit_to_window(&app_for_levels, "pill", "audio-level", level);
+                    last_emit = std::time::Instant::now();
+                    last_emitted_level = level;
+                }
             }
         });
     }
@@ -3190,11 +3417,6 @@ pub async fn stop_recording(
             "RECORDING_STOP",
             stop_start.elapsed().as_millis() as u64,
         );
-
-        // Emit pill toast if recording was stopped due to silence
-        if stop_message.contains("silence") {
-            pill_toast(&app, "No sound detected", 1000);
-        }
     } // MutexGuard dropped here BEFORE any await
 
     // Unregister ESC key
