@@ -67,7 +67,7 @@ function getRecommendedActionDescription(action: string): string | undefined {
 
 function getAccelerationGuidance(status: AccelerationStatus | null): string {
   if (!status) {
-    return "VoiceTypr will test GPU acceleration when needed and keep CPU transcription available.";
+    return "Voicetypr will test GPU acceleration when needed and keep CPU transcription available.";
   }
 
   switch (status.diagnostic_code) {
@@ -76,18 +76,18 @@ function getAccelerationGuidance(status: AccelerationStatus | null): string {
     case "vulkan_loader_missing":
     case "vulkan_device_missing":
     case "driver_or_runtime_failed":
-      return "GPU acceleration needs a Vulkan-capable NVIDIA, AMD, or Intel graphics driver. Update or install your graphics driver, then retry Test GPU. VoiceTypr will keep using CPU transcription safely until GPU acceleration is available.";
+      return "GPU acceleration needs a Vulkan-capable NVIDIA, AMD, or Intel graphics driver. Update or install your graphics driver, then retry Test GPU. Voicetypr will keep using CPU transcription safely until GPU acceleration is available.";
     case "sidecar_missing":
     case "sidecar_protocol_error":
-      return "VoiceTypr has a package or runtime issue. Please report this with logs. VoiceTypr will keep using CPU transcription safely.";
+      return "Voicetypr has a package or runtime issue. Please report this with logs. Voicetypr will keep using CPU transcription safely.";
     case "sidecar_timeout":
-      return "The Vulkan helper did not respond in time. VoiceTypr will keep using CPU transcription safely; retry Test GPU after updating your graphics driver.";
+      return "The Vulkan helper did not respond in time. Voicetypr will keep using CPU transcription safely; retry Test GPU after updating your graphics driver.";
     case "model_missing":
-      return "Download or select a local Whisper model before testing GPU acceleration. VoiceTypr will keep using CPU transcription safely.";
+      return "Download or select a local Whisper model before testing GPU acceleration. Voicetypr will keep using CPU transcription safely.";
     default:
       return (
         getRecommendedActionDescription(status.recommended_action) ||
-        "VoiceTypr will keep using CPU transcription safely."
+        "Voicetypr will keep using CPU transcription safely."
       );
   }
 }
@@ -717,7 +717,7 @@ export function GeneralSettings() {
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {accelerationStatus?.message ??
-                      "VoiceTypr will test GPU acceleration when needed."}
+                      "Voicetypr will test GPU acceleration when needed."}
                   </p>
                   {accelerationStatus?.diagnostic_code !== "ready" && (
                     <p className="text-xs text-muted-foreground">
@@ -755,7 +755,7 @@ export function GeneralSettings() {
                     Launch at Startup
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    Automatically start VoiceTypr when you log in
+                    Automatically start Voicetypr when you log in
                   </p>
                 </div>
               </div>

@@ -343,7 +343,7 @@ export class UpdateService {
       this.pendingRelaunch = true;
       this.pendingUpdateVersion = update.version;
       toast.dismiss(toastId);
-      await this.sendSystemNotification('Update Ready', 'VoiceTypr will restart when recording ends');
+      await this.sendSystemNotification('Update Ready', 'Voicetypr will restart when recording ends');
       return;
     }
 
@@ -372,7 +372,7 @@ export class UpdateService {
         await update.downloadAndInstall();
         // Notify if relaunch will be deferred due to active session
         if (this.isSessionActive) {
-          await this.sendSystemNotification('Update Ready', 'VoiceTypr will restart when recording ends');
+          await this.sendSystemNotification('Update Ready', 'Voicetypr will restart when recording ends');
         }
         this.pendingUpdateVersion = update.version;
         await this.performRelaunch();

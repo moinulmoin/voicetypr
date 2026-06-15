@@ -1,5 +1,5 @@
 ; Windows installer hook: VC++ runtime + optional bundled Vulkan Runtime installer.
-; VoiceTypr's main executable is CPU-safe; Vulkan is isolated in a sidecar.
+; Voicetypr's main executable is CPU-safe; Vulkan is isolated in a sidecar.
 
 !include "LogicLib.nsh"
 
@@ -52,7 +52,7 @@
         ${ElseIf} $1 == 1638
             DetailPrint "Vulkan Runtime already installed (newer or same version)"
         ${Else}
-            DetailPrint "Vulkan Runtime installer returned code $1; VoiceTypr will use CPU fallback if GPU acceleration is unavailable"
+            DetailPrint "Vulkan Runtime installer returned code $1; Voicetypr will use CPU fallback if GPU acceleration is unavailable"
         ${EndIf}
 
         Delete "$TEMP\VulkanRT-Installer.exe"

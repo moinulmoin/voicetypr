@@ -117,7 +117,7 @@ export function AboutSection() {
                 <div className="rounded-lg border border-border/40 bg-background/50 p-3">
                   <p className="text-sm font-medium">Updates managed by Microsoft Store</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    VoiceTypr will receive updates through Microsoft Store on this installation.
+                    Voicetypr will receive updates through Microsoft Store on this installation.
                   </p>
                 </div>
               ) : (
@@ -140,7 +140,7 @@ export function AboutSection() {
                         Download and install updates automatically
                       </Label>
                       <p className="text-xs text-muted-foreground">
-                        If off, VoiceTypr only shows an update prompt and waits for you to click Update.
+                        If off, Voicetypr only shows an update prompt and waits for you to click Update.
                       </p>
                     </div>
                     <Switch

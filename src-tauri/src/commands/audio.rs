@@ -2292,7 +2292,7 @@ async fn stop_recording_internal(
                     &app,
                     &audio_path,
                     "No speech recognition models installed",
-                    "Please download at least one speech recognition model from Models to use VoiceTypr.",
+                    "Please download at least one speech recognition model from Models to use Voicetypr.",
                 )
                 .await;
             }

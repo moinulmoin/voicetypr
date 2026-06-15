@@ -285,7 +285,7 @@ describe('UpdateService update consent', () => {
         return {
           channel: 'store_msix',
           is_store_install: true,
-          package_family_name: 'Ideaplexa.VoiceTypr_12345',
+          package_family_name: 'Ideaplexa.Voicetypr_12345',
         };
       }
 

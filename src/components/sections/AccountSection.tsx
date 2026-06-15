@@ -99,7 +99,7 @@ export function AccountSection() {
           <div>
             <h1 className="text-2xl font-semibold">License</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Manage your VoiceTypr license
+              Manage your Voicetypr license
             </p>
           </div>
           {status && status.status === 'licensed' && (
@@ -149,7 +149,7 @@ export function AccountSection() {
                       </div>
                       <div className="flex-1 space-y-1">
                         <p className="text-sm font-medium text-green-900 dark:text-green-100">
-                          VoiceTypr Pro Active
+                          Voicetypr Pro Active
                         </p>
                         {status.license_key && (
                           <p className="text-xs text-green-700 dark:text-green-300 font-mono">

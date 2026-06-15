@@ -560,7 +560,7 @@ fn classify_gpu_error(error: &str) -> GpuDiagnostic {
         return GpuDiagnostic {
             code: "sidecar_missing",
             action: "report_bug",
-            message: "The bundled Vulkan helper is missing or broken. Reinstall VoiceTypr, then report a bug if this continues.",
+            message: "The bundled Vulkan helper is missing or broken. Reinstall Voicetypr, then report a bug if this continues.",
         };
     }
 
@@ -572,7 +572,7 @@ fn classify_gpu_error(error: &str) -> GpuDiagnostic {
         return GpuDiagnostic {
             code: "sidecar_protocol_error",
             action: "report_bug",
-            message: "The Vulkan helper returned an unexpected response. VoiceTypr is using CPU mode; please report this bug.",
+            message: "The Vulkan helper returned an unexpected response. Voicetypr is using CPU mode; please report this bug.",
         };
     }
 
@@ -580,7 +580,7 @@ fn classify_gpu_error(error: &str) -> GpuDiagnostic {
         return GpuDiagnostic {
             code: "sidecar_timeout",
             action: "use_cpu",
-            message: "The Vulkan helper did not respond in time. VoiceTypr is using CPU mode.",
+            message: "The Vulkan helper did not respond in time. Voicetypr is using CPU mode.",
         };
     }
 
@@ -611,14 +611,14 @@ fn classify_gpu_error(error: &str) -> GpuDiagnostic {
         return GpuDiagnostic {
             code: "driver_or_runtime_failed",
             action: "update_graphics_driver",
-            message: "Vulkan GPU acceleration failed to start. Install or update your NVIDIA, AMD, or Intel graphics driver. VoiceTypr is using CPU mode.",
+            message: "Vulkan GPU acceleration failed to start. Install or update your NVIDIA, AMD, or Intel graphics driver. Voicetypr is using CPU mode.",
         };
     }
 
     GpuDiagnostic {
         code: "gpu_failed",
         action: "use_cpu",
-        message: "GPU acceleration failed. VoiceTypr is using CPU mode. Retry GPU after updating your graphics driver, or report this with logs if it continues.",
+        message: "GPU acceleration failed. Voicetypr is using CPU mode. Retry GPU after updating your graphics driver, or report this with logs if it continues.",
     }
 }
 
@@ -764,16 +764,16 @@ mod tests {
     #[test]
     fn sidecar_search_dirs_do_not_traverse_parent_directories() {
         let dirs = sidecar_search_dirs(
-            Some(PathBuf::from("/opt/VoiceTypr/resources")),
-            Some(PathBuf::from("/opt/VoiceTypr/voicetypr.exe")),
+            Some(PathBuf::from("/opt/Voicetypr/resources")),
+            Some(PathBuf::from("/opt/Voicetypr/voicetypr.exe")),
             None,
         );
 
-        assert!(dirs.contains(&PathBuf::from("/opt/VoiceTypr/resources")));
+        assert!(dirs.contains(&PathBuf::from("/opt/Voicetypr/resources")));
         assert!(dirs.contains(&PathBuf::from(
-            "/opt/VoiceTypr/resources/sidecar/whisper-vulkan/dist"
+            "/opt/Voicetypr/resources/sidecar/whisper-vulkan/dist"
         )));
-        assert!(dirs.contains(&PathBuf::from("/opt/VoiceTypr")));
+        assert!(dirs.contains(&PathBuf::from("/opt/Voicetypr")));
         assert!(!dirs.contains(&PathBuf::from("/opt")));
         assert!(!dirs.contains(&PathBuf::from("/")));
     }

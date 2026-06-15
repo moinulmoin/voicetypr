@@ -180,8 +180,8 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           mkdir -p artifacts
           cp src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg artifacts/
-          cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz "artifacts/VoiceTypr_${VERSION}_aarch64.app.tar.gz"
-          cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz.sig "artifacts/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig"
+          cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz "artifacts/Voicetypr_${VERSION}_aarch64.app.tar.gz"
+          cp src-tauri/target/aarch64-apple-darwin/release/bundle/macos/app.tar.gz.sig "artifacts/Voicetypr_${VERSION}_aarch64.app.tar.gz.sig"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -296,8 +296,8 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           mkdir -p artifacts
           cp src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg artifacts/
-          cp src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz "artifacts/VoiceTypr_${VERSION}_x86_64.app.tar.gz"
-          cp src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz.sig "artifacts/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig"
+          cp src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz "artifacts/Voicetypr_${VERSION}_x86_64.app.tar.gz"
+          cp src-tauri/target/x86_64-apple-darwin/release/bundle/macos/app.tar.gz.sig "artifacts/Voicetypr_${VERSION}_x86_64.app.tar.gz.sig"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -466,12 +466,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           $installer = Get-ChildItem "$env:CARGO_TARGET_DIR\release\bundle\nsis\*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $installer) { throw "No NSIS installer found" }
-          Copy-Item $installer.FullName "artifacts/VoiceTypr_${version}_x64-setup.exe"
+          Copy-Item $installer.FullName "artifacts/Voicetypr_${version}_x64-setup.exe"
           $sig = "$($installer.FullName).sig"
           if (-not (Test-Path $sig)) {
             throw "Missing installer signature: $sig"
           }
-          Copy-Item $sig "artifacts/VoiceTypr_${version}_x64-setup.exe.sig"
+          Copy-Item $sig "artifacts/Voicetypr_${version}_x64-setup.exe.sig"
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -576,27 +576,27 @@ jobs:
           VERSION="${{ needs.prepare.outputs.version }}"
 
           # macOS aarch64
-          cp artifacts/macos-aarch64/*.dmg "release/VoiceTypr_${VERSION}_aarch64.dmg"
-          cp artifacts/macos-aarch64/VoiceTypr_${VERSION}_aarch64.app.tar.gz "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz"
-          cp artifacts/macos-aarch64/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig"
+          cp artifacts/macos-aarch64/*.dmg "release/Voicetypr_${VERSION}_aarch64.dmg"
+          cp artifacts/macos-aarch64/Voicetypr_${VERSION}_aarch64.app.tar.gz "release/Voicetypr_${VERSION}_aarch64.app.tar.gz"
+          cp artifacts/macos-aarch64/Voicetypr_${VERSION}_aarch64.app.tar.gz.sig "release/Voicetypr_${VERSION}_aarch64.app.tar.gz.sig"
 
           # macOS x86_64
-          cp artifacts/macos-x86_64/*.dmg "release/VoiceTypr_${VERSION}_x86_64.dmg"
-          cp artifacts/macos-x86_64/VoiceTypr_${VERSION}_x86_64.app.tar.gz "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz"
-          cp artifacts/macos-x86_64/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig"
+          cp artifacts/macos-x86_64/*.dmg "release/Voicetypr_${VERSION}_x86_64.dmg"
+          cp artifacts/macos-x86_64/Voicetypr_${VERSION}_x86_64.app.tar.gz "release/Voicetypr_${VERSION}_x86_64.app.tar.gz"
+          cp artifacts/macos-x86_64/Voicetypr_${VERSION}_x86_64.app.tar.gz.sig "release/Voicetypr_${VERSION}_x86_64.app.tar.gz.sig"
 
           # Windows x64 (CPU-safe main app with bundled optional Vulkan sidecar)
-          cp artifacts/windows-x64/VoiceTypr_${VERSION}_x64-setup.exe "release/VoiceTypr_${VERSION}_x64-setup.exe"
-          cp artifacts/windows-x64/VoiceTypr_${VERSION}_x64-setup.exe.sig "release/VoiceTypr_${VERSION}_x64-setup.exe.sig"
+          cp artifacts/windows-x64/Voicetypr_${VERSION}_x64-setup.exe "release/Voicetypr_${VERSION}_x64-setup.exe"
+          cp artifacts/windows-x64/Voicetypr_${VERSION}_x64-setup.exe.sig "release/Voicetypr_${VERSION}_x64-setup.exe.sig"
 
       - name: Generate latest.json
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
           TAG="${{ needs.prepare.outputs.tag }}"
 
-          AARCH64_SIG=$(cat "release/VoiceTypr_${VERSION}_aarch64.app.tar.gz.sig" | tr -d '\n')
-          X86_64_SIG=$(cat "release/VoiceTypr_${VERSION}_x86_64.app.tar.gz.sig" | tr -d '\n')
-          WINDOWS_SIG=$(cat "release/VoiceTypr_${VERSION}_x64-setup.exe.sig" | tr -d '\n')
+          AARCH64_SIG=$(cat "release/Voicetypr_${VERSION}_aarch64.app.tar.gz.sig" | tr -d '\n')
+          X86_64_SIG=$(cat "release/Voicetypr_${VERSION}_x86_64.app.tar.gz.sig" | tr -d '\n')
+          WINDOWS_SIG=$(cat "release/Voicetypr_${VERSION}_x64-setup.exe.sig" | tr -d '\n')
 
           if [ -z "$AARCH64_SIG" ] || [ -z "$X86_64_SIG" ] || [ -z "$WINDOWS_SIG" ]; then
             echo "::error::One or more signature files are missing or empty"
@@ -608,11 +608,11 @@ jobs:
             --arg notes "See the release notes for $TAG" \
             --arg pub_date "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
             --arg aarch64_sig "$AARCH64_SIG" \
-            --arg aarch64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/VoiceTypr_${VERSION}_aarch64.app.tar.gz" \
+            --arg aarch64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/Voicetypr_${VERSION}_aarch64.app.tar.gz" \
             --arg x86_64_sig "$X86_64_SIG" \
-            --arg x86_64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/VoiceTypr_${VERSION}_x86_64.app.tar.gz" \
+            --arg x86_64_url "https://github.com/${{ github.repository }}/releases/download/$TAG/Voicetypr_${VERSION}_x86_64.app.tar.gz" \
             --arg windows_sig "$WINDOWS_SIG" \
-            --arg windows_url "https://github.com/${{ github.repository }}/releases/download/$TAG/VoiceTypr_${VERSION}_x64-setup.exe" \
+            --arg windows_url "https://github.com/${{ github.repository }}/releases/download/$TAG/Voicetypr_${VERSION}_x64-setup.exe" \
             '{
               version: $version,
               notes: $notes,
@@ -628,7 +628,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
-          name: VoiceTypr ${{ needs.prepare.outputs.tag }}
+          name: Voicetypr ${{ needs.prepare.outputs.tag }}
           draft: true
           generate_release_notes: true
           files: release/*

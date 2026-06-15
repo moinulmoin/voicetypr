@@ -1,7 +1,7 @@
 # Plan: Report Bug dialog with latest log context
 
 ## Overview
-Add a bottom-left Report Bug action that opens an in-app dialog. The dialog collects an optional name, optional email, and required message, then builds a support report containing clear system information and the latest app log excerpt. Because this repo currently has no private bug-report API endpoint and the existing GitHub issue path is public, this PR uses an email addressed to VoiceTypr Support plus a copy-report fallback; a direct-to-maintainer submit flow should be a follow-up web/API PR.
+Add a bottom-left Report Bug action that opens an in-app dialog. The dialog collects an optional name, optional email, and required message, then builds a support report containing clear system information and the latest app log excerpt. Because this repo currently has no private bug-report API endpoint and the existing GitHub issue path is public, this PR uses an email addressed to Voicetypr Support plus a copy-report fallback; a direct-to-maintainer submit flow should be a follow-up web/API PR.
 
 ---
 
@@ -10,7 +10,7 @@ Add a bottom-left Report Bug action that opens an in-app dialog. The dialog coll
 - Include necessary system info and latest app log context by default, with clear copy explaining what is included.
 - Sanitize and size-bound the latest log before exposing it to the frontend.
 - Preserve the existing crash-report GitHub flow unless a small shared utility extraction is needed.
-- Do not add a public GitHub issue flow for manual reports, because reports should come privately to VoiceTypr support.
+- Do not add a public GitHub issue flow for manual reports, because reports should come privately to Voicetypr support.
 - Do not add a server endpoint in this PR; no private endpoint exists in the desktop repo or sibling web API routes.
 
 ---
@@ -36,7 +36,7 @@ Add a bottom-left Report Bug action that opens an in-app dialog. The dialog coll
 
 ## Key Technical Decisions
 - **Manual Report Bug is a dialog action, not a tab.** It belongs in the bottom-left group and should not change `activeSection`.
-- **Email to support is the submission path for this PR.** It avoids public GitHub exposure and avoids inventing an unavailable backend. The dialog labels this as emailing VoiceTypr Support so the user understands where the report goes.
+- **Email to support is the submission path for this PR.** It avoids public GitHub exposure and avoids inventing an unavailable backend. The dialog labels this as emailing Voicetypr Support so the user understands where the report goes.
 - **Backend returns a bounded latest-log excerpt, not an arbitrary file read.** The command should select the newest `voicetypr-*.log`, bound bytes/lines, redact defensive common secrets/paths, and return metadata so the UI can explain what is included.
 - **Frontend report builder centralizes system info.** Reuse the crash-report style data gathering without requiring an `Error` object.
 
@@ -125,7 +125,7 @@ Add a bottom-left Report Bug action that opens an in-app dialog. The dialog coll
 **Approach:**
 - Add a `Report Bug` bottom action with `Bug` icon that opens a local dialog.
 - Dialog validates required message, gathers report data on submit/copy, opens an email compose URL to `support@voicetypr.com`, and offers Copy Report.
-- Include concise copy: “VoiceTypr will include your system info and the latest app log excerpt, then open an email addressed to VoiceTypr Support so you can send it directly to us.”
+- Include concise copy: “Voicetypr will include your system info and the latest app log excerpt, then open an email addressed to Voicetypr Support so you can send it directly to us.”
 - Avoid marking a nav section active.
 
 **Patterns to follow:**
@@ -171,4 +171,4 @@ Add a bottom-left Report Bug action that opens an in-app dialog. The dialog coll
 - Desktop follow-up: replace the email button with `Submit Report`, POST to the endpoint, show truthful success/failure, and keep Copy Report/email fallback for endpoint outages.
 
 ## Documentation / Operational Notes
-- This PR should mention that reports include the latest log excerpt and are addressed to VoiceTypr Support.
+- This PR should mention that reports include the latest log excerpt and are addressed to Voicetypr Support.

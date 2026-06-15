@@ -69,7 +69,7 @@ Remove-Item $StageDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $AssetsDir | Out-Null
 
 $MainExe = Join-Path $TargetDir "release\voicetypr.exe"
-if (-not (Test-Path $MainExe)) { throw "VoiceTypr release binary not found: $MainExe" }
+if (-not (Test-Path $MainExe)) { throw "Voicetypr release binary not found: $MainExe" }
 Copy-Item $MainExe (Join-Path $StageDir "voicetypr.exe") -Force
 
 $Sidecars = @(
@@ -118,7 +118,7 @@ $Utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
 [System.IO.File]::WriteAllText($ManifestDest, $Manifest, $Utf8NoBom)
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $OutputPath = Join-Path $RepoRoot "target\store-msix\VoiceTypr_${PackageVersion}_x64.msix"
+    $OutputPath = Join-Path $RepoRoot "target\store-msix\Voicetypr_${PackageVersion}_x64.msix"
 } elseif (-not [System.IO.Path]::IsPathRooted($OutputPath)) {
     $OutputPath = Join-Path $RepoRoot $OutputPath
 }

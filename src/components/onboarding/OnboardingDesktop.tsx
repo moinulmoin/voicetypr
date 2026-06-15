@@ -308,7 +308,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
             <div className="w-full max-w-2xl mx-auto animate-fade-in">
               <div className="text-center space-y-6">
                 <div className="space-y-2">
-                  <h1 className="text-4xl font-bold">Welcome to VoiceTypr</h1>
+                  <h1 className="text-4xl font-bold">Welcome to Voicetypr</h1>
                   <p className="text-lg text-muted-foreground max-w-lg mx-auto">
                     Write 5x faster with your voice
                   </p>

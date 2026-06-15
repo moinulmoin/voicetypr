@@ -466,7 +466,7 @@ mod event_emission_tests {
                 json!({
                     "type": "permission-needed",
                     "permission": "microphone",
-                    "message": "VoiceTypr needs microphone access to record audio.",
+                    "message": "Voicetypr needs microphone access to record audio.",
                     "action": {
                         "type": "request-permission",
                         "label": "Grant Access"

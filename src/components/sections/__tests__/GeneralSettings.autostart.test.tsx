@@ -306,7 +306,7 @@ describe('GeneralSettings autostart via backend commands', () => {
       ).toBeInTheDocument();
     });
     expect(
-      screen.getByText(/VoiceTypr will keep using CPU transcription safely/),
+      screen.getByText(/Voicetypr will keep using CPU transcription safely/),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /check status/i }));

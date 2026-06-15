@@ -357,7 +357,7 @@ export function HelpSection() {
       issue: "Global hotkey doesn't trigger recording",
       solution:
         osPlatform === "windows"
-          ? "Use Test Hotkey to confirm Windows detects the shortcut. If it fails, try another combination and allow VoiceTypr in your security or antivirus software."
+          ? "Use Test Hotkey to confirm Windows detects the shortcut. If it fails, try another combination and allow Voicetypr in your security or antivirus software."
           : osPlatform === "macos"
             ? "Use Test Hotkey to confirm macOS detects the shortcut. If it fails, try another combination and check macOS Keyboard Shortcuts for conflicts."
             : "Use Test Hotkey to confirm shortcut input.",
@@ -391,7 +391,7 @@ export function HelpSection() {
   };
 
   const handleEmailSupport = () => {
-    const subject = "VoiceTypr Support Request";
+    const subject = "Voicetypr Support Request";
     const body = `
 ${diagnostics}
 
@@ -807,7 +807,7 @@ Actual behavior:
 
           <div className="pt-4">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>VoiceTypr v{appVersion}</span>
+              <span>Voicetypr v{appVersion}</span>
               <span>{platformName}</span>
             </div>
           </div>

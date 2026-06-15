@@ -299,7 +299,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         )?)
     };
     let separator2 = PredefinedMenuItem::separator(app)?;
-    let quit_i = MenuItem::with_id(app, "quit", "Quit VoiceTypr", true, None::<&str>)?;
+    let quit_i = MenuItem::with_id(app, "quit", "Quit Voicetypr", true, None::<&str>)?;
 
     let mut menu_builder = MenuBuilder::new(app);
 

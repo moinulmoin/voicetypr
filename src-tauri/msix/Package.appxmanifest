@@ -12,7 +12,7 @@
     ProcessorArchitecture="x64" />
 
   <Properties>
-    <DisplayName>VoiceTypr</DisplayName>
+    <DisplayName>Voicetypr</DisplayName>
     <PublisherDisplayName>Ideaplexa LLC</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -26,9 +26,9 @@
   </Resources>
 
   <Applications>
-    <Application Id="VoiceTypr" Executable="voicetypr.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="Voicetypr" Executable="voicetypr.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="VoiceTypr"
+        DisplayName="Voicetypr"
         Description="Offline voice transcription for Windows."
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"

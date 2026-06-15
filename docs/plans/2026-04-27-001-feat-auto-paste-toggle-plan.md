@@ -10,7 +10,7 @@ origin: https://github.com/moinulmoin/voicetypr/issues/74
 
 ## Overview
 
-Add a user-facing setting that controls whether VoiceTypr automatically inserts completed transcriptions into the focused app. The default remains enabled so existing users keep current behavior. When disabled, VoiceTypr should still complete transcription, run formatting, save history, and leave the transcript available in the clipboard for manual paste without sending paste keystrokes to the current focused window.
+Add a user-facing setting that controls whether Voicetypr automatically inserts completed transcriptions into the focused app. The default remains enabled so existing users keep current behavior. When disabled, Voicetypr should still complete transcription, run formatting, save history, and leave the transcript available in the clipboard for manual paste without sending paste keystrokes to the current focused window.
 
 ## Problem Frame
 

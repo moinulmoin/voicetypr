@@ -229,7 +229,7 @@ export function AdvancedSection() {
                 <div className="pt-3">
                   <p className="text-sm font-medium mb-1">Reset App Data</p>
                   <p className="text-xs text-muted-foreground mb-2">
-                    Completely reset VoiceTypr to its initial state
+                    Completely reset Voicetypr to its initial state
                   </p>
                   <ul className="text-xs text-muted-foreground list-disc list-inside mb-3 space-y-0.5">
                     <li>Delete all transcription history</li>
@@ -243,7 +243,7 @@ export function AdvancedSection() {
                     disabled={isResetting}
                     onClick={async () => {
                       const confirmed = await ask(
-                        "This action cannot be undone. This will permanently delete all your VoiceTypr data.\n\nThe app will restart after reset.\n\nAre you absolutely sure?",
+                        "This action cannot be undone. This will permanently delete all your Voicetypr data.\n\nThe app will restart after reset.\n\nAre you absolutely sure?",
                         {
                           title: "Reset App Data",
                           okLabel: "Reset Everything",

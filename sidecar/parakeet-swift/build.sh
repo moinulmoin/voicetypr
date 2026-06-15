@@ -2,7 +2,7 @@
 set -e
 
 # Swift Parakeet Sidecar Build Script
-# Builds the Swift sidecar binary for VoiceTypr following Tauri v2 sidecar conventions
+# Builds the Swift sidecar binary for Voicetypr following Tauri v2 sidecar conventions
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIST_DIR="$SCRIPT_DIR/dist"

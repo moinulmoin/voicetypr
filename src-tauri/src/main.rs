@@ -3,7 +3,7 @@
 
 fn main() {
     if let Err(e) = voicetypr_lib::run() {
-        eprintln!("VoiceTypr failed to start: {}", e);
+        eprintln!("Voicetypr failed to start: {}", e);
         std::process::exit(1);
     }
 }
