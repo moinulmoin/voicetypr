@@ -19,7 +19,7 @@ use std::os::windows::process::CommandExt as _;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
-const SIDECAR_ABORT_ERROR: &str = "Vulkan sidecar request aborted";
+pub(crate) const SIDECAR_ABORT_ERROR: &str = "Vulkan sidecar request aborted";
 const DEFAULT_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(180);
 const MIN_TRANSCRIPTION_TIMEOUT_SECS: u64 = 180;
 const MAX_TRANSCRIPTION_TIMEOUT_SECS: u64 = 30 * 60;
@@ -473,7 +473,11 @@ impl GpuSidecarClient {
                 Err(error)
             }
             Err(error) => {
-                self.record_gpu_error(mode, &error).await;
+                // An intentional abort (user cancel / watchdog) is not a GPU fault —
+                // recording it would wrongly mark GPU unavailable for later recordings.
+                if error != SIDECAR_ABORT_ERROR {
+                    self.record_gpu_error(mode, &error).await;
+                }
                 Err(error)
             }
         }

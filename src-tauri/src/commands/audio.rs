@@ -937,9 +937,14 @@ where
 
             match gpu_result {
                 Ok(output) => return Ok(output),
-                Err(error) if error == "Transcription cancelled" => {
+                Err(error)
+                    if error == "Transcription cancelled"
+                        || error == crate::whisper::gpu_sidecar::SIDECAR_ABORT_ERROR =>
+                {
+                    // User cancel / watchdog abort: not a GPU fault. Surface the
+                    // canonical cancellation — no CPU re-run, no GPU-status change.
                     gpu_client.abort_active_process().await;
-                    return Err(error);
+                    return Err("Transcription cancelled".to_string());
                 }
                 Err(error) => {
                     preserve_gpu_status = true;
