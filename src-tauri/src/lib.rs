@@ -93,6 +93,7 @@ use commands::{
     settings::*,
     shortcuts::{get_shortcut_settings, list_shortcut_actions, update_shortcut_settings},
     stt::{clear_stt_key_cache, validate_stt_key},
+    system_info::get_system_specs,
     text::*,
     utils::export_transcriptions,
     window::*,
@@ -1334,6 +1335,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_autostart_status,
             set_autostart,
             get_device_id,
+            get_system_specs,
             // Remote transcription commands
             refresh_active_remote_server_status,
             get_recognition_availability_snapshot,
