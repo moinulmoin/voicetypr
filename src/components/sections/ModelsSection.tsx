@@ -61,6 +61,8 @@ interface ModelsSectionProps {
   downloadPhases?: Record<string, string>;
   verifyingModels: Set<string>;
   currentModel?: string;
+  downloadErrors?: Record<string, string>;
+  isLoading?: boolean;
   onDownload: (modelName: string) => Promise<void> | void;
   onDelete: (modelName: string) => Promise<void> | void;
   onCancelDownload: (modelName: string) => Promise<void> | void;
@@ -91,6 +93,8 @@ export function ModelsSection({
   downloadPhases = {},
   verifyingModels,
   currentModel,
+  downloadErrors = {},
+  isLoading = false,
   onDownload,
   onDelete,
   onCancelDownload,
@@ -765,6 +769,7 @@ export function ModelsSection({
                       downloadProgress={downloadProgress[name]}
                       downloadPhase={downloadPhases[name]}
                       isVerifying={verifyingModels.has(name)}
+                      downloadError={downloadErrors[name]}
                       onDownload={onDownload}
                       onDelete={onDelete}
                       onCancelDownload={onCancelDownload}
@@ -819,6 +824,7 @@ export function ModelsSection({
                         model={model}
                         downloadProgress={downloadProgress[name]}
                         isVerifying={verifyingModels.has(name)}
+                        downloadError={downloadErrors[name]}
                         downloadPhase={downloadPhases[name]}
                         onDownload={onDownload}
                         onDelete={onDelete}
@@ -940,7 +946,24 @@ export function ModelsSection({
               )}
             </section>
 
-            {availableToUse.length === 0 &&
+            {isLoading &&
+              availableToUse.length === 0 &&
+              availableToSetup.length === 0 && (
+                <Empty className="border border-border/60 bg-card/70 py-12">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <Spinner className="size-5" />
+                    </EmptyMedia>
+                    <EmptyTitle>Loading models</EmptyTitle>
+                    <EmptyDescription>
+                      Checking available transcription sources.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              )}
+
+            {!isLoading &&
+              availableToUse.length === 0 &&
               availableToSetup.length === 0 &&
               remoteServers.length === 0 && (
                 <Empty className="border border-border/60 bg-card/70 py-12">

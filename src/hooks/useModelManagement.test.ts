@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { useModelManagement } from './useModelManagement';
 
 const mockInvoke = vi.fn();
-const eventHandlers = new Map<string, (payload: any) => void | Promise<void>>();
+const eventHandlers = new Map<string, (payload: unknown) => void | Promise<void>>();
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
@@ -28,7 +28,7 @@ vi.mock('sonner', () => ({
 
 vi.mock('./useEventCoordinator', () => ({
   useEventCoordinator: () => ({
-    registerEvent: vi.fn(async (eventName: string, handler: (payload: any) => void | Promise<void>) => {
+    registerEvent: vi.fn(async (eventName: string, handler: (payload: unknown) => void | Promise<void>) => {
       eventHandlers.set(eventName, handler);
       return () => {
         eventHandlers.delete(eventName);
@@ -50,7 +50,7 @@ const parakeetModel = {
   engine: 'parakeet',
 };
 
-const emitModelEvent = async (eventName: string, payload: any) => {
+const emitModelEvent = async (eventName: string, payload: unknown) => {
   const handler = eventHandlers.get(eventName);
   expect(handler).toBeDefined();
   await handler?.(payload);
@@ -116,7 +116,7 @@ describe('useModelManagement', () => {
     expect(result.current.downloadProgress).not.toHaveProperty('parakeet-tdt-0.6b-v3');
   });
 
-  it('suppresses a cancelled request without hiding a later retry success', async () => {
+  it('keeps cancellation active until acknowledgement and ignores stale success', async () => {
     const { result } = renderHook(() => useModelManagement());
 
     await waitFor(() => {
@@ -132,25 +132,29 @@ describe('useModelManagement', () => {
 
     await act(async () => {
       await result.current.cancelDownload('parakeet-tdt-0.6b-v3');
-    });
-
-    await act(async () => {
       await result.current.downloadModel('parakeet-tdt-0.6b-v3');
     });
-    const retryRequestId = getDownloadRequestId(1);
+
+    expect(mockInvoke.mock.calls.filter(([command]) => command === 'download_model')).toHaveLength(1);
+    expect(toast.info).toHaveBeenCalledWith('Parakeet V3 is already downloading');
 
     await act(async () => {
-      await emitModelEvent('download-cancelled', {
+      await emitModelEvent('model-downloaded', {
         model: 'parakeet-tdt-0.6b-v3',
         requestId: cancelledRequestId,
       });
-      await emitModelEvent('model-downloaded', {
+      await emitModelEvent('download-cancelled', {
         model: 'parakeet-tdt-0.6b-v3',
         requestId: cancelledRequestId,
       });
     });
 
     expect(toast.success).not.toHaveBeenCalledWith('Parakeet V3 downloaded successfully');
+
+    await act(async () => {
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
+    });
+    const retryRequestId = getDownloadRequestId(1);
 
     await act(async () => {
       await emitModelEvent('model-downloaded', {
@@ -160,6 +164,38 @@ describe('useModelManagement', () => {
     });
 
     expect(toast.success).toHaveBeenCalledWith('Parakeet V3 downloaded successfully');
+  });
+
+  it('records download errors per model and clears verifying state', async () => {
+    const { result } = renderHook(() => useModelManagement());
+
+    await waitFor(() => {
+      expect(result.current.models['parakeet-tdt-0.6b-v3']).toBeDefined();
+      expect(eventHandlers.has('model-verifying')).toBe(true);
+      expect(eventHandlers.has('download-error')).toBe(true);
+    });
+
+    await act(async () => {
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
+    });
+    const requestId = getDownloadRequestId(0);
+
+    await act(async () => {
+      await emitModelEvent('model-verifying', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId,
+      });
+      await emitModelEvent('download-error', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId,
+        error: 'verification_failed',
+      });
+    });
+
+    expect(result.current.downloadErrors['parakeet-tdt-0.6b-v3']).toBe('verification_failed');
+    expect(result.current.downloadProgress).not.toHaveProperty('parakeet-tdt-0.6b-v3');
+    expect(result.current.downloadPhases).not.toHaveProperty('parakeet-tdt-0.6b-v3');
+    expect(result.current.verifyingModels.has('parakeet-tdt-0.6b-v3')).toBe(false);
   });
 
   it('does not let an old verification timer hide a retry progress update', async () => {
@@ -184,6 +220,10 @@ describe('useModelManagement', () => {
         requestId: staleRequestId,
       });
       await result.current.cancelDownload('parakeet-tdt-0.6b-v3');
+      await emitModelEvent('download-cancelled', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId: staleRequestId,
+      });
       await result.current.downloadModel('parakeet-tdt-0.6b-v3');
     });
     const retryRequestId = getDownloadRequestId(1);
@@ -207,5 +247,47 @@ describe('useModelManagement', () => {
 
     expect(result.current.downloadProgress['parakeet-tdt-0.6b-v3']).toBe(25);
     expect(result.current.downloadPhases['parakeet-tdt-0.6b-v3']).toBe('downloading 1/4');
+  });
+
+  it('does not double-handle a failure delivered via both the command rejection and the download-error event', async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'get_model_status') {
+        return Promise.resolve({ models: [parakeetModel] });
+      }
+      if (command === 'download_model') {
+        return Promise.reject(new Error('verification_failed'));
+      }
+      return Promise.resolve(null);
+    });
+
+    const { result } = renderHook(() => useModelManagement());
+
+    await waitFor(() => {
+      expect(result.current.models['parakeet-tdt-0.6b-v3']).toBeDefined();
+      expect(eventHandlers.has('download-error')).toBe(true);
+    });
+
+    await act(async () => {
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
+    });
+
+    const requestId = getDownloadRequestId(0);
+
+    // The command rejection handles the failure first: exactly one error toast.
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledTimes(1);
+    });
+
+    // The backend also emits download-error for the SAME request; it must NOT toast again.
+    await act(async () => {
+      await emitModelEvent('download-error', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId,
+        error: 'verification_failed',
+      });
+    });
+
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(result.current.downloadErrors['parakeet-tdt-0.6b-v3']).toBeTruthy();
   });
 });

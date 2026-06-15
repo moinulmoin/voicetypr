@@ -1,4 +1,4 @@
-import { CheckCircle, Download, HardDrive, Star, Trash2, X, Zap } from 'lucide-react';
+import { AlertCircle, CheckCircle, Download, HardDrive, Star, Trash2, X, Zap } from 'lucide-react';
 import { ModelInfo, isLocalModel } from '../types';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -14,6 +14,7 @@ interface ModelCardProps {
   downloadProgress?: number;
   downloadPhase?: string;
   isVerifying?: boolean;
+  downloadError?: string;
   isSelected?: boolean;
   onDownload: (name: string) => void;
   onSelect: (name: string) => void;
@@ -28,6 +29,7 @@ export const ModelCard = function ModelCard({
   model,
   downloadProgress,
   downloadPhase,
+  downloadError,
   isVerifying = false,
   isSelected = false,
   onDownload,
@@ -50,8 +52,9 @@ export const ModelCard = function ModelCard({
       : `${Math.round(sizeInMB)} MB`;
   };
 
-  // Model is usable if downloaded
-  const isUsable = model.downloaded;
+  // Model is usable if fully downloaded and no setup/repair is required.
+  const isUsable = model.downloaded && !model.requires_setup;
+  const showDownloadError = Boolean(downloadError) && !isUsable && downloadProgress === undefined && !isVerifying;
   const downloadLabel = downloadPhase
     ? downloadPhase.charAt(0).toUpperCase() + downloadPhase.slice(1)
     : "Downloading";
@@ -196,6 +199,12 @@ export const ModelCard = function ModelCard({
           )}
         </div>
       </div>
+      {showDownloadError ? (
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+          <p className="min-w-0">{downloadError}</p>
+        </div>
+      ) : null}
     </Card>
   );
 };

@@ -18,6 +18,9 @@ const isDownloadCancellation = (error: unknown) =>
   String(error).toLowerCase().includes("cancelled") ||
   String(error).toLowerCase().includes("canceled");
 
+const getErrorText = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
 const createDownloadRequestId = () => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -88,9 +91,41 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   const [verifyingModels, setVerifyingModels] = useState<Set<string>>(
     new Set(),
   );
+  const [downloadErrors, setDownloadErrors] = useState<Record<string, string>>({});
 
   // Removed selectedModel state - now using settings.current_model directly
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const clearDownloadState = useCallback((modelName: string) => {
+    activeDownloads.current.delete(modelName);
+    activeDownloadRequests.current.delete(modelName);
+    setDownloadProgress((prev) => {
+      const newProgress = { ...prev };
+      delete newProgress[modelName];
+      return newProgress;
+    });
+    setDownloadPhases((prev) => {
+      const newPhases = { ...prev };
+      delete newPhases[modelName];
+      return newPhases;
+    });
+    setVerifyingModels((prev) => {
+      const newSet = new Set(prev);
+      newSet.delete(modelName);
+      return newSet;
+    });
+  }, []);
+
+  const clearDownloadError = useCallback((modelName: string) => {
+    setDownloadErrors((prev) => {
+      if (!(modelName in prev)) {
+        return prev;
+      }
+      const newErrors = { ...prev };
+      delete newErrors[modelName];
+      return newErrors;
+    });
+  }, []);
 
   // Load models from backend
   const loadModels = useCallback(async () => {
@@ -165,22 +200,16 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           delete newPhases[modelName];
           return newPhases;
         });
+        clearDownloadError(modelName);
 
         // Don't await - let it run async so progress events can update UI
         invoke("download_model", { modelName, requestId }).catch((error) => {
           if (cancelledDownloadRequests.current.has(requestId) || isDownloadCancellation(error)) {
             const isCurrentRequest = activeDownloadRequests.current.get(modelName) === requestId;
-            if (isCurrentRequest) {
-              activeDownloads.current.delete(modelName);
-              activeDownloadRequests.current.delete(modelName);
-            }
             cancelledDownloadRequests.current.add(requestId);
             if (isCurrentRequest) {
-              setDownloadProgress((prev) => {
-                const newProgress = { ...prev };
-                delete newProgress[modelName];
-                return newProgress;
-              });
+              clearDownloadState(modelName);
+              clearDownloadError(modelName);
             }
             return;
           }
@@ -189,28 +218,20 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
             return;
           }
 
+          const errorText = getErrorText(error);
           console.error(
             "[useModelManagement.downloadModel] Failed to download model:",
             error,
           );
+          setDownloadErrors((prev) => ({
+            ...prev,
+            [modelName]: errorText,
+          }));
           if (showToasts) {
-            toast.error(`Failed to download ${getModelDisplayName(modelName, models)}: ${error}`);
+            toast.error(`Failed to download ${getModelDisplayName(modelName, models)}: ${errorText}`);
           }
-          // Remove from progress on error
-          setDownloadProgress((prev) => {
-            const newProgress = { ...prev };
-            delete newProgress[modelName];
-            return newProgress;
-          });
-          setDownloadPhases((prev) => {
-            const newPhases = { ...prev };
-            delete newPhases[modelName];
-            return newPhases;
-          });
-          // Remove from active downloads
           if (activeDownloadRequests.current.get(modelName) === requestId) {
-            activeDownloads.current.delete(modelName);
-            activeDownloadRequests.current.delete(modelName);
+            clearDownloadState(modelName);
           }
         });
       } catch (error) {
@@ -218,15 +239,18 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           "[useModelManagement.downloadModel] Failed to start download:",
           error,
         );
+        const errorText = getErrorText(error);
         if (showToasts) {
-          toast.error(`Failed to start ${getModelDisplayName(modelName, models)} download: ${error}`);
+          toast.error(`Failed to start ${getModelDisplayName(modelName, models)} download: ${errorText}`);
         }
-        // Remove from active downloads
-        activeDownloads.current.delete(modelName);
-        activeDownloadRequests.current.delete(modelName);
+        setDownloadErrors((prev) => ({
+          ...prev,
+          [modelName]: errorText,
+        }));
+        clearDownloadState(modelName);
       }
     },
-    [models, showToasts],
+    [clearDownloadError, clearDownloadState, models, showToasts],
   );
 
   // Cancel download
@@ -242,21 +266,12 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
         await invoke("cancel_download", { modelName });
 
-        // Immediately remove from active downloads to allow retry
-        activeDownloads.current.delete(modelName);
-        activeDownloadRequests.current.delete(modelName);
-
-        // Remove from progress tracking
-        setDownloadProgress((prev) => {
-          const newProgress = { ...prev };
-          delete newProgress[modelName];
-          return newProgress;
-        });
-        setDownloadPhases((prev) => {
-          const newPhases = { ...prev };
-          delete newPhases[modelName];
-          return newPhases;
-        });
+        if (!requestId || activeDownloadRequests.current.get(modelName) === requestId) {
+          setDownloadPhases((prev) => ({
+            ...prev,
+            [modelName]: "cancelling",
+          }));
+        }
       } catch (error) {
         cancelledDownloads.current.delete(modelName);
         if (requestId) {
@@ -264,7 +279,8 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         }
         console.error("Failed to cancel download:", error);
         if (showToasts) {
-          toast.error(`Failed to cancel ${getModelDisplayName(modelName, modelsRef.current)} download: ${error}`);
+          const errorText = getErrorText(error);
+          toast.error(`Failed to cancel ${getModelDisplayName(modelName, modelsRef.current)} download: ${errorText}`);
         }
       }
     },
@@ -281,7 +297,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
             `${target.display_name} is a cloud model and cannot be deleted locally.`,
           );
         }
-        return;
+        return false;
       }
 
       try {
@@ -294,7 +310,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         );
 
         if (!confirmed) {
-          return;
+          return false;
         }
 
         await invoke("delete_model", { modelName });
@@ -303,11 +319,14 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         await loadModels();
 
         // Model selection clearing is handled by the component via settings
+        return true;
       } catch (error) {
+        const errorText = getErrorText(error);
         console.error("Failed to delete model:", error);
         if (showToasts) {
-          toast.error(`Failed to delete ${getModelDisplayName(modelName, models)}: ${error}`);
+          toast.error(`Failed to delete ${getModelDisplayName(modelName, models)}: ${errorText}`);
         }
+        throw error;
       }
     },
     [loadModels, models, showToasts],
@@ -361,7 +380,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     let unregisterVerifying: (() => void) | undefined;
     let unregisterComplete: (() => void) | undefined;
     let unregisterCancelled: (() => void) | undefined;
-
+    let unregisterError: (() => void) | undefined;
     const setupListeners = async () => {
       // Progress updates
       unregisterProgress = await registerEvent<{
@@ -470,16 +489,8 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
             activeDownloads.current.delete(modelName);
             activeDownloadRequests.current.delete(modelName);
           }
-          setDownloadProgress((prev) => {
-            const newProgress = { ...prev };
-            delete newProgress[modelName];
-            return newProgress;
-          });
-          setDownloadPhases((prev) => {
-            const newPhases = { ...prev };
-            delete newPhases[modelName];
-            return newPhases;
-          });
+          clearDownloadState(modelName);
+          clearDownloadError(modelName);
           return;
         }
 
@@ -489,8 +500,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         }
 
         // Remove from active downloads
-        activeDownloads.current.delete(modelName);
-        activeDownloadRequests.current.delete(modelName);
+        clearDownloadState(modelName);
         setModels((prev) => {
           const existing = prev[modelName];
           if (!existing) {
@@ -507,25 +517,9 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           };
         });
 
-        // Remove from progress tracking and verifying
-        setDownloadProgress((prev) => {
-          const newProgress = { ...prev };
-          delete newProgress[modelName];
-          return newProgress;
-        });
-        setDownloadPhases((prev) => {
-          const newPhases = { ...prev };
-          delete newPhases[modelName];
-          return newPhases;
-        });
 
-        // Remove from verifying set
-        setVerifyingModels((prev) => {
-          const newSet = new Set(prev);
-          newSet.delete(modelName);
-          return newSet;
-        });
 
+        clearDownloadError(modelName);
         // Refresh model list
         await loadModels();
 
@@ -535,6 +529,47 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       });
 
       // Download cancelled
+
+      unregisterError = await registerEvent<{
+        model: string;
+        engine?: string;
+        requestId?: string;
+        error: string;
+      }>("download-error", (payload) => {
+        const { model: modelName, requestId } = payload;
+        const errorText = payload.error || "Download failed";
+
+        if (requestId && cancelledDownloadRequests.current.has(requestId)) {
+          if (activeDownloadRequests.current.get(modelName) === requestId) {
+            clearDownloadState(modelName);
+            clearDownloadError(modelName);
+          }
+          cancelledDownloadRequests.current.delete(requestId);
+          cancelledDownloads.current.delete(modelName);
+          return;
+        }
+
+        // Only handle if this is still the active request. If it was already cleared (e.g. the
+        // download_model invoke rejection handled this same failure) or superseded by a newer
+        // request, skip — otherwise one backend failure produces duplicate error UX.
+        const activeRequestId = activeDownloadRequests.current.get(modelName);
+        if (requestId && activeRequestId !== requestId) {
+          return;
+        }
+
+        setDownloadErrors((prev) => ({
+          ...prev,
+          [modelName]: errorText,
+        }));
+        clearDownloadState(modelName);
+
+        if (!isDownloadCancellation(errorText) && showToasts) {
+          toast.error("Download Failed", {
+            description: `Failed to download ${getModelDisplayName(modelName, modelsRef.current)}. Please try again.`,
+            duration: 5000,
+          });
+        }
+      });
       unregisterCancelled = await registerEvent<{
         model: string;
         engine?: string;
@@ -554,18 +589,9 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           cancelledDownloadRequests.current.add(requestId);
         }
 
-        // Remove from progress tracking
         if (isCurrentRequest) {
-          setDownloadProgress((prev) => {
-            const newProgress = { ...prev };
-            delete newProgress[modelName];
-            return newProgress;
-          });
-          setDownloadPhases((prev) => {
-            const newPhases = { ...prev };
-            delete newPhases[modelName];
-            return newPhases;
-          });
+          clearDownloadState(modelName);
+          clearDownloadError(modelName);
         }
 
         if (showToasts) {
@@ -582,8 +608,9 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       unregisterVerifying?.();
       unregisterComplete?.();
       unregisterCancelled?.();
+      unregisterError?.();
     };
-  }, [registerEvent, loadModels, showToasts]);
+  }, [registerEvent, loadModels, showToasts, clearDownloadState, clearDownloadError]);
 
   // Load models on mount
   useEffect(() => {
@@ -601,6 +628,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
     downloadProgress,
     verifyingModels,
     downloadPhases,
+    downloadErrors,
     isLoading,
 
     // Actions

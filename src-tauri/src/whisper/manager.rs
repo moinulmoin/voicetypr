@@ -230,25 +230,8 @@ impl WhisperManager {
         }
     }
 
-    /// Download a model (wrapper that validates and delegates to download_model_file)
-    pub async fn download_model(
-        &self,
-        model_name: &str,
-        cancel_flag: Option<Arc<AtomicBool>>,
-        progress_callback: impl Fn(u64, u64),
-    ) -> Result<(), String> {
-        // Get model info with validation
-        let (model_info, output_path) = self.get_model_info(model_name)?;
-
-        // Download the model file
-        Self::download_model_file(
-            &model_info,
-            &output_path,
-            &self.models_dir,
-            cancel_flag,
-            progress_callback,
-        )
-        .await
+    pub fn models_dir(&self) -> PathBuf {
+        self.models_dir.clone()
     }
 
     /// Get model info needed for download (doesn't hold lock during download)

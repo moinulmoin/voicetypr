@@ -1,6 +1,10 @@
 #[cfg(test)]
 mod tests {
+    use crate::commands::model::{clear_active_download, register_active_download};
     use crate::whisper::manager::{ModelInfo, ModelSize, WhisperManager};
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
     #[test]
@@ -111,6 +115,56 @@ mod tests {
 
         // The manager should be created with the correct directory
         assert!(models_dir.exists());
+    }
+
+    #[test]
+    fn test_whisper_manager_accessors_return_model_info_and_models_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let models_dir = temp_dir.path().join("models");
+        let manager = WhisperManager::new(models_dir.clone());
+
+        assert_eq!(manager.models_dir(), models_dir);
+
+        let (model_info, output_path) = manager.get_model_info("base.en").unwrap();
+        assert_eq!(model_info.name, "base.en");
+        assert_eq!(output_path, manager.models_dir().join("base.en.bin"));
+    }
+
+    #[test]
+    fn test_active_download_duplicate_preserves_original_flag() {
+        let active_downloads = Arc::new(Mutex::new(HashMap::new()));
+        let original_flag = Arc::new(AtomicBool::new(false));
+        let duplicate_flag = Arc::new(AtomicBool::new(false));
+
+        register_active_download(&active_downloads, "base.en", original_flag.clone()).unwrap();
+        let duplicate = register_active_download(&active_downloads, "base.en", duplicate_flag);
+
+        assert!(duplicate.is_err());
+        let stored_flag = active_downloads
+            .lock()
+            .unwrap()
+            .get("base.en")
+            .cloned()
+            .unwrap();
+        stored_flag.store(true, Ordering::Relaxed);
+        assert!(original_flag.load(Ordering::Relaxed));
+
+        clear_active_download(&active_downloads, "base.en");
+        assert!(!active_downloads.lock().unwrap().contains_key("base.en"));
+    }
+
+    #[test]
+    fn test_delete_guard_uses_active_download_registration() {
+        let active_downloads = Arc::new(Mutex::new(HashMap::new()));
+        let download_flag = Arc::new(AtomicBool::new(false));
+        let delete_flag = Arc::new(AtomicBool::new(false));
+
+        register_active_download(&active_downloads, "base.en", download_flag.clone()).unwrap();
+        let guarded_delete = register_active_download(&active_downloads, "base.en", delete_flag);
+
+        assert!(guarded_delete.is_err());
+        assert!(!download_flag.load(Ordering::Relaxed));
+        assert_eq!(active_downloads.lock().unwrap().len(), 1);
     }
 
     #[test]

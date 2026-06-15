@@ -144,6 +144,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
     modelOrder,
     downloadProgress,
     verifyingModels,
+    downloadErrors = {},
     downloadModel,
     cancelDownload,
     isLoading,
@@ -229,8 +230,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
     () => remoteServers.find((server) => server.id === activeRemoteServerId) ?? null,
     [activeRemoteServerId, remoteServers],
   );
-  const localReady = Boolean(selectedModelName && selectedModel?.downloaded);
-  const hasDownloadedLocalModel = modelOrder.some((name) => models[name]?.downloaded);
+  const isModelReady = useCallback(
+    (name: string) => models[name]?.downloaded === true && !models[name]?.requires_setup,
+    [models],
+  );
+  const localReady = Boolean(selectedModelName && isModelReady(selectedModelName));
+  const hasDownloadedLocalModel = modelOrder.some((name) => isModelReady(name));
   const remoteReady = isRemoteServerOnline(activeRemoteServer);
   const sourceReady = sourceType === "local" ? localReady : remoteReady;
   const sampleErrorDescription =
@@ -829,11 +834,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
                             model={model}
                             downloadProgress={progressValue}
                             isVerifying={verifyingModels.has(name)}
+                            downloadError={downloadErrors[name]}
                             isSelected={settings?.current_model === name}
                             onDownload={downloadModel}
                             onSelect={(modelName) => void selectLocalModel(modelName)}
                             onCancelDownload={cancelDownload}
-                            showSelectButton={model.downloaded}
+                            showSelectButton={isModelReady(name)}
                           />
                         );
                       })}

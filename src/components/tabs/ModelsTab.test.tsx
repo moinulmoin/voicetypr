@@ -60,6 +60,9 @@ vi.mock('@/contexts/ModelManagementContext', () => ({
     models: mockModels,
     downloadProgress: {},
     verifyingModels: new Set(),
+    downloadPhases: {},
+    downloadErrors: { 'small.en': 'Network error' },
+    isLoading: true,
     sortedModels: Object.entries(mockModels),
     downloadModel: vi.fn(),
     deleteModel: vi.fn(),
@@ -84,10 +87,12 @@ vi.mock('@/hooks/useEventCoordinator', () => ({
 
 // Mock ModelsSection component
 vi.mock('@/components/sections/ModelsSection', () => ({
-  ModelsSection: ({ models, currentModel }: any) => (
+  ModelsSection: ({ models, currentModel, downloadErrors, isLoading }: any) => (
     <div data-testid="models-section">
       <div>Current Model: {currentModel}</div>
       <div>Models Count: {models.length}</div>
+      <div>Small Error: {downloadErrors['small.en']}</div>
+      <div>Loading: {String(isLoading)}</div>
     </div>
   )
 }));
@@ -104,18 +109,10 @@ describe('ModelsTab', () => {
     expect(screen.getByText('Models Count: 2')).toBeInTheDocument();
   });
 
-  it('shows error toast on download failure', async () => {
-    const { toast } = await import('sonner');
+  it('passes hook-owned errors and loading state to ModelsSection', () => {
     render(<ModelsTab />);
 
-    const callback = (window as any).__testEventCallbacks['download-error'];
-    callback({ model: 'small.en', error: 'Network error' });
-
-    expect(toast.error).toHaveBeenCalledWith(
-      'Download Failed',
-      expect.objectContaining({
-        description: expect.stringContaining('Small English')
-      })
-    );
+    expect(screen.getByText('Small Error: Network error')).toBeInTheDocument();
+    expect(screen.getByText('Loading: true')).toBeInTheDocument();
   });
 });
