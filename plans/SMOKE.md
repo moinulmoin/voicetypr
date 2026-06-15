@@ -96,6 +96,33 @@ Anthropic, Google Gemini, Custom) must behave exactly as in plan 016.
       unless such a provider is added later.
 - [ ] 017-S4 Per-provider model memory persists across provider switches.
 
+## Plan 020 — transcription contract Stage 2: desktop executor (code `6ac9b00`, NEEDS-SMOKE)
+
+The desktop record→transcribe→insert hot path now runs through the shared
+executor for local + cloud engines (remote stays inline). This integrates plan
+015's watchdog/retry/cancel at the executor seam, so **020-S3/S4 supersede
+015-S3/S4** — run these against the integrated path.
+
+- [ ] 020-S1 Whisper: hotkey → speak → transcript inserts at cursor; first word
+      present (initial_prompt/custom vocab still applied).
+- [ ] 020-S2 Parakeet: hotkey → speak → transcript inserts; next recording works.
+- [ ] 020-S3 Cloud provider (one real key): hotkey → speak → transcript inserts.
+- [ ] 020-S4 Esc-cancel mid-decode of a ~60 s CPU Whisper recording → pill idle
+      within ~1 s, no text pasted, no history row (shared cancel flag).
+- [ ] 020-S5 Long decode hits the watchdog (or simulate a tiny budget): control
+      returns with a timeout, UI not wedged, no speech silently lost.
+- [ ] 020-S6 Too-short recording (<0.5 s) rejected cleanly pre-dispatch; no
+      history row written.
+- [ ] 020-S7 Non-speech/silence → "No speech detected"; no history row.
+- [ ] 020-S8 Forced translation failure (output language ≠ spoken, AI key bad):
+      raw transcript saved to history with a "translation failed" badge, NOT
+      pasted (Fix #2 + marker through the integrated path).
+- [ ] 020-S9 Active remote desktop server selected → record → transcript via the
+      UNCHANGED inline remote path; kill the server mid-request → failed remote
+      history row + preserved recording (Stage 5 untouched).
+- [ ] 020-S10 `save_recordings` on: local success saves a recording before temp
+      cleanup; re-transcribe that row from History succeeds.
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are

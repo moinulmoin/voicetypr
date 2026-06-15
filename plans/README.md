@@ -30,7 +30,6 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 013  | *(reserved: close 004/008 smoke blockers — checklist, no plan file yet)* | P1 | S | 004, 008 | RESERVED — no executable plan file yet |
-| 020  | Shared transcription contract — Stage 2 (port desktop local/cloud recording through `transcribe_with_app`; remote stays inline until Stage 5) | P1 | L | 014 Stage 1, Fix #2, 015 | IN PROGRESS — claimed Main 2026-06-15 |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 
@@ -42,6 +41,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 016  | AI polish Rust-native cutover — current providers, Pi sidecar removed | `3986b45`..`fb09a61` | NEEDS-SMOKE — steps 1-7 done; sidecar gone; triple-check audit findings fixed + independently re-reviewed; live invalid-key/bad-URL smoke passed; remaining items in SMOKE.md |
 | 019  | Cloud STT shortlist — Soniox + OpenAI/Groq/Deepgram/Cohere | `2026-06-12` (this session) | NEEDS-SMOKE — `cloud_stt` seam + 4 new providers + Soniox migration; clean cutover (no soniox-only residue); pre-merge reliability bar met (owned 120s/15s client, retry-once on transient, typed `SttError` categories, no raw provider bodies); Cohere language restricted to its 14; all automated gates green; real-key desktop smoke in `SMOKE.md` |
 | 017  | AI provider catalog + searchable breadth UI | `2026-06-13` (this session) | NEEDS-SMOKE — generated catalog (OpenAI / Anthropic / Google Gemini, 94 models from a pinned `models.dev` snapshot + overlay) replaces the hardcoded per-provider model table; data-driven genai dispatch (deliverable 1b), 016 reliability policy untouched; searchable/grouped picker UI; Custom stays the escape hatch for any other OpenAI-compatible endpoint; all automated gates green; real-key smoke in `SMOKE.md` |
+| 020  | Shared transcription contract — Stage 2 (desktop local/cloud → `transcribe_with_app`) | `6ac9b00` (this session) | NEEDS-SMOKE — desktop record→transcribe→insert hot path now runs through the shared executor for local+cloud (remote stays inline, Stage 5); plan 015's watchdog/retry/cancel moved to the executor seam (integrated path supersedes 015-S3/S4); behavior-preserving, reviewer-clean (8 never-lose-speech invariants verified); all automated gates green (clippy --all-targets, 927 tests incl. +5 seam tests); hot-path smoke in `SMOKE.md` (020-S1..S10) |
 
 ## Archived (closed — `plans/archive/`)
 
