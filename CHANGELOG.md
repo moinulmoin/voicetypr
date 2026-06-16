@@ -2,6 +2,10 @@
 
 ### Features
 
+* **stt:** cloud speech-to-text providers — Soniox, OpenAI, Groq, Deepgram, and Cohere — selectable per transcription (plan 019)
+* **ai:** Rust-native AI polish for OpenAI, Anthropic, Gemini, and custom OpenAI-compatible endpoints (replacing the bundled sidecar), with a deterministic fallback when polish fails (plan 016)
+* **ai:** searchable provider/model catalog (~94 models) generated from models.dev (plan 017)
+* **transcription:** unify local, cloud, and remote transcription behind a shared executor with never-lose-speech recovery — cancel-anywhere, decode watchdog, silence handling, and device-disconnect recovery (plans 015, 020)
 * **upload:** add Save button to file-upload transcript result; opens a native save dialog with .txt and .md filters; .md output includes a `# <filename>` heading; cancel is a no-op; success and error toasts fire
 * **diarization:** add cloud speaker diarization for file uploads (Deepgram, Soniox); a diarization-capable provider produces a speaker-attributed transcript ("Speaker 0: … / Speaker 1: …") shown and saved to .txt/.md, while non-diarizing providers fall back to plain text
 * **history:** persist rich per-entry metadata (source, engine/model, language, duration, diarized, and — for opted-in dictation — the target app) and add source/app/date filters with per-entry detail
