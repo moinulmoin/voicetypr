@@ -236,6 +236,10 @@ sessions, the Swift sidecar fd-redirect, UI-responsiveness, and wall-clock timin
 
 - **022-S1**: upload a file → transcribe → click **Save** → choose `.txt`; then repeat and choose `.md`. Both files contain the transcript (the `.md` has a `# <name>` heading); cancelling the dialog writes nothing. (Backend write + command registration are gate-covered; the native save-dialog round-trip is the irreducible UI residue.)
 
+## Plan 023 — cloud speaker diarization for uploads (NEEDS-SMOKE)
+
+- **023-S1**: with a real **Deepgram** key, upload a 2-speaker file → the result is a speaker-attributed transcript ("Speaker 0: … / Speaker 1: …") shown with line breaks, and Save `.txt`/`.md` contains the speaker blocks. Repeat with a real **Soniox** key. A non-diarizing provider (OpenAI/Groq/Cohere) or single-speaker audio → plain transcript (no labels). Live dictation is unaffected (no diarization). (Provider word-parsing + speaker grouping are unit-covered with fixtures; the real-key round-trip + attribution quality are the irreducible residue.)
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are

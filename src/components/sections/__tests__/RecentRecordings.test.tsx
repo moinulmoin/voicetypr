@@ -143,7 +143,7 @@ describe('RecentRecordings re-transcription', () => {
   it('creates a durable in-progress entry before re-transcribing', async () => {
     const user = userEvent.setup();
     const onHistoryUpdate = vi.fn();
-    const transcribeDeferred = createDeferred<string>();
+    const transcribeDeferred = createDeferred<{ text: string; words: null }>();
 
     invokeMock.mockImplementation(async (cmd: string) => {
       switch (cmd) {
@@ -183,7 +183,7 @@ describe('RecentRecordings re-transcription', () => {
       });
     });
 
-    transcribeDeferred.resolve('Re-transcribed text');
+    transcribeDeferred.resolve({ text: 'Re-transcribed text', words: null });
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('update_transcription', {
@@ -312,7 +312,7 @@ it('uses Soniox when it is the current cloud transcription source', async () => 
       case 'save_retranscription':
         return 'retry-soniox';
       case 'transcribe_audio_file':
-        return 'Cloud retry text';
+        return { text: 'Cloud retry text', words: null };
       default:
         return null;
     }

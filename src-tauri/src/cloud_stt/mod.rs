@@ -15,6 +15,7 @@ mod groq;
 mod openai;
 mod soniox;
 
+use crate::transcription::TranscriptionWord;
 use std::path::Path;
 use tauri::AppHandle;
 
@@ -25,6 +26,13 @@ pub enum CloudProvider {
     Groq,
     Deepgram,
     Cohere,
+}
+
+/// Transcript returned by a cloud provider, optionally with per-word speaker data.
+#[derive(Debug, Clone)]
+pub struct CloudTranscript {
+    pub text: String,
+    pub words: Vec<TranscriptionWord>,
 }
 
 impl CloudProvider {
@@ -151,6 +159,49 @@ impl CloudProvider {
             Self::Groq => groq::transcribe_typed(app, api_key, audio_path, language).await,
             Self::Deepgram => deepgram::transcribe_typed(app, api_key, audio_path, language).await,
             Self::Cohere => cohere::transcribe_typed(app, api_key, audio_path, language).await,
+        }
+    }
+
+    /// Transcribe `audio_path` with diarization using the stored API key.
+    ///
+    /// Providers that support diarization (Deepgram, Soniox) fill `words`; others
+    /// return an empty `words` vec and the plain transcript text.
+    pub async fn transcribe_diarized(
+        self,
+        app: &AppHandle,
+        audio_path: &Path,
+        language: Option<&str>,
+    ) -> Result<CloudTranscript, String> {
+        let key = crate::secure_store::secure_get(app, self.key_name())?
+            .ok_or_else(|| format!("{} API key not set", self.display_name()))?;
+        self.transcribe_typed_diarized(app, &key, audio_path, language)
+            .await
+            .map_err(|e| e.message(self.display_name()))
+    }
+
+    pub(crate) async fn transcribe_typed_diarized(
+        self,
+        app: &AppHandle,
+        api_key: &str,
+        audio_path: &Path,
+        language: Option<&str>,
+    ) -> Result<CloudTranscript, common::SttError> {
+        match self {
+            Self::Deepgram => {
+                deepgram::transcribe_typed_diarized(app, api_key, audio_path, language).await
+            }
+            Self::Soniox => {
+                soniox::transcribe_typed_diarized(app, api_key, audio_path, language).await
+            }
+            _ => {
+                let text = self
+                    .transcribe_typed(app, api_key, audio_path, language)
+                    .await?;
+                Ok(CloudTranscript {
+                    text,
+                    words: vec![],
+                })
+            }
         }
     }
 }

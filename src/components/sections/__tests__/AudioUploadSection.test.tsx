@@ -80,7 +80,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
           return { models: [readyLocalModel] };
         }
         if (cmd === 'transcribe_audio_file') {
-          return 'This is the meeting transcript content that was processed';
+          return { text: 'This is the meeting transcript content that was processed', words: null };
         }
         if (cmd === 'check_whisper_models') {
           return ['base.en'];
@@ -145,7 +145,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
           };
         }
         if (cmd === 'transcribe_audio_file') {
-          return 'Speaker transcript';
+          return { text: 'Speaker transcript', words: null };
         }
         if (cmd === 'diarize_audio_file') {
           return [{ speaker_id: 'speaker_1', start_ms: 0, end_ms: 2500 }];
@@ -189,7 +189,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
           return { models: [readyLocalModel] };
         }
         if (cmd === 'transcribe_audio_file') {
-          return 'Text to copy to clipboard';
+          return { text: 'Text to copy to clipboard', words: null };
         }
         return null;
       });
@@ -304,7 +304,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
           };
         }
         if (cmd === 'transcribe_audio_file') {
-          return 'Remote transcript';
+          return { text: 'Remote transcript', words: null };
         }
         return null;
       });
@@ -361,7 +361,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
           };
         }
         if (cmd === 'transcribe_audio_file') {
-          return 'Remote history transcript';
+          return { text: 'Remote history transcript', words: null };
         }
         return null;
       });
@@ -426,7 +426,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
           };
         }
         if (cmd === 'transcribe_audio_file') {
-          return 'Soniox transcript';
+          return { text: 'Soniox transcript', words: null };
         }
         return null;
       });
@@ -491,7 +491,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
           };
         }
         if (cmd === 'transcribe_audio_file') {
-          return 'Deepgram transcript';
+          return { text: 'Deepgram transcript', words: null };
         }
         return null;
       });
@@ -590,7 +590,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
         if (cmd === 'transcribe_audio_file') {
           // Simulate processing time
           await new Promise(resolve => setTimeout(resolve, 100));
-          return 'Transcription result';
+          return { text: 'Transcription result', words: null };
         }
         return null;
       });
@@ -624,7 +624,7 @@ describe('AudioUploadSection - Essential User Flows', () => {
           return { models: [readyLocalModel] };
         }
         if (cmd === 'transcribe_audio_file') {
-          return '[BLANK_AUDIO]';
+          return { text: '[BLANK_AUDIO]', words: null };
         }
         return null;
       });
@@ -685,5 +685,86 @@ describe('AudioUploadSection - Essential User Flows', () => {
       expect(toast.error).toHaveBeenCalledWith('Selected remote unavailable. Reconnect or choose another source.');
     });
     expect(invoke).not.toHaveBeenCalledWith('transcribe_audio_file', expect.anything());
+  });
+
+  describe('Cloud diarization', () => {
+    it('sets diarized=true and preserves multi-line text when words are returned', async () => {
+      const user = userEvent.setup();
+      mockSettings.current_model = 'deepgram';
+      mockSettings.current_model_engine = 'deepgram';
+
+      vi.mocked(open).mockResolvedValue('/audio/meeting.mp3');
+      vi.mocked(invoke).mockImplementation(async (cmd) => {
+        if (cmd === 'get_model_status') {
+          return { models: [{ name: 'deepgram', display_name: 'Deepgram', size: 0, url: '', sha256: '', downloaded: true, speed_score: 8, accuracy_score: 9, recommended: false, engine: 'deepgram', kind: 'cloud' as const, requires_setup: false }] };
+        }
+        if (cmd === 'get_active_remote_server') return null;
+        if (cmd === 'get_recognition_availability_snapshot') {
+          return { cloud_selected: true, cloud_ready: true, remote_available: false };
+        }
+        if (cmd === 'transcribe_audio_file') {
+          return {
+            text: 'Speaker 0: Hello there.\n\nSpeaker 1: Hi, how are you?',
+            words: [
+              { text: 'Hello', start_ms: 0, end_ms: 500, speaker_id: '0', confidence: 0.99 },
+              { text: 'there', start_ms: 500, end_ms: 900, speaker_id: '0', confidence: 0.98 },
+              { text: 'Hi', start_ms: 1200, end_ms: 1500, speaker_id: '1', confidence: 0.97 },
+            ],
+          };
+        }
+        return null;
+      });
+
+      render(<AudioUploadSection />);
+
+      await user.click(await screen.findByRole('button', { name: /select file/i }));
+      await waitFor(() => screen.getByText(/meeting.mp3/));
+      await user.click(await screen.findByRole('button', { name: /transcribe/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Speaker 0: Hello there/)).toBeInTheDocument();
+      });
+
+      // diarized flag set in store
+      expect(useUploadStore.getState().diarized).toBe(true);
+
+      // multi-line text preserved
+      expect(useUploadStore.getState().resultText).toBe(
+        'Speaker 0: Hello there.\n\nSpeaker 1: Hi, how are you?'
+      );
+
+      // diarization hint visible
+      expect(screen.getByText(/Speaker labels via Deepgram \/ Soniox/i)).toBeInTheDocument();
+    });
+
+    it('sets diarized=false and shows no hint when words is null', async () => {
+      const user = userEvent.setup();
+
+      vi.mocked(open).mockResolvedValue('/audio/plain.mp3');
+      vi.mocked(invoke).mockImplementation(async (cmd) => {
+        if (cmd === 'get_model_status') return { models: [readyLocalModel] };
+        if (cmd === 'get_active_remote_server') return null;
+        if (cmd === 'transcribe_audio_file') {
+          return { text: 'Plain transcript without diarization', words: null };
+        }
+        return null;
+      });
+
+      render(<AudioUploadSection />);
+
+      await user.click(await screen.findByRole('button', { name: /select file/i }));
+      await waitFor(() => screen.getByText(/plain.mp3/));
+      await user.click(await screen.findByRole('button', { name: /transcribe/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Plain transcript without diarization')).toBeInTheDocument();
+      });
+
+      // diarized flag NOT set
+      expect(useUploadStore.getState().diarized).toBe(false);
+
+      // no hint rendered
+      expect(screen.queryByText(/Speaker labels via Deepgram \/ Soniox/i)).not.toBeInTheDocument();
+    });
   });
 });

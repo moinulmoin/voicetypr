@@ -47,6 +47,7 @@ export function AudioUploadSection() {
     error: storeError,
     speakerSegments,
     diarizationError,
+    diarized,
     select,
     clearSelection,
     start,
@@ -428,7 +429,7 @@ export function AudioUploadSection() {
                         <div className="flex items-start gap-4">
                           <div className="flex-1">
                             <ScrollArea className="h-64">
-                              <p className="text-sm leading-relaxed pr-2">
+                              <p className="text-sm leading-relaxed pr-2 whitespace-pre-wrap">
                                 {resultText}
                               </p>
                             </ScrollArea>
@@ -438,6 +439,11 @@ export function AudioUploadSection() {
                           <span>{selectedFile.name}</span>
                           <span>{resultText.split(' ').length} words</span>
                         </div>
+                        {diarized && (
+                          <p className="text-xs text-muted-foreground/70">
+                            Speaker labels via Deepgram / Soniox
+                          </p>
+                        )}
                       </div>
 
                       {speakerSegments.length > 0 && (

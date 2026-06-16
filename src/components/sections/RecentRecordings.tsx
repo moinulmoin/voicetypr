@@ -229,11 +229,11 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
           throw new Error("No local or cloud transcription model selected");
         }
 
-        result = await invoke<string>('transcribe_audio_file', {
+        result = (await invoke<{ text: string; words: Array<{ text: string; start_ms?: number; end_ms?: number; speaker_id?: string; confidence?: number }> | null }>('transcribe_audio_file', {
           filePath: fullPath,
           modelName: currentSource.modelName,
           modelEngine: currentSource.modelEngine ?? null,
-        });
+        })).text;
         modelName = currentSource.type === 'cloud' ? currentSource.displayName : currentSource.modelName;
       }
 

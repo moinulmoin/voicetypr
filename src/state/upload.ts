@@ -9,6 +9,18 @@ export type UploadResult =
 
 export type SelectedFile = { path: string; name: string }
 export type SpeakerSegment = { speaker_id: string; start_ms: number; end_ms: number }
+export type TranscriptionWord = {
+  text: string
+  start_ms?: number
+  end_ms?: number
+  speaker_id?: string
+  confidence?: number
+}
+
+type UploadTranscriptionResult = {
+  text: string
+  words: TranscriptionWord[] | null
+}
 
 type UploadState = {
   selectedFile: SelectedFile | null
@@ -17,6 +29,7 @@ type UploadState = {
   error: string | null
   speakerSegments: SpeakerSegment[]
   diarizationError: string | null
+  diarized: boolean
   select: (path: string) => void
   clearSelection: () => void
   start: (modelName: string, modelEngine: string | null, historyModelName?: string) => Promise<UploadResult | null>
@@ -30,26 +43,27 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   error: null,
   speakerSegments: [],
   diarizationError: null,
+  diarized: false,
 
   select: (path: string) => {
     const name = path.split(/[\\/]/).pop() || 'audio file'
-    set({ selectedFile: { path, name }, resultText: null, error: null, speakerSegments: [], diarizationError: null })
+    set({ selectedFile: { path, name }, resultText: null, error: null, speakerSegments: [], diarizationError: null, diarized: false })
   },
 
-  clearSelection: () => set({ selectedFile: null, speakerSegments: [], diarizationError: null }),
+  clearSelection: () => set({ selectedFile: null, speakerSegments: [], diarizationError: null, diarized: false }),
 
   start: async (modelName: string, modelEngine: string | null, historyModelName?: string) => {
     const { selectedFile, status } = get()
     if (!selectedFile) return null
     if (status === 'processing') return null
-    set({ status: 'processing', error: null, resultText: null, speakerSegments: [], diarizationError: null })
+    set({ status: 'processing', error: null, resultText: null, speakerSegments: [], diarizationError: null, diarized: false })
     try {
-      const text = await invoke<string>('transcribe_audio_file', {
+      const res = await invoke<UploadTranscriptionResult>('transcribe_audio_file', {
         filePath: selectedFile.path,
         modelName,
         modelEngine,
       })
-      if (!text || text.trim() === '' || text === '[BLANK_AUDIO]') {
+      if (!res.text || res.text.trim() === '' || res.text === '[BLANK_AUDIO]') {
         set({ status: 'error', error: 'No speech detected in the audio file' })
         return { outcome: 'blank' }
       }
@@ -67,11 +81,11 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       }
 
       await invoke('save_transcription', {
-        text,
+        text: res.text,
         model: historyModelName || modelName,
       })
-      set({ status: 'done', resultText: text, speakerSegments, diarizationError })
-      return { outcome: 'success', text }
+      set({ status: 'done', resultText: res.text, speakerSegments, diarizationError, diarized: res.words != null })
+      return { outcome: 'success', text: res.text }
     } catch (e: any) {
       const message = String(e?.message || e)
       set({ status: 'error', error: message })
@@ -79,5 +93,5 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     }
   },
 
-  reset: () => set({ selectedFile: null, status: 'idle', resultText: null, error: null, speakerSegments: [], diarizationError: null })
+  reset: () => set({ selectedFile: null, status: 'idle', resultText: null, error: null, speakerSegments: [], diarizationError: null, diarized: false })
 }))

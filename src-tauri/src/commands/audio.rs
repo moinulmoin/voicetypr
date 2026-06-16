@@ -28,6 +28,7 @@ use crate::transcription::request::{
 };
 use crate::transcription::{
     TranscriptionJob, TranscriptionResult, TranscriptionSegment, TranscriptionSource,
+    TranscriptionWord,
 };
 use crate::utils::logger::*;
 #[cfg(debug_assertions)]
@@ -792,6 +793,90 @@ pub struct UploadDiarizationSegment {
     pub speaker_id: String,
     pub start_ms: u64,
     pub end_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UploadTranscription {
+    pub text: String,
+    pub words: Option<Vec<TranscriptionWord>>,
+}
+
+/// Group diarized words into speaker-attributed paragraphs.
+///
+/// Words with the same `speaker_id` are joined into a single paragraph prefixed
+/// with `"Speaker N: "`. Words without a `speaker_id` continue the current run.
+/// Paragraphs are separated by `"\n\n"`.
+///
+/// Token spacing is handled by [`join_tokens`]: Deepgram bare words get a space
+/// inserted between them; Soniox tokens that already carry leading whitespace or
+/// start with punctuation are appended as-is.
+pub(crate) fn group_words_into_speaker_text(words: &[TranscriptionWord]) -> String {
+    if words.is_empty() {
+        return String::new();
+    }
+
+    let mut paragraphs: Vec<(Option<String>, Vec<String>)> = Vec::new();
+    let mut current_speaker: Option<String> = None;
+    let mut current_words: Vec<String> = Vec::new();
+
+    for word in words {
+        match &word.speaker_id {
+            Some(spk) => {
+                if Some(spk) != current_speaker.as_ref() && !current_words.is_empty() {
+                    paragraphs.push((current_speaker.clone(), std::mem::take(&mut current_words)));
+                    current_speaker = Some(spk.clone());
+                } else if current_words.is_empty() {
+                    current_speaker = Some(spk.clone());
+                }
+            }
+            None => {
+                // No speaker tag — treat as continuation of the current run.
+            }
+        }
+        current_words.push(word.text.clone());
+    }
+    if !current_words.is_empty() {
+        paragraphs.push((current_speaker, current_words));
+    }
+
+    paragraphs
+        .into_iter()
+        .map(|(speaker, tokens)| {
+            let prefix = match speaker {
+                Some(s) => format!("{s}: "),
+                None => String::new(),
+            };
+            format!("{}{}", prefix, join_tokens(&tokens))
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Join transcript tokens with spacing awareness.
+///
+/// - First token: leading whitespace stripped (handles Soniox leading spaces).
+/// - Subsequent tokens: appended as-is if the token starts with whitespace or
+///   a punctuation character; otherwise a single space is prepended.
+///
+/// This keeps Deepgram bare words (`"Hello"`, `"world"`) space-joined while
+/// rendering Soniox pre-spaced tokens (`"How"`, `" are"`, `" you"`, `"?"`)
+/// correctly without double spaces or stray spaces before punctuation.
+fn join_tokens(tokens: &[String]) -> String {
+    const PUNCT: &[char] = &[
+        '.', ',', '!', '?', ';', ':', ')', ']', '}', '\'', '"', '\u{2026}',
+    ];
+    let mut out = String::new();
+    for (i, token) in tokens.iter().enumerate() {
+        if i == 0 {
+            out.push_str(token.trim_start());
+        } else if token.starts_with(|c: char| c.is_whitespace()) || token.starts_with(PUNCT) {
+            out.push_str(token);
+        } else {
+            out.push(' ');
+            out.push_str(token);
+        }
+    }
+    out
 }
 
 fn build_remote_transcription_result(
@@ -4936,7 +5021,7 @@ pub async fn transcribe_audio_file(
     file_path: String,
     model_name: String,
     model_engine: Option<String>,
-) -> Result<String, String> {
+) -> Result<UploadTranscription, String> {
     transcribe_audio_file_impl(app, file_path, model_name, model_engine, true).await
 }
 
@@ -4946,7 +5031,9 @@ pub async fn transcribe_audio_file_for_cli(
     model_name: String,
     model_engine: Option<String>,
 ) -> Result<String, String> {
-    transcribe_audio_file_impl(app, file_path, model_name, model_engine, false).await
+    transcribe_audio_file_impl(app, file_path, model_name, model_engine, false)
+        .await
+        .map(|t| t.text)
 }
 
 async fn transcribe_audio_file_impl(
@@ -4955,7 +5042,7 @@ async fn transcribe_audio_file_impl(
     model_name: String,
     model_engine: Option<String>,
     validate_requirements: bool,
-) -> Result<String, String> {
+) -> Result<UploadTranscription, String> {
     log::info!(
         "[UPLOAD] transcribe_audio_file START | file_path={:?}, model_name={}, engine_hint={:?}",
         file_path,
@@ -5140,9 +5227,25 @@ async fn transcribe_audio_file_impl(
                     .map_err(|e| format!("Audio normalization (ffmpeg) failed: {}", e))?;
                 out_path
             });
-            let text = provider
-                .transcribe(&app, normalized_file.path(), Some(&language))
+            let cloud_transcript = provider
+                .transcribe_diarized(&app, normalized_file.path(), Some(&language))
                 .await?;
+
+            // If the provider returned speaker-attributed words, group them and
+            // return directly — no AI polish for diarized uploads.
+            if !cloud_transcript.words.is_empty() {
+                let text = group_words_into_speaker_text(&cloud_transcript.words);
+                log::info!(
+                    "[UPLOAD] Diarized cloud transcript: {} words, {} chars",
+                    cloud_transcript.words.len(),
+                    text.len()
+                );
+                return Ok(UploadTranscription {
+                    text,
+                    words: Some(cloud_transcript.words),
+                });
+            }
+
             let cloud_job = build_transcription_job(
                 TranscriptionSource::AudioFile,
                 transcription_job.engine.clone(),
@@ -5150,7 +5253,7 @@ async fn transcribe_audio_file_impl(
                 transcription_job.spoken_language.clone(),
                 false,
             );
-            TranscriptionResult::new(&cloud_job, text)
+            TranscriptionResult::new(&cloud_job, cloud_transcript.text)
         }
         ActiveEngineSelection::Remote {
             server_id,
@@ -5248,7 +5351,10 @@ async fn transcribe_audio_file_impl(
         notify_ai_polish_failure(&app, error);
         // Upload history is persisted by the frontend after this command returns non-blank text.
     }
-    Ok(writing_result.final_text)
+    Ok(UploadTranscription {
+        text: writing_result.final_text,
+        words: None,
+    })
 }
 
 #[tauri::command]
@@ -5970,4 +6076,103 @@ pub async fn show_in_folder(path: String) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod diarization_tests {
+    use super::{group_words_into_speaker_text, TranscriptionWord};
+
+    fn word(text: &str, speaker: Option<&str>) -> TranscriptionWord {
+        TranscriptionWord {
+            text: text.to_string(),
+            start_ms: None,
+            end_ms: None,
+            speaker_id: speaker.map(str::to_string),
+            confidence: None,
+        }
+    }
+
+    #[test]
+    fn two_speakers_produces_two_paragraphs() {
+        let words = vec![
+            word("Hello", Some("Speaker 0")),
+            word("world.", Some("Speaker 0")),
+            word("Thanks.", Some("Speaker 1")),
+        ];
+        let result = group_words_into_speaker_text(&words);
+        assert_eq!(result, "Speaker 0: Hello world.\n\nSpeaker 1: Thanks.");
+    }
+
+    #[test]
+    fn single_speaker_produces_one_block() {
+        let words = vec![
+            word("Hello", Some("Speaker 0")),
+            word("world.", Some("Speaker 0")),
+        ];
+        let result = group_words_into_speaker_text(&words);
+        assert_eq!(result, "Speaker 0: Hello world.");
+    }
+
+    #[test]
+    fn no_speaker_produces_single_block_without_prefix() {
+        let words = vec![word("Hello", None), word("world.", None)];
+        let result = group_words_into_speaker_text(&words);
+        assert_eq!(result, "Hello world.");
+    }
+
+    #[test]
+    fn empty_input_returns_empty_string() {
+        assert_eq!(group_words_into_speaker_text(&[]), "");
+    }
+
+    #[test]
+    fn words_without_speaker_continue_current_run() {
+        let words = vec![
+            word("Hello", Some("Speaker 0")),
+            word("there", None), // no speaker → continue Speaker 0 run
+            word("Goodbye.", Some("Speaker 1")),
+        ];
+        let result = group_words_into_speaker_text(&words);
+        assert_eq!(result, "Speaker 0: Hello there\n\nSpeaker 1: Goodbye.");
+    }
+
+    #[test]
+    fn three_speaker_switches() {
+        let words = vec![
+            word("A", Some("Speaker 0")),
+            word("B", Some("Speaker 1")),
+            word("C", Some("Speaker 0")),
+        ];
+        let result = group_words_into_speaker_text(&words);
+        assert_eq!(result, "Speaker 0: A\n\nSpeaker 1: B\n\nSpeaker 0: C");
+    }
+
+    // Soniox tokens carry their own leading whitespace and punctuation.
+    #[test]
+    fn soniox_style_pre_spaced_tokens_no_double_space() {
+        // Soniox emits tokens like "How", " are", " you", "?"
+        let words = vec![
+            word("How", Some("Speaker 0")),
+            word(" are", Some("Speaker 0")),
+            word(" you", Some("Speaker 0")),
+            word("?", Some("Speaker 0")),
+        ];
+        let result = group_words_into_speaker_text(&words);
+        assert_eq!(result, "Speaker 0: How are you?");
+    }
+
+    #[test]
+    fn soniox_style_two_speakers_pre_spaced() {
+        let words = vec![
+            word("Hello", Some("Speaker 0")),
+            word(" there", Some("Speaker 0")),
+            word(".", Some("Speaker 0")),
+            word("How", Some("Speaker 1")),
+            word(" are", Some("Speaker 1")),
+            word(" you", Some("Speaker 1")),
+            word("?", Some("Speaker 1")),
+        ];
+        let result = group_words_into_speaker_text(&words);
+        assert_eq!(result, "Speaker 0: Hello there.\n\nSpeaker 1: How are you?");
+    }
 }
