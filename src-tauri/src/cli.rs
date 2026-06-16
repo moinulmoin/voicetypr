@@ -167,26 +167,36 @@ async fn warm_ai_key_cache(app: &tauri::AppHandle) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-async fn run_status(app: &tauri::AppHandle, _args: StatusArgs) -> Result<(), Box<dyn Error>> {
+async fn run_status(app: &tauri::AppHandle, args: StatusArgs) -> Result<(), Box<dyn Error>> {
     let settings = get_settings(app.clone()).await?;
     let availability = crate::recognition_availability_snapshot(app).await;
-    let payload = json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "settings": {
-            "current_model": settings.current_model,
-            "current_model_engine": settings.current_model_engine,
-            "speech_language": settings.speech_language,
-            "transcription_task": settings.transcription_task,
-            "final_text_language": settings.final_text_language,
-        },
-        "availability": availability,
-    });
 
-    println!("{}", serde_json::to_string_pretty(&payload)?);
+    if args.json {
+        let payload = json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "settings": {
+                "current_model": settings.current_model,
+                "current_model_engine": settings.current_model_engine,
+                "speech_language": settings.speech_language,
+                "transcription_task": settings.transcription_task,
+                "final_text_language": settings.final_text_language,
+            },
+            "availability": availability,
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        println!("version:  {}", env!("CARGO_PKG_VERSION"));
+        println!(
+            "model:    {} ({})",
+            settings.current_model, settings.current_model_engine
+        );
+        println!("language: {}", settings.speech_language);
+        println!("engines:  {}", format_availability(&availability));
+    }
     Ok(())
 }
 
-async fn run_models(app: &tauri::AppHandle, _args: OutputArgs) -> Result<(), Box<dyn Error>> {
+async fn run_models(app: &tauri::AppHandle, args: OutputArgs) -> Result<(), Box<dyn Error>> {
     let response = get_model_status(
         app.state::<AsyncRwLock<WhisperManager>>(),
         app.state::<ParakeetManager>(),
@@ -194,7 +204,18 @@ async fn run_models(app: &tauri::AppHandle, _args: OutputArgs) -> Result<(), Box
     )
     .await?;
 
-    println!("{}", serde_json::to_string_pretty(&response)?);
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+    } else {
+        for m in &response.models {
+            let state = if m.downloaded {
+                "ready"
+            } else {
+                "not downloaded"
+            };
+            println!("{:40} {:10} {}", m.display_name, m.engine, state);
+        }
+    }
     Ok(())
 }
 
@@ -220,14 +241,14 @@ async fn run_transcribe(
             (!settings.current_model_engine.is_empty())
                 .then_some(settings.current_model_engine.clone())
         });
-        let text = transcribe_audio_file_for_cli(
+        let t = transcribe_audio_file_for_cli(
             app.clone(),
             args.file.to_string_lossy().to_string(),
             model.clone(),
             engine.clone(),
         )
         .await?;
-        json!({ "text": text, "model": model, "engine": engine })
+        json!({ "text": t.text, "words": t.words, "metadata": t.metadata, "model": model, "engine": engine })
     };
 
     if args.json {
@@ -279,14 +300,14 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
             (!settings.current_model_engine.is_empty())
                 .then_some(settings.current_model_engine.clone())
         });
-        let text = transcribe_audio_file_for_cli(
+        let t = transcribe_audio_file_for_cli(
             app.clone(),
             output_path.to_string_lossy().to_string(),
             model.clone(),
             engine.clone(),
         )
         .await?;
-        json!({ "text": text, "model": model, "engine": engine, "stop_reason": stop_message })
+        json!({ "text": t.text, "words": t.words, "metadata": t.metadata, "model": model, "engine": engine, "stop_reason": stop_message })
     };
 
     let _ = std::fs::remove_file(&output_path);
@@ -402,6 +423,23 @@ fn parse_server(value: &str) -> Result<(String, u16), Box<dyn Error>> {
     Ok((host.to_string(), port))
 }
 
+fn format_availability(snap: &crate::RecognitionAvailabilitySnapshot) -> String {
+    let parts: Vec<&str> = [
+        snap.whisper_available.then_some("whisper"),
+        snap.parakeet_available.then_some("parakeet"),
+        (snap.cloud_selected && snap.cloud_ready).then_some("cloud"),
+        snap.remote_available.then_some("remote"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if parts.is_empty() {
+        "none".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,5 +490,80 @@ mod tests {
             }
             other => panic!("unexpected command: {:?}", other),
         }
+    }
+
+    #[test]
+    fn cli_parses_status_json_flag() {
+        let cli = Cli::try_parse_from(["voicetypr", "status", "--json"]).unwrap();
+        match cli.command {
+            Some(CliCommand::Status(args)) => assert!(args.json),
+            other => panic!("unexpected command: {:?}", other),
+        }
+
+        let cli = Cli::try_parse_from(["voicetypr", "status"]).unwrap();
+        match cli.command {
+            Some(CliCommand::Status(args)) => assert!(!args.json),
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cli_parses_models_json_flag() {
+        let cli = Cli::try_parse_from(["voicetypr", "models", "--json"]).unwrap();
+        match cli.command {
+            Some(CliCommand::Models(args)) => assert!(args.json),
+            other => panic!("unexpected command: {:?}", other),
+        }
+
+        let cli = Cli::try_parse_from(["voicetypr", "models"]).unwrap();
+        match cli.command {
+            Some(CliCommand::Models(args)) => assert!(!args.json),
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn format_availability_none_when_all_false() {
+        let snap = crate::RecognitionAvailabilitySnapshot {
+            whisper_available: false,
+            parakeet_available: false,
+            cloud_selected: false,
+            cloud_ready: false,
+            remote_selected: false,
+            remote_status: crate::remote::settings::ConnectionStatus::default(),
+            remote_last_checked: 0,
+            remote_available: false,
+        };
+        assert_eq!(format_availability(&snap), "none");
+    }
+
+    #[test]
+    fn format_availability_lists_available_engines() {
+        let snap = crate::RecognitionAvailabilitySnapshot {
+            whisper_available: true,
+            parakeet_available: false,
+            cloud_selected: true,
+            cloud_ready: true,
+            remote_selected: false,
+            remote_status: crate::remote::settings::ConnectionStatus::default(),
+            remote_last_checked: 0,
+            remote_available: true,
+        };
+        assert_eq!(format_availability(&snap), "whisper, cloud, remote");
+    }
+
+    #[test]
+    fn format_availability_cloud_requires_ready() {
+        let snap = crate::RecognitionAvailabilitySnapshot {
+            whisper_available: false,
+            parakeet_available: false,
+            cloud_selected: true,
+            cloud_ready: false, // selected but not ready
+            remote_selected: false,
+            remote_status: crate::remote::settings::ConnectionStatus::default(),
+            remote_last_checked: 0,
+            remote_available: false,
+        };
+        assert_eq!(format_availability(&snap), "none");
     }
 }

@@ -34,6 +34,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 | 022  | Wave 1 (F3) — save uploaded transcript to `.txt`/`.md` | P2 | S | 021 | DONE (code) — NEEDS-SMOKE 022-S1 (`82039e8`) |
 | 023  | Wave 2 (F2) — cloud speaker diarization (uploads) | P2 | M | 021, W0 | DONE (code) — NEEDS-SMOKE 023-S1 |
 | 024  | Wave 3 (F4) — rich, filterable history | P2 | M | 021, W0 | DONE (code) — NEEDS-SMOKE 024-S1 |
+| 025  | Wave 4 (F1) — CLI agent polish (MCP deferred) | P2 | S | 021, W0 | DONE (code) — NEEDS-SMOKE 025-S1 |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 

@@ -244,6 +244,10 @@ sessions, the Swift sidecar fd-redirect, UI-responsiveness, and wall-clock timin
 
 - **024-S1**: with the app-hint opt-in **ON**, dictate into an app → the history entry shows that app; upload a file via a cloud provider → its entry shows source + duration (+ a "Speakers" badge if diarized). Filter the list by **source / app / date** and confirm it narrows correctly; an old (pre-metadata) entry still renders and appears only under "All sources". With the opt-in **OFF**, new entries carry no app name.
 
+## Plan 025 — CLI agent polish (NEEDS-SMOKE)
+
+- **025-S1**: `voicetypr transcribe --file x.wav --json` emits `{ text, words, metadata, model, engine }`; without `--json` prints just the text. `voicetypr status` / `voicetypr models` print human-readable output by default and JSON with `--json`. (Flag parsing + availability formatting are unit-covered; the real transcription round-trip is the residue.)
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are

@@ -5208,10 +5208,8 @@ pub async fn transcribe_audio_file_for_cli(
     file_path: String,
     model_name: String,
     model_engine: Option<String>,
-) -> Result<String, String> {
-    transcribe_audio_file_impl(app, file_path, model_name, model_engine, false)
-        .await
-        .map(|t| t.text)
+) -> Result<UploadTranscription, String> {
+    transcribe_audio_file_impl(app, file_path, model_name, model_engine, false).await
 }
 
 async fn transcribe_audio_file_impl(
