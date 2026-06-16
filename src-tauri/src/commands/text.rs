@@ -298,10 +298,12 @@ fn insert_via_clipboard(
                         log::warn!("AppleScript paste failed: {}, text remains in clipboard", e);
                         // Notify user through pill toast that paste failed but text is in clipboard
                         if let Some(app) = &app_handle {
-                            crate::commands::audio::pill_toast(
+                            crate::commands::audio::pill_toast_with_suggestion(
                                 app,
-                                "Paste failed - copied to clipboard",
+                                "Text copied",
+                                "Grant Accessibility permission to enable auto-paste",
                                 1500,
+                                None,
                             );
                         }
                         // Don't fail - text is still in clipboard for manual paste
@@ -314,10 +316,12 @@ fn insert_via_clipboard(
                         );
                         // Notify user through pill toast about the failure
                         if let Some(app) = &app_handle {
-                            crate::commands::audio::pill_toast(
+                            crate::commands::audio::pill_toast_with_suggestion(
                                 app,
-                                "Paste failed - copied to clipboard",
+                                "Text copied",
+                                "Grant Accessibility permission to enable auto-paste",
                                 1500,
+                                None,
                             );
                         }
                         // Don't fail - text is still in clipboard for manual paste

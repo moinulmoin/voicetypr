@@ -248,6 +248,10 @@ sessions, the Swift sidecar fd-redirect, UI-responsiveness, and wall-clock timin
 
 - **025-S1**: `voicetypr transcribe --file x.wav --json` emits `{ text, words, metadata, model, engine }`; without `--json` prints just the text. `voicetypr status` / `voicetypr models` print human-readable output by default and JSON with `--json`. (Flag parsing + availability formatting are unit-covered; the real transcription round-trip is the residue.)
 
+## Plan 026 — actionable errors + feedback (NEEDS-SMOKE)
+
+- **026-S1**: deny microphone access → the pill feedback overlay shows the failure + a "how to fix" line (System Settings ▸ Privacy & Security). Trigger auto-paste without Accessibility permission → overlay shows "Text copied" + the Accessibility remediation. A normal success toast shows no remediation line.
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are

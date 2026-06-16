@@ -3,11 +3,11 @@
 //! Tests the audio recording changes including:
 //! - Recording size validation
 //! - AudioRecorder state management
-//! - PillToastPayload serialization
+//! - PillToastEventPayload serialization
 //! - Recording indicator mode logic
 
 use crate::audio::recorder::{AudioRecorder, RecordingSize};
-use crate::commands::audio::PillToastPayload;
+use crate::commands::audio::PillToastEventPayload;
 
 // ============================================================================
 // RecordingSize Tests
@@ -119,15 +119,19 @@ fn test_audio_recorder_get_devices() {
 }
 
 // ============================================================================
-// PillToastPayload Tests
+// PillToastEventPayload Tests
 // ============================================================================
 
 #[test]
 fn test_pill_toast_payload_creation() {
-    let payload = PillToastPayload {
+    let payload = PillToastEventPayload {
         id: 1,
         message: "Test message".to_string(),
         duration_ms: 2000,
+        action: None,
+        variant: None,
+        persistent: false,
+        suggestion: None,
     };
 
     assert_eq!(payload.id, 1);
@@ -137,10 +141,14 @@ fn test_pill_toast_payload_creation() {
 
 #[test]
 fn test_pill_toast_payload_serialization() {
-    let payload = PillToastPayload {
+    let payload = PillToastEventPayload {
         id: 42,
         message: "Recording started".to_string(),
         duration_ms: 1500,
+        action: None,
+        variant: None,
+        persistent: false,
+        suggestion: None,
     };
 
     let json = serde_json::to_string(&payload).unwrap();
@@ -151,10 +159,14 @@ fn test_pill_toast_payload_serialization() {
 
 #[test]
 fn test_pill_toast_payload_clone() {
-    let payload = PillToastPayload {
+    let payload = PillToastEventPayload {
         id: 1,
         message: "Test".to_string(),
         duration_ms: 1000,
+        action: None,
+        variant: None,
+        persistent: false,
+        suggestion: None,
     };
 
     let cloned = payload.clone();
@@ -165,10 +177,14 @@ fn test_pill_toast_payload_clone() {
 
 #[test]
 fn test_pill_toast_payload_empty_message() {
-    let payload = PillToastPayload {
+    let payload = PillToastEventPayload {
         id: 0,
         message: "".to_string(),
         duration_ms: 0,
+        action: None,
+        variant: None,
+        persistent: false,
+        suggestion: None,
     };
 
     let json = serde_json::to_string(&payload).unwrap();
@@ -177,10 +193,14 @@ fn test_pill_toast_payload_empty_message() {
 
 #[test]
 fn test_pill_toast_payload_unicode_message() {
-    let payload = PillToastPayload {
+    let payload = PillToastEventPayload {
         id: 1,
         message: "🎤 Recording...".to_string(),
         duration_ms: 2000,
+        action: None,
+        variant: None,
+        persistent: false,
+        suggestion: None,
     };
 
     let json = serde_json::to_string(&payload).unwrap();
@@ -190,10 +210,14 @@ fn test_pill_toast_payload_unicode_message() {
 
 #[test]
 fn test_pill_toast_payload_long_duration() {
-    let payload = PillToastPayload {
+    let payload = PillToastEventPayload {
         id: 1,
         message: "Long toast".to_string(),
         duration_ms: u64::MAX,
+        action: None,
+        variant: None,
+        persistent: false,
+        suggestion: None,
     };
 
     let json = serde_json::to_string(&payload).unwrap();

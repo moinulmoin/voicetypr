@@ -211,7 +211,8 @@ export function AppContainer() {
           }
           toast.error(data.title || 'No Models Available', {
             description:
-              data.message ||
+              data.suggestion ??
+              data.message ??
               'Connect a cloud provider or download a local model in Models before recording.',
             duration: 8000
           });

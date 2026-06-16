@@ -115,18 +115,10 @@ pub enum PillToastVariant {
     Warning,
 }
 
-/// Payload for legacy pill toast messages.
-#[derive(serde::Serialize, Clone)]
-pub struct PillToastPayload {
-    pub id: u64,
-    pub message: String,
-    pub duration_ms: u64,
-}
-
 /// Payload emitted to the frontend. Optional fields preserve the legacy
 /// severity-inference path: ordinary `pill_toast` calls emit no explicit variant.
 #[derive(serde::Serialize, Clone)]
-struct PillToastEventPayload {
+pub(crate) struct PillToastEventPayload {
     pub id: u64,
     pub message: String,
     pub duration_ms: u64,
@@ -136,6 +128,8 @@ struct PillToastEventPayload {
     pub variant: Option<PillToastVariant>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub persistent: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
 }
 
 fn next_toast_id() -> u64 {
@@ -161,6 +155,7 @@ fn emit_pill_toast(
     duration_ms: u64,
     variant: Option<PillToastVariant>,
     persistent: bool,
+    suggestion: Option<&str>,
 ) -> u64 {
     let id = next_toast_id();
 
@@ -185,15 +180,10 @@ fn emit_pill_toast(
         );
     }
 
-    let legacy_payload = PillToastPayload {
+    let payload = PillToastEventPayload {
         id,
         message: message.to_string(),
         duration_ms,
-    };
-    let payload = PillToastEventPayload {
-        id: legacy_payload.id,
-        message: legacy_payload.message,
-        duration_ms: legacy_payload.duration_ms,
         action: if persistent {
             Some(PillToastAction::Show)
         } else {
@@ -201,6 +191,7 @@ fn emit_pill_toast(
         },
         variant,
         persistent,
+        suggestion: suggestion.map(|s| s.to_string()),
     };
     let _ = app.emit("toast", payload);
     id
@@ -210,7 +201,7 @@ fn emit_pill_toast(
 /// Existing call sites intentionally emit no variant, preserving frontend
 /// severity inference.
 pub fn pill_toast(app: &AppHandle, message: &str, duration_ms: u64) -> u64 {
-    emit_pill_toast(app, message, duration_ms, None, false)
+    emit_pill_toast(app, message, duration_ms, None, false, None)
 }
 
 pub fn pill_toast_with_variant(
@@ -219,11 +210,22 @@ pub fn pill_toast_with_variant(
     duration_ms: u64,
     variant: PillToastVariant,
 ) -> u64 {
-    emit_pill_toast(app, message, duration_ms, Some(variant), false)
+    emit_pill_toast(app, message, duration_ms, Some(variant), false, None)
 }
 
 pub fn pill_toast_persistent(app: &AppHandle, message: &str, variant: PillToastVariant) -> u64 {
-    emit_pill_toast(app, message, 0, Some(variant), true)
+    emit_pill_toast(app, message, 0, Some(variant), true, None)
+}
+
+/// Show a toast with a remediation suggestion rendered below the message.
+pub fn pill_toast_with_suggestion(
+    app: &AppHandle,
+    message: &str,
+    suggestion: &str,
+    duration_ms: u64,
+    variant: Option<PillToastVariant>,
+) -> u64 {
+    emit_pill_toast(app, message, duration_ms, variant, false, Some(suggestion))
 }
 
 pub fn clear_pill_toast(app: &AppHandle, toast_id: u64) {
@@ -241,6 +243,7 @@ pub fn clear_pill_toast(app: &AppHandle, toast_id: u64) {
         action: Some(PillToastAction::Clear),
         variant: None,
         persistent: false,
+        suggestion: None,
     };
 
     let _ = app.emit("toast", payload);
@@ -1283,9 +1286,9 @@ mod tests {
         recording_license_state, remote_server_error_pill_message, should_hide_pill_when_idle,
         should_use_active_remote, silence_event_runs_in_state, silence_timeout_disposition,
         stop_should_reset_to_idle, sync_retranscription_failure_metadata, toast_clear_is_current,
-        transcription_watchdog_budget, NormalizedTempFile, RecordingLicenseState,
-        SilenceDetectorEvent, SilenceTimeoutDisposition, StopInFlightGuard, TranscriptionFailure,
-        TranscriptionStatus,
+        transcription_watchdog_budget, NormalizedTempFile, PillToastEventPayload,
+        RecordingLicenseState, SilenceDetectorEvent, SilenceTimeoutDisposition, StopInFlightGuard,
+        TranscriptionFailure, TranscriptionStatus,
     };
     use crate::commands::license::CachedLicense;
     use crate::license::{LicenseState, LicenseStatus};
@@ -2061,6 +2064,43 @@ mod tests {
             data["writing"] = m;
         }
         assert!(!data.as_object().unwrap().contains_key("writing"));
+    }
+
+    #[test]
+    fn pill_toast_event_payload_serializes_suggestion_when_present() {
+        let payload = PillToastEventPayload {
+            id: 1,
+            message: "Microphone access failed".to_string(),
+            duration_ms: 1500,
+            action: None,
+            variant: None,
+            persistent: false,
+            suggestion: Some("Enable Microphone access in System Settings".to_string()),
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(
+            json["suggestion"].as_str(),
+            Some("Enable Microphone access in System Settings")
+        );
+        assert_eq!(json["message"].as_str(), Some("Microphone access failed"));
+    }
+
+    #[test]
+    fn pill_toast_event_payload_omits_suggestion_when_none() {
+        let payload = PillToastEventPayload {
+            id: 2,
+            message: "Recording error".to_string(),
+            duration_ms: 1500,
+            action: None,
+            variant: None,
+            persistent: false,
+            suggestion: None,
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert!(
+            json.get("suggestion").is_none(),
+            "suggestion key must be absent when None"
+        );
     }
 }
 
@@ -2992,11 +3032,12 @@ fn spawn_silence_event_listener(
                             tauri::async_runtime::spawn(async move {
                                 match cancel_recording(app_for_cancel.clone()).await {
                                     Ok(()) => {
-                                        pill_toast_with_variant(
+                                        pill_toast_with_suggestion(
                                             &app_for_cancel,
                                             "No audio captured",
+                                            "Try recording again",
                                             1500,
-                                            PillToastVariant::Warning,
+                                            Some(PillToastVariant::Warning),
                                         );
                                     }
                                     Err(e) => {
@@ -3380,7 +3421,13 @@ pub async fn start_recording(
                         );
 
                         // Emit user-friendly error via pill toast
-                        pill_toast(&app, "Microphone access failed", 1500);
+                        pill_toast_with_suggestion(
+                        &app,
+                        "Microphone access failed",
+                        "Enable Microphone access in System Settings \u{25b8} Privacy & Security",
+                        1500,
+                        None,
+                    );
 
                         resume_media_if_needed();
                         return Err("Failed to start recording".to_string());
@@ -3420,17 +3467,21 @@ pub async fn start_recording(
                     update_recording_state(&app, RecordingState::Error, Some(e.to_string()));
 
                     // Provide specific error messages for common issues
-                    let user_message = if e.contains("permission") || e.contains("access") {
-                        "Microphone permission denied"
-                    } else if e.contains("device") || e.contains("not found") {
-                        "No microphone found"
-                    } else if e.contains("in use") || e.contains("busy") {
-                        "Microphone busy"
-                    } else {
-                        "Recording failed"
-                    };
+                    let (user_message, suggestion) =
+                        if e.contains("permission") || e.contains("access") {
+                            (
+                        "Microphone permission denied",
+                        "Enable Microphone access in System Settings \u{25b8} Privacy & Security",
+                    )
+                        } else if e.contains("device") || e.contains("not found") {
+                            ("No microphone found", "Connect a microphone and try again")
+                        } else if e.contains("in use") || e.contains("busy") {
+                            ("Microphone busy", "Close other apps using the microphone")
+                        } else {
+                            ("Recording failed", "Try recording again")
+                        };
 
-                    pill_toast(&app, user_message, 1500);
+                    pill_toast_with_suggestion(&app, user_message, suggestion, 1500, None);
 
                     resume_media_if_needed();
                     return Err(e);
@@ -3793,7 +3844,13 @@ pub async fn stop_recording(
     if stop_integrity_failure {
         let user_message = "Recording was interrupted — please try again";
         take_and_remove_current_recording_path(&app_state, "interrupted");
-        pill_toast(&app, user_message, 2000);
+        pill_toast_with_suggestion(
+            &app,
+            "Recording was interrupted",
+            "Try recording again",
+            2000,
+            None,
+        );
         update_recording_state(&app, RecordingState::Error, Some(user_message.to_string()));
         let app_for_reset = app.clone();
         tokio::spawn(async move {
@@ -3879,7 +3936,13 @@ pub async fn stop_recording(
     if let Ok(meta) = std::fs::metadata(&audio_path) {
         // A valid WAV header is typically 44 bytes; <= 44 implies no audio samples were written
         if meta.len() <= 44 {
-            pill_toast(&app, "No audio captured", 1000);
+            pill_toast_with_suggestion(
+                &app,
+                "No audio captured",
+                "Try recording again",
+                1000,
+                None,
+            );
             if let Err(e) = std::fs::remove_file(&audio_path) {
                 log::debug!("Failed to remove empty audio file: {}", e);
             }
@@ -4469,10 +4532,12 @@ pub async fn stop_recording(
                     log::info!("Whisper returned empty transcription - no speech detected");
 
                     // Emit graceful feedback to user via pill toast
-                    pill_toast(
+                    pill_toast_with_suggestion(
                         &app_for_task,
-                        "No speech detected - try speaking closer to the microphone",
+                        "No speech detected",
+                        "Try speaking closer to the microphone",
                         1500,
+                        None,
                     );
 
                     // Wait for feedback to show before hiding pill
@@ -4694,17 +4759,21 @@ pub async fn stop_recording(
                                 // Check if it's an accessibility permission issue
                                 if e.contains("accessibility") || e.contains("permission") {
                                     // Show pill toast for accessibility permission error
-                                    pill_toast(
+                                    pill_toast_with_suggestion(
                                         &app_for_process,
-                                        "Text copied - grant permission to auto-paste",
+                                        "Text copied",
+                                        "Grant Accessibility permission to enable auto-paste",
                                         1500,
+                                        None,
                                     );
                                 } else {
                                     // Generic paste error
-                                    pill_toast(
+                                    pill_toast_with_suggestion(
                                         &app_for_process,
-                                        "Paste failed - text in clipboard",
+                                        "Text copied",
+                                        "Grant Accessibility permission to enable auto-paste",
                                         1500,
+                                        None,
                                     );
                                 }
                             }

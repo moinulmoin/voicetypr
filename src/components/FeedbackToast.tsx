@@ -11,6 +11,7 @@ export interface PillToastPayload {
   action?: PillToastAction;
   variant?: PillToastVariant;
   persistent?: boolean;
+  suggestion?: string;
 }
 
 type ToastSeverity = "info" | "success" | "error" | "warning";
@@ -19,6 +20,7 @@ interface ActiveToast {
   id: number;
   message: string;
   severity: ToastSeverity;
+  suggestion?: string;
 }
 
 const SEVERITY_TREATMENT: Record<ToastSeverity, string> = {
@@ -85,6 +87,7 @@ export function FeedbackToast() {
         id: payload.id,
         message: payload.message,
         severity: severityForPayload(payload),
+        suggestion: payload.suggestion,
       });
 
       if (payload.persistent === true) return;
@@ -133,6 +136,11 @@ export function FeedbackToast() {
         <span className="block overflow-hidden break-words [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
           {toast.message}
         </span>
+        {toast.suggestion && (
+          <span className="mt-0.5 block text-xs opacity-70 overflow-hidden break-words [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] text-neutral-500 dark:text-neutral-400">
+            {toast.suggestion}
+          </span>
+        )}
       </div>
     </div>
   );

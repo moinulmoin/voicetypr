@@ -130,4 +130,39 @@ describe("FeedbackToast", () => {
     expect(status).toHaveTextContent("Check your microphone");
     expect(status).toHaveClass("before:bg-amber-500/80");
   });
+
+  it("renders suggestion as a second line when present", () => {
+    render(<FeedbackToast />);
+
+    act(() => {
+      emitMockEvent("toast", {
+        id: 7,
+        message: "Microphone access denied",
+        duration_ms: 5000,
+        suggestion: "Open System Settings > Privacy & Security > Microphone to grant access.",
+      });
+    });
+
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Microphone access denied");
+    expect(status).toHaveTextContent("Open System Settings > Privacy & Security > Microphone to grant access.");
+  });
+
+  it("renders only the message when suggestion is absent", () => {
+    render(<FeedbackToast />);
+
+    act(() => {
+      emitMockEvent("toast", {
+        id: 8,
+        message: "Recording failed",
+        duration_ms: 3000,
+      });
+    });
+
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Recording failed");
+    // Only one text span — no suggestion line rendered
+    const spans = status.querySelectorAll("span");
+    expect(spans).toHaveLength(1);
+  });
 });
