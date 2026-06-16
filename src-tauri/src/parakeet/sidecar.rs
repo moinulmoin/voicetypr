@@ -43,6 +43,43 @@ fn parse_response_line(raw: &str) -> Result<ParakeetResponse, ParakeetError> {
         }
     }
 }
+
+async fn request_with_timeout<F>(
+    operation: String,
+    timeout_secs: u64,
+    timeout: Duration,
+    request: F,
+) -> Result<ParakeetResponse, ParakeetError>
+where
+    F: std::future::Future<Output = Result<ParakeetResponse, ParakeetError>>,
+{
+    match tokio::time::timeout(timeout, request).await {
+        Ok(result) => result,
+        Err(_) => Err(ParakeetError::Timeout {
+            operation,
+            timeout_secs,
+        }),
+    }
+}
+
+async fn timed_request<F>(
+    command: &ParakeetCommand,
+    request: F,
+) -> Result<ParakeetResponse, ParakeetError>
+where
+    F: std::future::Future<Output = Result<ParakeetResponse, ParakeetError>>,
+{
+    let operation = command.operation_name().to_string();
+    let timeout_secs = command.request_timeout_secs();
+    request_with_timeout(
+        operation,
+        timeout_secs,
+        Duration::from_secs(timeout_secs),
+        request,
+    )
+    .await
+}
+
 pub struct ParakeetSidecar {
     rx: Receiver<CommandEvent>,
     child: Option<CommandChild>,
@@ -210,6 +247,12 @@ impl ParakeetClient {
         Ok(guard)
     }
 
+    fn clear_sidecar(guard: &mut RwLockWriteGuard<'_, Option<ParakeetSidecar>>) {
+        if let Some(sidecar) = guard.take() {
+            sidecar.kill();
+        }
+    }
+
     pub async fn send(
         &self,
         app: &AppHandle,
@@ -217,23 +260,27 @@ impl ParakeetClient {
     ) -> Result<ParakeetResponse, ParakeetError> {
         let mut guard = self.ensure(app).await?;
         let response = match guard.as_mut() {
-            Some(sidecar) => sidecar.request(command).await,
+            Some(sidecar) => timed_request(command, sidecar.request(command)).await,
             None => return Err(ParakeetError::Terminated),
         };
 
         match response {
+            Err(ParakeetError::Timeout { .. }) => {
+                Self::clear_sidecar(&mut guard);
+                response
+            }
             Err(ParakeetError::Terminated) => {
-                let old = guard.take();
+                Self::clear_sidecar(&mut guard);
                 drop(guard);
-                if let Some(sidecar) = old {
-                    sidecar.kill();
-                }
                 let mut guard = self.ensure(app).await?;
-                if let Some(sidecar) = guard.as_mut() {
-                    sidecar.request(command).await
-                } else {
-                    Err(ParakeetError::Terminated)
+                let response = match guard.as_mut() {
+                    Some(sidecar) => timed_request(command, sidecar.request(command)).await,
+                    None => Err(ParakeetError::Terminated),
+                };
+                if matches!(response, Err(ParakeetError::Timeout { .. })) {
+                    Self::clear_sidecar(&mut guard);
                 }
+                response
             }
             other => other,
         }
@@ -251,7 +298,7 @@ impl ParakeetClient {
     {
         let mut guard = self.ensure(app).await?;
         let response = match guard.as_mut() {
-            Some(sidecar) => {
+            Some(sidecar) if cancel_flag.is_some() => {
                 sidecar
                     .request_with_progress_and_cancel(
                         command,
@@ -260,39 +307,63 @@ impl ParakeetClient {
                     )
                     .await
             }
+            Some(sidecar) => {
+                timed_request(
+                    command,
+                    sidecar.request_with_progress_and_cancel(
+                        command,
+                        Some(&mut progress_callback),
+                        None,
+                    ),
+                )
+                .await
+            }
             None => return Err(ParakeetError::Terminated),
         };
 
         match response {
+            Err(ParakeetError::Timeout { .. }) => {
+                Self::clear_sidecar(&mut guard);
+                response
+            }
             Err(ParakeetError::Terminated)
                 if !cancel_flag
                     .as_ref()
                     .is_some_and(|flag| flag.load(Ordering::Relaxed)) =>
             {
-                let old = guard.take();
+                Self::clear_sidecar(&mut guard);
                 drop(guard);
-                if let Some(sidecar) = old {
-                    sidecar.kill();
-                }
                 let mut guard = self.ensure(app).await?;
-                if let Some(sidecar) = guard.as_mut() {
-                    sidecar
-                        .request_with_progress_and_cancel(
+                let response = match guard.as_mut() {
+                    Some(sidecar) if cancel_flag.is_some() => {
+                        sidecar
+                            .request_with_progress_and_cancel(
+                                command,
+                                Some(&mut progress_callback),
+                                cancel_flag,
+                            )
+                            .await
+                    }
+                    Some(sidecar) => {
+                        timed_request(
                             command,
-                            Some(&mut progress_callback),
-                            cancel_flag,
+                            sidecar.request_with_progress_and_cancel(
+                                command,
+                                Some(&mut progress_callback),
+                                None,
+                            ),
                         )
                         .await
-                } else {
-                    Err(ParakeetError::Terminated)
+                    }
+                    None => Err(ParakeetError::Terminated),
+                };
+                if matches!(response, Err(ParakeetError::Timeout { .. })) {
+                    Self::clear_sidecar(&mut guard);
                 }
+                response
             }
             Err(ParakeetError::SidecarError { code, message }) if code == "cancelled" => {
-                let old = guard.take();
-                drop(guard);
-                if let Some(sidecar) = old {
-                    sidecar.kill();
-                }
+                Self::clear_sidecar(&mut guard);
                 Err(ParakeetError::SidecarError { code, message })
             }
             other => other,
@@ -308,9 +379,10 @@ impl ParakeetClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_json_payload, parse_response_line};
+    use super::{extract_json_payload, parse_response_line, request_with_timeout};
     use crate::parakeet::error::ParakeetError;
-    use crate::parakeet::messages::ParakeetResponse;
+    use crate::parakeet::messages::{ParakeetResponse, SHORT_REQUEST_TIMEOUT_SECS};
+    use std::time::Duration;
 
     #[test]
     fn extract_json_payload_returns_object_slice() {
@@ -369,6 +441,28 @@ mod tests {
             }
             other => panic!("unexpected response: {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn request_with_timeout_returns_typed_timeout_for_pending_receive() {
+        let started = tokio::time::Instant::now();
+        let err = request_with_timeout(
+            "status".to_string(),
+            SHORT_REQUEST_TIMEOUT_SECS,
+            Duration::from_millis(10),
+            std::future::pending::<Result<ParakeetResponse, ParakeetError>>(),
+        )
+        .await
+        .expect_err("expected timeout");
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(matches!(
+            err,
+            ParakeetError::Timeout {
+                operation,
+                timeout_secs: SHORT_REQUEST_TIMEOUT_SECS,
+            } if operation == "status"
+        ));
     }
 
     #[test]

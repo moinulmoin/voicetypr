@@ -26,6 +26,7 @@ impl RecordingSize {
         Ok(())
     }
 }
+const WRITER_QUEUE_CAPACITY: usize = 1024; // Bounded memory; multi-second disk-stall slack.
 
 enum WriterMsg {
     Chunk(Vec<i16>),
@@ -212,7 +213,7 @@ impl AudioRecorder {
 
             let writer = hound::WavWriter::create(&output_path, spec).map_err(|e| e.to_string())?;
 
-            let (writer_tx, writer_rx) = mpsc::sync_channel::<WriterMsg>(64);
+            let (writer_tx, writer_rx) = mpsc::sync_channel::<WriterMsg>(WRITER_QUEUE_CAPACITY);
             let (recycle_tx, recycle_rx) = mpsc::channel::<Vec<i16>>();
             let recycle_tx_for_drop = recycle_tx.clone();
             let bytes_written = Arc::new(AtomicU64::new(0));
@@ -247,15 +248,20 @@ impl AudioRecorder {
                     let _ = recycle_tx.send(samples);
                 }
 
+                writer
+                    .finalize()
+                    .map_err(|e| format!("WAV finalize failed: {e}"))?;
+
                 let dropped = writer_dropped.load(Ordering::SeqCst);
                 if dropped > 0 {
                     log::warn!(
                         "Dropped {} audio chunks because the writer queue was full",
                         dropped
                     );
+                    return Err(format!(
+                        "Recording integrity failure: dropped {dropped} audio chunks before WAV finalization"
+                    ));
                 }
-
-                writer.finalize().map_err(|e| e.to_string())?;
 
                 if let Some(error) = write_error {
                     return Err(error);
@@ -499,14 +505,15 @@ impl AudioRecorder {
                 Err(_) => Err("Writer thread panicked".to_string()),
             };
 
-            // Check if any errors occurred during recording
+            writer_result?;
+
+            // Check if any errors occurred during recording after preserving writer integrity
+            // failures as the primary stop error.
             if let Ok(guard) = error_occurred.lock() {
                 if let Some(error) = &*guard {
                     return Err(error.clone());
                 }
             }
-
-            writer_result?;
 
             // Return appropriate message based on stop reason
             match stop_reason {
@@ -644,12 +651,18 @@ impl AudioRecorder {
 }
 
 /// Classifies an error returned by [`AudioRecorder::stop_recording`]. Returns true when the
-/// recording worker did NOT finish (stop timeout or a thread panic), so the WAV writer never
-/// finalized the file and the capture must not be transcribed. A worker that finishes with an
-/// error (e.g. a CPAL device error) finalizes the WAV first, so those return false and the
-/// captured audio can still be recovered.
+/// recording worker did NOT finish, or the WAV writer could not finalize the file, so the
+/// capture must not be transcribed. A worker that finishes with an error (e.g. a CPAL device
+/// error) finalizes the WAV first, so those return false and the captured audio can still be
+/// recovered.
 pub(crate) fn stop_error_is_unfinalized(error: &str) -> bool {
-    error.contains("failed to stop within timeout") || error.contains("panicked")
+    error.contains("failed to stop within timeout")
+        || error.contains("panicked")
+        || error.contains("WAV finalize failed:")
+}
+
+pub(crate) fn stop_error_is_integrity_failure(error: &str) -> bool {
+    error.starts_with("Recording integrity failure:")
 }
 
 #[cfg(test)]
@@ -664,9 +677,22 @@ mod tests {
         ));
         assert!(stop_error_is_unfinalized("Recording thread panicked"));
         assert!(stop_error_is_unfinalized("Writer thread panicked"));
+        assert!(stop_error_is_unfinalized(
+            "WAV finalize failed: failed to seek"
+        ));
         // Worker finished with an error -> WAV finalized -> recoverable, transcribe.
         assert!(!stop_error_is_unfinalized(
             "Audio device error: device disconnected"
+        ));
+    }
+
+    #[test]
+    fn stop_error_is_integrity_failure_matches_dropped_chunk_marker() {
+        assert!(stop_error_is_integrity_failure(
+            "Recording integrity failure: dropped 2 audio chunks before WAV finalization"
+        ));
+        assert!(!stop_error_is_integrity_failure(
+            "WAV finalize failed: failed to seek"
         ));
     }
 

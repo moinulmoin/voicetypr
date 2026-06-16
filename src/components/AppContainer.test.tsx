@@ -120,7 +120,9 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 
 vi.mock('@/components/onboarding/OnboardingDesktop', () => ({
-  OnboardingDesktop: ({ onComplete }: any) => {
+  OnboardingDesktop: ({ onCompletionStart, onCompletionError, onComplete }: any) => {
+    (window as any).__testOnboardingStart = onCompletionStart;
+    (window as any).__testOnboardingError = onCompletionError;
     (window as any).__testOnboardingComplete = onComplete;
     return (
       <button data-testid="onboarding">
@@ -301,6 +303,8 @@ describe('AppContainer', () => {
       expect(screen.getByTestId('onboarding')).toBeInTheDocument();
     });
     await act(async () => {
+      mockSettings.onboarding_completed = true;
+      rerender(<AppContainer />);
       (window as any).__testOnboardingComplete();
       rerender(<AppContainer />);
     });
@@ -311,6 +315,28 @@ describe('AppContainer', () => {
       expect(checkMicrophonePermissionMock).toHaveBeenCalledTimes(1);
       expect(requestNotificationPermissionServiceMock).toHaveBeenCalledTimes(1);
       expect(consoleLogSpy).toHaveBeenCalledWith('Permissions refreshed after onboarding completion');
+    });
+  });
+
+  it('does not run post-onboarding side effects when completion save fails', async () => {
+    mockSettings.onboarding_completed = false;
+    const { rerender } = render(<AppContainer />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      mockSettings.onboarding_completed = true;
+      rerender(<AppContainer />);
+      (window as any).__testOnboardingError?.();
+      rerender(<AppContainer />);
+    });
+
+    await waitFor(() => {
+      expect(checkAccessibilityPermissionMock).not.toHaveBeenCalled();
+      expect(checkMicrophonePermissionMock).not.toHaveBeenCalled();
+      expect(requestNotificationPermissionServiceMock).not.toHaveBeenCalled();
     });
   });
 

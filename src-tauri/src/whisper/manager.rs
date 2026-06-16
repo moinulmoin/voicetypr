@@ -285,9 +285,10 @@ impl WhisperManager {
 
                 if file_size == expected_size {
                     log::info!(
-                        "Model '{}' already exists with exact expected size. Skipping download.",
+                        "Model '{}' already exists with exact expected size. Verifying checksum before accepting.",
                         model_info.name
                     );
+                    Self::verify_model_checksum(model_info, output_path).await?;
                     return Ok(());
                 }
 
@@ -405,7 +406,25 @@ impl WhisperManager {
             progress_callback(total_size, total_size);
         }
 
-        // Verify checksum if available
+        Self::verify_model_checksum(model_info, output_path).await?;
+
+        // Log what files are in the directory after download
+        log::info!("[download_model] Download complete. Listing models directory:");
+        if let Ok(entries) = std::fs::read_dir(models_dir) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    log::info!("[download_model]   Found file: {}", name);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn verify_model_checksum(
+        model_info: &ModelInfo,
+        output_path: &PathBuf,
+    ) -> Result<(), String> {
         if !model_info.sha256.is_empty() {
             log::info!("Verifying model checksum...");
             match model_info.sha256.len() {
@@ -434,16 +453,6 @@ impl WhisperManager {
                 model_info.name
             );
             log::warn!("File integrity cannot be guaranteed without checksum verification.");
-        }
-
-        // Log what files are in the directory after download
-        log::info!("[download_model] Download complete. Listing models directory:");
-        if let Ok(entries) = std::fs::read_dir(models_dir) {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    log::info!("[download_model]   Found file: {}", name);
-                }
-            }
         }
 
         Ok(())

@@ -239,6 +239,49 @@ describe("ShortcutsSection", () => {
     expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "update_shortcut_settings")).toHaveLength(0);
   });
 
+  it("allows reusing a shortcut from a disabled binding", async () => {
+    const user = userEvent.setup();
+    arrangeInvoke({
+      bindings: [
+        {
+          id: "copy-binding",
+          action: "copy_last_transcription",
+          shortcut: "Alt+C",
+          trigger: "pressed",
+          enabled: false,
+          allow_risky_combo: false,
+        },
+      ],
+    });
+
+    render(<ShortcutsSection />);
+
+    const pasteRow = await screen.findByRole("group", { name: "Paste Last Transcription" });
+    await user.click(within(pasteRow).getByRole("button", { name: "Add shortcut" }));
+    await user.click(within(pasteRow).getByTitle("Change hotkey"));
+    await user.keyboard("{Alt>}c{/Alt}");
+    await user.click(within(pasteRow).getByTitle("Save hotkey"));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", {
+        settings: {
+          bindings: [
+            expect.objectContaining({
+              id: "copy-binding",
+              enabled: false,
+            }),
+            expect.objectContaining({
+              action: "paste_last_transcription",
+              shortcut: "Alt+C",
+              enabled: true,
+            }),
+          ],
+        },
+      });
+    });
+    expect(toast.error).not.toHaveBeenCalledWith("Shortcut already assigned", expect.anything());
+  });
+
   it("uses the shortcut settings returned by the backend after saving", async () => {
     const user = userEvent.setup();
     arrangeInvoke({ bindings: [] }, (submittedSettings) => ({

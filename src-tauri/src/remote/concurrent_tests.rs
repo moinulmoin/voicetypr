@@ -16,8 +16,12 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
-    use tokio::sync::RwLock;
+    use tokio::sync::{RwLock, Semaphore};
     use tokio::time::sleep;
+
+    fn test_transcription_guard() -> Arc<Semaphore> {
+        Arc::new(Semaphore::new(1))
+    }
 
     /// Mock context with configurable delay for simulating transcription time
     struct DelayedMockContext {
@@ -125,7 +129,7 @@ mod tests {
 
         let handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(ctx);
+            let routes = create_routes(ctx, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();

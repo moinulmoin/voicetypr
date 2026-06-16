@@ -31,62 +31,72 @@ pub struct TranscriptionServerConfig {
     pub model_name: String,
 }
 
+/// Current model configuration served by the remote server.
+#[derive(Clone)]
+pub struct SharedModelState {
+    /// Current model name.
+    pub model_name: String,
+    /// Current model path, only used by Whisper.
+    pub model_path: PathBuf,
+    /// Current engine type (whisper, parakeet, etc.).
+    pub engine: String,
+}
+
 /// Shared state that can be updated while the server is running
 #[derive(Clone)]
 pub struct SharedServerState {
-    /// Current model name (can be updated dynamically)
-    pub model_name: Arc<RwLock<String>>,
-    /// Current model path (can be updated dynamically, only for whisper)
-    pub model_path: Arc<RwLock<PathBuf>>,
-    /// Current engine type (whisper, parakeet, etc.)
-    pub engine: Arc<RwLock<String>>,
+    state: Arc<RwLock<SharedModelState>>,
 }
 
 impl SharedServerState {
     /// Create new shared state from initial values
     pub fn new(model_name: String, model_path: PathBuf, engine: String) -> Self {
         Self {
-            model_name: Arc::new(RwLock::new(model_name)),
-            model_path: Arc::new(RwLock::new(model_path)),
-            engine: Arc::new(RwLock::new(engine)),
+            state: Arc::new(RwLock::new(SharedModelState {
+                model_name,
+                model_path,
+                engine,
+            })),
         }
     }
 
-    /// Update the model
+    /// Update the model atomically.
     pub fn update_model(&self, model_name: String, model_path: PathBuf, engine: String) {
-        if let Ok(mut name) = self.model_name.write() {
-            *name = model_name;
+        if let Ok(mut state) = self.state.write() {
+            *state = SharedModelState {
+                model_name,
+                model_path,
+                engine,
+            };
         }
-        if let Ok(mut path) = self.model_path.write() {
-            *path = model_path;
-        }
-        if let Ok(mut eng) = self.engine.write() {
-            *eng = engine;
-        }
+    }
+
+    /// Snapshot the current model state atomically.
+    pub fn snapshot(&self) -> SharedModelState {
+        self.state
+            .read()
+            .map(|state| state.clone())
+            .unwrap_or_else(|_| SharedModelState {
+                model_name: String::new(),
+                model_path: PathBuf::new(),
+                engine: "whisper".to_string(),
+            })
     }
 
     /// Get the current model name
     pub fn get_model_name(&self) -> String {
-        self.model_name
-            .read()
-            .map(|n| n.clone())
-            .unwrap_or_default()
+        self.snapshot().model_name
     }
 
-    /// Get the current model path
+    /// Get the current model path (test-only accessor)
+    #[cfg(test)]
     pub fn get_model_path(&self) -> PathBuf {
-        self.model_path
-            .read()
-            .map(|p| p.clone())
-            .unwrap_or_default()
+        self.snapshot().model_path
     }
 
     /// Get the current engine
     pub fn get_engine(&self) -> String {
-        self.engine
-            .read()
-            .map(|e| e.clone())
-            .unwrap_or_else(|_| "whisper".to_string())
+        self.snapshot().engine
     }
 }
 
@@ -220,6 +230,11 @@ impl ServerContext for RealTranscriptionContext {
         self.shared_state.get_engine()
     }
 
+    fn model_status_snapshot(&self) -> (String, String) {
+        let snap = self.shared_state.snapshot();
+        (snap.engine, snap.model_name)
+    }
+
     fn transcribe(
         &self,
         audio_data: &[u8],
@@ -267,9 +282,12 @@ impl RealTranscriptionContext {
     ) -> Result<TranscriptionResult, String> {
         let start = Instant::now();
 
-        // Get current engine and model info from shared state
-        let engine = self.shared_state.get_engine();
-        let model_name = self.shared_state.get_model_name();
+        // Get current engine and model info from one atomic shared-state snapshot.
+        let SharedModelState {
+            model_name,
+            model_path,
+            engine,
+        } = self.shared_state.snapshot();
         let translate_to_english = transcription_task
             == Some(crate::commands::settings::TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH);
         let job = TranscriptionJob::from_legacy_settings(
@@ -321,6 +339,7 @@ impl RealTranscriptionContext {
             _ => {
                 let output = self.transcribe_with_whisper(
                     &temp_path,
+                    &model_path,
                     spoken_language,
                     translate_to_english,
                     context,
@@ -350,12 +369,11 @@ impl RealTranscriptionContext {
     fn transcribe_with_whisper(
         &self,
         audio_path: &Path,
+        model_path: &Path,
         spoken_language: Option<&str>,
         translate_to_english: bool,
         context: Option<&str>,
     ) -> Result<crate::whisper::transcriber::WhisperTranscriptionOutput, String> {
-        let model_path = self.shared_state.get_model_path();
-
         // Get transcriber from cache (blocking lock - serializes all transcriptions)
         let transcriber = {
             let mut cache = self
@@ -364,7 +382,7 @@ impl RealTranscriptionContext {
                 .map_err(|e| format!("Failed to acquire cache lock: {}", e))?;
 
             cache
-                .get_or_create(&model_path)
+                .get_or_create(model_path)
                 .map_err(|e| format!("Failed to load Whisper model: {}", e))?
         };
 
@@ -584,5 +602,19 @@ mod tests {
             error.contains("Failed to load") || error.contains("No such file"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn model_status_snapshot_matches_atomic_shared_state_read() {
+        let shared = SharedServerState::new(
+            "nano".to_string(),
+            PathBuf::from("/models/nano.bin"),
+            "parakeet".to_string(),
+        );
+        let ctx =
+            RealTranscriptionContext::new_with_shared_state("host".to_string(), None, shared, None);
+        let (engine, model) = ctx.model_status_snapshot();
+        assert_eq!(engine, "parakeet");
+        assert_eq!(model, "nano");
     }
 }

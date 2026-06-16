@@ -54,6 +54,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 interface OnboardingDesktopProps {
+  onCompletionStart?: () => void;
+  onCompletionError?: () => void;
   onComplete: () => void;
   modelManagement: ReturnType<typeof useModelManagement>;
 }
@@ -79,6 +81,7 @@ interface TranscriptionAddedPayload {
   text?: string;
   model?: string;
   timestamp?: string;
+  status?: "completed" | "in_progress" | "failed";
 }
 
 interface DiscoveredRemoteServer {
@@ -121,8 +124,46 @@ const isRemoteServerOnline = (server?: SavedConnection | null) =>
 
 const sourceLabel = (sourceType: SourceType, confirmed: boolean) =>
   confirmed ? (sourceType === "local" ? "This device" : "Remote VoiceTypr") : "Choose source";
+const getSampleSelectionKey = (
+  sourceType: SourceType,
+  selectedModelName: string | null,
+  activeRemoteServer: SavedConnection | null,
+) =>
+  sourceType === "local"
+    ? `local:${selectedModelName ?? ""}`
+    : `remote:${activeRemoteServer?.id ?? ""}:${activeRemoteServer?.model ?? ""}`;
+
+const FAILED_ONBOARDING_SAMPLE_PLACEHOLDER =
+  "Transcription failed - re-transcribe after resolving the issue";
+
+const isSuccessfulOnboardingSampleEvent = (
+  payload: TranscriptionAddedPayload,
+  sourceType: SourceType,
+  selectedModelName: string | null,
+  activeRemoteServer: SavedConnection | null,
+): boolean => {
+  const text = payload.text?.trim();
+  if (!text || text === FAILED_ONBOARDING_SAMPLE_PLACEHOLDER) {
+    return false;
+  }
+  if (payload.status === "failed" || payload.status === "in_progress") {
+    return false;
+  }
+  const eventModel = payload.model?.trim();
+  if (!eventModel) {
+    return false;
+  }
+  if (sourceType === "local") {
+    return Boolean(selectedModelName && eventModel === selectedModelName);
+  }
+  return Boolean(
+    activeRemoteServer && eventModel === activeRemoteServer.model,
+  );
+};
 
 export const OnboardingDesktop = function OnboardingDesktop({
+  onCompletionStart,
+  onCompletionError,
   onComplete,
   modelManagement,
 }: OnboardingDesktopProps) {
@@ -172,7 +213,10 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const [showAddRemoteModal, setShowAddRemoteModal] = useState(false);
   const [discoveredRemoteServers, setDiscoveredRemoteServers] = useState<DiscoveredRemoteServer[]>([]);
   const [selectedDiscoveredServer, setSelectedDiscoveredServer] = useState<DiscoveredRemoteServer | null>(null);
-  const [sampleTranscript, setSampleTranscript] = useState<string | null>(null);
+  const [sampleTranscript, setSampleTranscript] = useState<{
+    text: string;
+    selectionKey: string;
+  } | null>(null);
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [isSavingCompletion, setIsSavingCompletion] = useState(false);
 
@@ -242,6 +286,17 @@ export const OnboardingDesktop = function OnboardingDesktop({
     sourceType === "remote" && sampleError && !remoteReady
       ? "The selected remote VoiceTypr is offline. Make sure sharing is enabled on that device, keep both devices on the same network, then go back and choose an online server."
       : sampleError;
+  const sampleSelectionKey = getSampleSelectionKey(
+    sourceType,
+    selectedModelName,
+    activeRemoteServer,
+  );
+  const previousSampleSelectionKey = useRef(sampleSelectionKey);
+  const hasCurrentSampleTranscript =
+    sampleTranscript?.selectionKey === sampleSelectionKey;
+  const currentSampleTranscript = hasCurrentSampleTranscript
+    ? sampleTranscript.text
+    : null;
 
   const loadRemoteServers = useCallback(async () => {
     setIsLoadingRemoteServers(true);
@@ -324,11 +379,22 @@ export const OnboardingDesktop = function OnboardingDesktop({
       const unlisten = await listen<TranscriptionAddedPayload>(
         "transcription-added",
         (event) => {
-          const text = event.payload?.text?.trim();
-          if (!text || currentStep !== "first_transcription") {
+          if (currentStep !== "first_transcription") {
             return;
           }
-          setSampleTranscript(text);
+          const payload = event.payload ?? {};
+          if (
+            !isSuccessfulOnboardingSampleEvent(
+              payload,
+              sourceType,
+              selectedModelName,
+              activeRemoteServer,
+            )
+          ) {
+            return;
+          }
+          const text = payload.text!.trim();
+          setSampleTranscript({ text, selectionKey: sampleSelectionKey });
           setSampleError(null);
         },
       );
@@ -341,13 +407,29 @@ export const OnboardingDesktop = function OnboardingDesktop({
     });
 
     return () => cleanup?.();
-  }, [currentStep]);
+  }, [
+    activeRemoteServer,
+    currentStep,
+    sampleSelectionKey,
+    selectedModelName,
+    sourceType,
+  ]);
 
   useEffect(() => {
     if (recording.state === "error") {
       setSampleError(recording.error || "Recording failed. Try again.");
     }
   }, [recording.error, recording.state]);
+
+  useEffect(() => {
+    if (previousSampleSelectionKey.current === sampleSelectionKey) {
+      return;
+    }
+
+    previousSampleSelectionKey.current = sampleSelectionKey;
+    setSampleTranscript(null);
+    setSampleError(null);
+  }, [sampleSelectionKey]);
 
   const checkPermissions = async () => {
     await Promise.all([checkMicPermission(), checkAccessPermission()]);
@@ -491,10 +573,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
   const completeOnboarding = async () => {
     setIsSavingCompletion(true);
+    onCompletionStart?.();
     try {
       await updateSettings({ onboarding_completed: true });
       onComplete();
     } catch (error) {
+      onCompletionError?.();
       console.error("Failed to complete onboarding:", error);
       toast.error("Failed to finish onboarding. Please try again.");
     } finally {
@@ -534,7 +618,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         return;
       }
 
-      if (currentStep === "first_transcription" && sampleTranscript) {
+      if (currentStep === "first_transcription" && hasCurrentSampleTranscript) {
         setCurrentStep("success");
       }
     } catch (error) {
@@ -576,7 +660,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
       case "hotkey":
         return !isEditingHotkey;
       case "first_transcription":
-        return Boolean(sampleTranscript);
+        return hasCurrentSampleTranscript;
       default:
         return true;
     }
@@ -1111,12 +1195,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   </Alert>
                 ) : null}
 
-                {sampleTranscript ? (
+                {currentSampleTranscript ? (
                   <div className="rounded-2xl border bg-background/70 p-4">
                     <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
                       Transcript
                     </p>
-                    <p className="text-base leading-7">{sampleTranscript}</p>
+                    <p className="text-base leading-7">{currentSampleTranscript}</p>
                   </div>
                 ) : (
                   <div className="rounded-2xl border border-dashed bg-muted/40 p-6 text-center text-sm text-muted-foreground">

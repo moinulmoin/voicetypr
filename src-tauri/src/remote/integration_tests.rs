@@ -30,8 +30,12 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tempfile::TempDir;
-    use tokio::sync::RwLock;
+    use tokio::sync::{RwLock, Semaphore};
     use tokio::time::sleep;
+
+    fn test_transcription_guard() -> Arc<Semaphore> {
+        Arc::new(Semaphore::new(1))
+    }
 
     /// URL for the tiny.en Whisper model (~75MB)
     const TINY_MODEL_URL: &str =
@@ -218,7 +222,7 @@ mod tests {
 
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(context);
+            let routes = create_routes(context, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -337,7 +341,7 @@ mod tests {
 
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(context);
+            let routes = create_routes(context, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -438,7 +442,7 @@ mod tests {
 
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(context);
+            let routes = create_routes(context, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -574,7 +578,7 @@ mod tests {
 
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(context);
+            let routes = create_routes(context, test_transcription_guard());
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
             });
@@ -673,7 +677,7 @@ mod tests {
 
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(remote_context);
+            let routes = create_routes(remote_context, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -835,7 +839,7 @@ mod tests {
 
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(context);
+            let routes = create_routes(context, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();

@@ -28,20 +28,12 @@ fn main() {
             match output {
                 Ok(output) => {
                     if !output.status.success() {
-                        eprintln!("=== Swift sidecar build FAILED ({}) ===", output.status);
-                        eprintln!(
-                            "--- swift build stdout ---\n{}",
-                            String::from_utf8_lossy(&output.stdout)
-                        );
-                        eprintln!(
-                            "--- swift build stderr ---\n{}",
+                        panic!(
+                            "Swift sidecar build failed ({}).\n--- swift build stdout ---\n{}\n--- swift build stderr ---\n{}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stdout),
                             String::from_utf8_lossy(&output.stderr)
                         );
-                        println!(
-                            "cargo:warning=Swift sidecar build failed ({}); full output above",
-                            output.status
-                        );
-                        println!("cargo:warning=Continuing build without Parakeet sidecar...");
                     } else {
                         println!("cargo:warning=Swift sidecar built successfully");
 
@@ -65,8 +57,7 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                    println!("cargo:warning=Failed to run Swift build script: {}", e);
-                    println!("cargo:warning=Continuing build without Parakeet sidecar...");
+                    panic!("Failed to run Swift build script: {}", e);
                 }
             }
         } else {

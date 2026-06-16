@@ -295,6 +295,17 @@ fn handle_ptt_mode(
     }
 }
 
+fn should_dispatch_custom_pressed_binding(
+    active_bindings: &mut std::collections::HashSet<String>,
+    binding_id: &str,
+    action: ShortcutAction,
+    event_state: ShortcutState,
+) -> bool {
+    let should_run = pressed_shortcut_should_run(active_bindings, binding_id, event_state);
+    should_run
+        || (action == ShortcutAction::ToggleRecording && event_state == ShortcutState::Released)
+}
+
 fn dispatch_custom_shortcut(
     app: &tauri::AppHandle,
     app_state: &AppState,
@@ -302,17 +313,20 @@ fn dispatch_custom_shortcut(
     event_state: ShortcutState,
 ) {
     if binding.trigger == ShortcutTrigger::Pressed {
-        let should_run = match app_state.active_custom_pressed_bindings.lock() {
-            Ok(mut active_bindings) => {
-                pressed_shortcut_should_run(&mut active_bindings, &binding.id, event_state)
-            }
+        let should_dispatch = match app_state.active_custom_pressed_bindings.lock() {
+            Ok(mut active_bindings) => should_dispatch_custom_pressed_binding(
+                &mut active_bindings,
+                &binding.id,
+                binding.action,
+                event_state,
+            ),
             Err(error) => {
                 log::error!("Failed to lock active custom pressed bindings: {}", error);
                 false
             }
         };
 
-        if !should_run {
+        if !should_dispatch {
             return;
         }
     } else if binding.action != ShortcutAction::HoldToRecord {
@@ -463,9 +477,16 @@ fn handle_non_recording_shortcut(
 
 #[cfg(test)]
 mod tests {
-    use super::{claim_toggle_press, should_handle_recording_shortcut};
-    use crate::RecordingMode;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use super::{
+        claim_toggle_press, should_dispatch_custom_pressed_binding,
+        should_handle_recording_shortcut,
+    };
+    use crate::{commands::shortcuts::ShortcutAction, RecordingMode};
+    use std::{
+        collections::HashSet,
+        sync::atomic::{AtomicBool, Ordering},
+    };
+    use tauri_plugin_global_shortcut::ShortcutState;
 
     #[test]
     fn toggle_shortcut_events_are_handled_for_press_and_release() {
@@ -489,6 +510,44 @@ mod tests {
         assert!(!claim_toggle_press(&held));
 
         held.store(false, Ordering::SeqCst);
+        assert!(claim_toggle_press(&held));
+    }
+
+    #[test]
+    fn custom_toggle_release_clears_held_state_for_next_press() {
+        let mut active_bindings = HashSet::new();
+        let held = AtomicBool::new(false);
+        let binding_id = "custom-toggle";
+
+        assert!(should_dispatch_custom_pressed_binding(
+            &mut active_bindings,
+            binding_id,
+            ShortcutAction::ToggleRecording,
+            ShortcutState::Pressed,
+        ));
+        assert!(claim_toggle_press(&held));
+
+        assert!(!should_dispatch_custom_pressed_binding(
+            &mut active_bindings,
+            binding_id,
+            ShortcutAction::ToggleRecording,
+            ShortcutState::Pressed,
+        ));
+
+        assert!(should_dispatch_custom_pressed_binding(
+            &mut active_bindings,
+            binding_id,
+            ShortcutAction::ToggleRecording,
+            ShortcutState::Released,
+        ));
+        held.store(false, Ordering::SeqCst);
+
+        assert!(should_dispatch_custom_pressed_binding(
+            &mut active_bindings,
+            binding_id,
+            ShortcutAction::ToggleRecording,
+            ShortcutState::Pressed,
+        ));
         assert!(claim_toggle_press(&held));
     }
 }

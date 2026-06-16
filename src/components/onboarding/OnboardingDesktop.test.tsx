@@ -155,7 +155,10 @@ beforeEach(() => {
     },
   };
   modelManagement.modelOrder = ["base.en"];
-  updateSettingsMock.mockResolvedValue(undefined);
+  updateSettingsMock.mockImplementation((updates: Partial<typeof settingsState>) => {
+    Object.assign(settingsState, updates);
+    return Promise.resolve();
+  });
   startRecordingMock.mockResolvedValue(undefined);
   stopRecordingMock.mockResolvedValue(undefined);
   invokeMock.mockImplementation((command: string) => {
@@ -210,6 +213,118 @@ describe("OnboardingDesktop", () => {
 
     expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
     expect(onCompleteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a completed sample when the selected local model changes", async () => {
+    const user = userEvent.setup();
+    modelManagement.models = {
+      ...modelManagement.models,
+      "tiny.en": {
+        name: "tiny.en",
+        display_name: "Tiny English",
+        size: 39,
+        url: "",
+        sha256: "",
+        downloaded: true,
+        speed_score: 9,
+        accuracy_score: 3,
+        recommended: false,
+        engine: "whisper",
+        kind: "local",
+        requires_setup: false,
+      },
+    };
+    modelManagement.modelOrder = ["base.en", "tiny.en"];
+    const view = renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    const reviewButton = await screen.findByRole("button", { name: /review result/i });
+    emit("transcription-added", {
+      text: "Transcript from the original model.",
+      model: "base.en",
+      timestamp: "2026-05-18T00:00:00Z",
+    });
+
+    await waitFor(() => expect(reviewButton).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: /back/i }));
+    await user.click(screen.getByRole("button", { name: /back/i }));
+    await user.click(screen.getByText("Tiny English"));
+    view.rerender(
+      <OnboardingDesktop
+        onComplete={onCompleteMock}
+        modelManagement={modelManagement as never}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    const staleReviewButton = await screen.findByRole("button", { name: /review result/i });
+    expect(staleReviewButton).toBeDisabled();
+    expect(screen.queryByText("Transcript from the original model.")).not.toBeInTheDocument();
+  });
+
+  it("does not unlock review for failed or stale transcription-added events", async () => {
+    const user = userEvent.setup();
+    modelManagement.models = {
+      ...modelManagement.models,
+      "tiny.en": {
+        name: "tiny.en",
+        display_name: "Tiny English",
+        size: 39,
+        url: "",
+        sha256: "",
+        downloaded: true,
+        speed_score: 9,
+        accuracy_score: 3,
+        recommended: false,
+        engine: "whisper",
+        kind: "local",
+        requires_setup: false,
+      },
+    };
+    modelManagement.modelOrder = ["base.en", "tiny.en"];
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    const reviewButton = await screen.findByRole("button", { name: /review result/i });
+
+    emit("transcription-added", {
+      text: "Transcription failed - re-transcribe after resolving the issue",
+      model: "base.en",
+      timestamp: "2026-05-18T00:00:01Z",
+      status: "failed",
+    });
+    expect(reviewButton).toBeDisabled();
+
+    emit("transcription-added", {
+      text: "Delayed transcript from another model.",
+      model: "tiny.en",
+      timestamp: "2026-05-18T00:00:02Z",
+    });
+    expect(reviewButton).toBeDisabled();
+    expect(
+      screen.queryByText("Delayed transcript from another model."),
+    ).not.toBeInTheDocument();
+
+    emit("transcription-added", {
+      text: "Valid onboarding sample.",
+      model: "base.en",
+      timestamp: "2026-05-18T00:00:03Z",
+    });
+    await waitFor(() => expect(reviewButton).toBeEnabled());
   });
 
   it("requires an explicit source choice even when a local model is already saved", async () => {

@@ -177,6 +177,7 @@ export function ShortcutsSection() {
       const nextShortcutKey = shortcutComparisonKey(nextShortcut);
       const duplicateBinding = [...settings.bindings, ...draftBindings].find((binding) =>
         binding.id !== nextBinding.id
+        && binding.enabled
         && binding.shortcut
         && shortcutComparisonKey(binding.shortcut) === nextShortcutKey,
       );

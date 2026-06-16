@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
-use tauri::async_runtime::RwLock;
+use tauri::async_runtime::{Mutex as AsyncMutex, RwLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 type ActiveDownloadsState<'a> = State<'a, Arc<StdMutex<HashMap<String, Arc<AtomicBool>>>>>;
@@ -496,17 +496,7 @@ pub async fn download_parakeet_vocabulary_model(
     const MODEL_ID: &str = "parakeet-vocabulary-ctc-110m";
 
     let cancel_flag = Arc::new(AtomicBool::new(false));
-    {
-        match active_downloads.lock() {
-            Ok(mut downloads) => {
-                downloads.insert(MODEL_ID.to_string(), cancel_flag.clone());
-            }
-            Err(e) => {
-                log::error!("Failed to lock active downloads for inserting: {}", e);
-                return Err("Failed to initialize download tracking".to_string());
-            }
-        }
-    }
+    register_active_download(&active_downloads, MODEL_ID, cancel_flag.clone())?;
 
     let _ = emit_to_all(
         &app,
@@ -527,16 +517,7 @@ pub async fn download_parakeet_vocabulary_model(
     // path can report cancellation consistently once the sidecar returns.
     let download_result = parakeet_manager.download_ctc_models(&app).await;
 
-    {
-        match active_downloads.lock() {
-            Ok(mut downloads) => {
-                downloads.remove(MODEL_ID);
-            }
-            Err(e) => {
-                log::warn!("Failed to lock active downloads for cleanup: {}", e);
-            }
-        }
-    }
+    clear_active_download(&active_downloads, MODEL_ID);
 
     if cancel_flag.load(Ordering::Relaxed) {
         let _ = emit_to_all(
@@ -609,6 +590,27 @@ pub async fn download_parakeet_vocabulary_model(
     }
 }
 
+async fn ensure_model_is_not_currently_shared(
+    app: &AppHandle,
+    model_name: &str,
+) -> Result<(), String> {
+    let Some(server_manager) =
+        app.try_state::<AsyncMutex<crate::remote::lifecycle::RemoteServerManager>>()
+    else {
+        return Ok(());
+    };
+
+    let status = server_manager.lock().await.get_status();
+    if status.enabled && status.model_name.as_deref() == Some(model_name) {
+        return Err(format!(
+            "Cannot delete model '{}' while it is being shared. Stop network sharing or switch the shared model first.",
+            model_name
+        ));
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn delete_model(
     app: AppHandle,
@@ -621,6 +623,7 @@ pub async fn delete_model(
     register_active_download(&active_downloads, &model_name, operation_flag)?;
     let result = async {
         let engine = determine_model_engine(&model_name, &whisper_state, &parakeet_manager).await?;
+        ensure_model_is_not_currently_shared(&app, &model_name).await?;
 
         match engine {
             ModelEngine::Whisper => {

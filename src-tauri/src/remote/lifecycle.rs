@@ -6,7 +6,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
-use tokio::sync::{oneshot, RwLock};
+use tokio::sync::{oneshot, RwLock, Semaphore};
 
 use super::discovery::{
     start_discovery_responder, DiscoveryResponderConfig, DiscoveryResponderHandle,
@@ -15,6 +15,8 @@ use super::http::create_routes;
 use super::transcription::{
     RealTranscriptionContext, SharedServerState, TranscriptionServerConfig,
 };
+
+use std::time::Duration;
 
 /// Result of attempting to bind to an IP address
 #[derive(Debug, Clone, serde::Serialize)]
@@ -41,6 +43,9 @@ pub struct ServerHandle {
     discovery_handle: Option<DiscoveryResponderHandle>,
 }
 
+/// Generous upper bound while waiting for in-flight HTTP work during disable/restart.
+const GRACEFUL_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
+
 impl ServerHandle {
     /// Stop the server gracefully
     pub async fn stop(&mut self) {
@@ -55,12 +60,26 @@ impl ServerHandle {
             self.port
         );
 
+        let mut still_draining = false;
         for handle in self.task_handles.drain(..) {
-            match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+            match tokio::time::timeout(GRACEFUL_SHUTDOWN_DRAIN_TIMEOUT, handle).await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => log::warn!("[Remote Server] Server task panicked: {}", e),
-                Err(_) => log::warn!("[Remote Server] Server task did not stop within 5s timeout"),
+                Err(_) => {
+                    still_draining = true;
+                    log::warn!(
+                        "[Remote Server] Graceful shutdown still draining after {}s on port {}; proceeding",
+                        GRACEFUL_SHUTDOWN_DRAIN_TIMEOUT.as_secs(),
+                        self.port
+                    );
+                }
             }
+        }
+        if still_draining {
+            log::info!(
+                "[Remote Server] Shutdown proceeded while work may still be in flight on port {}",
+                self.port
+            );
         }
         log::info!(
             "[Remote Server] All server tasks stopped for port {}",
@@ -226,19 +245,21 @@ impl RemoteServerManager {
         let mut task_handles = Vec::new();
         let mut bound_ips = Vec::new();
         let mut binding_results = Vec::new();
+        let transcription_guard = Arc::new(Semaphore::new(1));
 
         for ip in bind_ips {
             let bind_start = Instant::now();
             let addr: SocketAddr = SocketAddr::new(ip, port);
             let ip_str = ip.to_string();
 
-            // Clone routes for each server instance
-            let routes = create_routes(ctx.clone());
+            // Clone routes for each server instance; all bound IPs share one transcription guard.
+            let routes = create_routes(ctx.clone(), transcription_guard.clone());
 
             // Create shutdown channel for this instance
             let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-            let ip_str_clone = ip_str.clone();
+            let shutdown_ip = ip_str.clone();
+            let server_ip = ip_str.clone();
 
             // Try to bind to this address using try_bind
             log::info!(
@@ -246,23 +267,20 @@ impl RemoteServerManager {
                 addr,
                 start_time.elapsed().as_millis()
             );
-            match warp::serve(routes).try_bind_ephemeral(addr) {
+            match warp::serve(routes).try_bind_with_graceful_shutdown(addr, async move {
+                shutdown_rx.await.ok();
+                log::info!(
+                    "[Remote Server] Received shutdown signal for {}; draining in-flight requests",
+                    shutdown_ip
+                );
+            }) {
                 Ok((bound_addr, server_future)) => {
                     shutdown_txs.push(shutdown_tx);
 
-                    // Wrap the server future with graceful shutdown
-                    let server = async move {
-                        tokio::select! {
-                            _ = server_future => {
-                                log::info!("[Remote Server] Server task completed for {}", ip_str_clone);
-                            }
-                            _ = shutdown_rx => {
-                                log::info!("[Remote Server] Received shutdown signal for {}", ip_str_clone);
-                            }
-                        }
-                    };
-                    // Spawn the server task
-                    let handle = tokio::spawn(server);
+                    let handle = tokio::spawn(async move {
+                        server_future.await;
+                        log::info!("[Remote Server] Server task completed for {}", server_ip);
+                    });
                     task_handles.push(handle);
 
                     bound_ips.push(ip);
@@ -307,7 +325,10 @@ impl RemoteServerManager {
                     .unwrap_or_else(|_| "unknown".to_string());
                 match start_discovery_responder(DiscoveryResponderConfig {
                     server_name: server_name.clone(),
-                    model_name: shared_state.model_name.clone(),
+                    model_name: {
+                        let state = shared_state.clone();
+                        Arc::new(move || state.get_model_name())
+                    },
                     port,
                     auth_required: self
                         .config

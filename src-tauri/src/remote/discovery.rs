@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -34,10 +34,10 @@ pub struct DiscoveredRemoteServer {
     pub machine_id: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DiscoveryResponderConfig {
     pub server_name: String,
-    pub model_name: Arc<RwLock<String>>,
+    pub model_name: Arc<dyn Fn() -> String + Send + Sync>,
     pub port: u16,
     pub auth_required: bool,
     pub machine_id: String,
@@ -111,11 +111,7 @@ pub async fn start_discovery_responder(
                         continue;
                     }
 
-                    let model_name = config
-                        .model_name
-                        .read()
-                        .map(|model_name| model_name.clone())
-                        .unwrap_or_default();
+                    let model_name = (config.model_name)();
 
                     let response = DiscoveredRemoteServer {
                         name: config.server_name.clone(),

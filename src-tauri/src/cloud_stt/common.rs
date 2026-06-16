@@ -90,13 +90,7 @@ where
 pub(super) async fn log_http_body(resp: reqwest::Response, label: &str) -> SttError {
     let status = resp.status();
     let err = classify_status(status);
-    let body = resp.text().await.unwrap_or_default();
-    let snippet: String = body.chars().take(300).collect();
-    if !snippet.is_empty() {
-        log::warn!("{label}: HTTP {status} body: {snippet}");
-    } else {
-        log::warn!("{label}: HTTP {status}");
-    }
+    log::warn!("{label}: HTTP {status}; response body suppressed for authenticated request");
     err
 }
 
@@ -154,12 +148,18 @@ pub(super) async fn openai_compatible_transcribe(
     language: Option<&str>,
     label: &str,
 ) -> Result<String, SttError> {
-    use reqwest::multipart::{Form, Part};
-    use tokio::fs;
+    use futures_util::stream;
+    use reqwest::{
+        multipart::{Form, Part},
+        Body,
+    };
+    use tokio::fs::{metadata, File};
+    use tokio::io::AsyncReadExt;
 
-    let bytes = fs::read(audio_path)
+    let audio_len = metadata(audio_path)
         .await
-        .map_err(|_| SttError::BadResponse)?;
+        .map_err(|_| SttError::BadResponse)?
+        .len();
     let filename = audio_path
         .file_name()
         .and_then(|s| s.to_str())
@@ -173,17 +173,28 @@ pub(super) async fn openai_compatible_transcribe(
     let url = format!("{}/audio/transcriptions", base_url);
 
     with_retry(|| {
-        let bytes = bytes.clone();
         let client = client.clone();
         let filename = filename.clone();
         let language = language.clone();
         let url = url.clone();
         async move {
-            let file_part = Part::bytes(bytes)
+            let file = File::open(audio_path)
+                .await
+                .map_err(|_| SttError::BadResponse)?;
+            let stream = stream::try_unfold(file, |mut file| async move {
+                let mut chunk = vec![0; 64 * 1024];
+                let bytes_read = file.read(&mut chunk).await?;
+                if bytes_read == 0 {
+                    Ok::<Option<(Vec<u8>, File)>, std::io::Error>(None)
+                } else {
+                    chunk.truncate(bytes_read);
+                    Ok(Some((chunk, file)))
+                }
+            });
+            let file_part = Part::stream_with_length(Body::wrap_stream(stream), audio_len)
                 .file_name(filename)
                 .mime_str("audio/wav")
                 .map_err(|_| SttError::BadResponse)?;
-
             let mut form = Form::new()
                 .part("file", file_part)
                 .text("model", model.to_string())
@@ -268,6 +279,12 @@ mod tests {
         let requests = server.received_requests().await.unwrap();
         assert_eq!(requests.len(), 1);
         let request = &requests[0];
+        let content_length = request
+            .headers
+            .get("content-length")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        assert!(!content_length.is_empty());
         let content_type = request
             .headers
             .get("content-type")
@@ -305,8 +322,51 @@ mod tests {
         .await
         .unwrap();
 
+        let requests = server.received_requests().await.unwrap();
         assert_eq!(text, "hello");
-        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(requests.len(), 2);
+        for request in requests {
+            assert!(request.headers.get("content-length").is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_transcribe_reopens_audio_file_for_retry() {
+        let server = MockServer::start().await;
+        let audio = audio_file();
+        let audio_path = audio.path().to_path_buf();
+        let responses_seen = Arc::new(AtomicUsize::new(0));
+        Mock::given(method("POST"))
+            .and(path("/audio/transcriptions"))
+            .respond_with(move |_request: &Request| {
+                if responses_seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                    std::fs::write(&audio_path, b"two").unwrap();
+                    ResponseTemplate::new(500).set_body_string("temporary")
+                } else {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "text": "hello"
+                    }))
+                }
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let text = openai_compatible_transcribe(
+            &server.uri(),
+            "k",
+            "gpt-4o-transcribe",
+            audio.path(),
+            None,
+            "OpenAI transcription",
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let second_body = String::from_utf8_lossy(&requests[1].body);
+        assert_eq!(text, "hello");
+        assert!(second_body.contains("two"));
     }
 
     #[tokio::test]

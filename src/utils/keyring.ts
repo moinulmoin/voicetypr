@@ -44,12 +44,8 @@ interface SaveApiKeyOptions {
   noAuth?: boolean;
 }
 
-interface AISettingsResponse {
-  enabled?: boolean;
-  model?: string;
-}
-
 // API Key specific helpers
+
 export const saveApiKey = async (
   provider: string,
   apiKey: string,
@@ -60,18 +56,8 @@ export const saveApiKey = async (
   await invoke('validate_ai_api_key', { args: { provider, apiKey, ...options } });
   await keyringSet(key, apiKey);
   await invoke('cache_ai_api_key', { args: { provider, apiKey } });
-
-  const providerSettings = await invoke<AISettingsResponse>('get_ai_settings_for_provider', {
-    provider,
-  });
-  await invoke('update_ai_settings', {
-    enabled: false,
-    provider,
-    model: options?.model ?? providerSettings.model ?? '',
-  });
-
   console.log(`[Keyring] API key saved and validated for ${provider}`);
-  
+
   // Emit event to notify that API key was saved
   await emit('api-key-saved', { provider });
 };

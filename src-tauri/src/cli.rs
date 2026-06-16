@@ -26,6 +26,7 @@ use crate::transcription::{
     TranscriptionJob, TranscriptionResult, TranscriptionSource as ContractSource,
 };
 use crate::whisper::cache::TranscriberCache;
+use crate::whisper::gpu_sidecar::GpuSidecarClient;
 use crate::whisper::manager::WhisperManager;
 
 #[derive(Parser, Debug)]
@@ -141,6 +142,7 @@ async fn build_cli_app(
     app.manage(AsyncRwLock::new(WhisperManager::new(models_dir.clone())));
     app.manage(ParakeetManager::new(parakeet_dir));
     app.manage(AsyncMutex::new(TranscriberCache::new()));
+    app.manage(GpuSidecarClient::new());
     app.manage(AppState::new());
     app.manage(AsyncMutex::new(RemoteServerManager::new()));
     app.manage(AsyncMutex::new(load_remote_settings(app.handle())));

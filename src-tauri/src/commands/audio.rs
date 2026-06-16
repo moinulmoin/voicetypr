@@ -83,6 +83,23 @@ fn stop_should_reset_to_idle(current: RecordingState) -> bool {
     )
 }
 
+fn take_and_remove_current_recording_path(app_state: &AppState, reason: &str) {
+    let audio_path = match app_state.current_recording_path.lock() {
+        Ok(mut path_guard) => path_guard.take(),
+        Err(e) => {
+            log::warn!("Failed to acquire recording path lock for cleanup: {}", e);
+            None
+        }
+    };
+
+    if let Some(audio_path) = audio_path {
+        log::info!("Removing {} recording file", reason);
+        if let Err(e) = std::fs::remove_file(&audio_path) {
+            log::warn!("Failed to remove {} recording: {}", reason, e);
+        }
+    }
+}
+
 #[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PillToastAction {
@@ -3416,6 +3433,7 @@ pub async fn stop_recording(
     // Cancellation should only happen in cancel_recording command
 
     let mut stop_unfinalized = false;
+    let mut stop_integrity_failure = false;
     // Stop recording (lock only within this scope to stay Send)
     log::info!("🛑 Stopping recording...");
     {
@@ -3445,7 +3463,9 @@ pub async fn stop_recording(
             Ok(msg) => msg,
             Err(e) => {
                 log::error!("Recorder stop returned error: {}", e);
-                if crate::audio::recorder::stop_error_is_unfinalized(&e) {
+                if crate::audio::recorder::stop_error_is_integrity_failure(&e) {
+                    stop_integrity_failure = true;
+                } else if crate::audio::recorder::stop_error_is_unfinalized(&e) {
                     stop_unfinalized = true;
                 }
                 format!("Recorder stop error: {}", e)
@@ -3508,10 +3528,32 @@ pub async fn stop_recording(
 
     // A recorder error where the worker FINISHED still finalizes the captured WAV (e.g. a
     // device error), so we fall through to the normal transcription path below and recover the
-    // speech (never-lose-speech). Only when the worker did NOT finish (stop timeout / thread
-    // panic) is there no usable WAV: surface an error and reset, having already run the
-    // media-resume + ESC cleanup above.
+    // speech (never-lose-speech). Integrity failures mean the WAV finalized after losing chunks:
+    // do not transcribe gappy audio or write failed history rows. Only when the worker did NOT
+    // finish (stop timeout / thread panic / finalize failure) is there no usable WAV: surface an
+    // error and reset, having already run the media-resume + ESC cleanup above.
+    if stop_integrity_failure {
+        let user_message = "Recording was interrupted — please try again";
+        take_and_remove_current_recording_path(&app_state, "interrupted");
+        pill_toast(&app, user_message, 2000);
+        update_recording_state(&app, RecordingState::Error, Some(user_message.to_string()));
+        let app_for_reset = app.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            if should_hide_pill(&app_for_reset).await {
+                if let Err(e) =
+                    crate::commands::window::hide_pill_widget(app_for_reset.clone()).await
+                {
+                    log::error!("Failed to hide pill window: {}", e);
+                }
+            }
+            update_recording_state(&app_for_reset, RecordingState::Idle, None);
+        });
+        return Ok(String::new());
+    }
+
     if stop_unfinalized {
+        take_and_remove_current_recording_path(&app_state, "unfinalized");
         pill_toast(&app, "Recording error", 1500);
         if should_hide_pill(&app).await {
             if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {

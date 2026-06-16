@@ -260,24 +260,29 @@ export function AppContainer() {
     modelAvailability.hasModels === false
   );
 
+  const markOnboardingCompletionPersisted = () => {
+    hasCompletedOnboarding.current = true;
+  };
+
+  const clearOnboardingCompletionMarker = () => {
+    hasCompletedOnboarding.current = false;
+  };
+
   // Check permissions only after an explicit onboarding completion.
   useEffect(() => {
-    // Only refresh if we just completed onboarding and are now showing dashboard
-    if (!showOnboarding && hasCompletedOnboarding.current && settings?.onboarding_completed) {
+    if (!showOnboarding && hasCompletedOnboarding.current) {
       hasCompletedOnboarding.current = false;
 
       Promise.all([checkAccessibilityPermission(), checkMicrophonePermission()]).then(() => {
         console.log("Permissions refreshed after onboarding completion");
       });
 
-      // Request notification permission for update notifications
       updateService.requestNotificationPermission();
     }
   }, [
     showOnboarding,
-    settings?.onboarding_completed,
     checkAccessibilityPermission,
-    checkMicrophonePermission
+    checkMicrophonePermission,
   ]);
 
   // Onboarding View
@@ -285,8 +290,9 @@ export function AppContainer() {
     return (
       <AppErrorBoundary>
         <OnboardingDesktop
+          onCompletionError={clearOnboardingCompletionMarker}
           onComplete={() => {
-            hasCompletedOnboarding.current = true;
+            markOnboardingCompletionPersisted();
             setForceShowOnboarding(false);
             refreshSettings();
             void modelAvailability.checkModels();

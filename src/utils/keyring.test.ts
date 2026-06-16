@@ -26,13 +26,8 @@ describe('keyring provider isolation', () => {
     expect(emit).toHaveBeenCalledWith('api-key-removed', { provider: 'custom' });
   });
 
-  it('validates before saving, caching, persisting settings, and emitting API key changes', async () => {
-    (invoke as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
-      if (cmd === 'get_ai_settings_for_provider') {
-        return Promise.resolve({ model: 'claude-sonnet-4-5' });
-      }
-      return Promise.resolve(undefined);
-    });
+  it('validates before saving, caching, and emitting API key changes without resetting AI settings', async () => {
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 
     await saveApiKey('anthropic', 'anthropic-key');
 
@@ -46,14 +41,7 @@ describe('keyring provider isolation', () => {
     expect(invoke).toHaveBeenNthCalledWith(3, 'cache_ai_api_key', {
       args: { provider: 'anthropic', apiKey: 'anthropic-key' },
     });
-    expect(invoke).toHaveBeenNthCalledWith(4, 'get_ai_settings_for_provider', {
-      provider: 'anthropic',
-    });
-    expect(invoke).toHaveBeenNthCalledWith(5, 'update_ai_settings', {
-      enabled: false,
-      provider: 'anthropic',
-      model: 'claude-sonnet-4-5',
-    });
+    expect(invoke).not.toHaveBeenCalledWith('update_ai_settings', expect.anything());
     expect(emit).toHaveBeenCalledWith('api-key-saved', { provider: 'anthropic' });
   });
 

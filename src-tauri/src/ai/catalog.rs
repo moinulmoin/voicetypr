@@ -35,10 +35,20 @@ type Catalog = CatalogFile;
 
 // Project rule prefers LazyLock when the initializer is known at declaration time;
 // this preserves the contract's parse-once behavior.
-static CATALOG: LazyLock<Catalog> = LazyLock::new(|| {
-    let mut catalog: Catalog =
-        serde_json::from_str(include_str!("../../catalog/catalog.generated.json"))
-            .expect("embedded AI provider catalog must be valid JSON");
+static CATALOG: LazyLock<Catalog> =
+    LazyLock::new(|| parse_catalog(include_str!("../../catalog/catalog.generated.json")));
+
+fn parse_catalog(json: &str) -> Catalog {
+    let mut catalog = match serde_json::from_str::<Catalog>(json) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            log::error!("embedded AI provider catalog failed to parse: {error}");
+            return Catalog {
+                providers: Vec::new(),
+            };
+        }
+    };
+
     catalog.providers.push(CatalogProvider {
         id: "custom".to_string(),
         label: "Custom (OpenAI-compatible)".to_string(),
@@ -51,7 +61,7 @@ static CATALOG: LazyLock<Catalog> = LazyLock::new(|| {
         models: Vec::new(),
     });
     catalog
-});
+}
 
 fn catalog() -> &'static Catalog {
     &CATALOG
@@ -169,6 +179,13 @@ mod tests {
                 assert!(recommended_ids.contains(recommended.model_id.as_str()));
             }
         }
+    }
+
+    #[test]
+    fn malformed_catalog_json_parses_to_empty_catalog() {
+        let catalog = parse_catalog("{\"providers\":[{\"id\":\"missing-fields\"}]}");
+
+        assert!(catalog.providers.is_empty());
     }
 
     #[test]

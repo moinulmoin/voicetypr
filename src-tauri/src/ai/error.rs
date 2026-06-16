@@ -70,6 +70,8 @@ pub(crate) fn map_http_status(
             AiProviderError::InvalidApiKey
         }
         429 => AiProviderError::RateLimited,
+        // Request Timeout and Too Early are transient retry cases.
+        408 | 425 => AiProviderError::ServiceUnavailable,
         400 | 404 if body.contains("model") => AiProviderError::InvalidModel,
         500..=599 => AiProviderError::ServiceUnavailable,
         _ => AiProviderError::BadResponse,
@@ -147,4 +149,17 @@ fn retry_after_from_headers(headers: &HeaderMap) -> Option<Duration> {
                 .to_std()
                 .unwrap_or(Duration::ZERO)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{map_http_status, AiProviderError};
+    use reqwest::StatusCode;
+
+    #[test]
+    fn request_timeout_maps_to_retryable_transient_error() {
+        let mapped = map_http_status(StatusCode::REQUEST_TIMEOUT, None, None);
+
+        assert_eq!(mapped.error, AiProviderError::ServiceUnavailable);
+    }
 }

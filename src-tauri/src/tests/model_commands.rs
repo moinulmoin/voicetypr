@@ -467,4 +467,37 @@ mod tests {
 
         assert_eq!(std::fs::read(&output_path).unwrap(), body);
     }
+
+    #[tokio::test]
+    async fn test_download_model_file_verifies_exact_size_existing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let models_dir = temp_dir.path().join("models");
+        std::fs::create_dir_all(&models_dir).unwrap();
+        let output_path = models_dir.join("base.en.bin");
+
+        let expected_body =
+            vec![1u8; ModelSize::new(10 * 1024 * 1024).unwrap().as_bytes() as usize];
+        let corrupt_body = vec![2u8; expected_body.len()];
+        std::fs::write(&output_path, &corrupt_body).unwrap();
+
+        let model = ModelInfo {
+            name: "base.en".to_string(),
+            display_name: "Base (English)".to_string(),
+            size: corrupt_body.len() as u64,
+            url: "http://127.0.0.1:9/should-not-download.bin".to_string(),
+            sha256: format!("{:x}", Sha256::digest(&expected_body)),
+            downloaded: false,
+            speed_score: 8,
+            accuracy_score: 5,
+            recommended: false,
+        };
+
+        let result =
+            WhisperManager::download_model_file(&model, &output_path, &models_dir, None, |_, _| {})
+                .await;
+
+        let error = result.unwrap_err();
+        assert!(error.contains("Checksum verification failed"));
+        assert!(!output_path.exists());
+    }
 }

@@ -37,6 +37,16 @@ const emitTauriEvent = (eventName: string, payload: unknown) => {
     callback({ payload });
   }
 };
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, resolve, reject };
+}
 
 const unknownRemoteSnapshot = {
   whisper_available: false,
@@ -200,6 +210,52 @@ describe('useModelAvailability', () => {
       expect(result.current.selectedModelAvailable).toBe(true);
       expect(result.current.hasModels).toBe(true);
     });
+  });
+
+  it('does not let a stale refresh overwrite a newer recognition availability event', async () => {
+    const statusDeferred = deferred<{ models: [] }>();
+    const availabilityDeferred = deferred<typeof unknownRemoteSnapshot>();
+
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'get_model_status') {
+        return statusDeferred.promise;
+      }
+
+      if (command === 'get_recognition_availability_snapshot') {
+        return availabilityDeferred.promise;
+      }
+
+      if (command === 'refresh_active_remote_server_status') {
+        return Promise.resolve(null);
+      }
+
+      return Promise.resolve(null);
+    });
+
+    const { result } = renderHook(() => useModelAvailability());
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith('get_model_status');
+    });
+
+    act(() => {
+      emitTauriEvent('recognition-availability', onlineRemoteSnapshot);
+    });
+
+    await waitFor(() => {
+      expect(result.current.remoteStatus).toBe('online');
+    });
+
+    await act(async () => {
+      statusDeferred.resolve({ models: [] });
+      availabilityDeferred.resolve(unknownRemoteSnapshot);
+      await Promise.all([statusDeferred.promise, availabilityDeferred.promise]);
+    });
+
+    expect(result.current.remoteStatus).toBe('online');
+    expect(result.current.remoteAvailable).toBe(true);
+    expect(result.current.selectedModelAvailable).toBe(true);
+    expect(result.current.hasModels).toBe(true);
   });
 
   it('refreshes the active remote only when it is selected and not already online', async () => {

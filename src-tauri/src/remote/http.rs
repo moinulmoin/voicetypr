@@ -41,6 +41,12 @@ pub trait ServerContext: Send + Sync {
     fn get_engine(&self) -> String {
         "whisper".to_string()
     }
+    /// Engine and model for status/capabilities in one consistent read.
+    fn model_status_snapshot(&self) -> (String, String) {
+        let engine = self.get_engine();
+        let model = self.get_model_name();
+        (engine, model)
+    }
     fn transcribe_with_context(
         &self,
         audio_data: &[u8],
@@ -66,8 +72,8 @@ pub trait ServerContext: Send + Sync {
 /// Create all warp routes for the remote transcription API
 pub fn create_routes<T: ServerContext + 'static>(
     ctx: Arc<RwLock<T>>,
+    transcription_guard: Arc<Semaphore>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    let transcription_guard = Arc::new(Semaphore::new(1));
     let status_route = status_endpoint(ctx.clone());
     let transcribe_route = transcribe_endpoint(ctx.clone(), transcription_guard);
     let control_models_route = control_models_endpoint(ctx);
@@ -163,6 +169,23 @@ fn with_transcription_guard(
     warp::any().map(move || guard.clone())
 }
 
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let max_len = a.len().max(b.len());
+    let mut diff = a.len() ^ b.len();
+
+    for i in 0..max_len {
+        let a_byte = a.get(i).copied().unwrap_or(0);
+        let b_byte = b.get(i).copied().unwrap_or(0);
+        diff |= usize::from(a_byte ^ b_byte);
+    }
+
+    diff == 0
+}
+
+fn auth_matches(provided: &str, required: &str) -> bool {
+    constant_time_eq(provided.as_bytes(), required.as_bytes())
+}
+
 async fn require_control_auth<T: ServerContext + 'static>(
     auth_key: Option<String>,
     ctx: Arc<RwLock<T>>,
@@ -219,7 +242,7 @@ fn check_control_auth(
 
     let required = password.as_ref().expect("password checked above");
     match auth_key {
-        Some(provided) if provided == *required => Ok(()),
+        Some(provided) if auth_matches(&provided, required) => Ok(()),
         _ => Err(ControlAuthFailure::Unauthorized),
     }
 }
@@ -298,10 +321,9 @@ async fn handle_status<T: ServerContext + 'static>(
         server_name
     );
 
-    // Check authentication
     if let Some(required_password) = ctx.get_password() {
         match auth_key {
-            Some(provided) if provided == required_password => {
+            Some(provided) if auth_matches(&provided, &required_password) => {
                 info!("[Remote Server] Status request authenticated successfully");
             }
             _ => {
@@ -322,12 +344,11 @@ async fn handle_status<T: ServerContext + 'static>(
     // Get unique machine ID to allow clients to detect self-connection
     let machine_id =
         crate::license::device::get_device_hash().unwrap_or_else(|_| "unknown".to_string());
-
-    let engine = ctx.get_engine();
+    let (engine, model) = ctx.model_status_snapshot();
     let response = StatusResponse {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        model: ctx.get_model_name(),
+        model,
         name: ctx.get_server_name(),
         machine_id,
         protocol_version: REMOTE_PROTOCOL_VERSION,
@@ -447,7 +468,7 @@ async fn handle_transcribe<T: ServerContext + 'static>(
     // Check authentication
     if let Some(required_password) = required_password {
         match auth_key {
-            Some(provided) if provided == required_password => {
+            Some(provided) if auth_matches(&provided, &required_password) => {
                 info!("[Remote Server] Transcription request authenticated successfully");
             }
             _ => {
@@ -484,9 +505,8 @@ async fn handle_transcribe<T: ServerContext + 'static>(
         model_name, audio_size_kb
     );
 
-    // Serialize transcription work on the sharing host.
-    let _permit = transcription_guard
-        .acquire()
+    let permit = transcription_guard
+        .acquire_owned()
         .await
         .expect("transcription semaphore closed");
 
@@ -494,10 +514,12 @@ async fn handle_transcribe<T: ServerContext + 'static>(
 
     // Perform transcription on a blocking thread: transcribe_with_context is
     // synchronous CPU work (full Whisper/Parakeet run) and must not pin a
-    // runtime worker.
+    // runtime worker. Hold the owned permit for the full blocking work so
+    // client disconnect / request-future drop cannot release serialization early.
     let ctx_for_blocking = ctx.clone();
     let body_for_blocking = body.clone();
     let transcription_outcome = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         let guard = ctx_for_blocking.blocking_read();
         guard.transcribe_with_context(
             &body_for_blocking,
@@ -535,7 +557,9 @@ async fn handle_transcribe<T: ServerContext + 'static>(
                 server_name, error
             );
             Ok(warp::reply::with_status(
-                warp::reply::json(&ErrorResponse { error }),
+                warp::reply::json(&ErrorResponse {
+                    error: "transcription_failed".to_string(),
+                }),
                 StatusCode::INTERNAL_SERVER_ERROR,
             ))
         }
@@ -567,8 +591,11 @@ mod tests {
             }],
         }
     }
+    fn test_transcription_guard() -> Arc<Semaphore> {
+        Arc::new(Semaphore::new(1))
+    }
 
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::Mutex;
     use std::time::Duration;
     use tokio::time::sleep;
@@ -833,10 +860,170 @@ mod tests {
         }
     }
 
+    struct ConsistentStatusMock;
+
+    impl ServerContext for ConsistentStatusMock {
+        fn get_model_name(&self) -> String {
+            "stale-model".to_string()
+        }
+
+        fn get_server_name(&self) -> String {
+            "consistent-server".to_string()
+        }
+
+        fn get_password(&self) -> Option<String> {
+            None
+        }
+
+        fn get_engine(&self) -> String {
+            "whisper".to_string()
+        }
+
+        fn model_status_snapshot(&self) -> (String, String) {
+            ("parakeet".to_string(), "nano".to_string())
+        }
+
+        fn transcribe(
+            &self,
+            _audio_data: &[u8],
+            _spoken_language: Option<&str>,
+            _transcription_task: Option<&str>,
+        ) -> Result<TranscriptionResult, String> {
+            Err("unused".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_status_uses_single_model_status_snapshot() {
+        let ctx = Arc::new(RwLock::new(ConsistentStatusMock));
+        let routes = create_routes(ctx, test_transcription_guard());
+
+        let response = warp::test::request()
+            .method("GET")
+            .path("/api/v1/status")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(response.status(), 200);
+
+        let body: StatusResponse = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body.model, "nano");
+        assert_eq!(body.engine.as_deref(), Some("parakeet"));
+        let caps = body.capabilities.expect("capabilities");
+        assert!(
+            !caps.accepts_request_context,
+            "parakeet capabilities must not use whisper initial-prompt caps"
+        );
+    }
+
+    struct SlowTranscribeMock {
+        started: Arc<AtomicBool>,
+        finished: Arc<AtomicBool>,
+    }
+
+    impl ServerContext for SlowTranscribeMock {
+        fn get_model_name(&self) -> String {
+            "slow-model".to_string()
+        }
+
+        fn get_server_name(&self) -> String {
+            "slow-server".to_string()
+        }
+
+        fn get_password(&self) -> Option<String> {
+            None
+        }
+
+        fn transcribe(
+            &self,
+            _audio_data: &[u8],
+            _spoken_language: Option<&str>,
+            _transcription_task: Option<&str>,
+        ) -> Result<TranscriptionResult, String> {
+            Err("use transcribe_with_context".to_string())
+        }
+
+        fn transcribe_with_context(
+            &self,
+            _audio_data: &[u8],
+            _spoken_language: Option<&str>,
+            _transcription_task: Option<&str>,
+            _context: Option<&str>,
+        ) -> Result<TranscriptionResult, String> {
+            self.started.store(true, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(800));
+            self.finished.store(true, Ordering::SeqCst);
+            let job = crate::transcription::TranscriptionJob::from_legacy_settings(
+                crate::transcription::TranscriptionSource::RemoteServer,
+                "remote",
+                "slow-model",
+                None,
+                false,
+            );
+            Ok(crate::transcription::TranscriptionResult::new(&job, "done"))
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn transcribe_owned_permit_held_when_handler_future_dropped() {
+        let started = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
+        let guard = test_transcription_guard();
+        let ctx = Arc::new(RwLock::new(SlowTranscribeMock {
+            started: started.clone(),
+            finished: finished.clone(),
+        }));
+
+        let ctx_for_handler = ctx.clone();
+        let guard_for_handler = guard.clone();
+        let handler_task = tokio::spawn(async move {
+            handle_transcribe(
+                TranscribeRequestParts {
+                    auth_key: None,
+                    content_type: "audio/wav".to_string(),
+                    spoken_language: None,
+                    transcription_task: None,
+                    request_context: None,
+                    body: bytes::Bytes::from_static(b"audio"),
+                },
+                ctx_for_handler,
+                guard_for_handler,
+            )
+            .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("transcription should start");
+
+        handler_task.abort();
+        let _ = handler_task.await;
+
+        let acquire_started = std::time::Instant::now();
+        let permit = guard
+            .acquire_owned()
+            .await
+            .expect("semaphore should remain held until blocking work completes");
+        drop(permit);
+
+        assert!(
+            acquire_started.elapsed() >= Duration::from_millis(300),
+            "dropping the handler future must not release the transcription permit early"
+        );
+        assert!(
+            finished.load(Ordering::SeqCst),
+            "blocking transcription should run to completion"
+        );
+    }
+
     #[tokio::test]
     async fn test_status_advertises_protocol_engine_and_capabilities() {
         let ctx = Arc::new(RwLock::new(MockContext));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let response = warp::test::request()
             .method("GET")
@@ -863,7 +1050,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(ContextCaptureMock {
             captured_context: captured_context.clone(),
         }));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let context = "project glossary: José 中";
         let encoded_context = BASE64.encode(context.as_bytes());
@@ -887,7 +1074,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(ContextCaptureMock {
             captured_context: captured_context.clone(),
         }));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let response = warp::test::request()
             .method("POST")
@@ -907,7 +1094,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(ContextCaptureMock {
             captured_context: captured_context.clone(),
         }));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
         let oversized_context = BASE64.encode(vec![b'a'; MAX_CONTEXT_HEADER_BYTES + 1]);
 
         let response = warp::test::request()
@@ -929,7 +1116,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(ContextCaptureMock {
             captured_context: captured_context.clone(),
         }));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let response = warp::test::request()
             .method("POST")
@@ -951,7 +1138,7 @@ mod tests {
     #[tokio::test]
     async fn test_transcribe_endpoint_rejects_oversized_body() {
         let ctx = Arc::new(RwLock::new(MockContext));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let oversized_audio = vec![0u8; MAX_AUDIO_BODY_BYTES as usize + 1];
 
@@ -1021,7 +1208,7 @@ mod tests {
     #[tokio::test]
     async fn test_transcribe_endpoint_handles_multibyte_preview_safely() {
         let ctx = Arc::new(RwLock::new(Utf8PreviewContext));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let response = warp::test::request()
             .method("POST")
@@ -1047,7 +1234,7 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context);
+            let routes = create_routes(server_context, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1109,7 +1296,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn transcribe_runs_off_runtime_worker() {
         let context = Arc::new(RwLock::new(DelayedMockContext::new(300)));
-        let routes = create_routes(context.clone());
+        let routes = create_routes(context.clone(), test_transcription_guard());
 
         let transcribe_routes = routes.clone();
         let started_at = std::time::Instant::now();
@@ -1164,7 +1351,7 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context);
+            let routes = create_routes(server_context, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1241,6 +1428,101 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(5), server_handle).await;
     }
 
+    #[tokio::test]
+    async fn test_transcription_guard_is_shared_across_route_instances() {
+        let context = Arc::new(RwLock::new(DelayedMockContext::new(100)));
+        let guard = Arc::new(Semaphore::new(1));
+        let routes_a = create_routes(context.clone(), guard.clone());
+        let routes_b = create_routes(context.clone(), guard);
+
+        let req_a = tokio::spawn(async move {
+            warp::test::request()
+                .method("POST")
+                .path("/api/v1/transcribe")
+                .header("Content-Type", "audio/wav")
+                .body(b"audio-a")
+                .reply(&routes_a)
+                .await
+        });
+        let req_b = tokio::spawn(async move {
+            warp::test::request()
+                .method("POST")
+                .path("/api/v1/transcribe")
+                .header("Content-Type", "audio/wav")
+                .body(b"audio-b")
+                .reply(&routes_b)
+                .await
+        });
+
+        let (response_a, response_b) = tokio::join!(req_a, req_b);
+
+        assert_eq!(response_a.expect("request A panicked").status(), 200);
+        assert_eq!(response_b.expect("request B panicked").status(), 200);
+        assert_eq!(context.read().await.max_concurrent_transcriptions(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_drains_in_flight_transcription() {
+        let context = Arc::new(RwLock::new(DelayedMockContext::new(250)));
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
+
+        let server_context = context.clone();
+        let mut server_handle = tokio::spawn(async move {
+            let addr = ([127, 0, 0, 1], 0u16);
+            let routes = create_routes(server_context, test_transcription_guard());
+            let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
+                shutdown_rx.await.ok();
+            });
+
+            let _ = addr_tx.send(addr);
+            server.await;
+        });
+
+        let addr = addr_rx.await.expect("server failed to start");
+        let client = reqwest::Client::new();
+        let transcribe_url = format!("http://{}/api/v1/transcribe", addr);
+        let request = tokio::spawn(async move {
+            client
+                .post(&transcribe_url)
+                .header("Content-Type", "audio/wav")
+                .body(b"audio".to_vec())
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_millis(150), async {
+            loop {
+                if context.read().await.request_counter.load(Ordering::SeqCst) > 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("transcription should start before shutdown");
+
+        let _ = shutdown_tx.send(());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut server_handle)
+                .await
+                .is_err(),
+            "server future resolved before in-flight transcription drained"
+        );
+
+        let response = request
+            .await
+            .expect("request task panicked")
+            .expect("request failed");
+        assert_eq!(response.status(), 200);
+        drop(response);
+        tokio::time::timeout(Duration::from_secs(5), server_handle)
+            .await
+            .expect("server should finish after in-flight request drains")
+            .expect("server task panicked");
+    }
+
     // ============================================================================
     // Rapid Sequential Requests Tests (Issue #2)
     // ============================================================================
@@ -1259,7 +1541,7 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context);
+            let routes = create_routes(server_context, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1343,7 +1625,7 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context);
+            let routes = create_routes(server_context, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1431,7 +1713,7 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context);
+            let routes = create_routes(server_context, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1485,7 +1767,7 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context);
+            let routes = create_routes(server_context, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1589,7 +1871,7 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context);
+            let routes = create_routes(server_context, test_transcription_guard());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1726,7 +2008,7 @@ mod tests {
     #[tokio::test]
     async fn test_control_models_requires_password_when_unconfigured() {
         let ctx = Arc::new(RwLock::new(MockContext));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let response = warp::test::request()
             .method("GET")
@@ -1746,7 +2028,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: true,
         }));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let response = warp::test::request()
             .method("GET")
@@ -1764,7 +2046,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: true,
         }));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let response = warp::test::request()
             .method("PATCH")
@@ -1786,7 +2068,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: true,
         }));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let response = warp::test::request()
             .method("GET")
@@ -1808,7 +2090,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: true,
         }));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let response = warp::test::request()
             .method("PATCH")
@@ -1829,7 +2111,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: true,
         }));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let response = warp::test::request()
             .method("PATCH")
@@ -1851,7 +2133,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: false,
         }));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let response = warp::test::request()
             .method("GET")
@@ -1872,7 +2154,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: false,
         }));
-        let routes = create_routes(ctx);
+        let routes = create_routes(ctx, test_transcription_guard());
 
         let response = warp::test::request()
             .method("PATCH")

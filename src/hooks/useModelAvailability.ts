@@ -130,6 +130,15 @@ function deriveAvailabilityState(
 export function useModelAvailability() {
   const { settings } = useSettings();
   const [state, setState] = useState<ModelAvailabilityState>(DEFAULT_STATE);
+  const refreshGenerationRef = useRef(0);
+  const latestAvailabilityRef = useRef<DerivedAvailabilityState>({
+    hasModels: DEFAULT_STATE.hasModels,
+    selectedModelAvailable: DEFAULT_STATE.selectedModelAvailable,
+    remoteSelected: DEFAULT_STATE.remoteSelected,
+    remoteAvailable: DEFAULT_STATE.remoteAvailable,
+    remoteStatus: DEFAULT_STATE.remoteStatus,
+    remoteLastChecked: DEFAULT_STATE.remoteLastChecked,
+  });
   const remoteStateRef = useRef({
     remoteSelected: DEFAULT_STATE.remoteSelected,
     remoteStatus: DEFAULT_STATE.remoteStatus,
@@ -147,6 +156,7 @@ export function useModelAvailability() {
   const applyCanonicalAvailability = useCallback(
     (snapshot: RecognitionAvailabilitySnapshot, fallbackSelectedModelAvailable: boolean | null) => {
       const derived = deriveAvailabilityState(snapshot, fallbackSelectedModelAvailable);
+      latestAvailabilityRef.current = derived;
       remoteStateRef.current = {
         remoteSelected: derived.remoteSelected,
         remoteStatus: derived.remoteStatus,
@@ -163,6 +173,7 @@ export function useModelAvailability() {
   );
 
   const checkModels = useCallback(async () => {
+    const refreshGeneration = ++refreshGenerationRef.current;
     setState((current) => ({ ...current, isChecking: true }));
 
     try {
@@ -171,11 +182,19 @@ export function useModelAvailability() {
         invoke<RecognitionAvailabilitySnapshot | null>('get_recognition_availability_snapshot'),
       ]);
 
+      if (refreshGeneration !== refreshGenerationRef.current) {
+        return latestAvailabilityRef.current;
+      }
+
       const availability = availabilityResult ?? FALLBACK_AVAILABILITY;
       const localSelectedModelAvailable = getLocalSelectedModelAvailability(status, settings?.current_model);
       return applyCanonicalAvailability(availability, localSelectedModelAvailable);
     } catch (error) {
       console.error('Failed to check model availability:', error);
+      if (refreshGeneration !== refreshGenerationRef.current) {
+        return latestAvailabilityRef.current;
+      }
+
       const unresolved: DerivedAvailabilityState = {
         hasModels: null,
         selectedModelAvailable: null,
@@ -184,6 +203,7 @@ export function useModelAvailability() {
         remoteStatus: 'unknown',
         remoteLastChecked: remoteStateRef.current.remoteLastChecked,
       };
+      latestAvailabilityRef.current = unresolved;
       remoteStateRef.current = {
         remoteSelected: unresolved.remoteSelected,
         remoteStatus: unresolved.remoteStatus,
@@ -250,6 +270,7 @@ export function useModelAvailability() {
     });
 
     const unlistenAvailability = listen('recognition-availability', (event) => {
+      refreshGenerationRef.current += 1;
       applyCanonicalAvailability(
         event.payload as RecognitionAvailabilitySnapshot,
         state.selectedModelAvailable,

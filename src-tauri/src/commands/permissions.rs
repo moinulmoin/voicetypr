@@ -279,9 +279,12 @@ pub fn open_accessibility_settings() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use std::process::Command;
-        // Windows doesn't have the same accessibility permission model
-        // Open Ease of Access settings as closest equivalent
-        let _ = Command::new("ms-settings:easeofaccess").spawn();
+        // Windows doesn't have the same accessibility permission model.
+        // Launch the Settings URI through the shell; it is not an executable path.
+        Command::new("cmd")
+            .args(["/C", "start", "", "ms-settings:easeofaccess"])
+            .spawn()
+            .map_err(|e| format!("Failed to open accessibility settings: {}", e))?;
         Ok(())
     }
 

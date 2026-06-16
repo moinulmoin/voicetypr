@@ -14,6 +14,11 @@ pub enum ParakeetError {
     Terminated,
     #[error("invalid transcription response payload")]
     InvalidResponse,
+    #[error("parakeet {operation} timed out after {timeout_secs}s")]
+    Timeout {
+        operation: String,
+        timeout_secs: u64,
+    },
     #[error("{0}")]
     Unavailable(String),
 }

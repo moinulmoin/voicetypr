@@ -10,7 +10,7 @@
 //! engine helpers. Two routes are intentionally deferred to later migration
 //! stages and return a typed error if reached:
 //! - `EngineSelection::HostDefault` (remote-server inbound) — Stage 4.
-//! - `ActiveEngineSelection::Remote` (send-to-peer) — Stage 5 (multipart wire).
+//! - `EngineSelection::Explicit { engine: Remote, .. }` (send-to-peer) — Stage 5 (multipart wire).
 //!
 //! `run_with_policy` enforces [`TimeoutPolicy`] at this seam (plan 015): an
 //! interactive watchdog sets the shared cancellation flag on deadline (it never
@@ -31,6 +31,7 @@ use crate::commands::audio::{
 };
 use crate::parakeet::manager::{ParakeetManager, ParakeetTranscriptionOptions};
 use crate::parakeet::messages::ParakeetResponse;
+use crate::provider_capabilities::ProviderEngine;
 use crate::secure_store::secure_get;
 use crate::transcription::error::{
     from_local_engine_string, from_stt_error, TranscriptionError, TranscriptionErrorCode,
@@ -102,18 +103,40 @@ async fn resolve_active(
     engine: &EngineSelection,
     source: TranscriptionSource,
 ) -> Result<ActiveEngineSelection, TranscriptionError> {
+    if let Some(error) = deferred_executor_route_error(engine, source) {
+        return Err(error);
+    }
+
     match engine {
         EngineSelection::Explicit { engine, model } => {
             resolve_engine_for_model(app, model, Some(engine.as_str()))
                 .await
                 .map_err(|e| from_local_engine_string(&e, source))
         }
+        EngineSelection::HostDefault => unreachable!("deferred route checked before resolution"),
+    }
+}
+
+fn deferred_executor_route_error(
+    engine: &EngineSelection,
+    source: TranscriptionSource,
+) -> Option<TranscriptionError> {
+    match engine {
+        EngineSelection::Explicit {
+            engine: ProviderEngine::Remote,
+            ..
+        } => Some(TranscriptionError::new(
+            TranscriptionErrorCode::Internal,
+            source,
+            "Remote engine selection is handled outside the transcription executor by the desktop remote transcription path.",
+        )),
         // Stage 4: remote-server inbound snapshots its own shared engine/model.
-        EngineSelection::HostDefault => Err(TranscriptionError::new(
+        EngineSelection::HostDefault => Some(TranscriptionError::new(
             TranscriptionErrorCode::Internal,
             source,
             "Host-default engine resolution is wired by the remote-server inbound port (Stage 4).",
         )),
+        _ => None,
     }
 }
 
@@ -451,18 +474,17 @@ async fn run_whisper_with_retry(
     result
 }
 
-/// When the watchdog fired, a cancellation is really a timeout — relabel it so
-/// callers surface "timed out" rather than "cancelled".
+/// When the watchdog fired, every outcome is untrusted: cancellation has been
+/// requested and the Windows GPU sidecar may have been aborted. Surface timeout.
 fn remap_timed_out(
     result: Result<TranscriptionResult, TranscriptionError>,
     timed_out: bool,
     source: TranscriptionSource,
 ) -> Result<TranscriptionResult, TranscriptionError> {
-    match result {
-        Err(error) if timed_out && error.code == TranscriptionErrorCode::Cancelled => {
-            Err(timed_out_error(source))
-        }
-        other => other,
+    if timed_out {
+        Err(timed_out_error(source))
+    } else {
+        result
     }
 }
 
@@ -503,10 +525,13 @@ fn should_delete_input(policy: &CleanupPolicy, success: bool, retryable: bool) -
 #[cfg(test)]
 mod tests {
     use super::should_delete_input;
-    use super::{is_normalized_wav, remap_timed_out, watchdog_budget_for, wav_duration_ms};
+    use super::{
+        deferred_executor_route_error, is_normalized_wav, remap_timed_out, watchdog_budget_for,
+        wav_duration_ms,
+    };
+    use crate::provider_capabilities::ProviderEngine;
     use crate::transcription::error::{TranscriptionError, TranscriptionErrorCode};
-    use crate::transcription::request::CleanupPolicy;
-    use crate::transcription::request::TimeoutPolicy;
+    use crate::transcription::request::{CleanupPolicy, EngineSelection, TimeoutPolicy};
     use crate::transcription::{
         TranscriptionJob, TranscriptionResult, TranscriptionSource, TranscriptionTask,
     };
@@ -608,21 +633,70 @@ mod tests {
     }
 
     #[test]
-    fn remap_timed_out_leaves_non_cancellation_and_success_untouched() {
-        let failed = Err::<TranscriptionResult, _>(TranscriptionError::new(
-            TranscriptionErrorCode::EngineFailed,
-            TranscriptionSource::DesktopRecording,
-            "boom",
-        ));
-        let remapped = remap_timed_out(failed, true, TranscriptionSource::DesktopRecording);
-        assert_eq!(
-            remapped.unwrap_err().code,
-            TranscriptionErrorCode::EngineFailed
-        );
+    fn remap_timed_out_maps_every_result_to_timeout_when_fired() {
+        let cases = [
+            Ok(TranscriptionResult::new(&sample_job(), "hi")),
+            Err(TranscriptionError::new(
+                TranscriptionErrorCode::Cancelled,
+                TranscriptionSource::DesktopRecording,
+                "Transcription cancelled",
+            )),
+            Err(TranscriptionError::new(
+                TranscriptionErrorCode::EngineFailed,
+                TranscriptionSource::DesktopRecording,
+                "boom",
+            )),
+        ];
 
-        let ok = Ok(TranscriptionResult::new(&sample_job(), "hi"));
-        let remapped = remap_timed_out(ok, true, TranscriptionSource::DesktopRecording);
-        assert!(remapped.is_ok());
+        for result in cases {
+            let remapped = remap_timed_out(result, true, TranscriptionSource::DesktopRecording);
+            assert_eq!(remapped.unwrap_err().code, TranscriptionErrorCode::Timeout);
+        }
+
+        let kept_ok = remap_timed_out(
+            Ok(TranscriptionResult::new(&sample_job(), "hi")),
+            false,
+            TranscriptionSource::DesktopRecording,
+        )
+        .unwrap();
+        assert_eq!(kept_ok.raw_text, "hi");
+
+        for code in [
+            TranscriptionErrorCode::Cancelled,
+            TranscriptionErrorCode::EngineFailed,
+        ] {
+            let kept = remap_timed_out(
+                Err(TranscriptionError::new(
+                    code,
+                    TranscriptionSource::DesktopRecording,
+                    "original",
+                )),
+                false,
+                TranscriptionSource::DesktopRecording,
+            );
+            assert_eq!(kept.unwrap_err().code, code);
+        }
+    }
+
+    #[test]
+    fn explicit_remote_selection_returns_clear_executor_error() {
+        let error = deferred_executor_route_error(
+            &EngineSelection::Explicit {
+                engine: ProviderEngine::Remote,
+                model: "remote_peer".to_string(),
+            },
+            TranscriptionSource::DesktopRecording,
+        )
+        .expect("remote selection should be rejected before executor resolution");
+
+        assert_eq!(error.code, TranscriptionErrorCode::Internal);
+        assert_eq!(error.source, TranscriptionSource::DesktopRecording);
+        assert!(error
+            .user_message
+            .contains("outside the transcription executor"));
+        assert!(error
+            .user_message
+            .contains("desktop remote transcription path"));
     }
 
     #[test]
