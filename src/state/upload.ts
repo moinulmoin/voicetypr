@@ -20,6 +20,7 @@ export type TranscriptionWord = {
 type UploadTranscriptionResult = {
   text: string
   words: TranscriptionWord[] | null
+  metadata?: Record<string, unknown> | null
 }
 
 type UploadState = {
@@ -83,6 +84,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       await invoke('save_transcription', {
         text: res.text,
         model: historyModelName || modelName,
+        metadata: res.metadata ?? undefined,
       })
       set({ status: 'done', resultText: res.text, speakerSegments, diarizationError, diarized: res.words != null })
       return { outcome: 'success', text: res.text }

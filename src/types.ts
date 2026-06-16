@@ -101,6 +101,22 @@ export interface TranscriptionWritingMeta {
   translation_failed?: boolean;
   /** The output language the failed translation targeted. */
   target_language?: string;
+  /** Transcription source: 'desktop_recording' | 'audio_file' | 'audio_bytes' | 'remote_server' */
+  source?: string;
+  /** Engine/provider used (e.g. 'whisper', 'parakeet', 'soniox'). */
+  engine?: string;
+  /** Audio length in milliseconds. */
+  audio_duration_ms?: number;
+  /** Processing time in milliseconds. */
+  processing_duration_ms?: number;
+  /** True when speaker-diarization word segments are present. */
+  diarized?: boolean;
+  /** AI writing mode applied (desktop only). */
+  mode?: string;
+  /** True when an AI enhancement was applied (desktop only). */
+  ai_applied?: boolean;
+  /** App that received the dictated text (only when user app-hint opt-in is on). */
+  context_hint?: { app_name?: string; app_category?: string };
 }
 
 export interface TranscriptionHistory {

@@ -799,6 +799,7 @@ pub struct UploadDiarizationSegment {
 pub struct UploadTranscription {
     pub text: String,
     pub words: Option<Vec<TranscriptionWord>>,
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// Group diarized words into speaker-attributed paragraphs.
@@ -892,18 +893,51 @@ fn build_remote_transcription_result(
 
 fn build_writing_history_metadata(
     transcription: &TranscriptionResult,
-    writing_result: &crate::writing::WritingResult,
+    writing: Option<&crate::writing::WritingResult>,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "mode": writing_result.mode,
-        "output_language": writing_result.output_language,
-        "transcript_language": transcription.transcript_language,
-        "spoken_language": transcription.spoken_language,
-        "ai_applied": writing_result.ai_applied,
-        "applied_operations": writing_result.applied_operations,
-        "warnings": writing_result.warnings,
-        "context_hint": writing_result.context_hint,
-    })
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "source".into(),
+        serde_json::to_value(transcription.source).unwrap_or(serde_json::Value::Null),
+    );
+    map.insert("engine".into(), transcription.engine.clone().into());
+    if let Some(v) = transcription.timings.audio_duration_ms {
+        map.insert("audio_duration_ms".into(), v.into());
+    }
+    if let Some(v) = transcription.timings.processing_duration_ms {
+        map.insert("processing_duration_ms".into(), v.into());
+    }
+    map.insert("diarized".into(), transcription.words.is_some().into());
+    if let Some(wr) = writing {
+        map.insert(
+            "mode".into(),
+            serde_json::to_value(wr.mode).unwrap_or(serde_json::Value::Null),
+        );
+        map.insert("output_language".into(), wr.output_language.clone().into());
+        map.insert(
+            "transcript_language".into(),
+            serde_json::json!(transcription.transcript_language),
+        );
+        map.insert(
+            "spoken_language".into(),
+            serde_json::json!(transcription.spoken_language),
+        );
+        map.insert("ai_applied".into(), wr.ai_applied.into());
+        map.insert(
+            "applied_operations".into(),
+            serde_json::to_value(&wr.applied_operations)
+                .unwrap_or(serde_json::Value::Array(vec![])),
+        );
+        map.insert(
+            "warnings".into(),
+            serde_json::to_value(&wr.warnings).unwrap_or(serde_json::Value::Array(vec![])),
+        );
+        map.insert(
+            "context_hint".into(),
+            serde_json::to_value(&wr.context_hint).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    serde_json::Value::Object(map)
 }
 
 /// Metadata marking a history row whose required AI translation failed: the saved
@@ -985,7 +1019,7 @@ async fn save_ai_polish_fallback_history(
         None,
         Some(build_writing_history_metadata(
             transcription,
-            writing_result,
+            Some(writing_result),
         )),
     )
     .await?;
@@ -1009,7 +1043,7 @@ fn plan_desktop_writing_success(
         final_text: writing_result.final_text.clone(),
         writing_metadata: Some(build_writing_history_metadata(
             transcription,
-            writing_result,
+            Some(writing_result),
         )),
         should_deliver: true,
         save_history_entries: 1,
@@ -1453,7 +1487,7 @@ mod tests {
             ai_error: None,
         };
 
-        let metadata = build_writing_history_metadata(&transcription, &writing_result);
+        let metadata = build_writing_history_metadata(&transcription, Some(&writing_result));
         assert_eq!(metadata["output_language"], "en");
         assert!(metadata.get("raw_text").is_none());
         assert!(metadata.get("final_text").is_none());
@@ -1888,6 +1922,145 @@ mod tests {
         assert!(
             !TranscriptionFailure::Local("Recording too short".to_string()).is_retryable_failure()
         );
+    }
+
+    // --- build_writing_history_metadata tests ---
+
+    fn minimal_transcription_result() -> crate::transcription::TranscriptionResult {
+        use crate::transcription::{TranscriptionSource, TranscriptionTask, TranscriptionTimings};
+        crate::transcription::TranscriptionResult {
+            raw_text: "hello world".into(),
+            engine: "whisper".into(),
+            model: "base.en".into(),
+            spoken_language: Some("en".into()),
+            transcript_language: Some("en".into()),
+            task: TranscriptionTask::Transcribe,
+            source: TranscriptionSource::AudioFile,
+            segments: None,
+            words: None,
+            timings: TranscriptionTimings {
+                audio_duration_ms: Some(5000),
+                processing_duration_ms: Some(1200),
+            },
+        }
+    }
+
+    fn minimal_writing_result_with_hint() -> crate::writing::WritingResult {
+        crate::writing::WritingResult {
+            raw_text: "hello world".into(),
+            final_text: "hello world".into(),
+            output_language: "en".into(),
+            mode: crate::writing::WritingMode::PersonalDictation,
+            ai_applied: true,
+            applied_operations: vec![],
+            warnings: vec![],
+            context_hint: Some(crate::writing::ContextHint {
+                app_name: Some("Finder".into()),
+                app_category: Some("productivity".into()),
+            }),
+            ai_error: None,
+        }
+    }
+
+    #[test]
+    fn writing_metadata_without_writing_has_base_fields_only() {
+        let tr = minimal_transcription_result();
+        let meta = build_writing_history_metadata(&tr, None);
+        let obj = meta.as_object().unwrap();
+
+        // Always-present fields
+        assert_eq!(obj["source"].as_str().unwrap(), "audio_file");
+        assert_eq!(obj["engine"].as_str().unwrap(), "whisper");
+        assert!(!obj["diarized"].as_bool().unwrap());
+        assert_eq!(obj["audio_duration_ms"].as_u64().unwrap(), 5000);
+        assert_eq!(obj["processing_duration_ms"].as_u64().unwrap(), 1200);
+
+        // Writing-specific fields must be ABSENT
+        assert!(
+            !obj.contains_key("context_hint"),
+            "context_hint must be absent"
+        );
+        assert!(!obj.contains_key("mode"), "mode must be absent");
+        assert!(!obj.contains_key("ai_applied"), "ai_applied must be absent");
+        assert!(
+            !obj.contains_key("output_language"),
+            "output_language must be absent"
+        );
+        assert!(
+            !obj.contains_key("applied_operations"),
+            "applied_operations must be absent"
+        );
+        assert!(!obj.contains_key("warnings"), "warnings must be absent");
+    }
+
+    #[test]
+    fn writing_metadata_diarized_true_when_words_present() {
+        let mut tr = minimal_transcription_result();
+        tr.words = Some(vec![]);
+        let meta = build_writing_history_metadata(&tr, None);
+        assert!(meta["diarized"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn writing_metadata_timings_omitted_when_none() {
+        let mut tr = minimal_transcription_result();
+        tr.timings.audio_duration_ms = None;
+        tr.timings.processing_duration_ms = None;
+        let meta = build_writing_history_metadata(&tr, None);
+        let obj = meta.as_object().unwrap();
+        assert!(!obj.contains_key("audio_duration_ms"));
+        assert!(!obj.contains_key("processing_duration_ms"));
+    }
+
+    #[test]
+    fn writing_metadata_with_writing_result_includes_all_fields() {
+        let tr = minimal_transcription_result();
+        let wr = minimal_writing_result_with_hint();
+        let meta = build_writing_history_metadata(&tr, Some(&wr));
+        let obj = meta.as_object().unwrap();
+
+        // Base fields still present
+        assert_eq!(obj["source"].as_str().unwrap(), "audio_file");
+        assert_eq!(obj["engine"].as_str().unwrap(), "whisper");
+        assert!(!obj["diarized"].as_bool().unwrap());
+
+        // Writing fields present
+        assert_eq!(obj["mode"].as_str().unwrap(), "personal_dictation");
+        assert_eq!(obj["output_language"].as_str().unwrap(), "en");
+        assert!(obj["ai_applied"].as_bool().unwrap());
+        assert!(obj.contains_key("applied_operations"));
+        assert!(obj.contains_key("warnings"));
+
+        // context_hint present with expected values
+        let hint = &obj["context_hint"];
+        assert_eq!(hint["app_name"].as_str().unwrap(), "Finder");
+        assert_eq!(hint["app_category"].as_str().unwrap(), "productivity");
+    }
+
+    // --- save_transcription metadata persistence ---
+
+    #[test]
+    fn save_transcription_with_metadata_sets_writing_key() {
+        // Verify the JSON assembly logic: Some(metadata) → data["writing"] is populated.
+        let metadata =
+            serde_json::json!({ "source": "audio_file", "engine": "whisper", "diarized": false });
+        let mut data = serde_json::json!({ "text": "hi", "model": "base.en", "timestamp": "t" });
+        if let Some(m) = Some(metadata.clone()) {
+            data["writing"] = m;
+        }
+        assert_eq!(data["writing"]["source"].as_str().unwrap(), "audio_file");
+        assert!(!data["writing"]["diarized"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn save_transcription_without_metadata_no_writing_key() {
+        // Verify the JSON assembly logic: None → data["writing"] is absent.
+        let mut data = serde_json::json!({ "text": "hi", "model": "base.en", "timestamp": "t" });
+        let writing_metadata: Option<serde_json::Value> = None;
+        if let Some(m) = writing_metadata {
+            data["writing"] = m;
+        }
+        assert!(!data.as_object().unwrap().contains_key("writing"));
     }
 }
 
@@ -4852,8 +5025,13 @@ pub async fn cleanup_old_transcriptions(app: AppHandle, days: Option<u32>) -> Re
 
 /// Save transcription to history without a recording file
 #[tauri::command]
-pub async fn save_transcription(app: AppHandle, text: String, model: String) -> Result<(), String> {
-    save_transcription_with_recording(app, text, model, None, None).await
+pub async fn save_transcription(
+    app: AppHandle,
+    text: String,
+    model: String,
+    metadata: Option<serde_json::Value>,
+) -> Result<(), String> {
+    save_transcription_with_recording(app, text, model, None, metadata).await
 }
 
 /// Save transcription to history with optional recording file reference
@@ -5234,15 +5412,21 @@ async fn transcribe_audio_file_impl(
             // If the provider returned speaker-attributed words, group them and
             // return directly — no AI polish for diarized uploads.
             if !cloud_transcript.words.is_empty() {
-                let text = group_words_into_speaker_text(&cloud_transcript.words);
+                let words = cloud_transcript.words;
+                let text = group_words_into_speaker_text(&words);
                 log::info!(
                     "[UPLOAD] Diarized cloud transcript: {} words, {} chars",
-                    cloud_transcript.words.len(),
+                    words.len(),
                     text.len()
                 );
+                let mut diarized_result =
+                    TranscriptionResult::new(&transcription_job, text.clone());
+                diarized_result.words = Some(words.clone());
+                let metadata = Some(build_writing_history_metadata(&diarized_result, None));
                 return Ok(UploadTranscription {
                     text,
-                    words: Some(cloud_transcript.words),
+                    words: Some(words),
+                    metadata,
                 });
             }
 
@@ -5351,9 +5535,14 @@ async fn transcribe_audio_file_impl(
         notify_ai_polish_failure(&app, error);
         // Upload history is persisted by the frontend after this command returns non-blank text.
     }
+    let metadata = Some(build_writing_history_metadata(
+        &transcription_result,
+        Some(&writing_result),
+    ));
     Ok(UploadTranscription {
         text: writing_result.final_text,
         words: None,
+        metadata,
     })
 }
 

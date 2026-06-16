@@ -240,6 +240,10 @@ sessions, the Swift sidecar fd-redirect, UI-responsiveness, and wall-clock timin
 
 - **023-S1**: with a real **Deepgram** key, upload a 2-speaker file → the result is a speaker-attributed transcript ("Speaker 0: … / Speaker 1: …") shown with line breaks, and Save `.txt`/`.md` contains the speaker blocks. Repeat with a real **Soniox** key. A non-diarizing provider (OpenAI/Groq/Cohere) or single-speaker audio → plain transcript (no labels). Live dictation is unaffected (no diarization). (Provider word-parsing + speaker grouping are unit-covered with fixtures; the real-key round-trip + attribution quality are the irreducible residue.)
 
+## Plan 024 — rich, filterable history (NEEDS-SMOKE)
+
+- **024-S1**: with the app-hint opt-in **ON**, dictate into an app → the history entry shows that app; upload a file via a cloud provider → its entry shows source + duration (+ a "Speakers" badge if diarized). Filter the list by **source / app / date** and confirm it narrows correctly; an old (pre-metadata) entry still renders and appears only under "All sources". With the opt-in **OFF**, new entries carry no app name.
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are

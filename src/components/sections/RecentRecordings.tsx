@@ -46,12 +46,80 @@ interface RecentRecordingsProps {
   onHistoryUpdate?: () => void;
 }
 
+// ---------------------------------------------------------------------------
+// Pure helpers — exported so tests can drive them directly
+// ---------------------------------------------------------------------------
+
+/** Map raw source values to user-facing labels. */
+export function sourceLabel(source: string | undefined): string {
+  switch (source) {
+    case 'desktop_recording': return 'Dictation';
+    case 'audio_file':
+    case 'audio_bytes': return 'Upload';
+    case 'remote_server': return 'Remote';
+    default: return '';
+  }
+}
+
+/** Format milliseconds as m:ss (e.g. 90 000 ms → "1:30"). */
+export function formatDurationMs(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}:${sec.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Structural filters for the history list (source, app, date).
+ * Text search is handled separately in the component to support model display-name matching.
+ * Under a specific source filter, only rows whose writing.source maps to that source pass;
+ * rows with no/unknown source are excluded (they appear only under 'all').
+ */
+export function applyHistoryFilters(
+  history: TranscriptionHistory[],
+  sourceFilter: string,
+  appFilter: string,
+  dateFilter: string,
+  now?: Date,
+): TranscriptionHistory[] {
+  const todayBase = now ? new Date(now) : new Date();
+  todayBase.setHours(0, 0, 0, 0);
+  const sevenDaysAgo = new Date(todayBase);
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+
+  return history.filter(item => {
+    // Source filter — requires an exact match; rows with no/unknown source are excluded
+    if (sourceFilter !== 'all') {
+      const src = item.writing?.source;
+      if (sourceFilter === 'desktop_recording' && src !== 'desktop_recording') return false;
+      if (sourceFilter === 'audio_file' && src !== 'audio_file' && src !== 'audio_bytes') return false;
+      if (sourceFilter === 'remote_server' && src !== 'remote_server') return false;
+    }
+
+    // App filter
+    if (appFilter !== 'all' && item.writing?.context_hint?.app_name !== appFilter) return false;
+
+    // Date filter
+    if (dateFilter !== 'all') {
+      const itemDate = new Date(item.timestamp);
+      itemDate.setHours(0, 0, 0, 0);
+      if (dateFilter === 'today' && itemDate.getTime() !== todayBase.getTime()) return false;
+      if (dateFilter === 'last7' && itemDate < sevenDaysAgo) return false;
+    }
+
+    return true;
+  });
+}
+
 export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistoryUpdate }: RecentRecordingsProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [reTranscribingIds, setReTranscribingIds] = useState<Set<string>>(new Set());
   const [verifiedRecordings, setVerifiedRecordings] = useState<Set<string>>(new Set());
   const [checkedRecordings, setCheckedRecordings] = useState<Set<string>>(new Set());
   const [reTranscribingModels, setReTranscribingModels] = useState<Map<string, string>>(new Map());
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [appFilter, setAppFilter] = useState("all");
+  const [dateFilter, setDateFilter] = useState("all");
   const { settings } = useSettings();
   const readiness = useReadiness();
   const canRecord = readiness.canRecord;
@@ -143,6 +211,16 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       setVerifiedRecordings(verified);
     };
     verifyRecordings();
+  }, [history]);
+
+  // Collect distinct app names from history for the app filter dropdown
+  const distinctAppNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const item of history) {
+      const app = item.writing?.context_hint?.app_name;
+      if (app) names.add(app);
+    }
+    return [...names].sort();
   }, [history]);
 
 
@@ -278,17 +356,17 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     }
   };
 
-  // Filter history based on search query
+  // Filter history by source/app/date (structural) then by text search
   const filteredHistory = useMemo(() => {
-    if (!searchQuery.trim()) return history;
-
-    const query = searchQuery.toLowerCase();
-    return history.filter(item =>
-      item.text.toLowerCase().includes(query) ||
-      (item.model && item.model.toLowerCase().includes(query)) ||
-      (item.model && (getModelDisplayName(item.model) ?? item.model).toLowerCase().includes(query))
+    const structural = applyHistoryFilters(history, sourceFilter, appFilter, dateFilter);
+    if (!searchQuery.trim()) return structural;
+    const q = searchQuery.trim().toLowerCase();
+    return structural.filter(item =>
+      item.text.toLowerCase().includes(q) ||
+      (item.model && item.model.toLowerCase().includes(q)) ||
+      (item.model && (getModelDisplayName(item.model) ?? '').toLowerCase().includes(q)),
     );
-  }, [history, searchQuery]);
+  }, [history, searchQuery, sourceFilter, appFilter, dateFilter]);
 
   // Group history by date
   const groupedHistory = useMemo(() => {
@@ -472,9 +550,9 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
         </div>
       </div>
 
-      {/* Search Bar */}
+      {/* Search + Filters */}
       {history.length > 0 && (
-        <div className="px-6 py-3">
+        <div className="px-6 py-3 space-y-2">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <input
@@ -493,8 +571,50 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
               </button>
             )}
           </div>
-          {searchQuery && (
-            <p className="text-xs text-muted-foreground mt-2">
+          {/* Filter row */}
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              className="text-xs bg-background border border-border/50 rounded-md px-2 py-1 text-muted-foreground focus:outline-none focus:border-primary/50 transition-colors"
+            >
+              <option value="all">All sources</option>
+              <option value="desktop_recording">Dictation</option>
+              <option value="audio_file">Upload</option>
+              <option value="remote_server">Remote</option>
+            </select>
+            <select
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value)}
+              className="text-xs bg-background border border-border/50 rounded-md px-2 py-1 text-muted-foreground focus:outline-none focus:border-primary/50 transition-colors"
+            >
+              <option value="all">All time</option>
+              <option value="today">Today</option>
+              <option value="last7">Last 7 days</option>
+            </select>
+            {distinctAppNames.length > 0 && (
+              <select
+                value={appFilter}
+                onChange={(e) => setAppFilter(e.target.value)}
+                className="text-xs bg-background border border-border/50 rounded-md px-2 py-1 text-muted-foreground focus:outline-none focus:border-primary/50 transition-colors"
+              >
+                <option value="all">All apps</option>
+                {distinctAppNames.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            )}
+            {(sourceFilter !== 'all' || appFilter !== 'all' || dateFilter !== 'all' || searchQuery) && (
+              <button
+                onClick={() => { setSearchQuery(""); setSourceFilter("all"); setAppFilter("all"); setDateFilter("all"); }}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+          {(searchQuery || sourceFilter !== 'all' || appFilter !== 'all' || dateFilter !== 'all') && (
+            <p className="text-xs text-muted-foreground">
               Found {filteredHistory.length} result{filteredHistory.length !== 1 ? 's' : ''}
             </p>
           )}
@@ -659,6 +779,31 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                               </button>
                             </div>
                           </div>
+                          {/* Metadata badges: source, duration, diarized, app */}
+                          {item.writing && (sourceLabel(item.writing.source) || item.writing.audio_duration_ms != null || item.writing.diarized || item.writing.context_hint?.app_name) && (
+                            <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                              {sourceLabel(item.writing.source) && (
+                                <span className="px-1.5 py-0.5 text-xs rounded bg-muted text-muted-foreground">
+                                  {sourceLabel(item.writing.source)}
+                                </span>
+                              )}
+                              {item.writing.audio_duration_ms != null && (
+                                <span className="px-1.5 py-0.5 text-xs rounded bg-muted text-muted-foreground">
+                                  {formatDurationMs(item.writing.audio_duration_ms)}
+                                </span>
+                              )}
+                              {item.writing.diarized && (
+                                <span className="px-1.5 py-0.5 text-xs rounded bg-muted text-muted-foreground">
+                                  Speakers
+                                </span>
+                              )}
+                              {item.writing.context_hint?.app_name && (
+                                <span className="px-1.5 py-0.5 text-xs rounded bg-muted/60 text-muted-foreground">
+                                  {item.writing.context_hint.app_name}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )})}
@@ -673,7 +818,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
               <Search className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
               <p className="text-sm text-muted-foreground">No transcriptions found</p>
               <p className="text-xs text-muted-foreground/70 mt-2">
-                Try adjusting your search query
+                Try adjusting your search or filters
               </p>
             </div>
           </div>
