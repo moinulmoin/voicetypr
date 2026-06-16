@@ -81,6 +81,19 @@ pub struct TranscriptionTimings {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptionWord {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptionResult {
     pub raw_text: String,
     pub engine: String,
@@ -88,7 +101,10 @@ pub struct TranscriptionResult {
     pub spoken_language: Option<String>,
     pub transcript_language: Option<String>,
     pub task: TranscriptionTask,
+    pub source: TranscriptionSource,
     pub segments: Option<Vec<TranscriptionSegment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<Vec<TranscriptionWord>>,
     pub timings: TranscriptionTimings,
 }
 
@@ -103,7 +119,9 @@ impl TranscriptionResult {
                 .task
                 .fallback_transcript_language(job.spoken_language.as_deref()),
             task: job.task,
+            source: job.source,
             segments: None,
+            words: None,
             timings: TranscriptionTimings::default(),
         }
     }
@@ -186,5 +204,41 @@ mod tests {
         assert_eq!(result.transcript_language.as_deref(), Some("pt"));
         assert_eq!(result.timings.audio_duration_ms, Some(1200));
         assert_eq!(result.timings.processing_duration_ms, Some(450));
+    }
+
+    #[test]
+    fn test_transcription_result_serde_round_trip_with_words() {
+        let job = TranscriptionJob::from_legacy_settings(
+            TranscriptionSource::AudioFile,
+            "whisper",
+            "large-v3",
+            Some("en".to_string()),
+            false,
+        );
+        let word = TranscriptionWord {
+            text: "hello".to_string(),
+            start_ms: Some(100),
+            end_ms: Some(600),
+            speaker_id: Some("S1".to_string()),
+            confidence: Some(0.95),
+        };
+        let result = TranscriptionResult::new(&job, "hello world")
+            .with_transcript_language(Some("en".to_string()));
+        let result = TranscriptionResult {
+            words: Some(vec![word]),
+            ..result
+        };
+
+        let json = serde_json::to_string(&result).expect("serialize");
+        let back: TranscriptionResult = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(result, back);
+        assert_eq!(back.source, TranscriptionSource::AudioFile);
+        assert!(back.words.is_some());
+
+        // Back-compat: JSON without `words` deserializes with words: None
+        let legacy_json = r#"{"raw_text":"hi","engine":"whisper","model":"large-v3","spoken_language":"en","transcript_language":"en","task":"transcribe","source":"audio_file","timings":{"audio_duration_ms":null,"processing_duration_ms":null}}"#;
+        let legacy: TranscriptionResult =
+            serde_json::from_str(legacy_json).expect("deserialize legacy");
+        assert_eq!(legacy.words, None);
     }
 }
