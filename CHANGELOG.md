@@ -1,3 +1,14 @@
+## [Unreleased]
+
+### Features
+
+* **upload:** add Save button to file-upload transcript result; opens a native save dialog with .txt and .md filters; .md output includes a `# <filename>` heading; cancel is a no-op; success and error toasts fire
+* **diarization:** add cloud speaker diarization for file uploads (Deepgram, Soniox); a diarization-capable provider produces a speaker-attributed transcript ("Speaker 0: … / Speaker 1: …") shown and saved to .txt/.md, while non-diarizing providers fall back to plain text
+* **history:** persist rich per-entry metadata (source, engine/model, language, duration, diarized, and — for opted-in dictation — the target app) and add source/app/date filters with per-entry detail
+* **cli:** make `--json` consistent across status/models/transcribe/record (human-readable by default) and emit the structured transcription artifact (text, words, metadata) from transcribe/record
+* **feedback:** add actionable remediation to the pill feedback overlay so key recording/permission failures show how to fix them
+
+
 ## [1.12.5](https://github.com/moinulmoin/voicetypr/compare/v1.12.4...v1.12.5) (2026-06-02)
 
 ### Bug Fixes
