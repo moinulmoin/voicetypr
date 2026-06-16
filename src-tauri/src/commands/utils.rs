@@ -71,3 +71,43 @@ pub async fn export_transcriptions(app: AppHandle) -> Result<String, String> {
     // Return the full path as string
     Ok(file_path.to_string_lossy().to_string())
 }
+
+#[tauri::command]
+pub async fn save_transcript_file(path: String, content: String) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("No file path provided".to_string());
+    }
+    if content.is_empty() {
+        return Err("Nothing to save".to_string());
+    }
+    std::fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e))?;
+    log::info!("Saved transcript to {}", path);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn save_transcript_file_writes_content() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "voicetypr_test_{}.txt",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let content = "Hello, transcript!".to_string();
+        let path_str = path.to_string_lossy().to_string();
+
+        let result = save_transcript_file(path_str.clone(), content.clone()).await;
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+
+        let written = std::fs::read_to_string(&path).expect("file should exist after write");
+        assert_eq!(written, content);
+
+        std::fs::remove_file(&path).ok();
+    }
+}

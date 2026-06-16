@@ -31,6 +31,7 @@ Verification commands used across all plans: `pnpm typecheck`, `pnpm lint`,
 |------|-------|----------|--------|------------|--------|
 | 013  | *(reserved: close 004/008 smoke blockers — checklist, no plan file yet)* | P1 | S | 004, 008 | RESERVED — no executable plan file yet |
 | 021  | V2 feature track + carried-over work (roadmap index; waves → 022+) | P2 | XL | 2.0.0 smoke gates | TODO — roadmap/index only; Part A Waves 0–8 are release-boundary **B** (fold into 2.0.0); Part B carry-over is noted/uncommitted (opt-in); each wave graduates to its own 022+ plan when claimed |
+| 022  | Wave 1 (F3) — save uploaded transcript to `.txt`/`.md` | P2 | S | 021 | IN PROGRESS — claimed Main 2026-06-16 |
 
 ## Code-done, awaiting batched manual smoke (`plans/SMOKE.md`)
 

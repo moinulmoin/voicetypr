@@ -41,7 +41,7 @@
 - **Acceptance**: types compile, serde back-compat (old history rows still read), no behavior change yet.
 
 ### Wave 1 — F3: save uploaded transcript to .txt/.md [S]
-- "Save as…" on the upload result → `.txt` (plain) now; `.md` (speaker headings + timestamps) once Wave 2 lands. Save dialog + write.
+- "Save as…" on the upload result via a native save dialog → **both `.txt` (raw) and `.md` (transcript under a minimal `# <name>` heading) ship now**; only the *speaker-block* `.md` enrichment is deferred to Wave 2/F2. Backend save command (frontend fs is appdata-scoped).
 - Seam: `src/state/upload.ts` `resultText` + a backend save command (or frontend fs write).
 - **Acceptance**: upload → Save as `.txt`/`.md` writes the transcript; plain works before diarization exists.
 

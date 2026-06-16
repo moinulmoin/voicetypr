@@ -232,6 +232,10 @@ compute, real microphone capture, OS hotkey event delivery, Windows GSMTC media
 sessions, the Swift sidecar fd-redirect, UI-responsiveness, and wall-clock timing
 (300 ms throttle, 250 ms poll, 60 s silence timeout).
 
+## Plan 022 — save uploaded transcript to .txt/.md (NEEDS-SMOKE)
+
+- **022-S1**: upload a file → transcribe → click **Save** → choose `.txt`; then repeat and choose `.md`. Both files contain the transcript (the `.md` has a `# <name>` heading); cancelling the dialog writes nothing. (Backend write + command registration are gate-covered; the native save-dialog round-trip is the irreducible UI residue.)
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are

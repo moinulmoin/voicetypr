@@ -32,7 +32,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   diarizationError: null,
 
   select: (path: string) => {
-    const name = path.split('/').pop() || path.split('\\').pop() || 'audio file'
+    const name = path.split(/[\\/]/).pop() || 'audio file'
     set({ selectedFile: { path, name }, resultText: null, error: null, speakerSegments: [], diarizationError: null })
   },
 

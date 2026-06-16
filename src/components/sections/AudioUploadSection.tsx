@@ -18,10 +18,11 @@ import {
   Check,
   AlertCircle,
   HelpCircle,
+  Download,
 } from "lucide-react";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useModelAvailability } from "@/hooks/useModelAvailability";
 import { listen } from "@tauri-apps/api/event";
@@ -211,6 +212,28 @@ export function AudioUploadSection() {
         console.error("Failed to copy:", error);
         toast.error("Failed to copy to clipboard");
       }
+    }
+  };
+
+  const handleSaveAs = async () => {
+    if (!resultText) return;
+    const base = (selectedFile?.name || "transcript").replace(/\.[^/.]+$/, "");
+    try {
+      const path = await save({
+        defaultPath: `${base}.txt`,
+        filters: [
+          { name: "Text", extensions: ["txt"] },
+          { name: "Markdown", extensions: ["md"] },
+        ],
+      });
+      if (!path) return; // cancelled
+      const content = path.toLowerCase().endsWith(".md")
+        ? `# ${base}\n\n${resultText}`
+        : resultText;
+      await invoke("save_transcript_file", { path, content });
+      toast.success("Transcript saved");
+    } catch (e) {
+      toast.error(`Save failed: ${e}`);
     }
   };
 
@@ -452,17 +475,22 @@ export function AudioUploadSection() {
                       )}
 
                       <div className="flex items-center justify-between gap-3">
-                        <Button onClick={handleCopy} variant="outline">
-                          {copied ? (
-                            <>
-                              <Check className="h-4 w-4 mr-2 text-green-500" /> Copied
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="h-4 w-4 mr-2" /> Copy
-                            </>
-                          )}
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          <Button onClick={handleCopy} variant="outline">
+                            {copied ? (
+                              <>
+                                <Check className="h-4 w-4 mr-2 text-green-500" /> Copied
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="h-4 w-4 mr-2" /> Copy
+                              </>
+                            )}
+                          </Button>
+                          <Button onClick={handleSaveAs} variant="outline">
+                            <Download className="h-4 w-4 mr-2" /> Save
+                          </Button>
+                        </div>
 
                         <Button onClick={handleReset} variant="outline">
                           Transcribe Another File

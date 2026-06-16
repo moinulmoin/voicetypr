@@ -95,7 +95,7 @@ use commands::{
     stt::{clear_stt_key_cache, validate_stt_key},
     system_info::get_system_specs,
     text::*,
-    utils::export_transcriptions,
+    utils::{export_transcriptions, save_transcript_file},
     window::*,
 };
 use remote::lifecycle::RemoteServerManager;
@@ -1289,6 +1289,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             delete_transcription_entry,
             clear_all_transcriptions,
             export_transcriptions,
+            save_transcript_file,
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,
