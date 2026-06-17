@@ -261,6 +261,7 @@ sessions, the Swift sidecar fd-redirect, UI-responsiveness, and wall-clock timin
 
 - **HK-S1**: Settings ▸ Shortcuts ▸ Recording ▸ Hold to record → the "Use a single key" option is visible without hunting; enable it, bind a single key (e.g. F1) → saving succeeds; holding that key records, releasing stops. With it off, a single key is rejected as before.
 - **HK-S2**: the General recording section reads as the primary shortcut + mode and points to Shortcuts for additional/single-key bindings; the two screens no longer look like duplicate hotkey editors.
+- **HK-S3**: Settings ▸ Shortcuts → on a non-recording action (e.g. Copy last transcription) the "Use a single key" toggle is offered; enable it and bind **F1** → saves and the key triggers the action. Try to bind a typing key (e.g. **E**) as a single key → rejected with a clear message; bind single keys until **5** are set → a 6th is rejected (cap), and the "N of 5 single-key shortcuts used" hint tracks the count.
 
 ## Toggle AI formatting shortcut (NEEDS-SMOKE)
 

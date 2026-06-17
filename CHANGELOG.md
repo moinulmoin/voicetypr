@@ -14,6 +14,7 @@
 * **transcription:** let Windows users choose GPU / CPU / Auto transcription acceleration in Settings and onboarding (Auto uses the GPU when available and falls back to CPU; macOS stays on Metal)
 * **shortcuts:** make single-key push-to-talk a clear, first-class option on Hold-to-record, and clarify that General hosts your primary recording shortcut while Shortcuts hosts additional per-action bindings
 * **shortcuts:** add a bindable "Toggle AI formatting" shortcut to turn AI polish on/off with one key
+* **shortcuts:** allow a single-key shortcut on any action (not just push-to-talk), limited to non-typing keys (function keys, numpad, navigation) and capped at 5 total, so a single key can't hijack normal typing
 
 
 ## [1.12.5](https://github.com/moinulmoin/voicetypr/compare/v1.12.4...v1.12.5) (2026-06-02)
