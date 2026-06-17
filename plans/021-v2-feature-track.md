@@ -122,6 +122,19 @@ Close 004/008 smoke blockers; only materializes if 004/008 smoke surfaces a bloc
 ### B8. Release cleanup
 CHANGELOG has no 2.0.0/Unreleased (versions already 2.0.0 in `package.json` + `Cargo.toml`). = Wave 8.
 
+## Post-2.0.0 — Native key-trigger engine (confirmed project, design-doc-first)
+
+Replace Tauri `global_shortcut` with a native event-tap key-trigger engine (macOS CGEventTap watching modifier flags; Windows `WH_KEYBOARD_LL`). Owner-confirmed 2026-06-17; ships AFTER 2.0.0. Build as a standalone, reusable, open-sourceable package.
+
+**Why** — three root-caused limits of `global_shortcut` (exclusive + concrete-key-required + consume-or-nothing):
+1. No bare modifier-only / double-tap triggers (hold Right-Option, double-tap Cmd) — the confirmed primary need.
+2. Can't bind any key without hijacking it from typing (the 2.0.0 single-key allowlist+cap, `f96743d`, is the stopgap).
+3. Exclusive registration fails when a hotkey is already taken; owner wants permissive/non-exclusive — never block, observe + fire, overlaps are the user's to resolve.
+
+**End-state (NOT a permanent side-by-side):** the native engine OWNS ALL triggers (it detects combos from modifier+key state too), `global_shortcut` is RETIRED, and the legacy↔per-action hotkey model-unify (W6) completes as a side effect — one engine, one binding model. Rollout MAY be phased (modifier-only/PTT first, combos after) but single-system replacement is the target.
+
+**Design-doc questions to resolve before any code:** which triggers v1 ships; permission/consume model (Accessibility already granted for paste); the non-exclusive conflict model; cross-platform abstraction; package boundary. Pressure-test with oracle first.
+
 ## Execution protocol
 
 - Each Wave graduates to its own executable plan file (022, 023, …) when claimed; add its `plans/README.md` row + set IN PROGRESS per the concurrency protocol. This file is the index/roadmap.

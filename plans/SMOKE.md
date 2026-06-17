@@ -267,6 +267,11 @@ sessions, the Swift sidecar fd-redirect, UI-responsiveness, and wall-clock timin
 
 - **AITOGGLE-S1**: Settings ▸ Shortcuts ▸ Formatting → bind "Toggle AI formatting"; press it → pill shows "AI formatting on/off" and the Enhancements AI toggle reflects it; the next recording honors the new state. Pressing it to enable when no AI model/key is configured shows "Set up an AI model in Settings to use formatting" and does not enable.
 
+## Overlay error messages + network connection count (NEEDS-SMOKE)
+
+- **ERR-S1**: enable AI formatting with a deliberately wrong API key, then dictate → the overlay shows a short message like "Transcription key rejected" + "Update the API key in Models" (NOT a long/internal error string); the full error is still in the logs. A transient failure (e.g. timeout) still shows "Transcription failed — try again".
+- **CONN-S1** (needs a second device): start sharing on host A, transcribe from peer B → host A's Network Sharing card shows 1 (not 0) connection; after ~5 minutes of no requests it decays back to 0.
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are

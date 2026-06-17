@@ -16,6 +16,11 @@
 * **shortcuts:** add a bindable "Toggle AI formatting" shortcut to turn AI polish on/off with one key
 * **shortcuts:** allow a single-key shortcut on any action (not just push-to-talk), limited to non-typing keys (function keys, numpad, navigation) and capped at 5 total, so a single key can't hijack normal typing
 
+### Bug Fixes
+
+* **transcription:** show short, plain messages in the recording overlay instead of long internal error strings; auth/model failures now point to Settings / model selection rather than an unhelpful "try again" (full detail still logged)
+* **remote:** the Network Sharing card now shows the real number of recently-connected clients (distinct client IPs within the last 5 minutes) instead of always 0
+
 
 ## [1.12.5](https://github.com/moinulmoin/voicetypr/compare/v1.12.4...v1.12.5) (2026-06-02)
 
