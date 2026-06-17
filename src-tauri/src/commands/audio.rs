@@ -637,6 +637,36 @@ fn remote_server_error_pill_message(can_retry_from_history: bool) -> &'static st
     }
 }
 
+/// Classification of a `TranscriptionFailure::Local` message for pill-toast
+/// dispatch.  Auth and model failures are not fixed by retrying; everything else
+/// is a transient fault where "try again" is appropriate.
+#[derive(Debug, PartialEq)]
+enum LocalFailureKind {
+    /// Cloud provider rejected the API key (401).
+    AuthInvalid,
+    /// Selected model or engine was unavailable at runtime.
+    ModelUnavailable,
+    /// Transient or unclassified fault — retrying may help.
+    Generic,
+}
+
+/// Classify a `TranscriptionFailure::Local` message so the pill-toast can give
+/// actionable guidance instead of a generic "try again" for auth/model faults.
+/// Matches are anchored to the `user_message_for_code` strings in
+/// `transcription::error`, which are the deterministic prefixes present in the
+/// failure string whether or not a raw detail was appended.
+fn classify_local_failure(e: &str) -> LocalFailureKind {
+    if e.starts_with("Authentication failed for the transcription service") {
+        LocalFailureKind::AuthInvalid
+    } else if e.starts_with("The selected transcription model is unavailable")
+        || e.starts_with("The selected transcription engine is unavailable")
+    {
+        LocalFailureKind::ModelUnavailable
+    } else {
+        LocalFailureKind::Generic
+    }
+}
+
 fn build_remote_server_error_payload(
     failure: &TranscriptionFailure,
     can_retry_from_history: bool,
@@ -969,11 +999,20 @@ fn ai_failure_category(error: &AiProviderError) -> &'static str {
     }
 }
 
-fn ai_failure_notice(error: &AiProviderError) -> String {
-    format!(
-        "AI polish failed: {}; inserted unpolished text",
-        user_facing_message(error)
-    )
+fn ai_failure_notice(error: &AiProviderError) -> &'static str {
+    match error {
+        AiProviderError::MissingApiKey => "AI key missing — check Settings",
+        AiProviderError::InvalidApiKey => "AI key invalid — check Settings",
+        AiProviderError::InvalidModel => "AI model unavailable",
+        AiProviderError::UnsupportedProvider => "AI provider not supported",
+        AiProviderError::Timeout => "AI service timed out",
+        AiProviderError::Canceled => "AI formatting cancelled",
+        AiProviderError::RateLimited => "AI rate limited",
+        AiProviderError::ServiceUnavailable => "AI service unavailable",
+        AiProviderError::Network => "Couldn't reach the AI service",
+        AiProviderError::BadResponse => "AI service error",
+        AiProviderError::Internal => "AI formatting failed",
+    }
 }
 
 fn ai_failure_payload(error: &AiProviderError) -> serde_json::Value {
@@ -999,7 +1038,12 @@ fn emit_enhancing_failed(app: &AppHandle, error: &AiProviderError) {
 
 fn notify_ai_polish_failure(app: &AppHandle, error: &AiProviderError) {
     emit_enhancing_failed(app, error);
-    pill_toast(app, &ai_failure_notice(error), 1500);
+    pill_toast_with_variant(
+        app,
+        ai_failure_notice(error),
+        1500,
+        PillToastVariant::Warning,
+    );
     if is_ai_auth_error(error) {
         let _ = emit_to_window(
             app,
@@ -1282,11 +1326,12 @@ mod tests {
         build_remote_server_error_payload, build_remote_transcription_result,
         build_remote_upload_transcription_request, build_transcription_job,
         build_translation_failed_history_metadata, build_writing_history_metadata,
-        is_ai_auth_error, is_non_speech_transcript, plan_desktop_writing_success,
-        recording_license_state, remote_server_error_pill_message, should_hide_pill_when_idle,
-        should_use_active_remote, silence_event_runs_in_state, silence_timeout_disposition,
-        stop_should_reset_to_idle, sync_retranscription_failure_metadata, toast_clear_is_current,
-        transcription_watchdog_budget, NormalizedTempFile, PillToastEventPayload,
+        classify_local_failure, is_ai_auth_error, is_non_speech_transcript,
+        plan_desktop_writing_success, recording_license_state, remote_server_error_pill_message,
+        should_hide_pill_when_idle, should_use_active_remote, silence_event_runs_in_state,
+        silence_timeout_disposition, stop_should_reset_to_idle,
+        sync_retranscription_failure_metadata, toast_clear_is_current,
+        transcription_watchdog_budget, LocalFailureKind, NormalizedTempFile, PillToastEventPayload,
         RecordingLicenseState, SilenceDetectorEvent, SilenceTimeoutDisposition, StopInFlightGuard,
         TranscriptionFailure, TranscriptionStatus,
     };
@@ -1565,11 +1610,14 @@ mod tests {
     }
 
     #[test]
-    fn ai_polish_failure_notice_uses_unpolished_text_fallback_invariant() {
+    fn ai_polish_failure_notice_returns_short_human_message() {
         let notice = ai_failure_notice(&crate::ai::error::AiProviderError::BadResponse);
-
-        assert!(notice.contains("bad response"));
-        assert!(notice.contains("inserted unpolished text"));
+        assert_eq!(notice, "AI service error");
+        assert!(!notice.contains("unpolished"), "must not say 'unpolished'");
+        assert!(
+            !notice.contains("bad response"),
+            "must not leak raw variant label"
+        );
     }
 
     #[test]
@@ -2100,6 +2148,122 @@ mod tests {
         assert!(
             json.get("suggestion").is_none(),
             "suggestion key must be absent when None"
+        );
+    }
+
+    #[test]
+    fn ai_failure_notice_network_returns_short_human_message() {
+        use crate::ai::error::AiProviderError;
+        let notice = ai_failure_notice(&AiProviderError::Network);
+        assert_eq!(notice, "Couldn't reach the AI service");
+        // Must not expose internal error jargon or the old "unpolished text" phrasing
+        assert!(!notice.contains("unpolished"));
+        assert!(!notice.contains("inserted"));
+        assert!(notice.len() < 60);
+    }
+
+    #[test]
+    fn ai_failure_notice_auth_errors_stay_short_and_calm() {
+        use crate::ai::error::AiProviderError;
+        for variant in [
+            AiProviderError::MissingApiKey,
+            AiProviderError::InvalidApiKey,
+        ] {
+            let notice = ai_failure_notice(&variant);
+            assert!(
+                !notice.contains("unpolished"),
+                "must not say 'unpolished': {notice}"
+            );
+            assert!(
+                !notice.contains("AI polish failed"),
+                "must not expose internal prefix: {notice}"
+            );
+            assert!(notice.len() < 60, "must be short: {notice}");
+        }
+    }
+
+    #[test]
+    fn ai_failure_notice_covers_all_variants_without_internal_strings() {
+        use crate::ai::error::AiProviderError;
+        let variants = [
+            AiProviderError::MissingApiKey,
+            AiProviderError::InvalidApiKey,
+            AiProviderError::InvalidModel,
+            AiProviderError::UnsupportedProvider,
+            AiProviderError::Timeout,
+            AiProviderError::Canceled,
+            AiProviderError::RateLimited,
+            AiProviderError::ServiceUnavailable,
+            AiProviderError::Network,
+            AiProviderError::BadResponse,
+            AiProviderError::Internal,
+        ];
+        for variant in variants {
+            let notice = ai_failure_notice(&variant);
+            assert!(
+                !notice.contains("unpolished"),
+                "internal phrasing in: {notice}"
+            );
+            assert!(
+                !notice.contains("AI polish failed"),
+                "internal prefix in: {notice}"
+            );
+            assert!(notice.len() < 60, "too long: {notice}");
+            // Must start with something legible (not lowercase "ai" etc.)
+            assert!(
+                notice.starts_with(|c: char| c.is_uppercase() || c == '\''),
+                "should start with uppercase or apostrophe: {notice}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_local_failure_detects_auth_errors() {
+        // Exact user_message string (no detail appended)
+        assert_eq!(
+            classify_local_failure("Authentication failed for the transcription service."),
+            LocalFailureKind::AuthInvalid
+        );
+        // With raw detail appended by desktop_failure_from_transcription_error
+        assert_eq!(
+            classify_local_failure(
+                "Authentication failed for the transcription service.: 401 Unauthorized"
+            ),
+            LocalFailureKind::AuthInvalid
+        );
+    }
+
+    #[test]
+    fn classify_local_failure_detects_model_errors() {
+        assert_eq!(
+            classify_local_failure("The selected transcription model is unavailable."),
+            LocalFailureKind::ModelUnavailable
+        );
+        assert_eq!(
+            classify_local_failure("The selected transcription engine is unavailable."),
+            LocalFailureKind::ModelUnavailable
+        );
+    }
+
+    #[test]
+    fn classify_local_failure_treats_everything_else_as_generic() {
+        // Transient failures: retrying may help
+        assert_eq!(
+            classify_local_failure("Transcription timed out"),
+            LocalFailureKind::Generic
+        );
+        assert_eq!(
+            classify_local_failure("Transcription failed. Please try again.: Parakeet error"),
+            LocalFailureKind::Generic
+        );
+        // Raw internal strings that slip through
+        assert_eq!(
+            classify_local_failure("Unknown transcription engine: custom-engine"),
+            LocalFailureKind::Generic
+        );
+        assert_eq!(
+            classify_local_failure("Failed to read audio file: permission denied (os error 13)"),
+            LocalFailureKind::Generic
         );
     }
 }
@@ -4607,7 +4771,12 @@ pub async fn stop_recording(
                                     if should_emit_enhancing_for_task {
                                         emit_enhancing_failed(&app_for_process, error);
                                     }
-                                    pill_toast(&app_for_process, &ai_failure_notice(error), 1500);
+                                    pill_toast_with_variant(
+                                        &app_for_process,
+                                        ai_failure_notice(error),
+                                        1500,
+                                        PillToastVariant::Warning,
+                                    );
                                     if is_ai_auth_error(error) {
                                         let _ = emit_to_window(
                                             &app_for_process,
@@ -4854,7 +5023,7 @@ pub async fn stop_recording(
                         }
 
                         // Emit specific feedback via pill toast
-                        pill_toast(&app_for_task, e, 1000);
+                        pill_toast(&app_for_task, "Recording too short", 1000);
 
                         // Hide pill after showing feedback
                         let app_for_reset = app_for_task.clone();
@@ -4971,6 +5140,9 @@ pub async fn stop_recording(
                             Some(e.clone()),
                         );
 
+                        // Log the full internal detail before any toast so nothing is lost.
+                        log::warn!("Local transcription failure: {}", e);
+
                         if can_retry_from_history {
                             pill_toast(
                                 &app_for_task,
@@ -4978,7 +5150,33 @@ pub async fn stop_recording(
                                 6000,
                             );
                         } else {
-                            pill_toast(&app_for_task, e, 1500);
+                            match classify_local_failure(e) {
+                                LocalFailureKind::AuthInvalid => {
+                                    pill_toast_with_suggestion(
+                                        &app_for_task,
+                                        "Transcription key rejected",
+                                        "Update the API key in Models",
+                                        4000,
+                                        Some(PillToastVariant::Warning),
+                                    );
+                                }
+                                LocalFailureKind::ModelUnavailable => {
+                                    pill_toast_with_suggestion(
+                                        &app_for_task,
+                                        "Transcription model unavailable",
+                                        "Select a different model in Models",
+                                        4000,
+                                        None,
+                                    );
+                                }
+                                LocalFailureKind::Generic => {
+                                    pill_toast(
+                                        &app_for_task,
+                                        "Transcription failed — try again",
+                                        1500,
+                                    );
+                                }
+                            }
                         }
 
                         // Transition back to Idle after a delay so we don't get stuck.
