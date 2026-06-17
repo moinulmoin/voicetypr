@@ -11,6 +11,9 @@
 * **history:** persist rich per-entry metadata (source, engine/model, language, duration, diarized, and — for opted-in dictation — the target app) and add source/app/date filters with per-entry detail
 * **cli:** make `--json` consistent across status/models/transcribe/record (human-readable by default) and emit the structured transcription artifact (text, words, metadata) from transcribe/record
 * **feedback:** add actionable remediation to the pill feedback overlay so key recording/permission failures show how to fix them
+* **transcription:** let Windows users choose GPU / CPU / Auto transcription acceleration in Settings and onboarding (Auto uses the GPU when available and falls back to CPU; macOS stays on Metal)
+* **shortcuts:** make single-key push-to-talk a clear, first-class option on Hold-to-record, and clarify that General hosts your primary recording shortcut while Shortcuts hosts additional per-action bindings
+* **shortcuts:** add a bindable "Toggle AI formatting" shortcut to turn AI polish on/off with one key
 
 
 ## [1.12.5](https://github.com/moinulmoin/voicetypr/compare/v1.12.4...v1.12.5) (2026-06-02)

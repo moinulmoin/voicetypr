@@ -68,11 +68,13 @@
 ### Wave 6 — F6: hotkey model consolidation [M]
 - Unify the two models (legacy GeneralSettings single global hotkey + per-action `shortcut_bindings`); preserve migration from `hotkey`/`recording_mode`/`ptt_hotkey`; surface single-key PTT (already works for HoldToRecord behind `allow_risky_combo`).
 - **Acceptance**: one coherent shortcuts UI; existing bindings migrate; single-key PTT discoverable; no flap/double-stop regression (PORT-S5).
+- **Shipped (2026-06-17, `451d396` + `26bc20e`)**: single-key PTT is now discoverable on Hold-to-record and the General↔Shortcuts relationship is clarified; a bindable "Toggle AI formatting" action was added. The full legacy↔`shortcut_bindings` model merge stays DEFERRED (user kept the dedicated Shortcuts screen; overlaps the native-trigger rewrite).
 
 ### Wave 7 — executor unification + adaptive acceleration [L]
 - Upload→executor (**contract Stage 3**) BEHIND an explicit input-normalization policy (cloud must still receive real WAV; test with MP4/WebM/WAV fixtures).
 - Adaptive GPU↔CPU (F7): first-run micro-benchmark (GPU vs CPU decode) cached per machine, feeding `transcription_acceleration_mode`. Needs real Windows hardware smoke; scope tightly so startup isn't hurt (Apple Silicon Metal essentially always wins).
 - **Acceptance**: upload reliability == mic path with no cloud-normalization regression; adaptive choice improves weak-GPU Windows perf without harming Apple Silicon.
+- **Shipped (2026-06-17, `6358305`)**: the user-facing acceleration choice — Windows Auto/GPU/CPU picker in Settings + onboarding toggle, persisting the existing `transcription_acceleration` setting (GPU engine + CPU fallback already existed). Still DEFERRED: upload→executor unification (Stage 3) and the adaptive auto-benchmark (needs Windows hardware).
 
 ### Wave 8 — release cleanup [S]
 - CHANGELOG 2.0.0 entry; focused smoke matrix for the new features; remove only obsolete code from paths actually cut over.

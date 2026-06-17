@@ -252,6 +252,20 @@ sessions, the Swift sidecar fd-redirect, UI-responsiveness, and wall-clock timin
 
 - **026-S1**: deny microphone access → the pill feedback overlay shows the failure + a "how to fix" line (System Settings ▸ Privacy & Security). Trigger auto-paste without Accessibility permission → overlay shows "Text copied" + the Accessibility remediation. A normal success toast shows no remediation line.
 
+## GPU/CPU acceleration choice (NEEDS-SMOKE)
+
+- **ACCEL-S1** (**W**, Windows): Settings ▸ General shows a "Transcription performance" Auto/GPU/CPU picker, and onboarding (readiness step) shows a "Use GPU acceleration" toggle (default on). Select **CPU** → record → runs on CPU; **GPU** → runs on the Vulkan sidecar; **Auto** → GPU when available, falls back to CPU on GPU failure. (Picker/toggle + persistence are gate-covered; the real GPU-vs-CPU effect is the Windows-hardware residue.)
+- **ACCEL-S2** (macOS): no acceleration picker in Settings and no GPU toggle in onboarding (Metal stays automatic); transcription unaffected.
+
+## Single-key PTT + shortcuts clarity (NEEDS-SMOKE)
+
+- **HK-S1**: Settings ▸ Shortcuts ▸ Recording ▸ Hold to record → the "Use a single key" option is visible without hunting; enable it, bind a single key (e.g. F1) → saving succeeds; holding that key records, releasing stops. With it off, a single key is rejected as before.
+- **HK-S2**: the General recording section reads as the primary shortcut + mode and points to Shortcuts for additional/single-key bindings; the two screens no longer look like duplicate hotkey editors.
+
+## Toggle AI formatting shortcut (NEEDS-SMOKE)
+
+- **AITOGGLE-S1**: Settings ▸ Shortcuts ▸ Formatting → bind "Toggle AI formatting"; press it → pill shows "AI formatting on/off" and the Enhancements AI toggle reflects it; the next recording honors the new state. Pressing it to enable when no AI model/key is configured shows "Set up an AI model in Settings to use formatting" and does not enable.
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are
