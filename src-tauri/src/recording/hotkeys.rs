@@ -408,6 +408,16 @@ fn dispatch_custom_shortcut(
                 });
             }
         }
+        ShortcutAction::ToggleAiFormatting => {
+            if event_state == ShortcutState::Pressed {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = shortcuts::toggle_ai_formatting(app_handle).await {
+                        log::error!("Shortcut toggle_ai_formatting failed: {e}");
+                    }
+                });
+            }
+        }
         ShortcutAction::SetPersonalDictation
         | ShortcutAction::SetCleanDictation
         | ShortcutAction::SetWriting

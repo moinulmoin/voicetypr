@@ -340,12 +340,17 @@ export function EnhancementsSection() {
       toast.error(typeof msg === "string" ? msg : "Formatting failed");
     });
 
+    const unlistenAiEnabledChanged = listen<boolean>("ai-enabled-changed", (event) => {
+      setAISettings((prev) => ({ ...prev, enabled: event.payload }));
+    });
+
     return () => {
       Promise.all([
         unlistenReady,
         unlistenApiKey,
         unlistenApiKeyRemoved,
         unlistenFormattingError,
+        unlistenAiEnabledChanged,
       ]).then((fns) => {
         fns.forEach((fn) => fn());
       });

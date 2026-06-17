@@ -23,6 +23,7 @@ pub enum ShortcutAction {
     CopyLastTranscription,
     PasteLastTranscription,
     CycleFormattingMode,
+    ToggleAiFormatting,
     SetPersonalDictation,
     SetCleanDictation,
     SetWriting,
@@ -380,6 +381,54 @@ pub async fn cycle_formatting_preset(app: AppHandle) -> Result<(), String> {
         EnhancementPreset::Code => EnhancementPreset::PersonalDictation,
     };
     set_formatting_preset(app, next).await
+}
+
+/// Pure decision function: what should ai_enabled become?
+/// Returns None if enabling is refused (no usable AI setup).
+pub fn next_ai_enabled(current: bool, can_enable: bool) -> Option<bool> {
+    if current {
+        Some(false) // always allow disabling
+    } else if can_enable {
+        Some(true)
+    } else {
+        None // refuse to enable without a usable AI setup
+    }
+}
+
+pub async fn toggle_ai_formatting(app: AppHandle) -> Result<(), String> {
+    use crate::commands::ai::get_ai_settings;
+    let ai_settings = get_ai_settings(app.clone()).await?;
+    let current = ai_settings.enabled;
+    let can_enable = ai_settings.has_api_key && !ai_settings.model.is_empty();
+
+    match next_ai_enabled(current, can_enable) {
+        Some(true) => {
+            let store = app.store("settings").map_err(|e| e.to_string())?;
+            store.set("ai_enabled", serde_json::Value::Bool(true));
+            store.save().map_err(|e| e.to_string())?;
+            drop(store);
+            crate::commands::audio::invalidate_recording_config_cache(&app).await;
+            crate::commands::audio::pill_toast(&app, "AI formatting on", 2500);
+            let _ = crate::emit_to_window(&app, "main", "ai-enabled-changed", true);
+        }
+        Some(false) => {
+            let store = app.store("settings").map_err(|e| e.to_string())?;
+            store.set("ai_enabled", serde_json::Value::Bool(false));
+            store.save().map_err(|e| e.to_string())?;
+            drop(store);
+            crate::commands::audio::invalidate_recording_config_cache(&app).await;
+            crate::commands::audio::pill_toast(&app, "AI formatting off", 2500);
+            let _ = crate::emit_to_window(&app, "main", "ai-enabled-changed", false);
+        }
+        None => {
+            crate::commands::audio::pill_toast(
+                &app,
+                "Set up an AI model in Settings to use formatting",
+                3500,
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -745,6 +794,14 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             action: ShortcutAction::SetCode,
             label: "Code",
             description: "Switch formatting to Code.",
+            section: "Formatting",
+            recommended_trigger: ShortcutTrigger::Pressed,
+            allows_single_key: false,
+        },
+        ShortcutActionDefinition {
+            action: ShortcutAction::ToggleAiFormatting,
+            label: "Toggle AI formatting",
+            description: "Turn AI formatting on or off.",
             section: "Formatting",
             recommended_trigger: ShortcutTrigger::Pressed,
             allows_single_key: false,

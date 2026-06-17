@@ -1,6 +1,6 @@
 use crate::ai::prompts::EnhancementPreset;
 use crate::commands::shortcuts::{
-    action_preset, hold_shortcut_transition, normalized_custom_shortcut_conflict,
+    action_preset, hold_shortcut_transition, next_ai_enabled, normalized_custom_shortcut_conflict,
     pressed_shortcut_should_run, validate_shortcut_settings, CustomHoldTransition,
     ExistingShortcutStrings, ShortcutAction, ShortcutBinding, ShortcutSettings, ShortcutTrigger,
 };
@@ -265,4 +265,15 @@ fn mode_actions_map_to_expected_presets() {
         Some(EnhancementPreset::Code)
     );
     assert_eq!(action_preset(ShortcutAction::OpenDashboard), None);
+}
+
+#[test]
+fn next_ai_enabled_toggles_correctly() {
+    // Disabling always works regardless of can_enable
+    assert_eq!(next_ai_enabled(true, true), Some(false));
+    assert_eq!(next_ai_enabled(true, false), Some(false));
+    // Enabling only works when can_enable is true
+    assert_eq!(next_ai_enabled(false, true), Some(true));
+    // Enabling is refused without a usable AI setup
+    assert_eq!(next_ai_enabled(false, false), None);
 }

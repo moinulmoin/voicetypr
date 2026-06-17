@@ -5,6 +5,7 @@ export type ShortcutAction =
   | "copy_last_transcription"
   | "paste_last_transcription"
   | "cycle_formatting_mode"
+  | "toggle_ai_formatting"
   | "set_personal_dictation"
   | "set_clean_dictation"
   | "set_writing"
