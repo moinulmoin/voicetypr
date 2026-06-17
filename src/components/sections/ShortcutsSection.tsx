@@ -276,7 +276,8 @@ export function ShortcutsSection() {
           <h1 className="text-2xl font-semibold">Shortcuts</h1>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          Configure global shortcuts for recording, history, formatting modes, and the dashboard.
+          Configure global shortcuts for recording, history, formatting modes, and the dashboard.{" "}
+          These supplement your primary recording shortcut in Settings.
         </p>
       </div>
 
@@ -412,7 +413,7 @@ export function ShortcutsSection() {
                                     <div className="mt-3 rounded-md bg-muted/40 p-3">
                                       <label className="flex items-start gap-3 text-sm">
                                         <Switch
-                                          aria-label="Allow single-key push-to-talk"
+                                          aria-label="Use a single key"
                                           checked={binding.allow_risky_combo}
                                           disabled={editingDisabled}
                                           onCheckedChange={(allow_risky_combo) =>
@@ -420,9 +421,9 @@ export function ShortcutsSection() {
                                           }
                                         />
                                         <span>
-                                          <span className="block font-medium text-foreground">Allow single-key push-to-talk</span>
+                                          <span className="block font-medium text-foreground">Use a single key</span>
                                           <span className="block text-muted-foreground">
-                                            Single keys are captured globally. Registration may still be refused by macOS, Windows, or another app that already owns the key.
+                                            Single keys are captured globally and may interfere with normal typing.
                                           </span>
                                           {canUseSingleKey && (
                                             <span className="mt-1 block text-xs text-muted-foreground">

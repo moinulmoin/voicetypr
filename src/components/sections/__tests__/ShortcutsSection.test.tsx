@@ -312,7 +312,7 @@ describe("ShortcutsSection", () => {
 
     const holdRow = await screen.findByRole("group", { name: "Hold to Record" });
     await user.click(within(holdRow).getByRole("button", { name: "Add shortcut" }));
-    await user.click(within(holdRow).getByRole("switch", { name: "Allow single-key push-to-talk" }));
+    await user.click(within(holdRow).getByRole("switch", { name: "Use a single key" }));
     await user.click(within(holdRow).getByTitle("Change hotkey"));
 
     fireEvent.keyDown(window, { key: "a", code: "KeyA" });
@@ -333,10 +333,10 @@ describe("ShortcutsSection", () => {
     const holdRow = await screen.findByRole("group", { name: "Hold to Record" });
     await user.click(within(holdRow).getByRole("button", { name: "Add shortcut" }));
 
-    expect(within(holdRow).getByText("Allow single-key push-to-talk")).toBeInTheDocument();
+    expect(within(holdRow).getByText("Use a single key")).toBeInTheDocument();
     expect(within(holdRow).queryByText("Single-key validation enabled.")).not.toBeInTheDocument();
 
-    await user.click(within(holdRow).getByRole("switch", { name: "Allow single-key push-to-talk" }));
+    await user.click(within(holdRow).getByRole("switch", { name: "Use a single key" }));
 
     expect(within(holdRow).getByText("Single-key validation enabled.")).toBeInTheDocument();
   });
@@ -464,6 +464,46 @@ describe("ShortcutsSection", () => {
 
     await waitFor(() => {
       expect(within(pasteRow).getByRole("switch", { name: "Paste Last Transcription enabled" })).toBeEnabled();
+    });
+  });
+
+  it("surfaces the single-key option on Hold to Record and saves a single-key binding when enabled", async () => {
+    const user = userEvent.setup();
+    arrangeInvoke({ bindings: [] });
+    render(<ShortcutsSection />);
+
+    const holdRow = await screen.findByRole("group", { name: "Hold to Record" });
+
+    // Add a Hold to Record binding — the single-key toggle must be discoverable immediately
+    await user.click(within(holdRow).getByRole("button", { name: "Add shortcut" }));
+
+    expect(within(holdRow).getByText("Use a single key")).toBeInTheDocument();
+    const singleKeySwitch = within(holdRow).getByRole("switch", { name: "Use a single key" });
+    expect(singleKeySwitch).not.toBeChecked();
+
+    // Enable single-key mode — updates draft locally (no shortcut yet)
+    await user.click(singleKeySwitch);
+    expect(singleKeySwitch).toBeChecked();
+
+    // Enter a single key — valid because single-key validation is now active
+    await user.click(within(holdRow).getByTitle("Change hotkey"));
+    fireEvent.keyDown(window, { key: "a", code: "KeyA" });
+    await waitFor(() => {
+      expect(within(holdRow).getByTitle("Save hotkey")).toBeEnabled();
+    });
+    await user.click(within(holdRow).getByTitle("Save hotkey"));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", {
+        settings: {
+          bindings: [
+            expect.objectContaining({
+              action: "hold_to_record",
+              allow_risky_combo: true,
+            }),
+          ],
+        },
+      });
     });
   });
 });

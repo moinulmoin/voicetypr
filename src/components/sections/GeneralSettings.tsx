@@ -276,6 +276,20 @@ export function GeneralSettings() {
                     </div>
                   </Field>
 
+                  <p className="text-xs text-muted-foreground">
+                    {settings.recording_mode === "push_to_talk" ? (
+                      <>
+                        Primary push-to-talk key (modifier required here). For single-key push-to-talk, use{" "}
+                        <span className="font-medium text-foreground">Settings &#8594; Shortcuts &#8594; Hold to record</span>.
+                      </>
+                    ) : (
+                      <>
+                        Primary recording shortcut. Additional per-action shortcuts live in{" "}
+                        <span className="font-medium text-foreground">Settings &#8594; Shortcuts</span>.
+                      </>
+                    )}
+                  </p>
+
                   {!canAutoInsert && showAccessibilityWarning && (
                     <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3">
                       <div className="flex items-start gap-2">
