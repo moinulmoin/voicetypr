@@ -11,13 +11,19 @@
 //! - Request validation
 //! - Error response formatting
 
-use crate::remote::http::{create_routes, ServerContext};
+use crate::remote::http::{create_routes, ClientActivityMap, ServerContext};
 use crate::remote::server::{ErrorResponse, StatusResponse, TranscribeResponse};
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tokio::sync::{RwLock, Semaphore};
 
 fn test_transcription_guard() -> Arc<Semaphore> {
     Arc::new(Semaphore::new(1))
+}
+
+fn test_client_activity() -> ClientActivityMap {
+    Arc::new(Mutex::new(HashMap::new()))
 }
 
 /// Test context for mock transcription
@@ -84,7 +90,7 @@ fn create_test_context_with_password(password: &str) -> Arc<RwLock<TestContext>>
 #[tokio::test]
 async fn test_status_endpoint_returns_ok() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("GET")
@@ -104,7 +110,7 @@ async fn test_status_endpoint_returns_ok() {
 #[tokio::test]
 async fn test_status_endpoint_requires_password() {
     let ctx = create_test_context_with_password("secret123");
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("GET")
@@ -119,7 +125,7 @@ async fn test_status_endpoint_requires_password() {
 #[tokio::test]
 async fn test_status_endpoint_accepts_correct_password() {
     let ctx = create_test_context_with_password("secret123");
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("GET")
@@ -135,7 +141,7 @@ async fn test_status_endpoint_accepts_correct_password() {
 #[tokio::test]
 async fn test_status_endpoint_rejects_wrong_password() {
     let ctx = create_test_context_with_password("secret123");
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("GET")
@@ -151,7 +157,7 @@ async fn test_status_endpoint_rejects_wrong_password() {
 #[tokio::test]
 async fn test_transcribe_endpoint_returns_transcription() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     // Create fake audio data (WAV header + some samples)
     let audio_data = create_test_wav_data();
@@ -175,7 +181,7 @@ async fn test_transcribe_endpoint_returns_transcription() {
 #[tokio::test]
 async fn test_transcribe_endpoint_requires_password() {
     let ctx = create_test_context_with_password("secret123");
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let audio_data = create_test_wav_data();
 
@@ -194,7 +200,7 @@ async fn test_transcribe_endpoint_requires_password() {
 #[tokio::test]
 async fn test_transcribe_endpoint_accepts_correct_password() {
     let ctx = create_test_context_with_password("secret123");
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let audio_data = create_test_wav_data();
 
@@ -214,7 +220,7 @@ async fn test_transcribe_endpoint_accepts_correct_password() {
 #[tokio::test]
 async fn test_transcribe_endpoint_rejects_wrong_content_type() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("POST")
@@ -329,7 +335,7 @@ fn create_custom_context(model: &str, server: &str) -> Arc<RwLock<TestContext>> 
 #[tokio::test]
 async fn test_routes_are_created() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     // Status route should work
     let response = warp::test::request()
@@ -345,7 +351,7 @@ async fn test_routes_are_created() {
 #[tokio::test]
 async fn test_unknown_route_returns_404() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("GET")
@@ -360,7 +366,7 @@ async fn test_unknown_route_returns_404() {
 #[tokio::test]
 async fn test_wrong_method_on_status_endpoint() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("POST")
@@ -376,7 +382,7 @@ async fn test_wrong_method_on_status_endpoint() {
 #[tokio::test]
 async fn test_wrong_method_on_transcribe_endpoint() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("GET")
@@ -396,7 +402,7 @@ async fn test_wrong_method_on_transcribe_endpoint() {
 #[tokio::test]
 async fn test_status_response_has_all_fields() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("GET")
@@ -418,7 +424,7 @@ async fn test_status_response_has_all_fields() {
 #[tokio::test]
 async fn test_status_response_custom_model_name() {
     let ctx = create_custom_context("large-v3-turbo", "My Desktop");
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("GET")
@@ -435,7 +441,7 @@ async fn test_status_response_custom_model_name() {
 #[tokio::test]
 async fn test_status_response_version_is_valid() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("GET")
@@ -456,7 +462,7 @@ async fn test_status_response_version_is_valid() {
 #[tokio::test]
 async fn test_transcribe_accepts_audio_mpeg() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let audio_data = vec![0u8; 100]; // Minimal audio data
 
@@ -475,7 +481,7 @@ async fn test_transcribe_accepts_audio_mpeg() {
 #[tokio::test]
 async fn test_transcribe_accepts_audio_webm() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let audio_data = vec![0u8; 100];
 
@@ -494,7 +500,7 @@ async fn test_transcribe_accepts_audio_webm() {
 #[tokio::test]
 async fn test_transcribe_response_includes_model() {
     let ctx = create_custom_context("base.en", "Test Server");
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let audio_data = create_test_wav_data();
 
@@ -514,7 +520,7 @@ async fn test_transcribe_response_includes_model() {
 #[tokio::test]
 async fn test_transcribe_response_includes_duration() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let audio_data = create_test_wav_data();
 
@@ -543,7 +549,7 @@ async fn test_auth_with_empty_password_string() {
         password: Some("".to_string()), // Empty string password
         mock_result: "Test".to_string(),
     }));
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     // Without header - should fail because empty string is still "some" password
     let response = warp::test::request()
@@ -569,7 +575,7 @@ async fn test_auth_with_empty_password_string() {
 #[tokio::test]
 async fn test_password_is_case_sensitive() {
     let ctx = create_test_context_with_password("Secret123");
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     // Lowercase should fail
     let response = warp::test::request()
@@ -586,7 +592,7 @@ async fn test_password_is_case_sensitive() {
 #[tokio::test]
 async fn test_transcribe_auth_wrong_password() {
     let ctx = create_test_context_with_password("correct");
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let audio_data = create_test_wav_data();
 
@@ -606,7 +612,7 @@ async fn test_transcribe_auth_wrong_password() {
 #[tokio::test]
 async fn test_no_auth_when_password_none() {
     let ctx = create_test_context(); // password is None
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     // Should work without any auth header
     let response = warp::test::request()
@@ -626,7 +632,7 @@ async fn test_no_auth_when_password_none() {
 #[tokio::test]
 async fn test_transcribe_rejects_text_plain() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("POST")
@@ -643,7 +649,7 @@ async fn test_transcribe_rejects_text_plain() {
 #[tokio::test]
 async fn test_transcribe_rejects_octet_stream() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("POST")
@@ -660,7 +666,7 @@ async fn test_transcribe_rejects_octet_stream() {
 #[tokio::test]
 async fn test_transcribe_rejects_multipart() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("POST")
@@ -681,7 +687,7 @@ async fn test_transcribe_rejects_multipart() {
 #[tokio::test]
 async fn test_unauthorized_error_format() {
     let ctx = create_test_context_with_password("secret");
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("GET")
@@ -699,7 +705,7 @@ async fn test_unauthorized_error_format() {
 #[tokio::test]
 async fn test_unsupported_media_type_error_format() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let response = warp::test::request()
         .method("POST")
@@ -719,7 +725,7 @@ async fn test_unsupported_media_type_error_format() {
 #[tokio::test]
 async fn test_transcription_error_is_sanitized() {
     let ctx = create_failing_context("Model failed to load");
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let audio_data = create_test_wav_data();
 
@@ -742,7 +748,7 @@ async fn test_transcription_error_is_sanitized() {
 async fn test_transcription_error_does_not_preserve_internal_message() {
     let ctx =
         create_failing_context("/Users/alice/Library/Application Support/models/model.bin failed");
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let audio_data = create_test_wav_data();
 
@@ -766,7 +772,7 @@ async fn test_transcription_error_does_not_preserve_internal_message() {
 #[tokio::test]
 async fn test_audio_wav_with_charset_accepted() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let audio_data = create_test_wav_data();
 
@@ -785,7 +791,7 @@ async fn test_audio_wav_with_charset_accepted() {
 #[tokio::test]
 async fn test_audio_x_wav_accepted() {
     let ctx = create_test_context();
-    let routes = create_routes(ctx, test_transcription_guard());
+    let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
     let audio_data = create_test_wav_data();
 

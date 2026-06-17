@@ -12,7 +12,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::remote::http::{create_routes, ServerContext};
+    use crate::remote::http::{create_routes, ClientActivityMap, ServerContext};
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -21,6 +21,12 @@ mod tests {
 
     fn test_transcription_guard() -> Arc<Semaphore> {
         Arc::new(Semaphore::new(1))
+    }
+
+    fn test_client_activity() -> ClientActivityMap {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+        Arc::new(Mutex::new(HashMap::new()))
     }
 
     /// Mock context with configurable delay for simulating transcription time
@@ -129,7 +135,7 @@ mod tests {
 
         let handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(ctx, test_transcription_guard());
+            let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();

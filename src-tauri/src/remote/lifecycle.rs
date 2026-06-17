@@ -4,19 +4,20 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 use tokio::sync::{oneshot, RwLock, Semaphore};
 
 use super::discovery::{
     start_discovery_responder, DiscoveryResponderConfig, DiscoveryResponderHandle,
 };
-use super::http::create_routes;
+use super::http::{count_recent_clients, create_routes, ClientActivityMap, RECENT_CLIENT_WINDOW};
 use super::transcription::{
     RealTranscriptionContext, SharedServerState, TranscriptionServerConfig,
 };
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 /// Result of attempting to bind to an IP address
 #[derive(Debug, Clone, serde::Serialize)]
@@ -111,6 +112,8 @@ pub struct RemoteServerManager {
     config: Option<TranscriptionServerConfig>,
     /// Shared state for dynamic model updates (only valid while server is running)
     shared_state: Option<SharedServerState>,
+    /// Tracks distinct client IPs for recent-connection counting (cleared on server stop)
+    client_activity: Option<ClientActivityMap>,
 }
 
 impl Default for RemoteServerManager {
@@ -126,6 +129,7 @@ impl RemoteServerManager {
             handle: None,
             config: None,
             shared_state: None,
+            client_activity: None,
         }
     }
 
@@ -161,7 +165,6 @@ impl RemoteServerManager {
         engine: String,
         app_handle: Option<AppHandle>,
     ) -> Result<(), String> {
-        use std::time::Instant;
         let start_time = Instant::now();
         log::info!("⏱️ [SERVER TIMING] start() called");
 
@@ -246,14 +249,21 @@ impl RemoteServerManager {
         let mut bound_ips = Vec::new();
         let mut binding_results = Vec::new();
         let transcription_guard = Arc::new(Semaphore::new(1));
+        let client_activity: ClientActivityMap = Arc::new(Mutex::new(HashMap::new()));
+        self.client_activity = Some(client_activity.clone());
 
         for ip in bind_ips {
             let bind_start = Instant::now();
             let addr: SocketAddr = SocketAddr::new(ip, port);
             let ip_str = ip.to_string();
 
-            // Clone routes for each server instance; all bound IPs share one transcription guard.
-            let routes = create_routes(ctx.clone(), transcription_guard.clone());
+            // Clone routes for each server instance; all bound IPs share one transcription guard
+            // and one client-activity map.
+            let routes = create_routes(
+                ctx.clone(),
+                transcription_guard.clone(),
+                client_activity.clone(),
+            );
 
             // Create shutdown channel for this instance
             let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -378,6 +388,7 @@ impl RemoteServerManager {
         }
         self.config = None;
         self.shared_state = None;
+        self.client_activity = None;
     }
 
     /// Update the model being served (without restarting server)
@@ -433,12 +444,18 @@ impl RemoteServerManager {
     pub fn get_status(&self) -> SharingStatus {
         if let Some(handle) = &self.handle {
             let config = self.config.as_ref();
+            let active_connections = self
+                .client_activity
+                .as_ref()
+                .and_then(|map| map.lock().ok())
+                .map(|mut map| count_recent_clients(&mut map, Instant::now(), RECENT_CLIENT_WINDOW))
+                .unwrap_or(0);
             SharingStatus {
                 enabled: true,
                 port: Some(handle.port),
                 model_name: config.map(|c| c.model_name.clone()),
                 server_name: config.map(|c| c.server_name.clone()),
-                active_connections: 0, // TODO: track actual connections
+                active_connections,
                 password_configured: config.is_some_and(|c| c.password.is_some()),
                 binding_results: handle.binding_results.clone(),
             }
@@ -458,6 +475,7 @@ impl RemoteServerManager {
 
 #[cfg(test)]
 mod tests {
+    use super::super::http::prune_stale_clients;
     use super::*;
 
     #[test]
@@ -557,5 +575,115 @@ mod tests {
         );
 
         manager.stop().await;
+    }
+
+    // ── count_recent_clients unit tests ───────────────────────────────────────
+
+    #[test]
+    fn test_count_recent_clients_empty() {
+        let mut map: HashMap<IpAddr, Instant> = HashMap::new();
+        let now = Instant::now();
+        assert_eq!(count_recent_clients(&mut map, now, RECENT_CLIENT_WINDOW), 0);
+    }
+
+    #[test]
+    fn test_count_recent_clients_recent_entries_counted() {
+        let mut map: HashMap<IpAddr, Instant> = HashMap::new();
+        let now = Instant::now();
+        // Two distinct IPs seen just now — both within window
+        let ip1: IpAddr = "10.0.0.1".parse().unwrap();
+        let ip2: IpAddr = "10.0.0.2".parse().unwrap();
+        map.insert(ip1, now);
+        map.insert(ip2, now);
+        assert_eq!(count_recent_clients(&mut map, now, RECENT_CLIENT_WINDOW), 2);
+        // Map still holds both entries (not pruned — they're recent)
+        assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn test_count_recent_clients_stale_entries_pruned() {
+        let mut map: HashMap<IpAddr, Instant> = HashMap::new();
+        let window = Duration::from_secs(60);
+        let now = Instant::now();
+        let stale = now.checked_sub(Duration::from_secs(120)).unwrap();
+
+        let ip_stale: IpAddr = "192.168.1.1".parse().unwrap();
+        let ip_recent: IpAddr = "192.168.1.2".parse().unwrap();
+        map.insert(ip_stale, stale);
+        map.insert(ip_recent, now);
+
+        // Only the recent entry is counted; the stale one is pruned
+        assert_eq!(count_recent_clients(&mut map, now, window), 1);
+        // The stale IP has been removed in-place
+        assert!(!map.contains_key(&ip_stale));
+        assert!(map.contains_key(&ip_recent));
+    }
+
+    #[test]
+    fn test_count_recent_clients_all_stale_returns_zero() {
+        let mut map: HashMap<IpAddr, Instant> = HashMap::new();
+        let window = Duration::from_secs(30);
+        let now = Instant::now();
+        let stale = now.checked_sub(Duration::from_secs(60)).unwrap();
+
+        map.insert("1.2.3.4".parse().unwrap(), stale);
+        map.insert("5.6.7.8".parse().unwrap(), stale);
+
+        assert_eq!(count_recent_clients(&mut map, now, window), 0);
+        assert!(map.is_empty(), "all stale entries must be pruned");
+    }
+
+    #[test]
+    fn test_count_recent_clients_boundary_exactly_at_window() {
+        let mut map: HashMap<IpAddr, Instant> = HashMap::new();
+        let window = Duration::from_secs(300);
+        let now = Instant::now();
+        // Entry seen exactly `window` ago — still within boundary (elapsed == window)
+        let boundary = now.checked_sub(window).unwrap_or(now);
+        map.insert("10.10.10.10".parse().unwrap(), boundary);
+        assert_eq!(count_recent_clients(&mut map, now, window), 1);
+    }
+
+    // ── prune_stale_clients unit tests ────────────────────────────────────────
+
+    #[test]
+    fn test_prune_stale_clients_removes_stale_keeps_recent() {
+        let mut map: HashMap<IpAddr, Instant> = HashMap::new();
+        let window = Duration::from_secs(60);
+        let now = Instant::now();
+        let stale = now.checked_sub(Duration::from_secs(120)).unwrap();
+
+        map.insert("10.0.0.1".parse().unwrap(), stale);
+        map.insert("10.0.0.2".parse().unwrap(), now);
+
+        prune_stale_clients(&mut map, now, window);
+
+        assert_eq!(map.len(), 1);
+        assert!(map.contains_key(&"10.0.0.2".parse::<IpAddr>().unwrap()));
+    }
+
+    #[test]
+    fn test_prune_on_write_bounds_map_size() {
+        // Simulate what the transcribe handler does: prune then insert.
+        // Verifies that stale entries are removed before the new IP is added,
+        // so the map stays bounded to distinct-recent IPs.
+        let window = Duration::from_secs(60);
+        let now = Instant::now();
+        let stale = now.checked_sub(Duration::from_secs(120)).unwrap();
+
+        let mut map: HashMap<IpAddr, Instant> = HashMap::new();
+        // Pre-populate with stale entries from many distinct IPs
+        for i in 1u8..=10 {
+            map.insert(IpAddr::from([10, 0, 0, i]), stale);
+        }
+        assert_eq!(map.len(), 10);
+
+        // Handler logic: prune then insert new IP
+        prune_stale_clients(&mut map, now, window);
+        map.insert("192.168.1.1".parse().unwrap(), now);
+
+        // All 10 stale entries gone; only the new one remains
+        assert_eq!(map.len(), 1, "map must be bounded after prune-on-write");
+        assert!(map.contains_key(&"192.168.1.1".parse::<IpAddr>().unwrap()));
     }
 }

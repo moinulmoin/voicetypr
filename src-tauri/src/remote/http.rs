@@ -5,7 +5,10 @@
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use log::{info, warn};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::{RwLock, Semaphore};
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
@@ -23,6 +26,39 @@ const MAX_AUDIO_BODY_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
 const MAX_CONTEXT_HEADER_BYTES: usize = 4096;
 const MAX_CONTEXT_HEADER_ENCODED_BYTES: usize = MAX_CONTEXT_HEADER_BYTES.div_ceil(3) * 4;
 const MAX_CONTROL_BODY_BYTES: u64 = 4 * 1024;
+
+/// Shared map from client IP to last-seen time for recent-client counting.
+pub type ClientActivityMap = Arc<Mutex<HashMap<IpAddr, Instant>>>;
+
+/// How long after a client's last transcription request they are counted as "recent".
+pub const RECENT_CLIENT_WINDOW: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Remove entries from `map` whose last-seen time is older than `window` relative to `now`.
+///
+/// Called on both write (to bound map size) and read (for the status count).
+pub fn prune_stale_clients(
+    map: &mut HashMap<IpAddr, Instant>,
+    now: Instant,
+    window: std::time::Duration,
+) {
+    map.retain(|_, last_seen| {
+        now.checked_duration_since(*last_seen)
+            .is_some_and(|elapsed| elapsed <= window)
+    });
+}
+
+/// Count distinct client IPs whose last-seen time is within `window` of `now`,
+/// pruning stale entries from `map` in place.
+///
+/// Pure function — takes explicit `now` so it can be unit-tested without timers.
+pub fn count_recent_clients(
+    map: &mut HashMap<IpAddr, Instant>,
+    now: Instant,
+    window: std::time::Duration,
+) -> u32 {
+    prune_stale_clients(map, now, window);
+    map.len() as u32
+}
 
 /// Trait for server context (allows mocking in tests)
 pub trait ServerContext: Send + Sync {
@@ -73,9 +109,10 @@ pub trait ServerContext: Send + Sync {
 pub fn create_routes<T: ServerContext + 'static>(
     ctx: Arc<RwLock<T>>,
     transcription_guard: Arc<Semaphore>,
+    client_activity: ClientActivityMap,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let status_route = status_endpoint(ctx.clone());
-    let transcribe_route = transcribe_endpoint(ctx.clone(), transcription_guard);
+    let transcribe_route = transcribe_endpoint(ctx.clone(), transcription_guard, client_activity);
     let control_models_route = control_models_endpoint(ctx);
 
     status_route.or(transcribe_route).or(control_models_route)
@@ -96,6 +133,7 @@ fn status_endpoint<T: ServerContext + 'static>(
 fn transcribe_endpoint<T: ServerContext + 'static>(
     ctx: Arc<RwLock<T>>,
     transcription_guard: Arc<Semaphore>,
+    client_activity: ClientActivityMap,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     warp::path!("api" / "v1" / "transcribe")
         .and(warp::post())
@@ -122,8 +160,10 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
                 }
             },
         )
+        .and(warp::filters::addr::remote())
         .and(with_context(ctx))
         .and(with_transcription_guard(transcription_guard))
+        .and(with_client_activity(client_activity))
         .and_then(handle_transcribe)
 }
 
@@ -167,6 +207,13 @@ fn with_transcription_guard(
     guard: Arc<Semaphore>,
 ) -> impl Filter<Extract = (Arc<Semaphore>,), Error = std::convert::Infallible> + Clone {
     warp::any().map(move || guard.clone())
+}
+
+/// Helper to inject the client-activity map into the transcribe handler
+fn with_client_activity(
+    map: ClientActivityMap,
+) -> impl Filter<Extract = (ClientActivityMap,), Error = std::convert::Infallible> + Clone {
+    warp::any().map(move || map.clone())
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -438,8 +485,10 @@ struct TranscribeRequestParts {
 /// Handle POST /api/v1/transcribe
 async fn handle_transcribe<T: ServerContext + 'static>(
     parts: TranscribeRequestParts,
+    client_addr: Option<SocketAddr>,
     ctx: Arc<RwLock<T>>,
     transcription_guard: Arc<Semaphore>,
+    client_activity: ClientActivityMap,
 ) -> Result<impl Reply, Rejection> {
     let TranscribeRequestParts {
         auth_key,
@@ -498,6 +547,18 @@ async fn handle_transcribe<T: ServerContext + 'static>(
             }),
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ));
+    }
+
+    // Record client IP for active-connections counting (rolling-window distinct clients).
+    // We record after auth + content-type pass so only genuine requests are counted.
+    if let Some(addr) = client_addr {
+        if let Ok(mut map) = client_activity.lock() {
+            let now = Instant::now();
+            // Prune stale entries on every write so the map is bounded to
+            // distinct-recent IPs regardless of how often get_status() is called.
+            prune_stale_clients(&mut map, now, RECENT_CLIENT_WINDOW);
+            map.insert(addr.ip(), now);
+        }
     }
 
     info!(
@@ -593,6 +654,10 @@ mod tests {
     }
     fn test_transcription_guard() -> Arc<Semaphore> {
         Arc::new(Semaphore::new(1))
+    }
+
+    fn test_client_activity() -> ClientActivityMap {
+        Arc::new(Mutex::new(std::collections::HashMap::new()))
     }
 
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -896,7 +961,7 @@ mod tests {
     #[tokio::test]
     async fn test_status_uses_single_model_status_snapshot() {
         let ctx = Arc::new(RwLock::new(ConsistentStatusMock));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("GET")
@@ -986,8 +1051,10 @@ mod tests {
                     request_context: None,
                     body: bytes::Bytes::from_static(b"audio"),
                 },
+                None, // client_addr — not relevant to this permit-hold test
                 ctx_for_handler,
                 guard_for_handler,
+                test_client_activity(),
             )
             .await
         });
@@ -1023,7 +1090,7 @@ mod tests {
     #[tokio::test]
     async fn test_status_advertises_protocol_engine_and_capabilities() {
         let ctx = Arc::new(RwLock::new(MockContext));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("GET")
@@ -1050,7 +1117,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(ContextCaptureMock {
             captured_context: captured_context.clone(),
         }));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let context = "project glossary: José 中";
         let encoded_context = BASE64.encode(context.as_bytes());
@@ -1074,7 +1141,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(ContextCaptureMock {
             captured_context: captured_context.clone(),
         }));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("POST")
@@ -1094,7 +1161,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(ContextCaptureMock {
             captured_context: captured_context.clone(),
         }));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
         let oversized_context = BASE64.encode(vec![b'a'; MAX_CONTEXT_HEADER_BYTES + 1]);
 
         let response = warp::test::request()
@@ -1116,7 +1183,7 @@ mod tests {
         let ctx = Arc::new(RwLock::new(ContextCaptureMock {
             captured_context: captured_context.clone(),
         }));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("POST")
@@ -1138,7 +1205,7 @@ mod tests {
     #[tokio::test]
     async fn test_transcribe_endpoint_rejects_oversized_body() {
         let ctx = Arc::new(RwLock::new(MockContext));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let oversized_audio = vec![0u8; MAX_AUDIO_BODY_BYTES as usize + 1];
 
@@ -1208,7 +1275,7 @@ mod tests {
     #[tokio::test]
     async fn test_transcribe_endpoint_handles_multibyte_preview_safely() {
         let ctx = Arc::new(RwLock::new(Utf8PreviewContext));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("POST")
@@ -1234,7 +1301,11 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context, test_transcription_guard());
+            let routes = create_routes(
+                server_context,
+                test_transcription_guard(),
+                test_client_activity(),
+            );
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1296,7 +1367,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn transcribe_runs_off_runtime_worker() {
         let context = Arc::new(RwLock::new(DelayedMockContext::new(300)));
-        let routes = create_routes(context.clone(), test_transcription_guard());
+        let routes = create_routes(
+            context.clone(),
+            test_transcription_guard(),
+            test_client_activity(),
+        );
 
         let transcribe_routes = routes.clone();
         let started_at = std::time::Instant::now();
@@ -1351,7 +1426,11 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context, test_transcription_guard());
+            let routes = create_routes(
+                server_context,
+                test_transcription_guard(),
+                test_client_activity(),
+            );
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1432,8 +1511,8 @@ mod tests {
     async fn test_transcription_guard_is_shared_across_route_instances() {
         let context = Arc::new(RwLock::new(DelayedMockContext::new(100)));
         let guard = Arc::new(Semaphore::new(1));
-        let routes_a = create_routes(context.clone(), guard.clone());
-        let routes_b = create_routes(context.clone(), guard);
+        let routes_a = create_routes(context.clone(), guard.clone(), test_client_activity());
+        let routes_b = create_routes(context.clone(), guard, test_client_activity());
 
         let req_a = tokio::spawn(async move {
             warp::test::request()
@@ -1470,7 +1549,11 @@ mod tests {
         let server_context = context.clone();
         let mut server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context, test_transcription_guard());
+            let routes = create_routes(
+                server_context,
+                test_transcription_guard(),
+                test_client_activity(),
+            );
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
             });
@@ -1541,7 +1624,11 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context, test_transcription_guard());
+            let routes = create_routes(
+                server_context,
+                test_transcription_guard(),
+                test_client_activity(),
+            );
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1625,7 +1712,11 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context, test_transcription_guard());
+            let routes = create_routes(
+                server_context,
+                test_transcription_guard(),
+                test_client_activity(),
+            );
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1713,7 +1804,11 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context, test_transcription_guard());
+            let routes = create_routes(
+                server_context,
+                test_transcription_guard(),
+                test_client_activity(),
+            );
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1767,7 +1862,11 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context, test_transcription_guard());
+            let routes = create_routes(
+                server_context,
+                test_transcription_guard(),
+                test_client_activity(),
+            );
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -1871,7 +1970,11 @@ mod tests {
         let server_context = context.clone();
         let server_handle = tokio::spawn(async move {
             let addr = ([127, 0, 0, 1], 0u16);
-            let routes = create_routes(server_context, test_transcription_guard());
+            let routes = create_routes(
+                server_context,
+                test_transcription_guard(),
+                test_client_activity(),
+            );
 
             let (addr, server) = warp::serve(routes).bind_with_graceful_shutdown(addr, async {
                 shutdown_rx.await.ok();
@@ -2008,7 +2111,7 @@ mod tests {
     #[tokio::test]
     async fn test_control_models_requires_password_when_unconfigured() {
         let ctx = Arc::new(RwLock::new(MockContext));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("GET")
@@ -2028,7 +2131,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: true,
         }));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("GET")
@@ -2046,7 +2149,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: true,
         }));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("PATCH")
@@ -2068,7 +2171,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: true,
         }));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("GET")
@@ -2090,7 +2193,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: true,
         }));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("PATCH")
@@ -2111,7 +2214,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: true,
         }));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("PATCH")
@@ -2133,7 +2236,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: false,
         }));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("GET")
@@ -2154,7 +2257,7 @@ mod tests {
             model_name: "base.en".to_string(),
             allow_model_control: false,
         }));
-        let routes = create_routes(ctx, test_transcription_guard());
+        let routes = create_routes(ctx, test_transcription_guard(), test_client_activity());
 
         let response = warp::test::request()
             .method("PATCH")
