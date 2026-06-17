@@ -70,6 +70,9 @@ pub struct Settings {
     // Recording persistence settings
     pub save_recordings: bool,
     pub recording_retention_days: Option<u32>, // None = keep forever
+    // Transcription hardware acceleration: "auto" | "gpu" | "cpu"
+    #[serde(default = "default_transcription_acceleration")]
+    pub transcription_acceleration: String,
 }
 
 impl Default for Settings {
@@ -103,7 +106,20 @@ impl Default for Settings {
             sharing_password: None,              // No password by default
             save_recordings: false,              // Default to not saving recordings
             recording_retention_days: Some(30),  // Default cleanup period when saving is enabled
+            transcription_acceleration: "auto".to_string(),
         }
+    }
+}
+
+fn default_transcription_acceleration() -> String {
+    "auto".to_string()
+}
+
+pub fn normalize_stored_transcription_acceleration(value: Option<&str>) -> String {
+    match value {
+        Some("gpu") => "gpu".to_string(),
+        Some("cpu") => "cpu".to_string(),
+        _ => "auto".to_string(),
     }
 }
 
@@ -454,6 +470,12 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().save_recordings),
         recording_retention_days: recording_retention_days_from_store(&store),
+        transcription_acceleration: normalize_stored_transcription_acceleration(
+            store
+                .get("transcription_acceleration")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .as_deref(),
+        ),
     };
     let normalized_speech_language = normalize_speech_language_for_model(
         &settings.current_model_engine,
@@ -666,6 +688,10 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set(
         "auto_paste_transcription",
         json!(settings.auto_paste_transcription),
+    );
+    store.set(
+        "transcription_acceleration",
+        json!(settings.transcription_acceleration),
     );
 
     // Network sharing settings

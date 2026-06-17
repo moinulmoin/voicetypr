@@ -2,9 +2,9 @@
 mod tests {
     use crate::commands::settings::{
         get_supported_languages, normalize_final_text_language,
-        normalize_speech_language_for_model, task_uses_translate_to_english, Settings,
-        FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT, TRANSCRIPTION_TASK_TRANSCRIBE,
-        TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH,
+        normalize_speech_language_for_model, normalize_stored_transcription_acceleration,
+        task_uses_translate_to_english, Settings, FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+        TRANSCRIPTION_TASK_TRANSCRIBE, TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH,
     };
     use serde_json::json;
 
@@ -61,6 +61,7 @@ mod tests {
             sharing_password: None,
             save_recordings: true,
             recording_retention_days: Some(7),
+            transcription_acceleration: "auto".to_string(),
         };
 
         // Test serialization
@@ -142,6 +143,7 @@ mod tests {
             sharing_password: Some("test123".to_string()),
             save_recordings: true,
             recording_retention_days: None,
+            transcription_acceleration: "auto".to_string(),
         };
 
         let cloned = settings.clone();
@@ -426,6 +428,57 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         let deserialized: Settings = serde_json::from_str(&json).unwrap();
         assert!(deserialized.pause_media_during_recording);
+    }
+
+    #[test]
+    fn test_transcription_acceleration_default_auto() {
+        let settings = Settings::default();
+        assert_eq!(settings.transcription_acceleration, "auto");
+    }
+
+    #[test]
+    fn test_transcription_acceleration_raw_store_key() {
+        // Assert the serde(default) kicks in when the key is absent from JSON.
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .remove("transcription_acceleration");
+        let parsed: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(parsed.transcription_acceleration, "auto");
+
+        // Assert the key serializes as the lowercase string the store/runtime rely on.
+        let settings = Settings {
+            transcription_acceleration: "cpu".to_string(),
+            ..Settings::default()
+        };
+        let v = serde_json::to_value(&settings).unwrap();
+        assert_eq!(
+            v["transcription_acceleration"],
+            serde_json::Value::String("cpu".to_string())
+        );
+    }
+
+    #[test]
+    fn test_transcription_acceleration_invalid_value_normalizes_to_auto() {
+        // None and garbage values must normalize to "auto" via the real production fn.
+        assert_eq!(normalize_stored_transcription_acceleration(None), "auto");
+        for bad in &["", "GPU", "Cpu", "vulkan", "metal"] {
+            assert_eq!(
+                normalize_stored_transcription_acceleration(Some(bad)),
+                "auto",
+                "bad value {:?} must normalize to auto",
+                bad
+            );
+        }
+        // Valid values pass through unchanged.
+        assert_eq!(
+            normalize_stored_transcription_acceleration(Some("gpu")),
+            "gpu"
+        );
+        assert_eq!(
+            normalize_stored_transcription_acceleration(Some("cpu")),
+            "cpu"
+        );
     }
 
     #[test]
@@ -786,6 +839,7 @@ mod tests {
             sharing_password: Some("pw".to_string()),
             save_recordings: true,
             recording_retention_days: None,
+            transcription_acceleration: "gpu".to_string(),
         };
 
         let json = serde_json::to_string(&original).unwrap();
@@ -847,6 +901,10 @@ mod tests {
         assert_eq!(
             restored.recording_retention_days,
             original.recording_retention_days
+        );
+        assert_eq!(
+            restored.transcription_acceleration,
+            original.transcription_acceleration
         );
     }
 

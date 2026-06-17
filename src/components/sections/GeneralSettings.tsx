@@ -27,8 +27,8 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { updateService } from "@/services/updateService";
-import { isMacOS } from "@/lib/platform";
-import { PillIndicatorMode, PillIndicatorPosition } from "@/types";
+import { isMacOS, isWindows } from "@/lib/platform";
+import { PillIndicatorMode, PillIndicatorPosition, TranscriptionAcceleration } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertCircle, FolderOpen, HelpCircle, Keyboard, Mic, RefreshCw, Rocket, ToggleLeft } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -431,6 +431,42 @@ export function GeneralSettings() {
                     />
                   </Field>
                 </FieldSet>
+
+                {isWindows && (
+                  <FieldSet className="gap-4 border-t border-border/60 pt-5">
+                    <FieldLegend className="mb-1 text-base font-semibold">Transcription performance</FieldLegend>
+
+                    <Field orientation="responsive" className="items-center gap-3">
+                      <FieldContent>
+                        <FieldTitle>Acceleration</FieldTitle>
+                        <FieldDescription>
+                          {(settings.transcription_acceleration ?? 'auto') === 'auto'
+                            ? 'Use GPU when available, fall back to CPU (recommended)'
+                            : (settings.transcription_acceleration ?? 'auto') === 'gpu'
+                              ? 'Always use the GPU'
+                              : 'Always use the CPU'}
+                        </FieldDescription>
+                      </FieldContent>
+                      <Select
+                        value={settings.transcription_acceleration ?? 'auto'}
+                        onValueChange={async (value: TranscriptionAcceleration) => {
+                          await updateSettings({
+                            transcription_acceleration: value,
+                          });
+                        }}
+                      >
+                        <SelectTrigger className="w-full md:w-[190px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="auto">Auto</SelectItem>
+                          <SelectItem value="gpu">GPU</SelectItem>
+                          <SelectItem value="cpu">CPU</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  </FieldSet>
+                )}
 
                 <FieldSet className="gap-4 border-t border-border/60 pt-5">
                   <FieldLegend className="mb-1 text-base font-semibold">Recording indicator</FieldLegend>

@@ -29,6 +29,7 @@ vi.mock('@/contexts/ReadinessContext', () => ({
 
 vi.mock('@/lib/platform', () => ({
   isMacOS: false,
+  isWindows: false,
 }));
 
 // Mock invoke — the new backend commands replace the autostart plugin

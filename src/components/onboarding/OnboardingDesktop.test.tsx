@@ -111,6 +111,9 @@ vi.mock("@tauri-apps/plugin-shell", () => ({
   open: vi.fn().mockResolvedValue(undefined),
 }));
 
+const platformMock = vi.hoisted(() => ({ isMacOS: true, isWindows: false, isLinux: false }));
+vi.mock("@/lib/platform", () => platformMock);
+
 const emit = (event: string, payload: unknown) => {
   eventListeners.get(event)?.forEach((handler) => handler({ payload }));
 };
@@ -125,6 +128,7 @@ const renderOnboarding = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  Object.assign(platformMock, { isMacOS: true, isWindows: false, isLinux: false });
   eventListeners.clear();
   Object.assign(settingsState, {
     hotkey: "CommandOrControl+Shift+Space",
@@ -133,6 +137,7 @@ beforeEach(() => {
     speech_language: "en",
     onboarding_completed: false,
   });
+  delete (settingsState as Record<string, unknown>).transcription_acceleration;
   Object.assign(recordingState, {
     state: "idle",
     error: null,
@@ -432,5 +437,56 @@ describe("OnboardingDesktop", () => {
       serverId: "remote-1",
     });
     expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
+  });
+
+  it("Windows GPU toggle ON→OFF persists 'cpu' (default state: acceleration undefined → switch ON)", async () => {
+    platformMock.isMacOS = false;
+    platformMock.isWindows = true;
+    // settingsState.transcription_acceleration is undefined → switch resolves to ON
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+
+    const gpuSwitch = screen.getByRole("switch", { name: /use gpu acceleration/i });
+    expect(gpuSwitch).toBeInTheDocument();
+    expect(gpuSwitch).toHaveAttribute("aria-checked", "true");
+
+    await user.click(gpuSwitch);
+    expect(updateSettingsMock).toHaveBeenCalledWith({ transcription_acceleration: "cpu" });
+  });
+
+  it("Windows GPU toggle OFF→ON persists 'auto' (prior state: acceleration 'cpu' → switch OFF)", async () => {
+    platformMock.isMacOS = false;
+    platformMock.isWindows = true;
+    (settingsState as Record<string, unknown>).transcription_acceleration = "cpu";
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+
+    const gpuSwitch = screen.getByRole("switch", { name: /use gpu acceleration/i });
+    expect(gpuSwitch).toHaveAttribute("aria-checked", "false");
+
+    await user.click(gpuSwitch);
+    expect(updateSettingsMock).toHaveBeenCalledWith({ transcription_acceleration: "auto" });
+  });
+
+  it("does not show the GPU toggle on macOS", async () => {
+    // platformMock defaults to isMacOS:true, isWindows:false (reset by beforeEach)
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    // Navigate through macOS flow to readiness (welcome→source→permissions→readiness)
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i })); // source→permissions
+    await user.click(screen.getByRole("button", { name: /continue/i })); // permissions→readiness
+
+    expect(screen.queryByText(/use gpu acceleration/i)).not.toBeInTheDocument();
   });
 });

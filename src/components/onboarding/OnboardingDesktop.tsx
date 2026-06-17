@@ -18,13 +18,14 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useAccessibilityPermission } from "@/hooks/useAccessibilityPermission";
 import { useMicrophonePermission } from "@/hooks/useMicrophonePermission";
 import type { useModelManagement } from "@/hooks/useModelManagement";
 import { useRecording } from "@/hooks/useRecording";
 import { formatHotkey } from "@/lib/hotkey-utils";
-import { isMacOS } from "@/lib/platform";
+import { isMacOS, isWindows } from "@/lib/platform";
 import { getModelDisplayName } from "@/lib/model-display";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
@@ -571,6 +572,10 @@ export const OnboardingDesktop = function OnboardingDesktop({
     });
   };
 
+  const handleGpuToggle = async (checked: boolean) => {
+    await updateSettings({ transcription_acceleration: checked ? 'auto' : 'cpu' });
+  };
+
   const completeOnboarding = async () => {
     setIsSavingCompletion(true);
     onCompletionStart?.();
@@ -945,6 +950,19 @@ export const OnboardingDesktop = function OnboardingDesktop({
                     </div>
                   </ScrollArea>
                 </Card>
+                {isWindows && (
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-card/80 px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium">Use GPU acceleration</p>
+                      <p className="text-xs text-muted-foreground">Recommended — uses your graphics card for faster transcription.</p>
+                    </div>
+                    <Switch
+                      checked={(settings?.transcription_acceleration ?? 'auto') !== 'cpu'}
+                      onCheckedChange={(checked) => void handleGpuToggle(checked)}
+                      aria-label="Use GPU acceleration"
+                    />
+                  </div>
+                )}
               </div>
             ) : (
               <div className="flex flex-col gap-4">
