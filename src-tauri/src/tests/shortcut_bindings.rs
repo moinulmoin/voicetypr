@@ -1,8 +1,9 @@
 use crate::ai::prompts::EnhancementPreset;
 use crate::commands::shortcuts::{
-    action_preset, hold_shortcut_transition, next_ai_enabled, normalized_custom_shortcut_conflict,
-    pressed_shortcut_should_run, validate_shortcut_settings, CustomHoldTransition,
-    ExistingShortcutStrings, ShortcutAction, ShortcutBinding, ShortcutSettings, ShortcutTrigger,
+    action_preset, hold_shortcut_transition, is_single_key_shortcut, is_typing_safe_single_key,
+    next_ai_enabled, normalized_custom_shortcut_conflict, pressed_shortcut_should_run,
+    validate_shortcut_settings, CustomHoldTransition, ExistingShortcutStrings, ShortcutAction,
+    ShortcutBinding, ShortcutSettings, ShortcutTrigger, MAX_SINGLE_KEY_BINDINGS,
 };
 use std::collections::HashSet;
 use tauri_plugin_global_shortcut::ShortcutState;
@@ -276,4 +277,166 @@ fn next_ai_enabled_toggles_correctly() {
     assert_eq!(next_ai_enabled(false, true), Some(true));
     // Enabling is refused without a usable AI setup
     assert_eq!(next_ai_enabled(false, false), None);
+}
+
+#[test]
+fn single_key_safe_on_non_hold_action_validates() {
+    // F1 on ToggleRecording with allow_risky_combo should pass
+    let mut toggle_binding = binding(ShortcutAction::ToggleRecording, "F1");
+    toggle_binding.allow_risky_combo = true;
+    assert!(
+        validate_shortcut_settings(
+            ShortcutSettings {
+                bindings: vec![toggle_binding]
+            },
+            &ExistingShortcutStrings::default(),
+        )
+        .is_ok(),
+        "F1 on ToggleRecording with allow_risky_combo should validate"
+    );
+
+    // Home on CopyLastTranscription with allow_risky_combo should pass
+    let mut copy_binding = binding(ShortcutAction::CopyLastTranscription, "Home");
+    copy_binding.allow_risky_combo = true;
+    assert!(
+        validate_shortcut_settings(
+            ShortcutSettings {
+                bindings: vec![copy_binding]
+            },
+            &ExistingShortcutStrings::default(),
+        )
+        .is_ok(),
+        "Home on CopyLastTranscription with allow_risky_combo should validate"
+    );
+}
+
+#[test]
+fn single_key_typing_key_rejected_for_any_action() {
+    // Letter key rejected for HoldToRecord
+    let mut hold_binding = binding(ShortcutAction::HoldToRecord, "E");
+    hold_binding.trigger = ShortcutTrigger::Hold;
+    hold_binding.allow_risky_combo = true;
+    let err = validate_shortcut_settings(
+        ShortcutSettings {
+            bindings: vec![hold_binding],
+        },
+        &ExistingShortcutStrings::default(),
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("function key") || err.contains("Single-key"),
+        "Expected typing-key rejection for HoldToRecord, got: {err}"
+    );
+
+    // Letter key rejected for non-HoldToRecord action
+    let mut toggle_binding = binding(ShortcutAction::ToggleRecording, "E");
+    toggle_binding.allow_risky_combo = true;
+    let err = validate_shortcut_settings(
+        ShortcutSettings {
+            bindings: vec![toggle_binding],
+        },
+        &ExistingShortcutStrings::default(),
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("function key") || err.contains("Single-key"),
+        "Expected typing-key rejection for ToggleRecording, got: {err}"
+    );
+}
+
+#[test]
+fn single_key_cap_allows_5_rejects_6() {
+    fn safe_sk(action: ShortcutAction, fkey: &str) -> ShortcutBinding {
+        ShortcutBinding {
+            allow_risky_combo: true,
+            ..binding(action, fkey)
+        }
+    }
+
+    let five_bindings = vec![
+        safe_sk(ShortcutAction::ToggleRecording, "F1"),
+        safe_sk(ShortcutAction::CancelRecording, "F2"),
+        safe_sk(ShortcutAction::CopyLastTranscription, "F3"),
+        safe_sk(ShortcutAction::PasteLastTranscription, "F4"),
+        safe_sk(ShortcutAction::CycleFormattingMode, "F5"),
+    ];
+    assert_eq!(five_bindings.len(), MAX_SINGLE_KEY_BINDINGS);
+    assert!(
+        validate_shortcut_settings(
+            ShortcutSettings {
+                bindings: five_bindings.clone()
+            },
+            &ExistingShortcutStrings::default(),
+        )
+        .is_ok(),
+        "Exactly {} single-key bindings should be accepted",
+        MAX_SINGLE_KEY_BINDINGS
+    );
+
+    let mut six_bindings = five_bindings;
+    six_bindings.push(safe_sk(ShortcutAction::ToggleAiFormatting, "F6"));
+    let err = validate_shortcut_settings(
+        ShortcutSettings {
+            bindings: six_bindings,
+        },
+        &ExistingShortcutStrings::default(),
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("single-key"),
+        "Expected single-key cap error for 6 bindings, got: {err}"
+    );
+}
+
+#[test]
+fn is_typing_safe_single_key_allowlist() {
+    // Allowed: function keys
+    assert!(is_typing_safe_single_key("F1"));
+    assert!(is_typing_safe_single_key("F12"));
+    assert!(is_typing_safe_single_key("F24"));
+    // Allowed: numpad
+    assert!(is_typing_safe_single_key("Numpad0"));
+    assert!(is_typing_safe_single_key("Numpad9"));
+    assert!(is_typing_safe_single_key("NumpadAdd"));
+    assert!(is_typing_safe_single_key("NumpadSubtract"));
+    // Allowed: navigation cluster
+    assert!(is_typing_safe_single_key("Home"));
+    assert!(is_typing_safe_single_key("End"));
+    assert!(is_typing_safe_single_key("PageUp"));
+    assert!(is_typing_safe_single_key("PageDown"));
+    assert!(is_typing_safe_single_key("Insert"));
+
+    // Rejected: letters, digits, typing keys
+    assert!(!is_typing_safe_single_key("A"));
+    assert!(!is_typing_safe_single_key("1"));
+    assert!(!is_typing_safe_single_key("Space"));
+    assert!(!is_typing_safe_single_key("Enter"));
+    assert!(!is_typing_safe_single_key("Tab"));
+    assert!(!is_typing_safe_single_key("Backspace"));
+    assert!(!is_typing_safe_single_key("Delete"));
+    assert!(!is_typing_safe_single_key("Escape"));
+    assert!(!is_typing_safe_single_key("Up"));
+    assert!(!is_typing_safe_single_key("Down"));
+    assert!(!is_typing_safe_single_key("Left"));
+    assert!(!is_typing_safe_single_key("Right"));
+    assert!(!is_typing_safe_single_key("Alt"));
+    assert!(!is_typing_safe_single_key("Shift"));
+    // Rejected: out-of-range function keys
+    assert!(!is_typing_safe_single_key("F0"));
+    assert!(!is_typing_safe_single_key("F25"));
+}
+
+#[test]
+fn is_single_key_shortcut_detection() {
+    assert!(is_single_key_shortcut("F1"));
+    assert!(is_single_key_shortcut("Home"));
+    assert!(is_single_key_shortcut("Numpad0"));
+    assert!(is_single_key_shortcut("A")); // letter IS single-key (just not typing-safe)
+
+    assert!(!is_single_key_shortcut("F1+A"));
+    assert!(!is_single_key_shortcut("CommandOrControl+F1"));
+    assert!(!is_single_key_shortcut("Alt+Shift+F1"));
+    assert!(!is_single_key_shortcut("Alt")); // bare modifier excluded
+    assert!(!is_single_key_shortcut("Shift"));
+    assert!(!is_single_key_shortcut("")); // empty excluded
 }

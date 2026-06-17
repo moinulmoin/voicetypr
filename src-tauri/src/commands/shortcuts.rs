@@ -14,6 +14,8 @@ use crate::AppState;
 
 const SHORTCUT_BINDINGS_KEY: &str = "shortcut_bindings";
 
+pub const MAX_SINGLE_KEY_BINDINGS: usize = 5;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShortcutAction {
@@ -216,6 +218,7 @@ pub fn register_saved_shortcuts(app: &AppHandle) -> Result<(), String> {
 
     let mut registered = Vec::new();
     let mut seen_enabled = HashSet::new();
+    let mut single_key_count: usize = 0;
     for binding in settings
         .bindings
         .into_iter()
@@ -244,6 +247,20 @@ pub fn register_saved_shortcuts(app: &AppHandle) -> Result<(), String> {
                 continue;
             }
         };
+
+        let normalized = normalize_shortcut_keys(&sanitized.shortcut);
+        if is_single_key_shortcut(&normalized) {
+            if single_key_count >= MAX_SINGLE_KEY_BINDINGS {
+                log::warn!(
+                    "Skipping saved single-key shortcut '{}' for {:?}: exceeds the {}-binding cap",
+                    sanitized.shortcut,
+                    sanitized.action,
+                    MAX_SINGLE_KEY_BINDINGS,
+                );
+                continue;
+            }
+            single_key_count += 1;
+        }
 
         match app.global_shortcut().register(shortcut) {
             Ok(_) => registered.push(RegisteredShortcutBinding {
@@ -484,6 +501,22 @@ fn prepare_shortcut_settings(
         }
     }
 
+    let single_key_count = prepared
+        .iter()
+        .filter(|pb| {
+            pb.binding.enabled
+                && pb.shortcut.is_some()
+                && is_single_key_shortcut(&normalize_shortcut_keys(&pb.binding.shortcut))
+        })
+        .count();
+    if single_key_count > MAX_SINGLE_KEY_BINDINGS {
+        return Err(format!(
+            "You can set at most {} single-key shortcuts -- you have {}. \
+             Disable or remove some single-key bindings.",
+            MAX_SINGLE_KEY_BINDINGS, single_key_count
+        ));
+    }
+
     Ok(prepared)
 }
 
@@ -603,6 +636,14 @@ fn validate_enabled_binding(binding: &ShortcutBinding) -> Result<(), String> {
             },
         )?;
         reject_single_modifier_only(&normalized)?;
+        if is_single_key_shortcut(&normalized) && !is_typing_safe_single_key(&normalized) {
+            return Err(
+                "Single-key shortcuts must be a function key (F1-F24), a numpad key, \
+                 or a navigation key (Home/End/Page Up/Page Down/Insert) \
+                 -- typing keys like letters would be captured everywhere."
+                    .to_string(),
+            );
+        }
     } else {
         validate_key_combination(&normalized)?;
     }
@@ -624,7 +665,7 @@ fn validate_trigger_matches_action(binding: &ShortcutBinding) -> Result<(), Stri
 }
 
 fn allows_single_key(binding: &ShortcutBinding) -> bool {
-    binding.action == ShortcutAction::HoldToRecord && binding.allow_risky_combo
+    binding.allow_risky_combo
 }
 
 fn reject_single_modifier_only(normalized: &str) -> Result<(), String> {
@@ -651,6 +692,39 @@ fn is_modifier(key: &str) -> bool {
             | "Option"
             | "Meta"
             | "Super"
+    )
+}
+
+pub fn is_single_key_shortcut(normalized: &str) -> bool {
+    let mut parts = normalized.split('+');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    !first.is_empty() && parts.next().is_none() && !is_modifier(first)
+}
+
+/// Allowlist of keys safe to bind as single-key global shortcuts.
+/// Only keys that don't appear in normal typing are permitted.
+/// Default-deny: any key not listed here returns false.
+pub fn is_typing_safe_single_key(normalized: &str) -> bool {
+    // Function keys F1-F24
+    if let Some(rest) = normalized.strip_prefix('F') {
+        if rest.len() <= 2 {
+            if let Ok(num) = rest.parse::<u8>() {
+                if (1..=24).contains(&num) {
+                    return true;
+                }
+            }
+        }
+    }
+    // Numpad keys (Numpad0-Numpad9, NumpadAdd, NumpadSubtract, etc.)
+    if normalized.starts_with("Numpad") {
+        return true;
+    }
+    // Navigation cluster (non-typing)
+    matches!(
+        normalized,
+        "Home" | "End" | "PageUp" | "PageDown" | "Insert"
     )
 }
 
@@ -708,7 +782,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Start or stop recording with one press.",
             section: "Recording",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
         ShortcutActionDefinition {
             action: ShortcutAction::HoldToRecord,
@@ -724,7 +798,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Cancel the current recording.",
             section: "Recording",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
         ShortcutActionDefinition {
             action: ShortcutAction::CopyLastTranscription,
@@ -732,7 +806,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Copy the latest finished transcription to the clipboard.",
             section: "History",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
         ShortcutActionDefinition {
             action: ShortcutAction::PasteLastTranscription,
@@ -740,7 +814,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Paste the latest finished transcription into the active app.",
             section: "History",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
         ShortcutActionDefinition {
             action: ShortcutAction::CycleFormattingMode,
@@ -748,7 +822,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Switch to the next formatting mode.",
             section: "Formatting",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
         ShortcutActionDefinition {
             action: ShortcutAction::SetPersonalDictation,
@@ -756,7 +830,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Switch formatting to Personal Dictation.",
             section: "Formatting",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
         ShortcutActionDefinition {
             action: ShortcutAction::SetCleanDictation,
@@ -764,7 +838,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Switch formatting to Clean Dictation.",
             section: "Formatting",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
         ShortcutActionDefinition {
             action: ShortcutAction::SetWriting,
@@ -772,7 +846,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Switch formatting to Writing.",
             section: "Formatting",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
         ShortcutActionDefinition {
             action: ShortcutAction::SetNotes,
@@ -780,7 +854,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Switch formatting to Notes.",
             section: "Formatting",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
         ShortcutActionDefinition {
             action: ShortcutAction::SetMessage,
@@ -788,7 +862,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Switch formatting to Message.",
             section: "Formatting",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
         ShortcutActionDefinition {
             action: ShortcutAction::SetCode,
@@ -796,7 +870,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Switch formatting to Code.",
             section: "Formatting",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
         ShortcutActionDefinition {
             action: ShortcutAction::ToggleAiFormatting,
@@ -804,7 +878,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Turn AI formatting on or off.",
             section: "Formatting",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
         ShortcutActionDefinition {
             action: ShortcutAction::OpenDashboard,
@@ -812,7 +886,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
             description: "Focus the VoiceTypr dashboard.",
             section: "Dashboard",
             recommended_trigger: ShortcutTrigger::Pressed,
-            allows_single_key: false,
+            allows_single_key: true,
         },
     ]
 }

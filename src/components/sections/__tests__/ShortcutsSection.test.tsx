@@ -30,7 +30,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     description: "Start or stop recording from anywhere.",
     section: "Recording",
     recommended_trigger: "pressed",
-    allows_single_key: false,
+    allows_single_key: true,
   },
   {
     action: "hold_to_record",
@@ -46,7 +46,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     description: "Cancel the current recording.",
     section: "Recording",
     recommended_trigger: "pressed",
-    allows_single_key: false,
+    allows_single_key: true,
   },
   {
     action: "copy_last_transcription",
@@ -54,7 +54,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     description: "Copy the most recent transcript to the clipboard.",
     section: "History",
     recommended_trigger: "pressed",
-    allows_single_key: false,
+    allows_single_key: true,
   },
   {
     action: "paste_last_transcription",
@@ -62,7 +62,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     description: "Paste the most recent transcript.",
     section: "History",
     recommended_trigger: "pressed",
-    allows_single_key: false,
+    allows_single_key: true,
   },
   {
     action: "cycle_formatting_mode",
@@ -70,7 +70,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     description: "Move to the next formatting mode.",
     section: "Formatting",
     recommended_trigger: "pressed",
-    allows_single_key: false,
+    allows_single_key: true,
   },
   {
     action: "set_personal_dictation",
@@ -78,7 +78,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     description: "Switch to personal dictation.",
     section: "Formatting",
     recommended_trigger: "pressed",
-    allows_single_key: false,
+    allows_single_key: true,
   },
   {
     action: "set_clean_dictation",
@@ -86,7 +86,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     description: "Switch to clean dictation.",
     section: "Formatting",
     recommended_trigger: "pressed",
-    allows_single_key: false,
+    allows_single_key: true,
   },
   {
     action: "set_writing",
@@ -94,7 +94,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     description: "Switch to writing mode.",
     section: "Formatting",
     recommended_trigger: "pressed",
-    allows_single_key: false,
+    allows_single_key: true,
   },
   {
     action: "set_notes",
@@ -102,7 +102,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     description: "Switch to notes mode.",
     section: "Formatting",
     recommended_trigger: "pressed",
-    allows_single_key: false,
+    allows_single_key: true,
   },
   {
     action: "set_message",
@@ -110,7 +110,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     description: "Switch to message mode.",
     section: "Formatting",
     recommended_trigger: "pressed",
-    allows_single_key: false,
+    allows_single_key: true,
   },
   {
     action: "set_code",
@@ -118,7 +118,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     description: "Switch to code mode.",
     section: "Formatting",
     recommended_trigger: "pressed",
-    allows_single_key: false,
+    allows_single_key: true,
   },
   {
     action: "open_dashboard",
@@ -126,7 +126,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
     description: "Show the VoiceTypr dashboard.",
     section: "App",
     recommended_trigger: "pressed",
-    allows_single_key: false,
+    allows_single_key: true,
   },
 ];
 
@@ -499,6 +499,50 @@ describe("ShortcutsSection", () => {
           bindings: [
             expect.objectContaining({
               action: "hold_to_record",
+              allow_risky_combo: true,
+            }),
+          ],
+        },
+      });
+    });
+  });
+
+  it("offers the single-key toggle on a non-hold-to-record action", async () => {
+    const user = userEvent.setup();
+    render(<ShortcutsSection />);
+
+    const copyRow = await screen.findByRole("group", { name: "Copy Last Transcription" });
+    await user.click(within(copyRow).getByRole("button", { name: "Add shortcut" }));
+
+    expect(within(copyRow).getByText("Use a single key")).toBeInTheDocument();
+    const singleKeySwitch = within(copyRow).getByRole("switch", { name: "Use a single key" });
+    expect(singleKeySwitch).not.toBeChecked();
+  });
+
+  it("saves a single-key F1 binding on a non-hold action when single-key mode is enabled", async () => {
+    const user = userEvent.setup();
+    arrangeInvoke({ bindings: [] });
+    render(<ShortcutsSection />);
+
+    const copyRow = await screen.findByRole("group", { name: "Copy Last Transcription" });
+    await user.click(within(copyRow).getByRole("button", { name: "Add shortcut" }));
+
+    await user.click(within(copyRow).getByRole("switch", { name: "Use a single key" }));
+
+    await user.click(within(copyRow).getByTitle("Change hotkey"));
+    fireEvent.keyDown(window, { key: "F1", code: "F1" });
+    await waitFor(() => {
+      expect(within(copyRow).getByTitle("Save hotkey")).toBeEnabled();
+    });
+    await user.click(within(copyRow).getByTitle("Save hotkey"));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", {
+        settings: {
+          bindings: [
+            expect.objectContaining({
+              action: "copy_last_transcription",
+              shortcut: "F1",
               allow_risky_combo: true,
             }),
           ],

@@ -23,6 +23,17 @@ const singleKeyValidation = ValidationPresets.custom({
   requireModifierForMultiKey: true,
 });
 
+const MAX_SINGLE_KEY_BINDINGS = 5;
+
+function isSingleKeyShortcut(shortcut: string): boolean {
+  if (!shortcut) return false;
+  const normalized = normalizeShortcutKeys(shortcut);
+  const parts = normalized.split('+').filter(Boolean);
+  if (parts.length !== 1) return false;
+  const modifiers = ['CommandOrControl', 'Super', 'Shift', 'Alt', 'Control', 'Command', 'Cmd', 'Ctrl', 'Option', 'Meta'];
+  return !modifiers.includes(parts[0]);
+}
+
 function createBinding(action: ShortcutActionDefinition): ShortcutBinding {
   return {
     id: typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -147,6 +158,12 @@ export function ShortcutsSection() {
     return new Map(actions.map((action) => [action.action, action.label]));
   }, [actions]);
 
+  const singleKeyCount = useMemo(() => {
+    return [...settings.bindings, ...draftBindings].filter(
+      (b) => b.enabled && b.shortcut && isSingleKeyShortcut(b.shortcut)
+    ).length;
+  }, [settings.bindings, draftBindings]);
+
   const isMutating = savingBindingId !== null;
   const editingDisabled = isMutating || settingsLoadError !== null;
 
@@ -211,7 +228,7 @@ export function ShortcutsSection() {
     } catch (error) {
       console.error("Failed to save shortcut:", error);
       toast.error("Could not save shortcut", {
-        description: "Global shortcuts may conflict with macOS, Windows, or other apps. VoiceTypr tests registration and refuses unavailable shortcuts.",
+        description: formatError(error),
       });
     } finally {
       endMutation();
@@ -290,6 +307,9 @@ export function ShortcutsSection() {
                 VoiceTypr tests global shortcuts and refuses combos already owned by macOS, Windows, or another app.
               </p>
             </div>
+            <p className="mt-1 text-xs">
+              {singleKeyCount} of {MAX_SINGLE_KEY_BINDINGS} single-key shortcuts used.
+            </p>
           </div>
 
           {actionLoadError && (
@@ -360,8 +380,7 @@ export function ShortcutsSection() {
                         ) : (
                           <div className="space-y-3">
                             {bindings.map((binding) => {
-                              const isHoldToRecord = binding.action === "hold_to_record";
-                              const canUseSingleKey = isHoldToRecord && binding.allow_risky_combo;
+                              const canUseSingleKey = action.allows_single_key && binding.allow_risky_combo;
                               const isSaving = savingBindingId === binding.id;
 
                               return (
@@ -409,7 +428,7 @@ export function ShortcutsSection() {
                                     </div>
                                   </div>
 
-                                  {isHoldToRecord && (
+                                  {action.allows_single_key && (
                                     <div className="mt-3 rounded-md bg-muted/40 p-3">
                                       <label className="flex items-start gap-3 text-sm">
                                         <Switch
@@ -423,7 +442,7 @@ export function ShortcutsSection() {
                                         <span>
                                           <span className="block font-medium text-foreground">Use a single key</span>
                                           <span className="block text-muted-foreground">
-                                            Single keys are captured globally and may interfere with normal typing.
+                                            Only non-typing keys are allowed as single-key shortcuts: function keys (F1\u2013F24), numpad keys, and navigation keys (Home, End, Page Up, Page Down, Insert). Typing keys are blocked globally when captured this way.
                                           </span>
                                           {canUseSingleKey && (
                                             <span className="mt-1 block text-xs text-muted-foreground">
