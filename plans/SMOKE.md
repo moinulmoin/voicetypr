@@ -272,6 +272,13 @@ sessions, the Swift sidecar fd-redirect, UI-responsiveness, and wall-clock timin
 - **ERR-S1**: enable AI formatting with a deliberately wrong API key, then dictate → the overlay shows a short message like "Transcription key rejected" + "Update the API key in Models" (NOT a long/internal error string); the full error is still in the logs. A transient failure (e.g. timeout) still shows "Transcription failed — try again".
 - **CONN-S1** (needs a second device): start sharing on host A, transcribe from peer B → host A's Network Sharing card shows 1 (not 0) connection; after ~5 minutes of no requests it decays back to 0.
 
+## Native triggers — hold a modifier / double-tap (NEEDS-SMOKE, plan 022 P2)
+
+- **NT-S1** (macOS, headline): Settings ▸ Shortcuts ▸ Recording ▸ Hold to record → trigger type "Hold a modifier", modifier "Option / Alt", side "Right" → hold Right-Option → recording starts; release → stops; Right-Option still types normally (not consumed). Requires Accessibility; if just granted, it starts without an app restart.
+- **NT-S2**: bind a press action (e.g. Toggle recording) to "Double-tap a modifier" → "Command", "Either" → double-tap Command toggles recording and does NOT stick (a single tap does nothing; two taps within ~350ms fire once).
+- **NT-S3** (no regression): existing combo + single-key shortcuts still work unchanged; switching a binding from a native kind back to "Key combo" leaves it disabled until you enter a combo and re-enable (no "Invalid shortcut" error); disabling/deleting a native hold while holding it does not leave recording stuck.
+- **NT-S4** (Windows, manual on real box): same as NT-S1/NT-S2 with Right-Alt / double-tap Win — the Windows backend is type-checked only here.
+
 ## Release rule
 
 015 + 016 smoke are ship gates for the AI-polish release; 004/008 smoke are
