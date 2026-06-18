@@ -210,3 +210,21 @@ External + built-in keyboard; left vs right modifiers; sleep/wake; lock/unlock; 
 
 ## 15. Documented policies / non-goals
 Physical-keycode matching (display strings localized/best-effort; `Raw(u32)` round-trips unknown keys); multiple keyboards collapse to one physical-key state (no device IDs in v1); macOS Globe/Fn not a trigger unless added to `Modifier`/`KeySpec`; Windows uses `WH_KEYBOARD_LL` for v1 (Raw Input is a possible later hardening for monitor-only cases).
+
+## 16. Implementation progress
+
+### Done (committed)
+- **P1 — `keytrigger` crate** (`24491db`): `src-tauri/crates/keytrigger/`. Matcher (18 unit tests incl. cross-side Either double-tap + synth-Released stuck-mic guard), `TriggerEngine` (two threads, no lock on the OS-callback path, readiness reported as `Result`), macOS `CGEventTap` backend (listen-only, captured-port re-enable, CFRunLoop stop, FlagsChanged down/up via authoritative `CGEventSourceKeyState`), Windows `WH_KEYBOARD_LL` backend (same-thread install+pump, queue-ready handshake, `WM_QUIT` stop). Verified: macOS `cargo test`/`clippy` clean + example runs (tap creates/stops cleanly); Windows `cargo check --target x86_64-pc-windows-msvc` clean (deliberate-error probe confirms the cfg(windows) path is really checked). Oracle-reviewed design; reviewer-reviewed crate (4 findings fixed: Either double-tap, macOS modifier seeding→key-state, start readiness error, OS reconciliation).
+- **P2 seam** (`e582a4e`): `recording/hotkeys.rs` `pub(crate) fn dispatch_action(app, app_state, id, action, trigger, state)` extracted from `dispatch_custom_shortcut` (behavior-preserving) so the engine and the legacy path share identical gating + action handling.
+
+### Remaining P2 (next session, all backend changes need the full sidecar gate)
+1. Add `keytrigger = { path = "crates/keytrigger" }` to `voicetypr` `[dependencies]` (src-tauri/Cargo.toml).
+2. `ShortcutBinding` schema (shortcuts.rs:~45): `#[serde(default)] trigger_kind: TriggerKind` (`Combo` default == today | `ModifierHold` | `DoubleTap` | `SingleKey`) + `#[serde(default)] modifier: Option<ModifierSpec>`. Frontend mirror `src/types/shortcuts.ts`. Serde-default round-trip test.
+3. `src-tauri/src/trigger/`: `mapping.rs` (`ShortcutBinding`→`keytrigger::Trigger`), `dispatch.rs` (`TriggerEvent`→`dispatch_action`, via an `EngineBinding{id,action,trigger}` lookup), `engine_host.rs` (owns `Arc<TriggerEngine>`, starts on `accessibility-granted` (macOS) / boot (Windows), `set_bindings` from settings).
+4. AppState: `trigger_engine: Arc<keytrigger::TriggerEngine>` + `engine_bindings: Arc<Mutex<Vec<EngineBinding>>>`.
+5. Routing (shortcuts.rs `prepare_shortcut_settings`/`register_saved_shortcuts`, settings.rs `update_shortcut_settings`): ModifierHold/DoubleTap → engine ONLY; Combo/SingleKey → global_shortcut ONLY. Routing tests (a kind never crosses systems).
+6. Frontend picker in `ShortcutsSection.tsx` (trigger-kind select; ModifierHold→modifier+side; DoubleTap→key/mod+interval). Keep `HotkeyInput` for Combo/SingleKey.
+7. Gates (backend full + frontend) + reviewer + macOS smoke (hold Right-Option records; Option still types; double-tap Cmd toggles, doesn't stick; revoke→regrant recovers; sleep/wake no stuck recording).
+
+### Remaining P3
+Per §10 P3: migrate Combo/SingleKey/primary hotkey to the engine, retire `tauri-plugin-global-shortcut`, migrate ESC, optional opt-in consume (raw FFI), settings migration; full smoke.
