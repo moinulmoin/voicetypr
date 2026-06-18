@@ -1,4 +1,4 @@
 pub mod escape_handler;
-mod hotkeys;
+pub(crate) mod hotkeys;
 
 pub use hotkeys::handle_global_shortcut;

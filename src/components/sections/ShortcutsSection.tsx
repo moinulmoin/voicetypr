@@ -5,10 +5,14 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { normalizeShortcutKeys, ValidationPresets } from "@/lib/keyboard-normalizer";
 import type {
+  ModifierKind,
+  ModifierSide,
   ShortcutAction,
   ShortcutActionDefinition,
   ShortcutBinding,
   ShortcutSettings,
+  ShortcutTrigger,
+  TriggerKind,
 } from "@/types/shortcuts";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, Keyboard, Plus, Trash2 } from "lucide-react";
@@ -63,6 +67,88 @@ function formatTrigger(trigger: ShortcutBinding["trigger"]) {
 
 function shortcutComparisonKey(shortcut: string) {
   return normalizeShortcutKeys(shortcut).toLowerCase();
+}
+
+const MODIFIER_OPTIONS: { value: ModifierKind; label: string }[] = [
+  { value: "meta", label: "Command / Win" },
+  { value: "alt", label: "Option / Alt" },
+  { value: "control", label: "Control" },
+  { value: "shift", label: "Shift" },
+];
+
+const SIDE_OPTIONS: { value: ModifierSide; label: string }[] = [
+  { value: "right", label: "Right" },
+  { value: "left", label: "Left" },
+  { value: "either", label: "Either" },
+];
+
+const selectClass =
+  "h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground";
+
+function bindingKind(binding: ShortcutBinding): TriggerKind {
+  return binding.trigger_kind ?? "combo";
+}
+
+function isEngineKind(binding: ShortcutBinding): boolean {
+  const kind = bindingKind(binding);
+  return kind === "modifier_hold" || kind === "double_tap";
+}
+
+function availableKinds(action: ShortcutAction): TriggerKind[] {
+  // Hold-a-modifier only makes sense for hold-to-record; double-tap is a
+  // one-shot press, so it's offered for every other action.
+  return action === "hold_to_record"
+    ? ["combo", "modifier_hold"]
+    : ["combo", "double_tap"];
+}
+
+function kindLabel(kind: TriggerKind): string {
+  switch (kind) {
+    case "modifier_hold":
+      return "Hold a modifier";
+    case "double_tap":
+      return "Double-tap a modifier";
+    default:
+      return "Key combo";
+  }
+}
+
+// Switch a binding's trigger kind with defaults so it is immediately complete
+// (engine kinds need a modifier, not a shortcut string).
+function applyKind(
+  binding: ShortcutBinding,
+  kind: TriggerKind,
+  recommendedTrigger: ShortcutTrigger,
+): ShortcutBinding {
+  if (kind === "modifier_hold") {
+    return {
+      ...binding,
+      trigger_kind: "modifier_hold",
+      trigger: "hold",
+      shortcut: "",
+      modifier: binding.modifier ?? { modifier: "alt", side: "right" },
+    };
+  }
+  if (kind === "double_tap") {
+    return {
+      ...binding,
+      trigger_kind: "double_tap",
+      trigger: "pressed",
+      shortcut: "",
+      modifier: binding.modifier ?? { modifier: "meta", side: "either" },
+    };
+  }
+  // Switching back to a key combo: the engine binding had no shortcut string, so
+  // disable it (a disabled binding skips backend shortcut validation) until the
+  // user enters a combo and re-enables it.
+  return {
+    ...binding,
+    trigger_kind: "combo",
+    trigger: recommendedTrigger,
+    modifier: null,
+    shortcut: "",
+    enabled: false,
+  };
 }
 
 export function ShortcutsSection() {
@@ -240,7 +326,7 @@ export function ShortcutsSection() {
       return;
     }
 
-    if (draftBindings.some((binding) => binding.id === nextBinding.id) && !nextBinding.shortcut) {
+    if (draftBindings.some((binding) => binding.id === nextBinding.id) && !nextBinding.shortcut && !isEngineKind(nextBinding)) {
       setDraftBindings((bindings) => bindings.map((binding) =>
         binding.id === nextBinding.id ? nextBinding : binding,
       ));
@@ -386,10 +472,77 @@ export function ShortcutsSection() {
                               return (
                                 <div key={binding.id} className="rounded-lg border border-border/60 p-3">
                                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                                    <div className="min-w-[220px] flex-1">
+                                    <div className="min-w-[220px] flex-1 space-y-2">
+                                      {!editingDisabled && availableKinds(action.action).length > 1 && (
+                                        <select
+                                          className={selectClass}
+                                          aria-label={`${action.label} trigger type`}
+                                          value={bindingKind(binding)}
+                                          onChange={(event) =>
+                                            changeBinding(
+                                              applyKind(
+                                                binding,
+                                                event.target.value as TriggerKind,
+                                                action.recommended_trigger,
+                                              ),
+                                            )
+                                          }
+                                        >
+                                          {availableKinds(action.action).map((kind) => (
+                                            <option key={kind} value={kind}>
+                                              {kindLabel(kind)}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      )}
                                       {editingDisabled ? (
                                         <div className="flex min-h-9 items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-muted-foreground" aria-label={`${action.label} shortcut read-only`}>
-                                          {binding.shortcut || "No shortcut configured"}
+                                          {isEngineKind(binding)
+                                            ? `${kindLabel(bindingKind(binding))}${binding.modifier ? ` \u2014 ${binding.modifier.side} ${binding.modifier.modifier}` : ""}`
+                                            : binding.shortcut || "No shortcut configured"}
+                                        </div>
+                                      ) : isEngineKind(binding) ? (
+                                        <div className="flex items-center gap-2">
+                                          <select
+                                            className={selectClass}
+                                            aria-label={`${action.label} modifier`}
+                                            value={binding.modifier?.modifier ?? "alt"}
+                                            onChange={(event) =>
+                                              changeBinding({
+                                                ...binding,
+                                                modifier: {
+                                                  modifier: event.target.value as ModifierKind,
+                                                  side: binding.modifier?.side ?? "right",
+                                                },
+                                              })
+                                            }
+                                          >
+                                            {MODIFIER_OPTIONS.map((option) => (
+                                              <option key={option.value} value={option.value}>
+                                                {option.label}
+                                              </option>
+                                            ))}
+                                          </select>
+                                          <select
+                                            className={selectClass}
+                                            aria-label={`${action.label} side`}
+                                            value={binding.modifier?.side ?? "right"}
+                                            onChange={(event) =>
+                                              changeBinding({
+                                                ...binding,
+                                                modifier: {
+                                                  modifier: binding.modifier?.modifier ?? "alt",
+                                                  side: event.target.value as ModifierSide,
+                                                },
+                                              })
+                                            }
+                                          >
+                                            {SIDE_OPTIONS.map((option) => (
+                                              <option key={option.value} value={option.value}>
+                                                {option.label}
+                                              </option>
+                                            ))}
+                                          </select>
                                         </div>
                                       ) : (
                                         <HotkeyInput
@@ -410,7 +563,7 @@ export function ShortcutsSection() {
                                         <Switch
                                           aria-label={`${action.label} enabled`}
                                           checked={binding.enabled}
-                                          disabled={!binding.shortcut || editingDisabled}
+                                          disabled={editingDisabled || (!isEngineKind(binding) && !binding.shortcut)}
                                           onCheckedChange={(enabled) => changeBinding({ ...binding, enabled })}
                                         />
                                         Enabled
@@ -428,7 +581,7 @@ export function ShortcutsSection() {
                                     </div>
                                   </div>
 
-                                  {action.allows_single_key && (
+                                  {action.allows_single_key && !isEngineKind(binding) && (
                                     <div className="mt-3 rounded-md bg-muted/40 p-3">
                                       <label className="flex items-start gap-3 text-sm">
                                         <Switch

@@ -8540,6 +8540,7 @@ dependencies = [
  "hound",
  "image",
  "keyboard-types",
+ "keytrigger",
  "lazy_static",
  "local-ip-address",
  "log",

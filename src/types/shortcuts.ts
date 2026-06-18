@@ -16,6 +16,15 @@ export type ShortcutAction =
 
 export type ShortcutTrigger = "pressed" | "hold";
 
+export type TriggerKind = "combo" | "modifier_hold" | "double_tap";
+export type ModifierKind = "alt" | "control" | "meta" | "shift";
+export type ModifierSide = "left" | "right" | "either";
+
+export interface ModifierSpec {
+  modifier: ModifierKind;
+  side: ModifierSide;
+}
+
 export interface ShortcutBinding {
   id: string;
   action: ShortcutAction;
@@ -23,6 +32,12 @@ export interface ShortcutBinding {
   trigger: ShortcutTrigger;
   enabled: boolean;
   allow_risky_combo: boolean;
+  /** Defaults to "combo" (legacy global_shortcut). Native kinds use the engine. */
+  trigger_kind?: TriggerKind;
+  /** Modifier target for "modifier_hold" / "double_tap" kinds. */
+  modifier?: ModifierSpec | null;
+  /** Double-tap window in ms (default 350). */
+  double_tap_ms?: number | null;
 }
 
 export interface ShortcutSettings {

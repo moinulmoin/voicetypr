@@ -42,6 +42,41 @@ pub enum ShortcutTrigger {
     Hold,
 }
 
+/// How a binding is triggered. `Combo` (default) uses the legacy
+/// `global_shortcut` path; `ModifierHold`/`DoubleTap` use the native engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerKind {
+    #[default]
+    Combo,
+    ModifierHold,
+    DoubleTap,
+}
+
+/// A side-specific modifier for native (`ModifierHold`/`DoubleTap`) bindings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModifierSpec {
+    pub modifier: ModifierKind,
+    pub side: SideKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModifierKind {
+    Alt,
+    Control,
+    Meta,
+    Shift,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SideKind {
+    Left,
+    Right,
+    Either,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShortcutBinding {
     pub id: String,
@@ -50,6 +85,12 @@ pub struct ShortcutBinding {
     pub trigger: ShortcutTrigger,
     pub enabled: bool,
     pub allow_risky_combo: bool,
+    #[serde(default)]
+    pub trigger_kind: TriggerKind,
+    #[serde(default)]
+    pub modifier: Option<ModifierSpec>,
+    #[serde(default)]
+    pub double_tap_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +230,11 @@ pub fn update_shortcut_settings(
         return Err(error);
     }
 
+    // Route native (ModifierHold/DoubleTap) bindings to the trigger engine
+    // BEFORE clearing shared active state, so a removed/edited hold-to-record
+    // that is mid-hold is released (Stop) while its id is still tracked.
+    crate::trigger::engine_host::apply_engine_bindings(&app, &sanitized.bindings);
+
     {
         let mut guard = app_state
             .custom_shortcut_bindings
@@ -219,6 +265,7 @@ pub fn register_saved_shortcuts(app: &AppHandle) -> Result<(), String> {
     let mut registered = Vec::new();
     let mut seen_enabled = HashSet::new();
     let mut single_key_count: usize = 0;
+    let mut engine_source: Vec<ShortcutBinding> = Vec::new();
     for binding in settings
         .bindings
         .into_iter()
@@ -229,6 +276,12 @@ pub fn register_saved_shortcuts(app: &AppHandle) -> Result<(), String> {
             shortcut: binding.shortcut.trim().to_string(),
             ..binding
         };
+
+        // Native engine kinds (modifier-hold / double-tap) bypass global_shortcut.
+        if crate::trigger::mapping::is_engine_kind(&sanitized) {
+            engine_source.push(sanitized);
+            continue;
+        }
 
         let shortcut = match prepare_enabled_shortcut(
             &sanitized,
@@ -285,6 +338,8 @@ pub fn register_saved_shortcuts(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| format!("Failed to lock custom shortcut state: {}", e))?;
     *guard = registered;
     clear_active_custom_shortcut_state(&app_state);
+
+    crate::trigger::engine_host::apply_engine_bindings(app, &engine_source);
     Ok(())
 }
 
@@ -482,7 +537,15 @@ fn prepare_shortcut_settings(
             ..binding
         };
 
-        if sanitized.enabled {
+        if sanitized.enabled && crate::trigger::mapping::is_engine_kind(&sanitized) {
+            // Native engine kinds are not tauri Shortcuts; validate separately
+            // and keep them out of the global_shortcut registration vector.
+            crate::trigger::mapping::validate(&sanitized)?;
+            prepared.push(PreparedShortcutBinding {
+                binding: sanitized,
+                shortcut: None,
+            });
+        } else if sanitized.enabled {
             let shortcut = prepare_enabled_shortcut(
                 &sanitized,
                 primary.as_deref(),

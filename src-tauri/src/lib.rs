@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
 use tauri_plugin_store::StoreExt;
@@ -31,6 +31,7 @@ mod simple_cache;
 mod state;
 mod state_machine;
 pub mod transcription;
+mod trigger;
 mod utils;
 mod whisper;
 mod window_manager;
@@ -1012,6 +1013,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Err(error) = crate::commands::shortcuts::register_saved_shortcuts(app.app_handle()) {
                 log::error!("Failed to register saved custom shortcuts: {}", error);
+            }
+
+            // Start the native trigger engine (modifier-hold / double-tap).
+            // On macOS the tap needs Accessibility; if not yet granted, start()
+            // logs and we retry when the grant event fires.
+            crate::trigger::engine_host::start_engine(app.app_handle());
+            {
+                let engine_app = app.app_handle().clone();
+                app.listen("accessibility-granted", move |_event| {
+                    crate::trigger::engine_host::start_engine(&engine_app);
+                });
             }
 
             // Preload current model if set (graceful degradation)

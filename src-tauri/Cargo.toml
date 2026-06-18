@@ -26,6 +26,7 @@ default = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+keytrigger = { path = "crates/keytrigger" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }

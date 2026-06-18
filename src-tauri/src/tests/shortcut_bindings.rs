@@ -16,6 +16,9 @@ fn binding(action: ShortcutAction, shortcut: &str) -> ShortcutBinding {
         trigger: ShortcutTrigger::Pressed,
         enabled: true,
         allow_risky_combo: false,
+        trigger_kind: crate::commands::shortcuts::TriggerKind::Combo,
+        modifier: None,
+        double_tap_ms: None,
     }
 }
 
@@ -439,4 +442,25 @@ fn is_single_key_shortcut_detection() {
     assert!(!is_single_key_shortcut("Alt")); // bare modifier excluded
     assert!(!is_single_key_shortcut("Shift"));
     assert!(!is_single_key_shortcut("")); // empty excluded
+}
+
+#[test]
+fn legacy_binding_json_defaults_to_combo() {
+    // A binding persisted before the native-trigger fields existed must
+    // deserialize with trigger_kind defaulting to Combo (zero behavior change).
+    let json = r#"{
+        "id": "abc",
+        "action": "toggle_recording",
+        "shortcut": "CommandOrControl+Shift+Space",
+        "trigger": "pressed",
+        "enabled": true,
+        "allow_risky_combo": false
+    }"#;
+    let parsed: ShortcutBinding = serde_json::from_str(json).expect("deserialize legacy binding");
+    assert_eq!(
+        parsed.trigger_kind,
+        crate::commands::shortcuts::TriggerKind::Combo
+    );
+    assert!(parsed.modifier.is_none());
+    assert!(parsed.double_tap_ms.is_none());
 }
