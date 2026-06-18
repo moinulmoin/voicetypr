@@ -312,12 +312,33 @@ fn dispatch_custom_shortcut(
     binding: RegisteredShortcutBinding,
     event_state: ShortcutState,
 ) {
-    if binding.trigger == ShortcutTrigger::Pressed {
+    dispatch_action(
+        app,
+        app_state,
+        &binding.id,
+        binding.action,
+        binding.trigger,
+        event_state,
+    );
+}
+
+/// Dispatch a shortcut action by (id, action, trigger). Shared by the legacy
+/// `global_shortcut` path and the native trigger engine so both run identical
+/// pressed/hold gating and action handling.
+pub(crate) fn dispatch_action(
+    app: &tauri::AppHandle,
+    app_state: &AppState,
+    id: &str,
+    action: ShortcutAction,
+    trigger: ShortcutTrigger,
+    event_state: ShortcutState,
+) {
+    if trigger == ShortcutTrigger::Pressed {
         let should_dispatch = match app_state.active_custom_pressed_bindings.lock() {
             Ok(mut active_bindings) => should_dispatch_custom_pressed_binding(
                 &mut active_bindings,
-                &binding.id,
-                binding.action,
+                id,
+                action,
                 event_state,
             ),
             Err(error) => {
@@ -329,20 +350,20 @@ fn dispatch_custom_shortcut(
         if !should_dispatch {
             return;
         }
-    } else if binding.action != ShortcutAction::HoldToRecord {
+    } else if action != ShortcutAction::HoldToRecord {
         return;
     }
 
-    match binding.action {
+    match action {
         ShortcutAction::ToggleRecording => {
             let current_state = get_recording_state(app);
             handle_toggle_mode(app, app_state, current_state, event_state);
         }
         ShortcutAction::HoldToRecord => {
-            if binding.trigger != ShortcutTrigger::Hold {
+            if trigger != ShortcutTrigger::Hold {
                 return;
             }
-            handle_hold_to_record_source(app, app_state, &binding.id, event_state);
+            handle_hold_to_record_source(app, app_state, id, event_state);
         }
         ShortcutAction::CancelRecording => {
             if event_state == ShortcutState::Pressed {
@@ -425,7 +446,7 @@ fn dispatch_custom_shortcut(
         | ShortcutAction::SetMessage
         | ShortcutAction::SetCode => {
             if event_state == ShortcutState::Pressed {
-                if let Some(preset) = shortcuts::action_preset(binding.action) {
+                if let Some(preset) = shortcuts::action_preset(action) {
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
                         if let Err(error) =
