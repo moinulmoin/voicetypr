@@ -1,9 +1,11 @@
 use crate::ai::prompts::EnhancementPreset;
+use crate::commands::key_normalizer::is_typing_safe_single_key;
 use crate::commands::shortcuts::{
-    action_preset, hold_shortcut_transition, is_single_key_shortcut, is_typing_safe_single_key,
-    next_ai_enabled, normalized_custom_shortcut_conflict, pressed_shortcut_should_run,
-    validate_shortcut_settings, CustomHoldTransition, ExistingShortcutStrings, ShortcutAction,
-    ShortcutBinding, ShortcutSettings, ShortcutTrigger, MAX_SINGLE_KEY_BINDINGS,
+    action_preset, hold_shortcut_transition, is_single_key_shortcut, next_ai_enabled,
+    normalized_custom_shortcut_conflict, pressed_shortcut_should_run, validate_shortcut_settings,
+    CustomHoldTransition, ExistingShortcutStrings, ModifierKind, ModifierSpec, ShortcutAction,
+    ShortcutBinding, ShortcutSettings, ShortcutTrigger, SideKind, TriggerKind,
+    MAX_SINGLE_KEY_BINDINGS,
 };
 use std::collections::HashSet;
 use tauri_plugin_global_shortcut::ShortcutState;
@@ -408,6 +410,10 @@ fn is_typing_safe_single_key_allowlist() {
     assert!(is_typing_safe_single_key("PageUp"));
     assert!(is_typing_safe_single_key("PageDown"));
     assert!(is_typing_safe_single_key("Insert"));
+    assert!(is_typing_safe_single_key("Up"));
+    assert!(is_typing_safe_single_key("Down"));
+    assert!(is_typing_safe_single_key("Left"));
+    assert!(is_typing_safe_single_key("Right"));
 
     // Rejected: letters, digits, typing keys
     assert!(!is_typing_safe_single_key("A"));
@@ -418,10 +424,6 @@ fn is_typing_safe_single_key_allowlist() {
     assert!(!is_typing_safe_single_key("Backspace"));
     assert!(!is_typing_safe_single_key("Delete"));
     assert!(!is_typing_safe_single_key("Escape"));
-    assert!(!is_typing_safe_single_key("Up"));
-    assert!(!is_typing_safe_single_key("Down"));
-    assert!(!is_typing_safe_single_key("Left"));
-    assert!(!is_typing_safe_single_key("Right"));
     assert!(!is_typing_safe_single_key("Alt"));
     assert!(!is_typing_safe_single_key("Shift"));
     // Rejected: out-of-range function keys
@@ -463,4 +465,72 @@ fn legacy_binding_json_defaults_to_combo() {
     );
     assert!(parsed.modifier.is_none());
     assert!(parsed.double_tap_ms.is_none());
+}
+
+/// A Right-Option HoldToRecord binding (the onboarding default) validates correctly
+/// even when the primary hotkey field is explicitly empty (cleared by the user).
+/// This is the engine-kind path: it bypasses global_shortcut, so no parse/conflict
+/// check is performed against the primary hotkey.
+#[test]
+fn modifier_hold_right_option_validates_with_empty_primary() {
+    let binding = ShortcutBinding {
+        id: "hold_to_record".to_string(),
+        action: ShortcutAction::HoldToRecord,
+        shortcut: String::new(),
+        trigger: ShortcutTrigger::Hold,
+        enabled: true,
+        allow_risky_combo: false,
+        trigger_kind: TriggerKind::ModifierHold,
+        modifier: Some(ModifierSpec {
+            modifier: ModifierKind::Alt,
+            side: SideKind::Right,
+        }),
+        double_tap_ms: None,
+    };
+    let settings = ShortcutSettings {
+        bindings: vec![binding],
+    };
+    // Primary hotkey explicitly cleared (empty string)
+    let existing = ExistingShortcutStrings {
+        primary_hotkey: Some(String::new()),
+        ptt_hotkey: None,
+    };
+    assert!(
+        validate_shortcut_settings(settings, &existing).is_ok(),
+        "Right-Option ModifierHold binding must validate when primary hotkey is empty"
+    );
+}
+
+/// When the primary hotkey is empty the engine-kind binding is its own recording
+/// trigger. A second (combo) binding must still fail if it conflicts with itself,
+/// but an engine-kind binding alongside an empty primary must not be rejected.
+#[test]
+fn engine_kind_binding_not_treated_as_combo_against_empty_primary() {
+    // Engine-kind bindings get validate() from mapping.rs, not prepare_enabled_shortcut,
+    // so an empty primary hotkey string must never cause a parse/conflict rejection.
+    let binding = ShortcutBinding {
+        id: "hold_to_record".to_string(),
+        action: ShortcutAction::HoldToRecord,
+        shortcut: String::new(),
+        trigger: ShortcutTrigger::Hold,
+        enabled: true,
+        allow_risky_combo: false,
+        trigger_kind: TriggerKind::ModifierHold,
+        modifier: Some(ModifierSpec {
+            modifier: ModifierKind::Meta,
+            side: SideKind::Right,
+        }),
+        double_tap_ms: None,
+    };
+    let existing = ExistingShortcutStrings {
+        primary_hotkey: Some(String::new()),
+        ptt_hotkey: None,
+    };
+    assert!(validate_shortcut_settings(
+        ShortcutSettings {
+            bindings: vec![binding]
+        },
+        &existing
+    )
+    .is_ok());
 }

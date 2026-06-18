@@ -332,6 +332,68 @@ describe("OnboardingDesktop", () => {
     await waitFor(() => expect(reviewButton).toBeEnabled());
   });
 
+  it("strips a stale onboarding hold binding when a combo hotkey is saved", async () => {
+    const user = userEvent.setup();
+    const userBinding = {
+      id: "user-custom",
+      action: "copy_last_transcription",
+      shortcut: "CommandOrControl+Shift+C",
+      trigger: "pressed",
+      enabled: true,
+      allow_risky_combo: false,
+      trigger_kind: "combo",
+      modifier: null,
+      double_tap_ms: null,
+    };
+    const onboardingHold = {
+      id: "onboarding-primary-hold",
+      action: "hold_to_record",
+      shortcut: "",
+      trigger: "hold",
+      enabled: true,
+      allow_risky_combo: false,
+      trigger_kind: "modifier_hold",
+      modifier: { modifier: "alt", side: "right" },
+      double_tap_ms: null,
+    };
+    invokeMock.mockImplementation((command: string) => {
+      switch (command) {
+        case "discover_remote_servers":
+        case "list_remote_servers":
+          return Promise.resolve([]);
+        case "get_active_remote_server":
+          return Promise.resolve(null);
+        case "set_active_remote_server":
+        case "set_global_shortcut":
+          return Promise.resolve(true);
+        case "get_shortcut_settings":
+          return Promise.resolve({ bindings: [userBinding, onboardingHold] });
+        default:
+          return Promise.resolve(null);
+      }
+    });
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    await screen.findByRole("button", { name: /review result/i });
+
+    // Combo save registers the primary global shortcut AND removes only the
+    // onboarding-created hold binding, so recording can never fire from both a
+    // global shortcut and a modifier_hold trigger at once.
+    expect(invokeMock).toHaveBeenCalledWith("set_global_shortcut", {
+      shortcut: "CommandOrControl+Shift+Space",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("update_shortcut_settings", {
+      settings: { bindings: [userBinding] },
+    });
+  });
+
   it("requires an explicit source choice even when a local model is already saved", async () => {
     const user = userEvent.setup();
     renderOnboarding();

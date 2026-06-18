@@ -1,4 +1,4 @@
-import { HotkeyInput } from "@/components/HotkeyInput";
+import { HotkeyInput, type BareModifierSpec } from "@/components/HotkeyInput";
 import { ModelCard } from "@/components/ModelCard";
 import type { SavedConnection } from "@/components/RemoteServerCard";
 import { AddServerModal } from "@/components/sections/AddServerModal";
@@ -19,6 +19,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useAccessibilityPermission } from "@/hooks/useAccessibilityPermission";
 import { useMicrophonePermission } from "@/hooks/useMicrophonePermission";
@@ -28,6 +29,7 @@ import { formatHotkey } from "@/lib/hotkey-utils";
 import { isMacOS, isWindows } from "@/lib/platform";
 import { getModelDisplayName } from "@/lib/model-display";
 import { cn } from "@/lib/utils";
+import { ValidationPresets } from "@/lib/keyboard-normalizer";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
@@ -53,6 +55,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import type { ModifierKind, ModifierSide, ShortcutBinding, ShortcutSettings } from "@/types/shortcuts";
 
 interface OnboardingDesktopProps {
   onCompletionStart?: () => void;
@@ -137,6 +140,14 @@ const getSampleSelectionKey = (
 const FAILED_ONBOARDING_SAMPLE_PLACEHOLDER =
   "Transcription failed - re-transcribe after resolving the issue";
 
+const ONBOARDING_HOTKEY_VALIDATION = ValidationPresets.custom({
+  minKeys: 1,
+  requireModifier: false,
+  requireModifierForMultiKey: true,
+});
+
+const SAMPLE_SENTENCE = "The quick brown fox jumps over the lazy dog.";
+
 const isSuccessfulOnboardingSampleEvent = (
   payload: TranscriptionAddedPayload,
   sourceType: SourceType,
@@ -161,6 +172,18 @@ const isSuccessfulOnboardingSampleEvent = (
     activeRemoteServer && eventModel === activeRemoteServer.model,
   );
 };
+
+/** Format a bare modifier spec as a short human-readable label, e.g. "Right ⌥". */
+function formatBareModifierLabel({ modifier, side }: BareModifierSpec): string {
+  const sideStr = side === "right" ? "Right " : side === "left" ? "Left " : "";
+  const macIcons: Record<string, string> = {
+    alt: "⌥", meta: "⌘", control: "⌃", shift: "⇧",
+  };
+  const modStr = isMacOS
+    ? (macIcons[modifier] ?? modifier)
+    : modifier.charAt(0).toUpperCase() + modifier.slice(1);
+  return `${sideStr}${modStr}`;
+}
 
 export const OnboardingDesktop = function OnboardingDesktop({
   onCompletionStart,
@@ -189,6 +212,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
     downloadErrors = {},
     downloadModel,
     cancelDownload,
+    deleteModel,
     isLoading,
   } = modelManagement;
 
@@ -200,6 +224,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
     settings?.hotkey || "CommandOrControl+Shift+Space",
   );
   const [isEditingHotkey, setIsEditingHotkey] = useState(false);
+  const [capturedBareModifier, setCapturedBareModifier] = useState<BareModifierSpec | null>(null);
   const [isRequestingPermission, setIsRequestingPermission] = useState<
     string | null
   >(null);
@@ -278,6 +303,15 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const isModelReady = useCallback(
     (name: string) => models[name]?.downloaded === true && !models[name]?.requires_setup,
     [models],
+  );
+  const handleDeleteModel = useCallback(
+    async (modelName: string) => {
+      const deleted = await deleteModel(modelName);
+      if (deleted && settings?.current_model === modelName) {
+        await updateSettings({ current_model: "", current_model_engine: "whisper" });
+      }
+    },
+    [deleteModel, settings, updateSettings],
   );
   const localReady = Boolean(selectedModelName && isModelReady(selectedModelName));
   const hasDownloadedLocalModel = modelOrder.some((name) => isModelReady(name));
@@ -561,15 +595,77 @@ export const OnboardingDesktop = function OnboardingDesktop({
   };
 
 
+  // Stable id for the onboarding-created HoldToRecord modifier_hold binding.
+  // Using a fixed id means repeated saves replace the same entry instead of
+  // accumulating stale bindings.
+  const ONBOARDING_HOLD_ID = "onboarding-primary-hold";
+
   const saveHotkeySettings = async () => {
-    await invoke("set_global_shortcut", { shortcut: hotkey });
-    await updateSettings({
-      hotkey,
-      current_model: selectedModelName || "",
-      current_model_engine: selectedModel?.engine ?? "whisper",
-      speech_language: "en",
-      onboarding_completed: false,
-    });
+    if (capturedBareModifier) {
+      // ── Bare modifier path ────────────────────────────────────────────
+      // 1. Unregister (and clear) any existing primary global shortcut.
+      //    set_global_shortcut("") is the backend's "clear primary" contract.
+      await invoke("set_global_shortcut", { shortcut: "" });
+
+      // 2. Upsert the HoldToRecord modifier_hold binding with the stable id.
+      const currentSettings = await invoke<ShortcutSettings>("get_shortcut_settings");
+      const newBinding: ShortcutBinding = {
+        id: ONBOARDING_HOLD_ID,
+        action: "hold_to_record",
+        shortcut: "",
+        trigger: "hold",
+        enabled: true,
+        allow_risky_combo: false,
+        trigger_kind: "modifier_hold",
+        modifier: {
+          modifier: capturedBareModifier.modifier as ModifierKind,
+          side: capturedBareModifier.side as ModifierSide,
+        },
+        double_tap_ms: null,
+      };
+      await invoke("update_shortcut_settings", {
+        settings: {
+          bindings: [
+            ...(currentSettings?.bindings ?? []).filter((b) => b.id !== ONBOARDING_HOLD_ID),
+            newBinding,
+          ],
+        },
+      });
+
+      // 3. Persist the remaining settings (hotkey=""; set_global_shortcut already
+      //    cleared it in the store, but we still need to write model/language etc.)
+      await updateSettings({
+        hotkey: "",
+        current_model: selectedModelName || "",
+        current_model_engine: selectedModel?.engine ?? "whisper",
+        speech_language: "en",
+        onboarding_completed: false,
+      });
+    } else {
+      // ── Combo / safe single-key path ──────────────────────────────────
+      // 1. Register the new primary shortcut (also saves hotkey to store).
+      await invoke("set_global_shortcut", { shortcut: hotkey });
+
+      // 2. Remove any onboarding-created HoldToRecord binding so there is
+      //    never BOTH a primary global shortcut and a modifier_hold binding.
+      const currentSettings = await invoke<ShortcutSettings>("get_shortcut_settings");
+      if ((currentSettings?.bindings ?? []).some((b) => b.id === ONBOARDING_HOLD_ID)) {
+        await invoke("update_shortcut_settings", {
+          settings: {
+            bindings: (currentSettings?.bindings ?? []).filter((b) => b.id !== ONBOARDING_HOLD_ID),
+          },
+        });
+      }
+
+      // 3. Persist the remaining settings.
+      await updateSettings({
+        hotkey,
+        current_model: selectedModelName || "",
+        current_model_engine: selectedModel?.engine ?? "whisper",
+        speech_language: "en",
+        onboarding_completed: false,
+      });
+    }
   };
 
   const handleGpuToggle = async (checked: boolean) => {
@@ -928,6 +1024,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                             onDownload={downloadModel}
                             onSelect={(modelName) => void selectLocalModel(modelName)}
                             onCancelDownload={cancelDownload}
+                            onDelete={handleDeleteModel}
                             showSelectButton={isModelReady(name)}
                           />
                         );
@@ -1134,16 +1231,32 @@ export const OnboardingDesktop = function OnboardingDesktop({
               <CardContent className="flex flex-col gap-4">
                 <HotkeyInput
                   value={hotkey}
-                  onChange={setHotkey}
+                  onChange={(v) => { setHotkey(v); setCapturedBareModifier(null); }}
                   onEditingChange={setIsEditingHotkey}
+                  onBareModifier={(spec) => { setCapturedBareModifier(spec); setHotkey(""); }}
+                  allowBareModifier
+                  validationRules={ONBOARDING_HOTKEY_VALIDATION}
+                  placeholder={capturedBareModifier
+                    ? `Hold ${formatBareModifierLabel(capturedBareModifier)} · push-to-talk`
+                    : undefined}
                 />
-                <Alert>
-                  <Info className="size-4" />
-                  <AlertTitle>Tip</AlertTitle>
-                  <AlertDescription>
-                    Use a shortcut you can hit without looking down. VoiceTypr works best when recording feels invisible.
-                  </AlertDescription>
-                </Alert>
+                {capturedBareModifier ? (
+                  <Alert>
+                    <Info className="size-4" />
+                    <AlertTitle>Hold to record selected</AlertTitle>
+                    <AlertDescription>
+                      Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording — release to stop.
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <Alert>
+                    <Info className="size-4" />
+                    <AlertTitle>Tip</AlertTitle>
+                    <AlertDescription>
+                      Use a shortcut you can hit without looking down. VoiceTypr works best when recording feels invisible.
+                    </AlertDescription>
+                  </Alert>
+                )}
               </CardContent>
             </Card>
           </OnboardingPanel>
@@ -1160,6 +1273,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 onNext={handleNext}
                 nextDisabled={!canProceed()}
                 nextLabel="Review result"
+                onSkip={() => setCurrentStep("success")}
+                skipLabel="Skip for now"
               />
             }
           >
@@ -1195,12 +1310,17 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   </Button>
                 </div>
 
+                <div className="rounded-2xl border bg-muted/40 p-4 text-sm">
+                  <p className="mb-1 font-medium text-muted-foreground">Read this aloud:</p>
+                  <p className="text-foreground">{SAMPLE_SENTENCE}</p>
+                </div>
+
                 {recording.state === "transcribing" ? (
                   <Alert>
                     <Spinner />
                     <AlertTitle>Transcribing</AlertTitle>
                     <AlertDescription>
-                      Waiting for the selected {sourceLabel(sourceType, true).toLowerCase()} source to return text.
+                      Waiting for {sourceLabel(sourceType, true).toLowerCase()} to return your text.
                     </AlertDescription>
                   </Alert>
                 ) : null}
@@ -1213,18 +1333,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   </Alert>
                 ) : null}
 
-                {currentSampleTranscript ? (
-                  <div className="rounded-2xl border bg-background/70 p-4">
-                    <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                      Transcript
-                    </p>
-                    <p className="text-base leading-7">{currentSampleTranscript}</p>
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-dashed bg-muted/40 p-6 text-center text-sm text-muted-foreground">
-                    Your first transcript will appear here.
-                  </div>
-                )}
+                <Textarea
+                  key={currentSampleTranscript ?? "empty"}
+                  defaultValue={currentSampleTranscript ?? ""}
+                  placeholder="Your transcription will appear here as you speak."
+                  className="min-h-[96px] resize-y text-base leading-7"
+                />
               </CardContent>
             </Card>
           </OnboardingPanel>
@@ -1243,7 +1357,9 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 VoiceTypr is ready on {sourceLabel(sourceType, true).toLowerCase()}.
               </h1>
               <p className="text-muted-foreground">
-                Press {formatHotkey(hotkey)} anywhere to start recording.
+                {capturedBareModifier
+                  ? <>Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording — release to stop.</>
+                  : <>Press {formatHotkey(hotkey)} anywhere to start recording.</>}
               </p>
             </div>
             <Button size="lg" onClick={() => void completeOnboarding()} disabled={isSavingCompletion}>
@@ -1295,11 +1411,15 @@ function StepFooter({
   onNext,
   nextDisabled,
   nextLabel,
+  onSkip,
+  skipLabel,
 }: {
   onBack: () => void;
   onNext: () => void | Promise<void>;
   nextDisabled?: boolean;
   nextLabel: string;
+  onSkip?: () => void;
+  skipLabel?: string;
 }) {
   return (
     <div className="flex items-center justify-between gap-4">
@@ -1307,10 +1427,17 @@ function StepFooter({
         <ChevronLeft />
         Back
       </Button>
-      <Button onClick={() => void onNext()} disabled={nextDisabled}>
-        {nextLabel}
-        <ChevronRight />
-      </Button>
+      <div className="flex items-center gap-2">
+        {onSkip ? (
+          <Button variant="ghost" onClick={onSkip}>
+            {skipLabel ?? "Skip"}
+          </Button>
+        ) : null}
+        <Button onClick={() => void onNext()} disabled={nextDisabled}>
+          {nextLabel}
+          <ChevronRight />
+        </Button>
+      </div>
     </div>
   );
 }

@@ -50,6 +50,20 @@ pub fn to_trigger(binding: &ShortcutBinding) -> Option<Trigger> {
     }
 }
 
+/// Returns `true` iff `bindings` contains at least one enabled `HoldToRecord`
+/// engine-kind binding with a resolvable trigger.
+///
+/// Used at startup: an empty primary hotkey is only safe to skip when such a
+/// binding exists and covers recording via the native keytrigger engine.
+pub fn has_recording_engine_binding(bindings: &[ShortcutBinding]) -> bool {
+    bindings.iter().any(|b| {
+        b.enabled
+            && b.action == ShortcutAction::HoldToRecord
+            && is_engine_kind(b)
+            && to_trigger(b).is_some()
+    })
+}
+
 /// Validate an enabled engine-kind binding (the `global_shortcut` validator does
 /// not run for these). Returns a user-facing error string on failure.
 pub fn validate(binding: &ShortcutBinding) -> Result<(), String> {
@@ -114,7 +128,7 @@ fn side(kind: SideKind) -> Side {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_engine_kind, to_trigger, validate};
+    use super::{has_recording_engine_binding, is_engine_kind, to_trigger, validate};
     use crate::commands::shortcuts::{
         ModifierKind, ModifierSpec, ShortcutAction, ShortcutBinding, ShortcutTrigger, SideKind,
         TriggerKind,
@@ -192,5 +206,73 @@ mod tests {
         b.modifier = None;
         assert!(validate(&b).is_err());
         assert!(to_trigger(&b).is_none());
+    }
+
+    #[test]
+    fn modifier_hold_left_side_maps() {
+        let mut b = hold_binding();
+        b.modifier = Some(ModifierSpec {
+            modifier: ModifierKind::Control,
+            side: SideKind::Left,
+        });
+        assert!(is_engine_kind(&b));
+        assert!(validate(&b).is_ok());
+        assert!(matches!(
+            to_trigger(&b),
+            Some(Trigger::ModifierHold {
+                modifier: Modifier::Control,
+                side: Side::Left,
+            })
+        ));
+    }
+
+    #[test]
+    fn modifier_hold_either_side_maps() {
+        let mut b = hold_binding();
+        b.modifier = Some(ModifierSpec {
+            modifier: ModifierKind::Alt,
+            side: SideKind::Either,
+        });
+        assert!(validate(&b).is_ok());
+        assert!(matches!(
+            to_trigger(&b),
+            Some(Trigger::ModifierHold {
+                modifier: Modifier::Alt,
+                side: Side::Either,
+            })
+        ));
+    }
+
+    #[test]
+    fn has_recording_engine_binding_enabled_hold() {
+        let b = hold_binding();
+        assert!(has_recording_engine_binding(&[b]));
+    }
+
+    #[test]
+    fn has_recording_engine_binding_disabled_returns_false() {
+        let mut b = hold_binding();
+        b.enabled = false;
+        assert!(!has_recording_engine_binding(&[b]));
+    }
+
+    #[test]
+    fn has_recording_engine_binding_combo_kind_returns_false() {
+        let mut b = hold_binding();
+        b.trigger_kind = TriggerKind::Combo;
+        assert!(!has_recording_engine_binding(&[b]));
+    }
+
+    #[test]
+    fn has_recording_engine_binding_toggle_action_returns_false() {
+        let mut b = hold_binding();
+        b.action = ShortcutAction::ToggleRecording;
+        // ModifierHold + ToggleRecording is not a HoldToRecord binding
+        assert!(!has_recording_engine_binding(&[b]));
+    }
+
+    #[test]
+    fn has_recording_engine_binding_empty_slice_returns_false() {
+        assert!(!has_recording_engine_binding(&[]));
     }
 }

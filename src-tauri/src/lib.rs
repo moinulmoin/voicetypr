@@ -832,13 +832,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             let hotkey_str = match app.store("settings") {
                 Ok(store) => {
-                    store
-                        .get("hotkey")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .unwrap_or_else(|| {
+                    match store.get("hotkey").and_then(|v| v.as_str().map(|s| s.to_string())) {
+                        Some(s) if !s.is_empty() => s,
+                        None => {
                             log::info!("🎹 No hotkey configured, using default");
                             "CommandOrControl+Shift+Space".to_string()
-                        })
+                        }
+                        _ => {
+                            // Explicitly empty = primary hotkey was cleared (modifier-hold in use)
+                            log::info!("🎹 Primary hotkey cleared; will skip global shortcut registration");
+                            String::new()
+                        }
+                    }
                 }
                 Err(e) => {
                     log_failed("SETTINGS_LOAD", &format!("Failed to load settings store: {}", e));
@@ -887,6 +892,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(mut mode_guard) = app_state.recording_mode.lock() {
                 *mode_guard = recording_mode;
                 log::info!("Recording mode set to: {:?}", recording_mode);
+            }
+
+            // Skip global shortcut registration only when the primary hotkey was
+            // explicitly cleared AND a live HoldToRecord engine binding covers
+            // recording. If the state is inconsistent (empty hotkey but no engine
+            // binding), fall through so the default hotkey gets registered.
+            let has_engine_recording = crate::commands::shortcuts::load_shortcut_settings(app.handle())
+                .map(|s| crate::trigger::mapping::has_recording_engine_binding(&s.bindings))
+                .unwrap_or(false);
+
+            'register_primary: {
+            if hotkey_str.is_empty() {
+                if has_engine_recording {
+                    log::info!("🎹 Primary hotkey empty; engine HoldToRecord binding present — skipping global shortcut registration");
+                    log_complete("HOTKEY_SETUP", 0);
+                    break 'register_primary;
+                } else {
+                    log::warn!("Primary hotkey empty but no enabled hold-to-record engine binding found; falling back to default hotkey");
+                    // Fall through — empty string fails parse below, triggering the
+                    // CommandOrControl+Shift+Space fallback at line ~915.
+                }
             }
 
             // Normalize the hotkey for Tauri
@@ -975,6 +1001,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            } // end 'register_primary
 
             // Register PTT shortcut if configured differently
             if recording_mode == RecordingMode::PushToTalk && use_different_ptt_key {

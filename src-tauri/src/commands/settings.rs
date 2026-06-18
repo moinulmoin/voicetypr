@@ -1,5 +1,7 @@
 use crate::audio::device_watcher::try_start_device_watcher_if_ready;
-use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_combination};
+use crate::commands::key_normalizer::{
+    normalize_shortcut_keys, validate_key_combination_allowing_safe_single_key,
+};
 use crate::commands::remote::{resolve_shareable_model_config, save_remote_settings};
 use crate::commands::shortcuts;
 use crate::menu::should_include_remote_connection_in_tray;
@@ -763,7 +765,18 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             settings.current_model
         );
 
-        if !(is_parakeet_engine || is_cloud_engine) {
+        if is_parakeet_engine {
+            // Warm the selected Parakeet model in the background.
+            let app_clone = app.clone();
+            let model_name = settings.current_model.clone();
+            tokio::spawn(async move {
+                let parakeet_manager = app_clone.state::<ParakeetManager>();
+                match parakeet_manager.load_model(&app_clone, &model_name).await {
+                    Ok(_) => log::info!("Successfully preloaded new model: {}", model_name),
+                    Err(e) => log::warn!("Failed to preload new model: {}", e),
+                }
+            });
+        } else if !is_cloud_engine {
             // Preload the new Whisper model
             let app_clone = app.clone();
             let model_name = settings.current_model.clone();
@@ -920,27 +933,86 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
 #[tauri::command]
 pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(), String> {
-    log::info!("Updating global shortcut to: {}", shortcut);
+    log::info!(
+        "Updating global shortcut to: {}",
+        if shortcut.is_empty() {
+            "<clear>"
+        } else {
+            &shortcut
+        }
+    );
 
-    // Validate shortcut format
-    if shortcut.is_empty() || shortcut.len() > 100 {
-        log::error!("Invalid shortcut format: empty or too long");
+    // Empty string = clear / unregister the primary (and PTT) recording shortcut.
+    // Used when the user switches to a bare-modifier hold binding that does not
+    // need a global shortcut registration at all.
+    if shortcut.is_empty() {
+        let shortcuts = app.global_shortcut();
+        let app_state = app.state::<AppState>();
+
+        // Persist empty hotkey FIRST so that if save fails, runtime state is untouched.
+        let store = match app.store("settings") {
+            Ok(store) => store,
+            Err(e) => {
+                log::error!("Failed to get settings store: {}", e);
+                return Err("Failed to access settings store".to_string());
+            }
+        };
+        store.set("hotkey", json!(""));
+        if let Err(e) = store.save() {
+            log::error!("Failed to save settings after clearing hotkey: {}", e);
+            return Err(format!("Failed to save settings: {}", e));
+        }
+
+        // Save succeeded — now unregister and clear runtime state.
+
+        // Unregister and clear the primary recording shortcut.
+        if let Ok(mut guard) = app_state.recording_shortcut.lock() {
+            if let Some(old) = *guard {
+                if shortcuts.is_registered(old) {
+                    if let Err(e) = shortcuts.unregister(old) {
+                        log::warn!("Failed to unregister primary recording shortcut: {}", e);
+                    }
+                }
+            }
+            *guard = None;
+        }
+
+        // Also clear the PTT shortcut so no stale global shortcut remains.
+        if let Ok(mut guard) = app_state.ptt_shortcut.lock() {
+            if let Some(old) = *guard {
+                if shortcuts.is_registered(old) {
+                    if let Err(e) = shortcuts.unregister(old) {
+                        log::warn!("Failed to unregister PTT shortcut: {}", e);
+                    }
+                }
+            }
+            *guard = None;
+        }
+
+        log::info!("Primary recording shortcut cleared successfully");
+        return Ok(());
+    }
+
+    // Validate non-empty shortcut format
+    if shortcut.len() > 100 {
+        log::error!("Invalid shortcut format: too long");
         return Err("Invalid shortcut format".to_string());
     }
 
-    // Validate key combination
-    if let Err(e) = validate_key_combination(&shortcut) {
-        log::error!("Invalid key combination '{}': {}", shortcut, e);
-        return Err(format!("Invalid key combination: {}", e));
-    }
-
-    // Normalize the shortcut keys
+    // Normalize before validation so frontend aliases like "Cmd" and "ArrowUp"
+    // are checked against the same names Tauri will parse.
     let normalized_shortcut = normalize_shortcut_keys(&shortcut);
     log::debug!(
         "Normalized shortcut: {} -> {}",
         shortcut,
         normalized_shortcut
     );
+
+    // Validate key combination
+    if let Err(e) = validate_key_combination_allowing_safe_single_key(&normalized_shortcut) {
+        log::error!("Invalid key combination '{}': {}", shortcut, e);
+        return Err(format!("Invalid key combination: {}", e));
+    }
 
     // Validate that shortcut can be parsed
     let new_shortcut: Shortcut = normalized_shortcut.parse().map_err(|e| {

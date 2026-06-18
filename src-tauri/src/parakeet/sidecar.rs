@@ -161,40 +161,9 @@ impl ParakeetSidecar {
                 break;
             };
 
-            match event {
-                CommandEvent::Stdout(line) => {
-                    let text = String::from_utf8_lossy(&line);
-                    let trimmed = text.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    match parse_response_line(trimmed) {
-                        Ok(response) => match &response {
-                            ParakeetResponse::Error { code, message, .. } => {
-                                return Err(ParakeetError::SidecarError {
-                                    code: code.clone(),
-                                    message: message.clone(),
-                                });
-                            }
-                            ParakeetResponse::Progress { progress, phase } => {
-                                if let Some(callback) = progress_callback.as_deref_mut() {
-                                    callback(*progress, phase.as_deref());
-                                }
-                                continue;
-                            }
-                            _ => return Ok(response),
-                        },
-                        Err(err) => {
-                            return Err(err);
-                        }
-                    }
-                }
-                CommandEvent::Stderr(line) => {
-                    warn!(
-                        "Parakeet sidecar stderr: {}",
-                        String::from_utf8_lossy(&line)
-                    );
-                }
+            let (line_bytes, from_stdout) = match event {
+                CommandEvent::Stdout(line) => (line, true),
+                CommandEvent::Stderr(line) => (line, false),
                 CommandEvent::Terminated(payload) => {
                     error!(
                         "Parakeet sidecar terminated unexpectedly code={:?}",
@@ -206,7 +175,35 @@ impl ParakeetSidecar {
                     error!("Error from Parakeet sidecar pipe: {err}");
                     return Err(ParakeetError::SpawnError(err));
                 }
-                _ => {}
+                _ => continue,
+            };
+
+            let text = String::from_utf8_lossy(&line_bytes);
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // The sidecar redirects stdout->stderr around native CoreML calls, so a
+            // protocol response (load/transcribe result or status) can surface on
+            // stderr instead of stdout. Parse responses from EITHER stream; a
+            // non-protocol stderr line is only a diagnostic log.
+            match parse_response_line(trimmed) {
+                Ok(ParakeetResponse::Error { code, message, .. }) => {
+                    return Err(ParakeetError::SidecarError { code, message });
+                }
+                Ok(ParakeetResponse::Progress { progress, phase }) => {
+                    if let Some(callback) = progress_callback.as_deref_mut() {
+                        callback(progress, phase.as_deref());
+                    }
+                }
+                Ok(response) => return Ok(response),
+                Err(err) => {
+                    if from_stdout {
+                        return Err(err);
+                    }
+                    warn!("Parakeet sidecar stderr: {}", trimmed);
+                }
             }
         }
 

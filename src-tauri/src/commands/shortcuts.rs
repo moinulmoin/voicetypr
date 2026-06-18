@@ -6,9 +6,10 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_store::StoreExt;
 
 use crate::ai::prompts::{EnhancementOptions, EnhancementPreset};
+pub use crate::commands::key_normalizer::is_single_key_shortcut;
 use crate::commands::key_normalizer::{
-    normalize_shortcut_keys, validate_key_combination, validate_key_combination_with_rules,
-    KeyValidationRules,
+    normalize_shortcut_keys, validate_key_combination,
+    validate_key_combination_allowing_safe_single_key,
 };
 use crate::AppState;
 
@@ -620,7 +621,7 @@ fn prepare_enabled_shortcut(
         .map_err(|e| format!("Invalid shortcut '{}': {}", binding.shortcut, e))
 }
 
-fn load_shortcut_settings(app: &AppHandle) -> Result<ShortcutSettings, String> {
+pub(crate) fn load_shortcut_settings(app: &AppHandle) -> Result<ShortcutSettings, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
     match store.get(SHORTCUT_BINDINGS_KEY) {
         Some(value) => serde_json::from_value(value.clone())
@@ -689,24 +690,7 @@ fn validate_enabled_binding(binding: &ShortcutBinding) -> Result<(), String> {
 
     let normalized = normalize_shortcut_keys(&binding.shortcut);
     if allows_single_key(binding) {
-        validate_key_combination_with_rules(
-            &normalized,
-            &KeyValidationRules {
-                min_keys: 1,
-                max_keys: 5,
-                require_modifier: false,
-                require_modifier_for_multi_key: true,
-            },
-        )?;
-        reject_single_modifier_only(&normalized)?;
-        if is_single_key_shortcut(&normalized) && !is_typing_safe_single_key(&normalized) {
-            return Err(
-                "Single-key shortcuts must be a function key (F1-F24), a numpad key, \
-                 or a navigation key (Home/End/Page Up/Page Down/Insert) \
-                 -- typing keys like letters would be captured everywhere."
-                    .to_string(),
-            );
-        }
+        validate_key_combination_allowing_safe_single_key(&normalized)?;
     } else {
         validate_key_combination(&normalized)?;
     }
@@ -729,66 +713,6 @@ fn validate_trigger_matches_action(binding: &ShortcutBinding) -> Result<(), Stri
 
 fn allows_single_key(binding: &ShortcutBinding) -> bool {
     binding.allow_risky_combo
-}
-
-fn reject_single_modifier_only(normalized: &str) -> Result<(), String> {
-    let mut parts = normalized.split('+');
-    let Some(first) = parts.next() else {
-        return Err("Shortcut is required".to_string());
-    };
-    if parts.next().is_none() && is_modifier(first) {
-        return Err("Single modifier-only shortcuts are not allowed".to_string());
-    }
-    Ok(())
-}
-
-fn is_modifier(key: &str) -> bool {
-    matches!(
-        key,
-        "CommandOrControl"
-            | "Shift"
-            | "Alt"
-            | "Control"
-            | "Command"
-            | "Cmd"
-            | "Ctrl"
-            | "Option"
-            | "Meta"
-            | "Super"
-    )
-}
-
-pub fn is_single_key_shortcut(normalized: &str) -> bool {
-    let mut parts = normalized.split('+');
-    let Some(first) = parts.next() else {
-        return false;
-    };
-    !first.is_empty() && parts.next().is_none() && !is_modifier(first)
-}
-
-/// Allowlist of keys safe to bind as single-key global shortcuts.
-/// Only keys that don't appear in normal typing are permitted.
-/// Default-deny: any key not listed here returns false.
-pub fn is_typing_safe_single_key(normalized: &str) -> bool {
-    // Function keys F1-F24
-    if let Some(rest) = normalized.strip_prefix('F') {
-        if rest.len() <= 2 {
-            if let Ok(num) = rest.parse::<u8>() {
-                if (1..=24).contains(&num) {
-                    return true;
-                }
-            }
-        }
-    }
-    // Numpad keys (Numpad0-Numpad9, NumpadAdd, NumpadSubtract, etc.)
-    if normalized.starts_with("Numpad") {
-        return true;
-    }
-    // Navigation cluster (non-typing)
-    matches!(
-        normalized,
-        "Home" | "End" | "PageUp" | "PageDown" | "Insert"
-    )
 }
 
 fn unregister_registered_shortcuts(app: &AppHandle, bindings: &[RegisteredShortcutBinding]) {
