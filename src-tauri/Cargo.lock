@@ -3670,6 +3670,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "keytrigger"
+version = "0.1.0"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-graphics 0.24.0",
+ "log",
+ "parking_lot",
+ "thiserror 1.0.69",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "kuchikiki"
 version = "0.8.8-speedreader"
 source = "registry+https://github.com/rust-lang/crates.io-index"

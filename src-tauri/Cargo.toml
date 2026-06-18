@@ -5,6 +5,10 @@ description = "open source voice to text transcription app"
 authors = ["moinulmoin"]
 edition = "2021"
 
+[workspace]
+members = [".", "crates/keytrigger"]
+resolver = "2"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
