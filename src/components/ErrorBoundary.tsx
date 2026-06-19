@@ -3,6 +3,9 @@ import React, { useState } from 'react';
 import { ErrorBoundary as ReactErrorBoundary, type FallbackProps } from 'react-error-boundary';
 import { Button } from './ui/button';
 import { CrashReportDialog } from './CrashReportDialog';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('error-boundary');
 
 type ErrorFallbackProps = FallbackProps;
 
@@ -85,7 +88,7 @@ export function AppErrorBoundary({
       FallbackComponent={FallbackComponent}
       onError={(error, errorInfo) => {
         const normalizedError = asError(error);
-        console.error('Error caught by boundary:', normalizedError, errorInfo);
+        log.error('Error caught by boundary:', normalizedError, errorInfo);
         if (onError) {
           onError(normalizedError, errorInfo);
         }
@@ -127,7 +130,7 @@ export function RecordingErrorBoundary({ children }: { children: React.ReactNode
     <AppErrorBoundary
       showCrashReporter={false}
       onError={(error) => {
-        console.error('Recording error:', error);
+        log.error('Recording error:', error);
       }}
       onReset={() => {
         // Could reset recording state here
@@ -142,7 +145,7 @@ export function SettingsErrorBoundary({ children }: { children: React.ReactNode 
   return (
     <AppErrorBoundary
       onError={(error) => {
-        console.error('Settings error:', error);
+        log.error('Settings error:', error);
       }}
       fallback={({ error, resetErrorBoundary }) => (
         <div className="p-4 border border-destructive/20 rounded-lg bg-destructive/5">
@@ -169,7 +172,7 @@ export function ModelManagementErrorBoundary({ children }: { children: React.Rea
   return (
     <AppErrorBoundary
       onError={(error) => {
-        console.error('Model management error:', error);
+        log.error('Model management error:', error);
       }}
       fallback={({ resetErrorBoundary }) => (
         <div className="text-center p-4 space-y-2">

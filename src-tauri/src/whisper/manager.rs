@@ -174,11 +174,6 @@ impl WhisperManager {
     }
 
     fn check_downloaded_models(&mut self) {
-        log::info!(
-            "[check_downloaded_models] Checking models directory: {:?}",
-            self.models_dir
-        );
-
         // Check each known model directly instead of scanning directory
         for (model_name, model_info) in self.models.iter_mut() {
             let model_path = self.models_dir.join(format!("{}.bin", model_name));
@@ -191,12 +186,6 @@ impl WhisperManager {
                     let expected_size = model_info.size;
 
                     if file_size == expected_size {
-                        log::info!(
-                            "[check_downloaded_models] Model '{}' found at {:?} (size: {} bytes)",
-                            model_name,
-                            model_path,
-                            file_size
-                        );
                         model_info.downloaded = true;
                     } else if file_size > 0 {
                         log::warn!("[check_downloaded_models] Model '{}' exists but has wrong size: {} bytes (expected: {} bytes)",
@@ -217,19 +206,8 @@ impl WhisperManager {
                     model_info.downloaded = false;
                 }
             } else {
-                log::debug!(
-                    "[check_downloaded_models] Model '{}' not found at {:?}",
-                    model_name,
-                    model_path
-                );
                 model_info.downloaded = false;
             }
-        }
-
-        // Log final status
-        log::info!("[check_downloaded_models] Final status after directory scan:");
-        for (name, info) in &self.models {
-            log::info!("  Model '{}': downloaded = {}", name, info.downloaded);
         }
     }
 
@@ -597,25 +575,20 @@ impl WhisperManager {
     }
 
     pub fn refresh_downloaded_status(&mut self) {
-        log::info!("[refresh_downloaded_status] Starting refresh");
-
         // Reset all to not downloaded
-        for (name, model) in self.models.iter_mut() {
-            log::debug!(
-                "[refresh_downloaded_status] Resetting {} to not downloaded",
-                name
-            );
+        for model in self.models.values_mut() {
             model.downloaded = false;
         }
 
         // Check again
         self.check_downloaded_models();
 
-        // Log final status
-        log::info!("[refresh_downloaded_status] Final status:");
-        for (name, model) in &self.models {
-            log::info!("  Model {}: downloaded = {}", name, model.downloaded);
-        }
+        let n_downloaded = self.models.values().filter(|m| m.downloaded).count();
+        log::debug!(
+            "whisper model status: {}/{} downloaded",
+            n_downloaded,
+            self.models.len()
+        );
     }
 
     /// Returns the names of downloaded model files that are recognized by the manager.

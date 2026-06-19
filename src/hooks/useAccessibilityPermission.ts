@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("permissions");
 
 interface AccessibilityPermissionOptions {
   // When false, skip the automatic check on mount and rely on explicit calls.
@@ -19,7 +22,7 @@ export function useAccessibilityPermission(options?: AccessibilityPermissionOpti
       setHasPermission(result);
       return result;
     } catch (error) {
-      console.error('Failed to check accessibility permission:', error);
+      log.error('Failed to check accessibility permission:', error);
       setHasPermission(false);
       return false;
     } finally {
@@ -33,7 +36,7 @@ export function useAccessibilityPermission(options?: AccessibilityPermissionOpti
       setHasPermission(result);
       return result;
     } catch (error) {
-      console.error('Failed to request accessibility permission:', error);
+      log.error('Failed to request accessibility permission:', error);
       return false;
     }
   }, []);
@@ -69,12 +72,12 @@ export function useAccessibilityPermission(options?: AccessibilityPermissionOpti
   // Listen for permission changes
   useEffect(() => {
     const unlistenGranted = listen('accessibility-granted', () => {
-      console.log('[useAccessibilityPermission] Permission granted event received');
+      log.info('[useAccessibilityPermission] Permission granted event received');
       setHasPermission(true);
     });
 
     const unlistenDenied = listen('accessibility-denied', () => {
-      console.log('[useAccessibilityPermission] Permission denied event received');
+      log.info('[useAccessibilityPermission] Permission denied event received');
       setHasPermission(false);
     });
 

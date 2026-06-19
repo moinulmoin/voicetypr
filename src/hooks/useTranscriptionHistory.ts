@@ -2,6 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
 import type { TranscriptionHistory } from "@/types";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("history");
 
 interface RawTranscriptionHistoryItem {
   timestamp?: string;
@@ -89,7 +92,7 @@ export function useTranscriptionHistory({
       setHistory(formattedHistory);
       setTotalCount(count ?? formattedHistory.length);
     } catch (error) {
-      console.error("Failed to load transcription history:", error);
+      log.error("Failed to load transcription history:", error);
     }
   }, [includeTotalCount, limit]);
 

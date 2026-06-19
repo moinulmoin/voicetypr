@@ -1,5 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-shell';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("permissions");
 
 export interface PermissionStatus {
   microphone: boolean;
@@ -25,7 +28,7 @@ export async function checkMicrophonePermission(): Promise<boolean> {
   try {
     return await invoke<boolean>('check_microphone_permission');
   } catch (error) {
-    console.error('Failed to check microphone permission:', error);
+    log.error('Failed to check microphone permission:', error);
     return false;
   }
 }
@@ -37,7 +40,7 @@ export async function checkAccessibilityPermission(): Promise<boolean> {
   try {
     return await invoke<boolean>('check_accessibility_permission');
   } catch (error) {
-    console.error('Failed to check accessibility permission:', error);
+    log.error('Failed to check accessibility permission:', error);
     return false;
   }
 }
@@ -49,7 +52,7 @@ export async function requestMicrophonePermission(): Promise<boolean> {
   try {
     return await invoke<boolean>('request_microphone_permission');
   } catch (error) {
-    console.error('Failed to request microphone permission:', error);
+    log.error('Failed to request microphone permission:', error);
     return false;
   }
 }
@@ -61,7 +64,7 @@ export async function openAccessibilitySettings(): Promise<void> {
   try {
     await open('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
   } catch (error) {
-    console.error('Failed to open accessibility settings:', error);
+    log.error('Failed to open accessibility settings:', error);
   }
 }
 

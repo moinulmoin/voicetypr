@@ -20,6 +20,7 @@
 * **onboarding:** warm the selected model the moment it is chosen so the first-transcription test runs immediately instead of stalling on first-load model compilation
 * **onboarding:** the first-transcription step now shows an example sentence to read aloud, an editable transcript box, and a "Skip for now" option
 * **onboarding:** add a delete action to the setup model cards so a model can be removed and re-downloaded without leaving onboarding
+* **logging:** route frontend logs through a leveled `logger` backed by `tauri-plugin-log`, so they land in the same rotated file as the Rust logs (and in Report Bug diagnostics) with a client-side level gate; collapse the model-status flood from ~14 log lines per refresh to a single summary line; and fetch model availability once through a shared provider instead of independently in every consumer
 
 ### Bug Fixes
 

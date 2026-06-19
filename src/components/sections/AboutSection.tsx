@@ -13,6 +13,9 @@ import XIcon from "@/components/icons/XIcon";
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { updateService } from '@/services/updateService';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("about");
 
 export function AboutSection() {
   const [appVersion, setAppVersion] = useState<string>('');
@@ -24,7 +27,7 @@ export function AboutSection() {
         const version = await getVersion();
         setAppVersion(version);
       } catch (error) {
-        console.error('Failed to get app version:', error);
+        log.error('Failed to get app version:', error);
         setAppVersion('Unknown');
       }
     };
@@ -42,7 +45,7 @@ export function AboutSection() {
     try {
       await open(url);
     } catch (error) {
-      console.error('Failed to open external link:', error);
+      log.error('Failed to open external link:', error);
       toast.error('Failed to open link');
     }
   };

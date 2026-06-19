@@ -24,13 +24,16 @@ import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "@/contexts/SettingsContext";
-import { useModelAvailability } from "@/hooks/useModelAvailability";
+import { useModelAvailabilityContext } from "@/contexts/ModelAvailabilityContext";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import { getModelDisplayName } from "@/lib/model-display";
 import { isCloudEngine } from "@/lib/cloudProviders";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useUploadStore } from "@/state/upload";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("audio-upload");
 
 // local result type not needed; handled by store
 
@@ -39,7 +42,7 @@ export function AudioUploadSection() {
   const [isDragging, setIsDragging] = useState(false);
   const [activeRemoteServer, setActiveRemoteServer] = useState<string | null>(null);
   const { settings } = useSettings();
-  const { selectedModelAvailable, remoteAvailable } = useModelAvailability();
+  const { selectedModelAvailable, remoteAvailable } = useModelAvailabilityContext();
   const {
     selectedFile,
     status,
@@ -90,7 +93,7 @@ export function AudioUploadSection() {
       const displayName = activeServer.name || `${activeServer.host}:${activeServer.port}`;
       return `Remote: ${displayName}`;
     } catch (error) {
-      console.error('Failed to resolve active remote server name:', error);
+      log.error('Failed to resolve active remote server name:', error);
       return `Remote: ${effectiveRemoteId}`;
     }
   };
@@ -101,7 +104,7 @@ export function AudioUploadSection() {
         const activeId = await invoke<string | null>('get_active_remote_server');
         setActiveRemoteServer(activeId);
       } catch (error) {
-        console.error('Failed to get active remote server:', error);
+        log.error('Failed to get active remote server:', error);
         setActiveRemoteServer(null);
       }
     };
@@ -139,7 +142,7 @@ export function AudioUploadSection() {
         select(selected);
       }
     } catch (error) {
-      console.error("Failed to select file:", error);
+      log.error("Failed to select file:", error);
       toast.error("Failed to select file");
     }
   };
@@ -195,7 +198,7 @@ export function AudioUploadSection() {
         toast.success("Transcription completed and saved to history!");
       }
     } catch (error) {
-      console.error("[Upload] Transcription handling failed:", error);
+      log.error("[Upload] Transcription handling failed:", error);
       toast.error(`Transcription failed: ${error}`);
     } finally {
       // keep store state; UI renders from it
@@ -210,7 +213,7 @@ export function AudioUploadSection() {
         toast.success("Copied to clipboard");
         setTimeout(() => setCopied(false), 2000);
       } catch (error) {
-        console.error("Failed to copy:", error);
+        log.error("Failed to copy:", error);
         toast.error("Failed to copy to clipboard");
       }
     }

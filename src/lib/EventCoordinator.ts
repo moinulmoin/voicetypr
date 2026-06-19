@@ -1,4 +1,7 @@
 import { listen, UnlistenFn, Event as TauriEvent } from "@tauri-apps/api/event";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("events");
 
 type EventHandler<T = any> = (payload: T) => void | Promise<void>;
 type WindowId = "main" | "pill" | "onboarding";
@@ -17,12 +20,6 @@ export class EventCoordinator {
   private static instance: EventCoordinator;
   private registrations: Map<string, EventRegistration[]> = new Map();
   private activeWindow: WindowId = "main";
-  // Disable debug logs under test to keep output clean
-  private debug = !(
-    typeof process !== 'undefined' &&
-    // @ts-ignore - process may be shimmed in browser tests
-    process?.env?.NODE_ENV === 'test'
-  );
 
   private constructor() {
     // Singleton pattern
@@ -40,9 +37,7 @@ export class EventCoordinator {
    */
   setActiveWindow(windowId: WindowId) {
     this.activeWindow = windowId;
-    if (this.debug) {
-      console.log(`[EventCoordinator] Active window set to: ${windowId}`);
-    }
+    log.debug(`[EventCoordinator] Active window set to: ${windowId}`);
   }
 
   /**
@@ -59,11 +54,7 @@ export class EventCoordinator {
     if (existing) {
       const existingForWindow = existing.find(reg => reg.windowId === windowId);
       if (existingForWindow) {
-        if (this.debug) {
-          console.log(
-            `[EventCoordinator] Event "${eventName}" already registered for window "${windowId}". Cleaning up old registration.`
-          );
-        }
+        log.debug(`[EventCoordinator] Event "${eventName}" already registered for window "${windowId}". Cleaning up old registration.`);
         // Clean up the old registration before creating a new one
         this.unregister(windowId, eventName);
       }
@@ -73,11 +64,7 @@ export class EventCoordinator {
     const wrappedHandler = (event: TauriEvent<T>) => {
       const shouldHandle = this.shouldWindowHandleEvent(windowId, eventName);
       
-      if (this.debug) {
-        console.log(
-          `[EventCoordinator] Event "${eventName}" received. Window: ${windowId}, Should handle: ${shouldHandle}`
-        );
-      }
+      log.debug(`[EventCoordinator] Event "${eventName}" received. Window: ${windowId}, Should handle: ${shouldHandle}`);
 
       if (shouldHandle) {
         handler(event.payload);
@@ -99,11 +86,7 @@ export class EventCoordinator {
     }
     this.registrations.get(eventName)!.push(registration);
 
-    if (this.debug) {
-      console.log(
-        `[EventCoordinator] Registered event "${eventName}" for window "${windowId}"`
-      );
-    }
+    log.debug(`[EventCoordinator] Registered event "${eventName}" for window "${windowId}"`);
 
     // Return cleanup function
     return () => {
@@ -128,11 +111,9 @@ export class EventCoordinator {
         this.registrations.delete(eventName);
       }
 
-      if (this.debug) {
-        console.log(
-          `[EventCoordinator] Unregistered event "${eventName}" for window "${windowId}"`
-        );
-      }
+      log.debug(
+        `[EventCoordinator] Unregistered event "${eventName}" for window "${windowId}"`
+      );
     }
   }
 
@@ -200,9 +181,7 @@ export class EventCoordinator {
       }
     }
 
-    if (this.debug) {
-      console.log(`[EventCoordinator] Cleared all registrations for window "${windowId}"`);
-    }
+    log.debug(`[EventCoordinator] Cleared all registrations for window "${windowId}"`);
   }
 
   /**

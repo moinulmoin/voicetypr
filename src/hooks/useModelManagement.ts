@@ -5,6 +5,9 @@ import { toast } from "sonner";
 import { ModelInfo, isCloudModel } from "../types";
 import { useEventCoordinator } from "./useEventCoordinator";
 import { getModelDisplayName } from "@/lib/model-display";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("models");
 
 interface UseModelManagementOptions {
   windowId?: "main" | "pill" | "onboarding";
@@ -131,11 +134,11 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
   const loadModels = useCallback(async () => {
     try {
       setIsLoading(true);
-      console.log("[useModelManagement] Calling get_model_status...");
+      log.debug("[useModelManagement] Calling get_model_status...");
       const response = await invoke<{ models: ModelInfo[] }>(
         "get_model_status",
       );
-      console.log("[useModelManagement] Response:", response);
+      log.debug("model status loaded", { count: response.models.length });
 
       if (!response || !Array.isArray(response.models)) {
         throw new Error("Invalid response format from get_model_status");
@@ -149,10 +152,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
       return response.models;
     } catch (error) {
-      console.error(
-        "[useModelManagement.loadModels] Failed to load models:",
-        error,
-      );
+      log.error("[useModelManagement.loadModels] Failed to load models:", error);
       if (showToasts) {
         toast.error("Failed to load models");
       }
@@ -219,10 +219,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           }
 
           const errorText = getErrorText(error);
-          console.error(
-            "[useModelManagement.downloadModel] Failed to download model:",
-            error,
-          );
+          log.error("[useModelManagement.downloadModel] Failed to download model:", error);
           setDownloadErrors((prev) => ({
             ...prev,
             [modelName]: errorText,
@@ -235,10 +232,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           }
         });
       } catch (error) {
-        console.error(
-          "[useModelManagement.downloadModel] Failed to start download:",
-          error,
-        );
+        log.error("[useModelManagement.downloadModel] Failed to start download:", error);
         const errorText = getErrorText(error);
         if (showToasts) {
           toast.error(`Failed to start ${getModelDisplayName(modelName, models)} download: ${errorText}`);
@@ -277,7 +271,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         if (requestId) {
           cancelledDownloadRequests.current.delete(requestId);
         }
-        console.error("Failed to cancel download:", error);
+        log.error("Failed to cancel download:", error);
         if (showToasts) {
           const errorText = getErrorText(error);
           toast.error(`Failed to cancel ${getModelDisplayName(modelName, modelsRef.current)} download: ${errorText}`);
@@ -322,7 +316,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         return true;
       } catch (error) {
         const errorText = getErrorText(error);
-        console.error("Failed to delete model:", error);
+        log.error("Failed to delete model:", error);
         if (showToasts) {
           toast.error(`Failed to delete ${getModelDisplayName(modelName, models)}: ${errorText}`);
         }
@@ -365,7 +359,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         });
         await downloadModel(modelName);
       } catch (error) {
-        console.error("Failed to repair model:", error);
+        log.error("Failed to repair model:", error);
         if (showToasts) {
           toast.error(`Failed to repair ${getModelDisplayName(modelName, modelsRef.current)}: ${error}`);
         }
@@ -392,7 +386,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         requestId?: string;
         phase?: string | null;
       }>("download-progress", (payload) => {
-        const { model, progress, downloaded, total, engine, requestId, phase } = payload;
+        const { model, progress, engine, requestId, phase } = payload;
         if (requestId && cancelledDownloadRequests.current.has(requestId)) {
           return;
         }
@@ -402,9 +396,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           return;
         }
 
-        console.log(
-          `[useModelManagement] Download progress for ${model} (${engine ?? "whisper"}): ${progress.toFixed(1)}% (${downloaded}/${total} bytes)`,
-        );
+        log.debug(`[useModelManagement] Download progress for ${model} (${engine ?? "whisper"}): ${progress.toFixed(1)}%`);
 
         // Keep updating progress until we receive the verifying event
         setDownloadProgress((prev) => ({

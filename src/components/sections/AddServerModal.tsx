@@ -26,6 +26,9 @@ import { CheckCircle2, Eye, EyeOff, Server, XCircle } from "lucide-react";
 import React, { useState } from "react";
 import { toast } from "sonner";
 import { getModelDisplayName } from "@/lib/model-display";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("server-modal");
 
 interface SavedConnection {
   id: string;
@@ -127,7 +130,7 @@ export function AddServerModal({
     if (open && !localMachineId) {
       invoke<string>("get_local_machine_id")
         .then(setLocalMachineId)
-        .catch((err) => console.warn("Failed to get local machine ID:", err));
+        .catch((err) => log.warn("Failed to get local machine ID:", err));
     }
   }, [open, localMachineId]);
 
@@ -197,7 +200,7 @@ export function AddServerModal({
         setName(data.name);
       }
     } catch (error) {
-      console.error("Connection test failed:", error);
+      log.error("Connection test failed:", error);
       let errorMessage = "Connection failed";
 
       if (typeof error === "string") {
@@ -280,7 +283,7 @@ export function AddServerModal({
       onServerAdded?.(server);
       handleClose();
     } catch (error) {
-      console.error(`Failed to ${isEditMode ? "update" : "add"} server:`, error);
+      log.error(`Failed to ${isEditMode ? "update" : "add"} server:`, error);
       const errorMessage =
         error instanceof Error ? error.message : `Failed to ${isEditMode ? "update" : "add"} server`;
       toast.error(errorMessage);

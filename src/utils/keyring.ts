@@ -2,6 +2,9 @@ import { invoke } from '@tauri-apps/api/core';
 
 import type { AiProvider } from '@/types/providers';
 import { emit } from '@tauri-apps/api/event';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("keyring");
 
 /**
  * Save a value to the OS keyring
@@ -56,7 +59,7 @@ export const saveApiKey = async (
   await invoke('validate_ai_api_key', { args: { provider, apiKey, ...options } });
   await keyringSet(key, apiKey);
   await invoke('cache_ai_api_key', { args: { provider, apiKey } });
-  console.log(`[Keyring] API key saved and validated for ${provider}`);
+  log.debug(`[Keyring] API key saved and validated for ${provider}`);
 
   // Emit event to notify that API key was saved
   await emit('api-key-saved', { provider });
@@ -79,7 +82,7 @@ export const removeApiKey = async (provider: string): Promise<void> => {
   // Clear backend cache for the same provider key
   await invoke('clear_ai_api_key_cache', { provider });
   
-  console.log(`[Keyring] API key removed for ${provider}`);
+  log.debug(`[Keyring] API key removed for ${provider}`);
   
   // Emit event to notify that API key was removed
   await emit('api-key-removed', { provider });
@@ -92,7 +95,7 @@ export const loadApiKeysToCache = async (): Promise<void> => {
   try {
     providers = await invoke<AiProvider[]>('list_ai_providers');
   } catch (error) {
-    console.error('Failed to list AI providers for key cache warmup:', error);
+    log.error('Failed to list AI providers for key cache warmup:', error);
     return;
   }
 
@@ -101,10 +104,10 @@ export const loadApiKeysToCache = async (): Promise<void> => {
       const apiKey = await getApiKey(provider.id);
       if (apiKey) {
         await invoke('cache_ai_api_key', { args: { provider: provider.id, apiKey } });
-        console.log(`[Keyring] Loaded ${provider.id} API key from keyring to cache`);
+        log.debug(`[Keyring] Loaded ${provider.id} API key from keyring to cache`);
       }
     } catch (error) {
-      console.error(`Failed to load API key for ${provider.id}:`, error);
+      log.error(`Failed to load API key for ${provider.id}:`, error);
     }
   }
 };

@@ -2,6 +2,9 @@ import { createContext, useContext, ReactNode, useState, useEffect, useCallback 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { AppSettings } from '@/types';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("settings");
 
 interface SettingsContextType {
   settings: AppSettings | null;
@@ -27,7 +30,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       const error = err instanceof Error ? err : new Error('Failed to load settings');
       setError(error);
-      console.error('[SettingsContext] Failed to load settings:', error);
+      log.error('[SettingsContext] Failed to load settings:', error);
     } finally {
       setIsLoading(false);
     }
@@ -49,7 +52,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       // Rollback on error
       setSettings(previousSettings);
-      console.error('[SettingsContext] Failed to update settings:', err);
+      log.error('[SettingsContext] Failed to update settings:', err);
       throw err;
     }
   }, [settings]);

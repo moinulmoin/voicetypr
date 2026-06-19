@@ -4,6 +4,9 @@ import { ModelsSection } from "../sections/ModelsSection";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { AppSettings } from "@/types";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("models-tab");
 
 export function ModelsTab() {
   const { settings, updateSettings } = useSettings();
@@ -30,7 +33,7 @@ export function ModelsTab() {
       try {
         await updateSettings(updates);
       } catch (error) {
-        console.error("Failed to save settings:", error);
+        log.error("Failed to save settings:", error);
       }
     },
     [updateSettings]

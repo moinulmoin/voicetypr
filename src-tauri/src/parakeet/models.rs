@@ -43,8 +43,8 @@ pub fn get_available_models() -> Vec<&'static ParakeetModelDefinition> {
     // FluidAudio ASR requires Apple Silicon - no Parakeet models work on Intel Macs
     // FluidAudio throws ASRError.unsupportedPlatform("Parakeet models require Apple Silicon")
     if !is_apple_silicon() {
-        log::info!(
-            "🚫 Parakeet unavailable on Intel Mac - FluidAudio requires Apple Neural Engine (arch: {})",
+        log::debug!(
+            "Parakeet unavailable on Intel Mac - FluidAudio requires Apple Neural Engine (arch: {})",
             arch
         );
         return vec![];

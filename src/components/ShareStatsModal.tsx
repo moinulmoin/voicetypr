@@ -10,6 +10,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { Check, Copy, Download, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("share-stats");
 
 interface ShareStatsModalProps {
   open: boolean;
@@ -186,7 +189,7 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
       toast.success("Stats image copied to clipboard!");
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error("Failed to copy image to clipboard:", err);
+      log.error("Failed to copy image to clipboard:", err);
       toast.error("Failed to copy image. Try the download button instead.");
     } finally {
       setIsCopying(false);
@@ -217,7 +220,7 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
         });
       }
     } catch (err) {
-      console.error("Failed to download image:", err);
+      log.error("Failed to download image:", err);
       // Fallback to browser download
       const link = document.createElement("a");
       link.download = `voicetypr-stats-${Date.now()}.png`;

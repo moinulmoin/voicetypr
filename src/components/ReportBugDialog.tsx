@@ -22,6 +22,9 @@ import {
 import { useSettings } from '@/contexts/SettingsContext';
 import { useModelManagementContext } from '@/contexts/ModelManagementContext';
 import { getModelDisplayName } from '@/lib/model-display';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('report-bug');
 
 interface ReportBugDialogProps {
   isOpen: boolean;
@@ -127,7 +130,7 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
       return actionId === actionIdRef.current ? data : null;
     } catch (err) {
       if (actionId === actionIdRef.current) {
-        console.error('Failed to gather report data:', err);
+        log.error('Failed to gather report data:', err);
         toast.error('Failed to gather report data');
       }
       return null;
@@ -184,7 +187,7 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
         copiedTimerRef.current = null;
       }, 2000);
     } catch (err) {
-      console.error('Failed to copy report:', err);
+      log.error('Failed to copy report:', err);
       toast.error('Failed to copy report');
     }
   };

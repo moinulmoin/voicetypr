@@ -45,6 +45,9 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { Check, ExternalLink, HelpCircle, Key, Loader2, RefreshCw, Search, Settings2, Star, Trash2 } from "lucide-react";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("enhancements");
 
 
 type AISettingsResponse = Omit<AISettings, "modelsByProvider"> & {
@@ -127,7 +130,7 @@ export function EnhancementsSection() {
       }
       setEnhancementOptions(nextOptions);
     } catch (error) {
-      console.error("Failed to load enhancement options:", error);
+      log.error("Failed to load enhancement options:", error);
     }
   };
 
@@ -137,7 +140,7 @@ export function EnhancementsSection() {
       setWritingSettings(mergeWritingSettings(nextSettings));
       return true;
     } catch (error) {
-      console.error("Failed to load writing settings:", error);
+      log.error("Failed to load writing settings:", error);
       return false;
     }
   };
@@ -165,7 +168,7 @@ export function EnhancementsSection() {
               );
               isConfigured = providerSettings.hasApiKey;
             } catch (error) {
-              console.error(`Failed to resolve ${providerId} provider readiness:`, error);
+              log.error(`Failed to resolve ${providerId} provider readiness:`, error);
             }
           }
 
@@ -180,7 +183,7 @@ export function EnhancementsSection() {
                 });
               }
             } catch (error) {
-              console.error(`Failed to cache ${keyId} API key:`, error);
+              log.error(`Failed to cache ${keyId} API key:`, error);
             }
           }
         }),
@@ -192,7 +195,7 @@ export function EnhancementsSection() {
         const customConfig = await invoke<{ baseUrl: string }>("get_openai_config");
         setOpenAIDefaultBaseUrl(customConfig.baseUrl || "https://api.openai.com/v1");
       } catch (error) {
-        console.error("Failed to load custom config:", error);
+        log.error("Failed to load custom config:", error);
       }
 
       const loadedAISettingsResponse = await invoke<AISettingsResponse>("get_ai_settings");
@@ -221,7 +224,7 @@ export function EnhancementsSection() {
 
       return loadedAISettings;
     } catch (error) {
-      console.error("Failed to load AI settings:", error);
+      log.error("Failed to load AI settings:", error);
       return null;
     }
   }, [readiness, fetchModels]);
@@ -234,7 +237,7 @@ export function EnhancementsSection() {
         const writingSettingsLoaded = await loadWritingSettings();
         setSettingsLoaded(writingSettingsLoaded);
       })().catch((error) => {
-        console.error("Failed to load formatting settings:", error);
+        log.error("Failed to load formatting settings:", error);
       });
     }
   }, [settingsLoaded, loadAISettings]);
@@ -287,10 +290,7 @@ export function EnhancementsSection() {
               [event.payload.provider]: providerStillConfigured,
             }));
           } catch (error) {
-            console.error(
-              `Failed to refresh ${event.payload.provider} provider readiness after key removal:`,
-              error,
-            );
+            log.error(`Failed to refresh ${event.payload.provider} provider readiness after key removal:`, error);
             setProviderApiKeys((prev) => ({
               ...prev,
               [event.payload.provider]: false,
@@ -329,7 +329,7 @@ export function EnhancementsSection() {
               transcription_task: "transcribe",
             });
           } catch (error) {
-            console.error("Failed to refresh language settings after API key removal:", error);
+            log.error("Failed to refresh language settings after API key removal:", error);
           }
         }
       },
@@ -498,7 +498,7 @@ export function EnhancementsSection() {
           setCustomModelName(providerSettings.model);
         }
       } catch (error) {
-        console.error("Failed to load custom config:", error);
+        log.error("Failed to load custom config:", error);
       }
       setShowOpenAIConfig(true);
     } else {

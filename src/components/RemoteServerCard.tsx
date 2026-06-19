@@ -30,6 +30,9 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("remote-server-card");
 
 // Connection status enum matching backend
 export type ConnectionStatus = "Unknown" | "Online" | "Offline" | "AuthFailed" | "SelfConnection";
@@ -151,7 +154,7 @@ function RemoteTranscriptionModelControl({
       );
       setControl(result);
     } catch (error) {
-      console.error("Failed to load remote transcription control:", error);
+      log.error("Failed to load remote transcription control:", error);
       setControl(null);
       setFetchError(
         remoteControlUnavailableMessage(
@@ -197,7 +200,7 @@ function RemoteTranscriptionModelControl({
       await onUpdated?.();
       await loadControl();
     } catch (error) {
-      console.error("Failed to update remote transcription control:", error);
+      log.error("Failed to update remote transcription control:", error);
       toast.error("Failed to update remote shared transcription model", {
         description: remoteControlUnavailableMessage(
           error,

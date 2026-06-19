@@ -28,6 +28,9 @@ import {
   Zap,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("overview-tab");
 
 const ShareStatsModal = lazy(() =>
   import("@/components/ShareStatsModal").then((module) => ({
@@ -82,7 +85,7 @@ export function OverviewTab() {
           activeServer?.name || (activeServer ? `${activeServer.host}:${activeServer.port}` : "Remote VoiceTypr"),
         );
       } catch (error) {
-        console.error("[OverviewTab] Failed to load active remote VoiceTypr:", error);
+        log.error("[OverviewTab] Failed to load active remote VoiceTypr:", error);
         if (!cancelled) {
           setActiveRemoteLabel("Remote VoiceTypr");
         }

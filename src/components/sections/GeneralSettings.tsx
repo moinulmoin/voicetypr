@@ -35,6 +35,9 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { MicrophoneSelection } from "../MicrophoneSelection";
 import { NetworkSharingCard } from "./NetworkSharingCard";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("settings");
 
 
 export function GeneralSettings() {
@@ -51,7 +54,7 @@ export function GeneralSettings() {
         const enabled = await invoke<boolean>("get_autostart_status");
         setAutostartEnabled(enabled);
       } catch (error) {
-        console.error("Failed to check autostart status:", error);
+        log.error("Failed to check autostart status:", error);
       }
     };
 
@@ -76,7 +79,7 @@ export function GeneralSettings() {
         );
       }
     } catch (error) {
-      console.error("Failed to toggle autostart:", error);
+      log.error("Failed to toggle autostart:", error);
     } finally {
       setAutostartLoading(false);
     }
@@ -262,7 +265,7 @@ export function GeneralSettings() {
                             await updateSettings({ hotkey });
                             toast.success("Hotkey updated successfully!");
                           } catch (err) {
-                            console.error("Failed to update hotkey:", err);
+                            log.error("Failed to update hotkey:", err);
                             const errorMessage =
                               err instanceof Error ? err.message : String(err);
                             toast.error(
@@ -317,7 +320,7 @@ export function GeneralSettings() {
                               try {
                                 await invoke("open_accessibility_settings");
                               } catch (error) {
-                                console.error("Failed to open accessibility settings:", error);
+                                log.error("Failed to open accessibility settings:", error);
                                 toast.error(
                                   "Could not open settings. Please open System Settings manually.",
                                 );
@@ -346,7 +349,7 @@ export function GeneralSettings() {
                             });
                             toast.success(`Microphone changed to: ${deviceName || "Default"}`);
                           } catch (error) {
-                            console.error("Failed to set microphone:", error);
+                            log.error("Failed to set microphone:", error);
                             toast.error("Failed to change microphone");
                           }
                         }}
@@ -666,7 +669,7 @@ export function GeneralSettings() {
                               try {
                                 await invoke("open_recordings_folder");
                               } catch (error) {
-                                console.error("Failed to open recordings folder:", error);
+                                log.error("Failed to open recordings folder:", error);
                                 toast.error("Failed to open recordings folder");
                               }
                             }}

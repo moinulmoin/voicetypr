@@ -22,6 +22,9 @@ import {
 } from "lucide-react";
 import { useState } from 'react';
 import { toast } from 'sonner';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("account");
 
 export function AccountSection() {
   const { status, isLoading, checkStatus, activateLicense, deactivateLicense, openPurchasePage } = useLicense();
@@ -58,7 +61,7 @@ export function AccountSection() {
     try {
       await open(url);
     } catch (error) {
-      console.error('Failed to open external link:', error);
+      log.error('Failed to open external link:', error);
       toast.error('Failed to open link');
     }
   };

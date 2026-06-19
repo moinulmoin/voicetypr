@@ -9,6 +9,9 @@ import { listen } from "@tauri-apps/api/event";
 import { AlertTriangle, Check, CheckCircle, Copy, Eye, EyeOff, ExternalLink, Network, Server, Shield, XCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("network");
 
 interface BindingResult {
   ip: string;
@@ -136,7 +139,7 @@ export function NetworkSharingCard() {
           const localIps = await invoke<string[]>("get_local_ips");
           bindingResults = bindingResultsFromLocalIps(localIps);
         } catch (error) {
-          console.error("Failed to get local IPs:", error);
+          log.error("Failed to get local IPs:", error);
         }
       }
 
@@ -155,7 +158,7 @@ export function NetworkSharingCard() {
         }
       }
     } catch (error) {
-      console.error("Failed to get sharing status:", error);
+      log.error("Failed to get sharing status:", error);
     }
   }, []);
 
@@ -165,7 +168,7 @@ export function NetworkSharingCard() {
       const activeId = await invoke<string | null>("get_active_remote_server");
       setActiveRemoteServer(activeId);
     } catch (error) {
-      console.error("Failed to get active remote server:", error);
+      log.error("Failed to get active remote server:", error);
     }
   }, []);
 
@@ -175,7 +178,7 @@ export function NetworkSharingCard() {
       const result = await invoke<FirewallStatus>("get_firewall_status");
       setFirewallStatus(result);
     } catch (error) {
-      console.error("Failed to get firewall status:", error);
+      log.error("Failed to get firewall status:", error);
       setFirewallStatus(null);
     }
   }, []);
@@ -207,7 +210,7 @@ export function NetworkSharingCard() {
         setModelDisplayName(null);
       }
     } catch (error) {
-      console.error("Failed to get model status:", error);
+      log.error("Failed to get model status:", error);
       setHasShareableModel(false);
       setCurrentSelectionShareable(false);
     }
@@ -230,7 +233,7 @@ export function NetworkSharingCard() {
   useEffect(() => {
     const setupListener = async () => {
       const unlisten = await listen("sharing-status-changed", () => {
-        console.log("[NetworkSharingCard] Received sharing-status-changed event, refreshing status...");
+        log.debug("[NetworkSharingCard] Received sharing-status-changed event, refreshing status...");
         fetchStatus();
         fetchActiveRemoteServer(); // Also refresh remote server state in case it changed
       });
@@ -277,7 +280,7 @@ export function NetworkSharingCard() {
     if (previousSelection.model !== currentModel && status.model_name === currentModel) return;
 
     const autoRestartSharing = async () => {
-      console.log(`[Remote Transcription] Local model changed to ${currentModel}, restarting sharing...`);
+      log.debug(`[Remote Transcription] Local model changed to ${currentModel}, restarting sharing...`);
 
       const validatedPort = parseSharingPort(port);
       if (!validatedPort) {
@@ -297,7 +300,7 @@ export function NetworkSharingCard() {
         await fetchStatus();
         toast.success(`Remote transcription now uses ${modelDisplayName ?? getModelDisplayName(currentModel) ?? currentModel}`);
       } catch (error) {
-        console.error("Failed to restart remote transcription with new model:", error);
+        log.error("Failed to restart remote transcription with new model:", error);
         toast.error("Failed to switch remote transcription model");
         await fetchStatus();
       }
@@ -318,7 +321,7 @@ export function NetworkSharingCard() {
           : "Host model changes disabled",
       );
     } catch (error) {
-      console.error("Failed to update remote model control setting:", error);
+      log.error("Failed to update remote model control setting:", error);
       toast.error("Failed to update remote model control setting");
       await fetchStatus();
     } finally {
@@ -350,7 +353,7 @@ export function NetworkSharingCard() {
       }
       await fetchStatus();
     } catch (error) {
-      console.error("Failed to toggle sharing:", error);
+      log.error("Failed to toggle sharing:", error);
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       toast.error(errorMessage || "Failed to toggle remote transcription");
@@ -397,13 +400,13 @@ export function NetworkSharingCard() {
       await fetchStatus();
       toast.success(`Port changed to ${port}`);
     } catch (error) {
-      console.error("Failed to update port:", error);
+      log.error("Failed to update port:", error);
       setPort(savedPort);
       try {
         await restorePreviousSharing();
         toast.error("Failed to update port; sharing restored");
       } catch (restoreError) {
-        console.error("Failed to restore sharing after port change:", restoreError);
+        log.error("Failed to restore sharing after port change:", restoreError);
         toast.error("Failed to update port and could not restore sharing");
       }
       await fetchStatus();
@@ -444,12 +447,12 @@ export function NetworkSharingCard() {
       await fetchStatus();
       toast.success(password ? "Password updated" : "Password removed");
     } catch (error) {
-      console.error("Failed to update password:", error);
+      log.error("Failed to update password:", error);
       setPassword(savedPassword);
       try {
         await restorePreviousSharing();
       } catch (restoreError) {
-        console.error("Failed to restore sharing after password change:", restoreError);
+        log.error("Failed to restore sharing after password change:", restoreError);
         toast.error("Failed to update password and could not restore sharing");
         await fetchStatus();
         return;
@@ -460,7 +463,7 @@ export function NetworkSharingCard() {
           await invoke("update_remote_model_control_enabled", { enabled: true });
           setStatus((current) => ({ ...current, allow_model_control: true }));
         } catch (restoreModelControlError) {
-          console.error("Failed to restore remote model control:", restoreModelControlError);
+          log.error("Failed to restore remote model control:", restoreModelControlError);
           toast.error("Failed to update password; sharing restored without remote model changes");
           await fetchStatus();
           return;
@@ -642,7 +645,7 @@ export function NetworkSharingCard() {
                         try {
                           await invoke("open_firewall_settings");
                         } catch (error) {
-                          console.error("Failed to open firewall settings:", error);
+                          log.error("Failed to open firewall settings:", error);
                           const settingsPath = isMacOS
                             ? "System Settings > Network > Firewall"
                             : isWindows

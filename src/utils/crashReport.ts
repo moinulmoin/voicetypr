@@ -2,6 +2,9 @@ import { getVersion } from '@tauri-apps/api/app';
 import { platform, version as osVersion, arch } from '@tauri-apps/plugin-os';
 import { invoke } from '@tauri-apps/api/core';
 import { getModelDisplayName } from '@/lib/model-display';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("crash-report");
 
 export interface SystemSpecs {
   osName: string;
@@ -55,7 +58,7 @@ export async function gatherCrashReportData(
     osVer = osVersion();
     architecture = arch();
   } catch (e) {
-    console.error('Failed to get OS info:', e);
+    log.error('Failed to get OS info:', e);
   }
 
   return {
@@ -135,7 +138,7 @@ export async function gatherManualReportData(
     osVer = osVersion();
     architecture = arch();
   } catch (e) {
-    console.error('Failed to get OS info:', e);
+    log.error('Failed to get OS info:', e);
   }
 
   return {
@@ -340,7 +343,7 @@ async function submitBugReport(payload: BugReportPayload): Promise<ReportSubmitR
       message: responseBody?.message || 'Report submitted.',
     };
   } catch (error) {
-    console.error('Failed to submit bug report:', error);
+    log.error('Failed to submit bug report:', error);
     return {
       success: false,
       message: 'Could not connect to VoiceTypr Support. Please use Copy Report instead.',

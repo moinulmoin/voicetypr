@@ -18,6 +18,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, Keyboard, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("shortcuts");
 
 const emptySettings: ShortcutSettings = { bindings: [] };
 
@@ -180,7 +183,7 @@ export function ShortcutsSection() {
         if (actionResult.status === "fulfilled") {
           setActions(actionResult.value);
         } else {
-          console.error("Failed to load shortcut actions:", actionResult.reason);
+          log.error("Failed to load shortcut actions:", actionResult.reason);
           setActions([]);
           nextActionLoadError = formatError(actionResult.reason);
         }
@@ -189,7 +192,7 @@ export function ShortcutsSection() {
           setSettings(normalizeSettings(settingsResult.value));
           nextSettingsLoadError = null;
         } else {
-          console.error("Failed to load shortcut settings:", settingsResult.reason);
+          log.error("Failed to load shortcut settings:", settingsResult.reason);
           setSettings(emptySettings);
           nextSettingsLoadError = formatError(settingsResult.reason);
         }
@@ -312,7 +315,7 @@ export function ShortcutsSection() {
         setDraftBindings((bindings) => bindings.filter((binding) => binding.id !== nextBinding.id));
       }
     } catch (error) {
-      console.error("Failed to save shortcut:", error);
+      log.error("Failed to save shortcut:", error);
       toast.error("Could not save shortcut", {
         description: formatError(error),
       });
@@ -357,7 +360,7 @@ export function ShortcutsSection() {
     try {
       await persistSettings(nextSettings, "Shortcut removed.");
     } catch (error) {
-      console.error("Failed to remove shortcut:", error);
+      log.error("Failed to remove shortcut:", error);
       toast.error("Could not remove shortcut", { description: formatError(error) });
     } finally {
       endMutation();

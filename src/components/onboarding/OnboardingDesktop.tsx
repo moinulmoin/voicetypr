@@ -56,6 +56,9 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ModifierKind, ModifierSide, ShortcutBinding, ShortcutSettings } from "@/types/shortcuts";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("onboarding");
 
 interface OnboardingDesktopProps {
   onCompletionStart?: () => void;
@@ -341,7 +344,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         invoke<string | null>("get_active_remote_server"),
         invoke<DiscoveredRemoteServer[]>("discover_remote_servers", { timeoutMs: 1200 }).catch(
           (error) => {
-            console.error("[OnboardingDesktop] Failed to discover remote servers:", error);
+            log.error("[OnboardingDesktop] Failed to discover remote servers:", error);
             return [] as DiscoveredRemoteServer[];
           },
         ),
@@ -364,7 +367,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
               serverId: server.id,
             });
           } catch (error) {
-            console.error(
+            log.error(
               `[OnboardingDesktop] Failed to refresh remote server ${server.id}:`,
               error,
             );
@@ -382,7 +385,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         setSourceType("remote");
       }
     } catch (error) {
-      console.error("[OnboardingDesktop] Failed to load remote servers:", error);
+      log.error("[OnboardingDesktop] Failed to load remote servers:", error);
     } finally {
       setIsLoadingRemoteServers(false);
     }
@@ -486,7 +489,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         await checkAccessPermission();
       }
     } catch (error) {
-      console.error(`Failed to check ${type} permission:`, error);
+      log.error(`Failed to check ${type} permission:`, error);
     } finally {
       setCheckingPermissions((prev) => {
         const next = new Set(prev);
@@ -515,7 +518,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         }
       }
     } catch (error) {
-      console.error(`Failed to request ${type} permission:`, error);
+      log.error(`Failed to request ${type} permission:`, error);
     } finally {
       setIsRequestingPermission(null);
     }
@@ -565,7 +568,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
     );
     setActiveRemoteServerId(server.id);
     void invoke("set_active_remote_server", { serverId: server.id }).catch((error) => {
-      console.error("[OnboardingDesktop] Failed to activate remote server:", error);
+      log.error("[OnboardingDesktop] Failed to activate remote server:", error);
       toast.error("Remote VoiceTypr was added, but could not be selected");
     });
     confirmSource("remote");
@@ -589,7 +592,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
       handleRemoteServerAdded(added);
       toast.success(`${server.name} selected`);
     } catch (error) {
-      console.error("[OnboardingDesktop] Failed to add discovered remote server:", error);
+      log.error("[OnboardingDesktop] Failed to add discovered remote server:", error);
       toast.error(error instanceof Error ? error.message : "Failed to add remote VoiceTypr");
     }
   };
@@ -680,7 +683,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
       onComplete();
     } catch (error) {
       onCompletionError?.();
-      console.error("Failed to complete onboarding:", error);
+      log.error("Failed to complete onboarding:", error);
       toast.error("Failed to finish onboarding. Please try again.");
     } finally {
       setIsSavingCompletion(false);
@@ -723,7 +726,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         setCurrentStep("success");
       }
     } catch (error) {
-      console.error("Failed to advance onboarding:", error);
+      log.error("Failed to advance onboarding:", error);
       toast.error(error instanceof Error ? error.message : "Failed to continue onboarding");
     }
   };

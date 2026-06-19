@@ -21,6 +21,9 @@ import { cn } from "@/lib/utils";
 import { getModelDisplayName } from "@/lib/model-display";
 import { isCloudEngine } from "@/lib/cloudProviders";
 import { isMacOS } from "@/lib/platform";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("recordings");
 
 interface SavedConnection {
   id: string;
@@ -135,7 +138,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
 
   const resolveCurrentTranscriptionSource = useCallback(async (): Promise<CurrentTranscriptionSource | null> => {
     const activeRemoteServerId = await invoke<string | null>("get_active_remote_server").catch((error) => {
-      console.error("Failed to resolve active remote VoiceTypr:", error);
+      log.error("Failed to resolve active remote VoiceTypr:", error);
       return null;
     });
 
@@ -151,7 +154,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
           remoteModel = server.model ?? "";
         }
       } catch (error) {
-        console.error("Failed to load active remote VoiceTypr label:", error);
+        log.error("Failed to load active remote VoiceTypr label:", error);
       }
 
       const modelDisplayName = getModelDisplayName(remoteModel) ?? remoteModel;
@@ -184,29 +187,29 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
   // Verify which recordings exist on filesystem
   useEffect(() => {
     const verifyRecordings = async () => {
-      console.log("[RecentRecordings] Starting verification for", history.length, "items");
+      log.debug("[RecentRecordings] Starting verification for", history.length, "items");
       const verified = new Set<string>();
       const checked = new Set<string>();
       let itemsWithRecordingFile = 0;
       for (const item of history) {
         if (item.recording_file) {
           itemsWithRecordingFile++;
-          console.log("[RecentRecordings] Checking recording:", item.recording_file, "for item:", item.id);
+          log.debug("[RecentRecordings] Checking recording:", item.recording_file, "for item:", item.id);
           try {
             const exists = await invoke<boolean>("check_recording_exists", {
               filename: item.recording_file
             });
             checked.add(item.id);
-            console.log("[RecentRecordings] Recording", item.recording_file, "exists:", exists);
+            log.debug("[RecentRecordings] Recording", item.recording_file, "exists:", exists);
             if (exists) {
               verified.add(item.id);
             }
           } catch (error) {
-            console.error(`Failed to verify recording ${item.recording_file}:`, error);
+            log.error(`Failed to verify recording ${item.recording_file}:`, error);
           }
         }
       }
-      console.log("[RecentRecordings] Verification complete. Items with recording_file:", itemsWithRecordingFile, "Verified:", verified.size);
+      log.debug("[RecentRecordings] Verification complete. Items with recording_file:", itemsWithRecordingFile, "Verified:", verified.size);
       setCheckedRecordings(checked);
       setVerifiedRecordings(verified);
     };
@@ -235,7 +238,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       });
       await invoke("show_in_folder", { path: fullPath });
     } catch (error) {
-      console.error("Failed to show recording in folder:", error);
+      log.error("Failed to show recording in folder:", error);
       toast.error("Failed to open file location");
     }
   }, []);
@@ -330,7 +333,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
         onHistoryUpdate();
       }
     } catch (error) {
-      console.error("Re-transcription failed:", error);
+      log.error("Re-transcription failed:", error);
       const failureMessage = `Re-transcription failed: ${String(error)}`;
       try {
         if (!retryTimestamp) {
@@ -343,7 +346,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
           status: 'failed',
         });
       } catch (updateError) {
-        console.error("Failed to persist retranscription error state:", updateError);
+        log.error("Failed to persist retranscription error state:", updateError);
       }
       toast.error("Re-transcription failed", {
         description: String(error)
@@ -430,7 +433,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
         onHistoryUpdate();
       }
     } catch (error) {
-      console.error("Failed to delete transcription:", error);
+      log.error("Failed to delete transcription:", error);
       toast.error("Failed to delete transcription");
     }
   };
@@ -457,7 +460,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
         onHistoryUpdate();
       }
     } catch (error) {
-      console.error("Failed to clear all transcriptions:", error);
+      log.error("Failed to clear all transcriptions:", error);
       toast.error("Failed to clear all transcriptions");
     }
   };
@@ -484,7 +487,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
         description: `Saved to Downloads folder`
       });
     } catch (error) {
-      console.error("Failed to export transcriptions:", error);
+      log.error("Failed to export transcriptions:", error);
       toast.error("Failed to export transcriptions");
     }
   };

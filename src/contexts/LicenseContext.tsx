@@ -3,6 +3,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { LicenseStatus } from '@/types';
 import { toast } from 'sonner';
 import { getErrorMessage } from '@/utils/error';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("license");
 
 interface LicenseContextValue {
   status: LicenseStatus | null;
@@ -68,7 +71,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
     const checkId = ++latestCheckStatusId.current;
     try {
       setIsLoading(true);
-      console.log(`[${new Date().toISOString()}] Frontend: Checking license status...`);
+      log.debug('Checking license status...');
 
       const invokePromise = invoke<LicenseStatus>('check_license_status');
       invokePromise.catch(() => {
@@ -78,7 +81,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       const licenseStatus = await withTimeout(invokePromise, 10_000);
 
       if (checkId !== latestCheckStatusId.current) return;
-      console.log(`[${new Date().toISOString()}] Frontend: License status received:`, licenseStatus);
+      log.debug('License status received:', licenseStatus);
       setStatus(licenseStatus);
     } catch (error) {
       if (checkId !== latestCheckStatusId.current) return;
@@ -89,7 +92,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       }
 
       const message = getErrorMessage(error, 'Failed to check license status');
-      console.error('Failed to check license status:', error);
+      log.error('Failed to check license status:', error);
       toast.error(message);
     } finally {
       if (checkId === latestCheckStatusId.current) {
@@ -105,7 +108,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       toast.success('License restored successfully');
     } catch (error: unknown) {
       const message = getErrorMessage(error);
-      console.error('Failed to restore license:', error);
+      log.error('Failed to restore license:', error);
       toast.error(getFriendlyLicenseError('restore', message));
     }
   };
@@ -117,7 +120,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       toast.success('License activated successfully');
     } catch (error: unknown) {
       const message = getErrorMessage(error);
-      console.error('Failed to activate license:', error);
+      log.error('Failed to activate license:', error);
       toast.error(getFriendlyLicenseError('activate', message));
     }
   };
@@ -130,7 +133,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       toast.success('License deactivated successfully');
     } catch (error: unknown) {
       const message = getErrorMessage(error, 'Failed to deactivate license');
-      console.error('Failed to deactivate license:', error);
+      log.error('Failed to deactivate license:', error);
       toast.error(message);
     }
   };
@@ -139,7 +142,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
     try {
       await invoke('open_purchase_page');
     } catch (error) {
-      console.error('Failed to open purchase page:', error);
+      log.error('Failed to open purchase page:', error);
       // Fallback to window.open
       window.open('https://voicetypr.com/#pricing', '_blank');
     }
@@ -147,7 +150,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
 
   // Check license status on mount
   useEffect(() => {
-    console.log(`[${new Date().toISOString()}] Frontend: LicenseProvider mounted, checking status...`);
+    log.debug('LicenseProvider mounted, checking status...');
     checkStatus();
   }, []);
 

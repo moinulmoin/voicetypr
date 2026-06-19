@@ -11,9 +11,12 @@ import { useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
 import { useModelManagementContext } from "@/contexts/ModelManagementContext";
-import { useModelAvailability } from "@/hooks/useModelAvailability";
+import { useModelAvailabilityContext } from "@/contexts/ModelAvailabilityContext";
 import { updateService } from "@/services/updateService";
 import { loadApiKeysToCache } from "@/utils/keyring";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("app");
 
 // Type for error event payloads from backend
 interface ErrorEventPayload {
@@ -34,7 +37,7 @@ export function AppContainer() {
   const [justUpdatedVersion, setJustUpdatedVersion] = useState<string | null>(null);
   const { settings, refreshSettings } = useSettings();
   const { checkAccessibilityPermission, checkMicrophonePermission } = useReadiness();
-  const modelAvailability = useModelAvailability();
+  const modelAvailability = useModelAvailabilityContext();
 
   // Use the model management context for onboarding
   const modelManagement = useModelManagementContext();
@@ -51,7 +54,7 @@ export function AppContainer() {
     const timeoutId = window.setTimeout(() => {
       if (cancelled) return;
       loadApiKeysToCache().catch((error) => {
-        console.error("Failed to load API keys to cache:", error);
+        log.error("Failed to load API keys to cache:", error);
       });
     }, 100);
 
@@ -80,7 +83,7 @@ export function AppContainer() {
           }
         }
       } catch (error) {
-        console.error("Failed to initialize:", error);
+        log.error("Failed to initialize:", error);
       }
     };
 
@@ -119,13 +122,13 @@ export function AppContainer() {
           try {
             await updateService.checkForUpdatesManually();
           } catch (e) {
-            console.error("Manual update check failed:", e);
+            log.error("Manual update check failed:", e);
             toast.error("Failed to check for updates");
           }
         });
 
         await register<string>("tray-action-error", (message) => {
-          console.error("Tray action error:", message);
+          log.error("Tray action error:", message);
           toast.error(message);
         });
 
@@ -133,7 +136,7 @@ export function AppContainer() {
           const description = typeof message === "string" && message.trim().length > 0
             ? message
             : "Parakeet is unavailable on this Mac. Please reinstall VoiceTypr or remove the quarantine flag.";
-          console.error("Parakeet unavailable:", description);
+          log.error("Parakeet unavailable:", description);
           toast.error("Parakeet Unavailable", {
             description,
             duration: 8000
@@ -162,7 +165,7 @@ export function AppContainer() {
           message?: string;
           can_retry_from_history?: boolean;
         }>("remote-server-error", async (data) => {
-          console.error("Remote server error:", data);
+          log.error("Remote server error:", data);
 
           // Show toast with backend-owned error details and clear action
           const { title, message } = getRemoteServerErrorCopy(data);
@@ -185,12 +188,12 @@ export function AppContainer() {
               });
             }
           } catch (err) {
-            console.error("Failed to send system notification:", err);
+            log.error("Failed to send system notification:", err);
           }
         });
 
         await register<{ title: string; message: string; action?: string }>("license-required", (data) => {
-          console.log("License required event received in AppContainer:", data);
+          log.debug("License required event received in AppContainer:", data);
           // Navigate to License section to show license management
           setActiveSection("license");
           // Show a toast to inform the user
@@ -201,7 +204,7 @@ export function AppContainer() {
         });
 
         await register<ErrorEventPayload>("no-models-error", async (data) => {
-          console.error("No models available:", data);
+          log.error("No models available:", data);
           setForceShowOnboarding(true);
           forceOnboardingNeedsFreshAvailability.current = true;
           const refreshedAvailability = await modelAvailability.checkModels();
@@ -218,7 +221,7 @@ export function AppContainer() {
           });
         });
       } catch (error) {
-        console.error("Failed to register app event listeners:", error);
+        log.error("Failed to register app event listeners:", error);
       }
     };
 
@@ -275,7 +278,7 @@ export function AppContainer() {
       hasCompletedOnboarding.current = false;
 
       Promise.all([checkAccessibilityPermission(), checkMicrophonePermission()]).then(() => {
-        console.log("Permissions refreshed after onboarding completion");
+        log.info("Permissions refreshed after onboarding completion");
       });
 
       updateService.requestNotificationPermission();

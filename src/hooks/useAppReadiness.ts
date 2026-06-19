@@ -1,6 +1,6 @@
 import { useAccessibilityPermission } from './useAccessibilityPermission';
 import { useMicrophonePermission } from './useMicrophonePermission';
-import { useModelAvailability } from './useModelAvailability';
+import { useModelAvailabilityContext } from '@/contexts/ModelAvailabilityContext';
 import { useLicenseStatus } from './useLicenseStatus';
 import { useSettings } from '@/contexts/SettingsContext';
 
@@ -14,7 +14,7 @@ export function useAppReadiness() {
 
   const accessibility = useAccessibilityPermission({ checkOnMount: onboardingCompleted });
   const microphone = useMicrophonePermission({ checkOnMount: onboardingCompleted });
-  const models = useModelAvailability();
+  const models = useModelAvailabilityContext();
   const license = useLicenseStatus();
 
   // Compute derived values

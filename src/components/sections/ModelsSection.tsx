@@ -54,6 +54,9 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AddServerModal } from "./AddServerModal";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("models");
 
 interface ModelsSectionProps {
   models: [string, ModelInfo][];
@@ -168,7 +171,7 @@ export function ModelsSection({
       try {
         await updateSettings({ speech_language: value });
       } catch (error) {
-        console.error("Failed to update spoken language:", error);
+        log.error("Failed to update spoken language:", error);
         toast.error("Failed to update spoken language");
       }
     },
@@ -182,7 +185,7 @@ export function ModelsSection({
       const servers = await invoke<SavedConnection[]>("list_remote_servers");
       setRemoteServers(servers);
     } catch (error) {
-      console.error("Failed to fetch remote servers:", error);
+      log.error("Failed to fetch remote servers:", error);
     }
   }, []);
 
@@ -212,7 +215,7 @@ export function ModelsSection({
           });
           return updated;
         } catch (error) {
-          console.error(`Failed to check server ${server.id}:`, error);
+          log.error(`Failed to check server ${server.id}:`, error);
           return server; // Keep existing data on error
         }
       });
@@ -220,7 +223,7 @@ export function ModelsSection({
       // Wait for all checks to complete
       await Promise.all(checkPromises);
     } catch (error) {
-      console.error("Failed to refresh remote servers:", error);
+      log.error("Failed to refresh remote servers:", error);
     } finally {
       setIsRefreshingServers(false);
     }
@@ -237,7 +240,7 @@ export function ModelsSection({
         toast.info("No remote VoiceTypr devices found. You can still add one manually.");
       }
     } catch (error) {
-      console.error("Failed to discover remote VoiceTypr devices:", error);
+      log.error("Failed to discover remote VoiceTypr devices:", error);
       if (notifyEmpty) {
         toast.error("Failed to scan for remote VoiceTypr devices");
       }
@@ -252,7 +255,7 @@ export function ModelsSection({
       const activeId = await invoke<string | null>("get_active_remote_server");
       setActiveRemoteServer(activeId);
     } catch (error) {
-      console.error("Failed to fetch active remote server:", error);
+      log.error("Failed to fetch active remote server:", error);
     }
   }, []);
 
@@ -292,7 +295,7 @@ export function ModelsSection({
     const unlistenModelChanged = listen<{ model: string; engine: string }>(
       "model-changed",
       (event) => {
-        console.log("[ModelsSection] model-changed event received:", event.payload);
+        log.debug("[ModelsSection] model-changed event received:", event.payload);
         // Refresh all model-related state
         fetchActiveRemoteServer();
         fetchRemoteServers();
@@ -315,7 +318,7 @@ export function ModelsSection({
         toast.success("Remote VoiceTypr selected");
       } catch (error) {
         const message = getErrorMessage(error, "Failed to select remote VoiceTypr");
-        console.error("Failed to set active remote server:", error);
+        log.error("Failed to set active remote server:", error);
         toast.error(message);
       }
     },
@@ -329,7 +332,7 @@ export function ModelsSection({
       toast.success("Remote VoiceTypr deselected");
     } catch (error) {
       const message = getErrorMessage(error, "Failed to stop routing to remote VoiceTypr");
-      console.error("Failed to clear active remote server:", error);
+      log.error("Failed to clear active remote server:", error);
       toast.error(message);
     }
   }, []);
@@ -346,7 +349,7 @@ export function ModelsSection({
         setRemoteServers((prev) => prev.filter((s) => s.id !== serverId));
         toast.success("Remote VoiceTypr removed");
       } catch (error) {
-        console.error("Failed to remove remote server:", error);
+        log.error("Failed to remove remote server:", error);
         toast.error("Failed to remove remote VoiceTypr");
       }
     },
@@ -397,7 +400,7 @@ export function ModelsSection({
         );
         toast.success(`${server.name} added`);
       } catch (error) {
-        console.error("Failed to add discovered remote VoiceTypr:", error);
+        log.error("Failed to add discovered remote VoiceTypr:", error);
         toast.error(error instanceof Error ? error.message : "Failed to add remote VoiceTypr");
       }
     },
@@ -454,7 +457,7 @@ export function ModelsSection({
     if (!settings) return;
     if (isEnglishOnlyModel && settings.speech_language !== "en") {
       updateSettings({ speech_language: "en" }).catch((error) => {
-        console.error("Failed to enforce English fallback:", error);
+        log.error("Failed to enforce English fallback:", error);
       });
     }
   }, [isEnglishOnlyModel, settings, updateSettings]);
@@ -482,7 +485,7 @@ export function ModelsSection({
       await invoke("set_active_remote_server", { serverId: null });
       setActiveRemoteServer(null);
     } catch (error) {
-      console.error("Failed to clear active remote:", error);
+      log.error("Failed to clear active remote:", error);
     }
   };
 
@@ -542,7 +545,7 @@ export function ModelsSection({
         try {
           await invoke('update_tray_menu');
         } catch (e) {
-          console.warn('[ModelsSection] Failed to refresh tray menu after disconnect:', e);
+          log.warn('[ModelsSection] Failed to refresh tray menu after disconnect:', e);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

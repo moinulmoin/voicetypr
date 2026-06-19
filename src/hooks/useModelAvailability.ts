@@ -3,8 +3,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useSettings } from '@/contexts/SettingsContext';
 import type { ModelInfo } from '@/types';
+import { createLogger } from '@/lib/logger';
 
-type RemoteAvailabilityStatus = 'unknown' | 'online' | 'offline' | 'auth_failed' | 'self_connection';
+const log = createLogger("model-availability");
+export type RemoteAvailabilityStatus = 'unknown' | 'online' | 'offline' | 'auth_failed' | 'self_connection';
 
 type RemoteAvailabilityStatusPayload =
   | RemoteAvailabilityStatus
@@ -39,7 +41,23 @@ interface ModelAvailabilityState {
   isChecking: boolean;
 }
 
-type DerivedAvailabilityState = Omit<ModelAvailabilityState, 'isChecking'>;
+/** Snapshot of model availability — the subset without isChecking/checkModels. */
+export interface ModelAvailabilitySnapshot {
+  hasModels: boolean | null;
+  selectedModelAvailable: boolean | null;
+  remoteSelected: boolean;
+  remoteAvailable: boolean;
+  remoteStatus: RemoteAvailabilityStatus;
+  remoteLastChecked: number | string | null;
+}
+
+/** Full return type of useModelAvailability. Import this type at consumers. */
+export interface ModelAvailability extends ModelAvailabilitySnapshot {
+  isChecking: boolean;
+  checkModels: () => Promise<ModelAvailabilitySnapshot>;
+}
+
+type DerivedAvailabilityState = ModelAvailabilitySnapshot;
 
 const FALLBACK_AVAILABILITY: RecognitionAvailabilitySnapshot = {
   whisper_available: false,
@@ -190,7 +208,7 @@ export function useModelAvailability() {
       const localSelectedModelAvailable = getLocalSelectedModelAvailability(status, settings?.current_model);
       return applyCanonicalAvailability(availability, localSelectedModelAvailable);
     } catch (error) {
-      console.error('Failed to check model availability:', error);
+      log.error('Failed to check model availability:', error);
       if (refreshGeneration !== refreshGenerationRef.current) {
         return latestAvailabilityRef.current;
       }

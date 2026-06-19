@@ -17,6 +17,9 @@ import {
   submitCrashReport,
 } from '@/utils/crashReport';
 import { getModelDisplayName } from '@/lib/model-display';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('crash-report');
 
 interface CrashReportDialogProps {
   error: Error;
@@ -107,7 +110,7 @@ export function CrashReportDialog({
       })
       .catch((err) => {
         if (actionId === actionIdRef.current) {
-          console.error(err);
+          log.error(err);
         }
       })
       .finally(() => {
@@ -160,7 +163,7 @@ export function CrashReportDialog({
         copiedTimerRef.current = null;
       }, 2000);
     } catch (err) {
-      console.error('Failed to copy:', err);
+      log.error('Failed to copy:', err);
       toast.error('Failed to copy details');
     }
   };

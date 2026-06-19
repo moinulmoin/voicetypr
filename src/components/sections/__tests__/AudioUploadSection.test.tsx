@@ -27,6 +27,15 @@ vi.mock('@/contexts/SettingsContext', () => ({
   })
 }));
 
+// AudioUploadSection now reads availability from context; delegate the context
+// hook to the real useModelAvailability so the per-test mocked invoke still drives it.
+vi.mock('@/contexts/ModelAvailabilityContext', async () => {
+  const actual = await vi.importActual<typeof import('@/hooks/useModelAvailability')>(
+    '@/hooks/useModelAvailability'
+  );
+  return { useModelAvailabilityContext: actual.useModelAvailability };
+});
+
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';

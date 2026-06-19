@@ -35,6 +35,9 @@ import { useSettings } from '@/contexts/SettingsContext';
 import { useCanRecord, useCanAutoInsert } from '@/contexts/ReadinessContext';
 import { useModelManagementContext } from '@/contexts/ModelManagementContext';
 import { getModelDisplayName } from '@/lib/model-display';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("help");
 
 interface QuickFix {
   id: string;
@@ -91,7 +94,7 @@ export function HelpSection() {
         const diag = lines.join('\n');
         setDiagnostics(diag);
       } catch (error) {
-        console.error('Failed to get system info:', error);
+        log.error('Failed to get system info:', error);
       }
     };
 
@@ -172,7 +175,7 @@ Actual behavior:
       setShowEmailModal(false);
       toast.success('Opening Gmail in browser');
     } catch (error) {
-      console.error('Failed to open Gmail:', error);
+      log.error('Failed to open Gmail:', error);
       toast.error('Failed to open Gmail');
     }
   };
@@ -184,7 +187,7 @@ Actual behavior:
       setShowEmailModal(false);
       toast.success('Opening default email client');
     } catch (error) {
-      console.error('Failed to open email client:', error);
+      log.error('Failed to open email client:', error);
       toast.error('Failed to open email client');
     }
   };
@@ -195,7 +198,7 @@ Actual behavior:
     try {
       await open(xUrl);
     } catch (error) {
-      console.error('Failed to open X profile:', error);
+      log.error('Failed to open X profile:', error);
       toast.error('Failed to open X profile');
     }
   };
@@ -205,7 +208,7 @@ Actual behavior:
       await navigator.clipboard.writeText(diagnostics);
       toast.success('System info copied to clipboard');
     } catch (error) {
-      console.error('Failed to copy system info:', error);
+      log.error('Failed to copy system info:', error);
       toast.error('Failed to copy system info');
     }
   };
@@ -215,7 +218,7 @@ Actual behavior:
       await invoke('open_logs_folder');
       toast.info('Please attach the latest log file to your support message');
     } catch (error) {
-      console.error('Failed to open logs folder:', error);
+      log.error('Failed to open logs folder:', error);
       toast.error('Failed to open logs folder');
     }
   };

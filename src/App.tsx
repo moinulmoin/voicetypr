@@ -6,14 +6,16 @@ import { LicenseProvider } from "./contexts/LicenseContext";
 import { ReadinessProvider } from "./contexts/ReadinessContext";
 import { SettingsProvider } from "./contexts/SettingsContext";
 import { ModelManagementProvider } from "./contexts/ModelManagementContext";
+import { ModelAvailabilityProvider } from "./contexts/ModelAvailabilityContext";
 
 export default function App() {
   return (
     <AppErrorBoundary>
       <LicenseProvider>
         <SettingsProvider>
-          <ReadinessProvider>
-            <ModelManagementProvider>
+          <ModelAvailabilityProvider>
+            <ReadinessProvider>
+              <ModelManagementProvider>
               <TooltipProvider>
                 <AppContainer />
                 <Toaster
@@ -41,6 +43,7 @@ export default function App() {
               </TooltipProvider>
             </ModelManagementProvider>
           </ReadinessProvider>
+          </ModelAvailabilityProvider>
         </SettingsProvider>
       </LicenseProvider>
     </AppErrorBoundary>

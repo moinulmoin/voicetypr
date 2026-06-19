@@ -51,6 +51,17 @@ const mockSettings = {
   hotkey: 'Cmd+Shift+Space',
 };
 
+const mockModelAvailability = {
+  hasModels: true as boolean | null,
+  selectedModelAvailable: true as boolean | null,
+  remoteSelected: false as boolean,
+  remoteAvailable: false as boolean,
+  remoteStatus: 'unknown' as 'unknown' | 'online' | 'offline' | 'auth_failed' | 'self_connection',
+  remoteLastChecked: null as string | number | null,
+  isChecking: false as boolean,
+  checkModels: vi.fn(),
+};
+
 vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
     settings: mockSettings,
@@ -90,6 +101,11 @@ vi.mock('@/contexts/ModelManagementContext', () => ({
     preloadModel: vi.fn(),
     verifyModel: vi.fn(),
   }),
+}));
+
+// Mock ModelAvailabilityContext — AppContainer now reads model availability from context
+vi.mock('@/contexts/ModelAvailabilityContext', () => ({
+  useModelAvailabilityContext: () => ({ ...mockModelAvailability }),
 }));
 
 // Mock services
@@ -181,13 +197,6 @@ const getRemoteServerErrorHandler = async () => {
   return (window as any).__testEventCallbacks['remote-server-error'] as (payload: any) => Promise<void>;
 };
 
-const emitTauriEvent = (eventName: string, payload: unknown) => {
-  for (const callback of tauriEventListeners.get(eventName) ?? []) {
-    callback({ payload });
-  }
-};
-
-const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
 describe('AppContainer', () => {
   beforeEach(() => {
@@ -195,6 +204,21 @@ describe('AppContainer', () => {
     tauriEventListeners.clear();
     (window as any).__testEventCallbacks = {};
     mockSettings.onboarding_completed = true;
+    mockModelAvailability.hasModels = true;
+    mockModelAvailability.selectedModelAvailable = true;
+    mockModelAvailability.remoteSelected = false;
+    mockModelAvailability.remoteAvailable = false;
+    mockModelAvailability.remoteStatus = 'unknown';
+    mockModelAvailability.remoteLastChecked = null;
+    mockModelAvailability.isChecking = false;
+    mockModelAvailability.checkModels = vi.fn().mockResolvedValue({
+      hasModels: true,
+      selectedModelAvailable: true,
+      remoteSelected: false,
+      remoteAvailable: false,
+      remoteStatus: 'unknown',
+      remoteLastChecked: null,
+    });
     refreshSettingsMock.mockReset();
     mockGetJustUpdatedVersion.mockReset().mockReturnValue(null);
     checkAccessibilityPermissionMock.mockReset().mockResolvedValue(true);
@@ -314,7 +338,6 @@ describe('AppContainer', () => {
       expect(checkAccessibilityPermissionMock).toHaveBeenCalledTimes(1);
       expect(checkMicrophonePermissionMock).toHaveBeenCalledTimes(1);
       expect(requestNotificationPermissionServiceMock).toHaveBeenCalledTimes(1);
-      expect(consoleLogSpy).toHaveBeenCalledWith('Permissions refreshed after onboarding completion');
     });
   });
 
@@ -363,28 +386,21 @@ describe('AppContainer', () => {
   });
 
   it('clears onboarding when a remote server recovers after a no-models error', async () => {
-    mockInvoke.mockImplementation((command: string) => {
-      if (command === 'get_model_status') {
-        return Promise.resolve({ models: [] });
-      }
-
-      if (command === 'get_recognition_availability_snapshot') {
-        return Promise.resolve({
-          whisper_available: false,
-          parakeet_available: false,
-          cloud_selected: false,
-          cloud_ready: false,
-          remote_selected: true,
-          remote_status: 'unknown',
-          remote_available: false,
-          remote_last_checked: null,
-        });
-      }
-
-      return Promise.resolve(null);
+    // Start with remote selected but status unknown (hasModels: null — no local models, remote pending)
+    mockModelAvailability.hasModels = null;
+    mockModelAvailability.selectedModelAvailable = null;
+    mockModelAvailability.remoteSelected = true;
+    mockModelAvailability.remoteStatus = 'unknown';
+    mockModelAvailability.checkModels = vi.fn().mockResolvedValue({
+      hasModels: null,
+      selectedModelAvailable: null,
+      remoteSelected: true,
+      remoteAvailable: false,
+      remoteStatus: 'unknown',
+      remoteLastChecked: null,
     });
 
-    render(<AppContainer />);
+    const { rerender } = render(<AppContainer />);
 
     await waitFor(() => {
       expect((window as any).__testEventCallbacks?.['no-models-error']).toBeInstanceOf(Function);
@@ -392,7 +408,7 @@ describe('AppContainer', () => {
 
     const callback = (window as any).__testEventCallbacks['no-models-error'];
     await act(async () => {
-      callback({
+      await callback({
         title: 'No models available',
         message: 'Connect a cloud provider or download a local model in Models before recording.',
       });
@@ -402,21 +418,13 @@ describe('AppContainer', () => {
       expect(screen.getByTestId('onboarding')).toBeInTheDocument();
     });
 
-    await waitFor(() => {
-      expect(tauriEventListeners.get('recognition-availability')?.size ?? 0).toBeGreaterThan(0);
-    });
-
+    // Simulate the context updating when the remote server comes online (provider responsibility)
+    mockModelAvailability.hasModels = true;
+    mockModelAvailability.selectedModelAvailable = true;
+    mockModelAvailability.remoteAvailable = true;
+    mockModelAvailability.remoteStatus = 'online';
     await act(async () => {
-      emitTauriEvent('recognition-availability', {
-        whisper_available: false,
-        parakeet_available: false,
-        cloud_selected: false,
-        cloud_ready: false,
-        remote_selected: true,
-        remote_status: 'online',
-        remote_available: true,
-        remote_last_checked: '2026-03-31T00:01:00Z',
-      });
+      rerender(<AppContainer />);
     });
 
     await waitFor(() => {
@@ -427,7 +435,6 @@ describe('AppContainer', () => {
     expect(checkAccessibilityPermissionMock).not.toHaveBeenCalled();
     expect(checkMicrophonePermissionMock).not.toHaveBeenCalled();
     expect(requestNotificationPermissionServiceMock).not.toHaveBeenCalled();
-    expect(consoleLogSpy).not.toHaveBeenCalledWith('Permissions refreshed after onboarding completion');
   });
 
   it('shows History guidance for retryable remote errors', async () => {

@@ -437,7 +437,7 @@ pub async fn get_model_status(
     parakeet_manager: State<'_, ParakeetManager>,
     app: tauri::AppHandle,
 ) -> Result<ModelStatusResponse, String> {
-    log::info!("[GET_MODEL_STATUS] Refreshing downloaded status...");
+    log::debug!("[GET_MODEL_STATUS] Refreshing downloaded status...");
 
     let whisper_models_map = {
         let mut manager = whisper_state.write().await;
@@ -463,7 +463,7 @@ pub async fn get_model_status(
         a_key.cmp(&b_key)
     });
 
-    log::info!("[GET_MODEL_STATUS] Returning {} models", models.len());
+    log::debug!("[GET_MODEL_STATUS] Returning {} models", models.len());
 
     Ok(ModelStatusResponse { models })
 }

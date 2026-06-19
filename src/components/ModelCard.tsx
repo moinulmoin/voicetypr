@@ -7,6 +7,9 @@ import { Progress } from './ui/progress';
 import { Spinner } from './ui/spinner';
 import { cn } from '@/lib/utils';
 import { getModelDisplayName } from '@/lib/model-display';
+import { createLogger } from "@/lib/logger"
+
+const log = createLogger("model-card")
 
 interface ModelCardProps {
   name: string;
@@ -41,7 +44,7 @@ export const ModelCard = function ModelCard({
 }: ModelCardProps) {
 
   if (!isLocalModel(model)) {
-    console.warn(`[ModelCard] Skipping non-local model card for ${model.name}`);
+    log.debug(`[ModelCard] Skipping non-local model card for ${model.name}`);
     return null;
   }
 

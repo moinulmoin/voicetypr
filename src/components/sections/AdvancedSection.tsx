@@ -32,6 +32,9 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("advanced");
 
 export function AdvancedSection() {
   const { updateSettings } = useSettings();
@@ -107,7 +110,7 @@ export function AdvancedSection() {
       toast.success("Onboarding reset!");
       // No need to reload - the settings update will trigger the UI change
     } catch (error) {
-      console.error('Failed to reset onboarding:', error);
+      log.error('Failed to reset onboarding:', error);
       toast.error("Failed to reset onboarding");
     }
   };
@@ -292,7 +295,7 @@ export function AdvancedSection() {
                             relaunch();
                           }, 1000);
                         } catch (error) {
-                          console.error("Failed to reset app data:", error);
+                          log.error("Failed to reset app data:", error);
                           toast.error("Failed to reset app data");
                           setIsResetting(false);
                         }
