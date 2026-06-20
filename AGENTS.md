@@ -7,7 +7,7 @@ macOS desktop app for offline voice transcription using Whisper AI. Built with T
 ```bash
 # Development
 pnpm dev              # Frontend only (Vite)
-pnpm tauri dev        # Full Tauri app (frontend + Rust)
+pnpm tauri:dev        # Full Tauri app (frontend + Rust)
 
 # Quality checks (run before commits)
 pnpm lint             # ESLint

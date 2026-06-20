@@ -21,7 +21,7 @@ This Swift sidecar replaces the previous 123MB Python/MLX implementation with a 
 
 ### Automated Build (via Tauri)
 
-The sidecar is automatically built when running `pnpm tauri dev` or `pnpm tauri build` thanks to the integration in `src-tauri/build.rs`.
+The sidecar is automatically built when running `pnpm tauri:dev` or `pnpm tauri build` thanks to the integration in `src-tauri/build.rs`.
 
 ### Manual Build
 

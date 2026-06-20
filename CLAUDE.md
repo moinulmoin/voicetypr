@@ -20,7 +20,7 @@ VoiceTypr is a native desktop app for macOS that provides offline voice transcri
 
 ```bash
 pnpm dev          # Frontend only
-pnpm tauri dev    # Full Tauri app
+pnpm tauri:dev    # Full Tauri app
 pnpm test         # Frontend tests
 pnpm typecheck    # TypeScript compiler
 pnpm lint         # ESLint

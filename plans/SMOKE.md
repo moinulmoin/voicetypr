@@ -5,7 +5,7 @@ work is interactive desktop smoke, batched (per product owner) to run once at
 the end of the current feature push, before release. Do NOT re-implement
 anything here; executors and agents treat these plans as code-frozen.
 
-Run on a real macOS machine via `pnpm tauri dev` (item 16-S8 needs a Windows
+Run on a real macOS machine via `pnpm tauri:dev` (item 16-S8 needs a Windows
 build). Check each box with date + result; on failure, file the failure
 against the named plan instead of hot-fixing inline.
 
@@ -146,7 +146,7 @@ across local/cloud/remote). Cancellation/too-short never preserved.
 Behavioral re-application of good fixes from the V1 hotfix line (origin/main)
 onto V2; each is reviewer-clean + gate-green and committed. Several are
 Windows-runtime only (marked **W**) and can be verified solely on a real
-Windows build; the rest run via `pnpm tauri dev` on macOS.
+Windows build; the rest run via `pnpm tauri:dev` on macOS.
 
 - [ ] PORT-S1 (bug report) Submit a bug report → body includes a System table
       (OS, CPU, RAM, GPU); a spec-collection failure never blocks the report.
