@@ -12,12 +12,14 @@ use crate::commands::shortcuts::{
 const DEFAULT_DOUBLE_TAP_MS: u64 = 350;
 const MIN_DOUBLE_TAP_MS: u64 = 120;
 const MAX_DOUBLE_TAP_MS: u64 = 1000;
+/// Max single-press duration that still counts as an isolated tap.
+const ISOLATED_TAP_MS: u64 = 500;
 
 /// True if this binding is handled by the native engine (not `global_shortcut`).
 pub fn is_engine_kind(binding: &ShortcutBinding) -> bool {
     matches!(
         binding.trigger_kind,
-        TriggerKind::ModifierHold | TriggerKind::DoubleTap
+        TriggerKind::ModifierHold | TriggerKind::DoubleTap | TriggerKind::IsolatedTap
     )
 }
 
@@ -45,6 +47,13 @@ pub fn to_trigger(binding: &ShortcutBinding) -> Option<Trigger> {
             Some(Trigger::DoubleTap {
                 key: TapKey::Mod(modifier(spec.modifier), side(spec.side)),
                 within,
+            })
+        }
+        TriggerKind::IsolatedTap => {
+            let spec = binding.modifier?;
+            Some(Trigger::IsolatedTap {
+                key: TapKey::Mod(modifier(spec.modifier), side(spec.side)),
+                within: Duration::from_millis(ISOLATED_TAP_MS),
             })
         }
     }
@@ -103,6 +112,21 @@ pub fn validate(binding: &ShortcutBinding) -> Result<(), String> {
             }
             if binding.action == ShortcutAction::HoldToRecord {
                 return Err("Double-tap cannot be used for Hold-to-record".to_string());
+            }
+        }
+        TriggerKind::IsolatedTap => {
+            if binding.modifier.is_none() {
+                return Err(format!(
+                    "Tap-a-modifier binding '{}' requires a modifier",
+                    binding.id
+                ));
+            }
+            // Isolated single-tap is a one-shot press; it cannot drive a hold.
+            if binding.trigger != ShortcutTrigger::Pressed {
+                return Err("Tap-a-modifier shortcuts must use the press trigger".to_string());
+            }
+            if binding.action == ShortcutAction::HoldToRecord {
+                return Err("Tap-a-modifier cannot be used for Hold-to-record".to_string());
             }
         }
     }
@@ -274,5 +298,49 @@ mod tests {
     #[test]
     fn has_recording_engine_binding_empty_slice_returns_false() {
         assert!(!has_recording_engine_binding(&[]));
+    }
+
+    #[test]
+    fn isolated_tap_maps_and_validates() {
+        let mut b = hold_binding();
+        b.trigger_kind = TriggerKind::IsolatedTap;
+        b.trigger = ShortcutTrigger::Pressed;
+        b.action = ShortcutAction::ToggleRecording;
+        b.modifier = Some(ModifierSpec {
+            modifier: ModifierKind::Control,
+            side: SideKind::Either,
+        });
+        assert!(is_engine_kind(&b));
+        assert!(validate(&b).is_ok());
+        assert!(matches!(to_trigger(&b), Some(Trigger::IsolatedTap { .. })));
+    }
+
+    #[test]
+    fn isolated_tap_rejects_hold_to_record() {
+        let mut b = hold_binding();
+        b.trigger_kind = TriggerKind::IsolatedTap;
+        b.trigger = ShortcutTrigger::Pressed;
+        b.action = ShortcutAction::HoldToRecord;
+        assert!(validate(&b).is_err());
+    }
+
+    #[test]
+    fn isolated_tap_requires_pressed_trigger() {
+        let mut b = hold_binding();
+        b.trigger_kind = TriggerKind::IsolatedTap;
+        b.trigger = ShortcutTrigger::Hold;
+        b.action = ShortcutAction::ToggleRecording;
+        assert!(validate(&b).is_err());
+    }
+
+    #[test]
+    fn isolated_tap_missing_modifier_rejected() {
+        let mut b = hold_binding();
+        b.trigger_kind = TriggerKind::IsolatedTap;
+        b.trigger = ShortcutTrigger::Pressed;
+        b.action = ShortcutAction::ToggleRecording;
+        b.modifier = None;
+        assert!(validate(&b).is_err());
+        assert!(to_trigger(&b).is_none());
     }
 }

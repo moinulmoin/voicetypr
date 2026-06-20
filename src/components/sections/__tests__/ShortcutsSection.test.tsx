@@ -190,6 +190,7 @@ describe("ShortcutsSection", () => {
     await user.click(within(copyRow).getByTitle("Change hotkey"));
     await user.keyboard("{Alt>}{Shift>}c{/Shift}{/Alt}");
     await user.click(within(copyRow).getByTitle("Save hotkey"));
+    await user.click(within(copyRow).getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", {
@@ -230,6 +231,7 @@ describe("ShortcutsSection", () => {
     await user.click(within(pasteRow).getByTitle("Change hotkey"));
     await user.keyboard("{Alt>}c{/Alt}");
     await user.click(within(pasteRow).getByTitle("Save hotkey"));
+    await user.click(within(pasteRow).getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith("Shortcut already assigned", {
@@ -261,6 +263,7 @@ describe("ShortcutsSection", () => {
     await user.click(within(pasteRow).getByTitle("Change hotkey"));
     await user.keyboard("{Alt>}c{/Alt}");
     await user.click(within(pasteRow).getByTitle("Save hotkey"));
+    await user.click(within(pasteRow).getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", {
@@ -298,11 +301,13 @@ describe("ShortcutsSection", () => {
     await user.click(within(copyRow).getByTitle("Change hotkey"));
     await user.keyboard("{Alt>}{Shift>}c{/Shift}{/Alt}");
     await user.click(within(copyRow).getByTitle("Save hotkey"));
+    await user.click(within(copyRow).getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(within(copyRow).getByText("⌥")).toBeInTheDocument();
-      expect(within(copyRow).getByText("r")).toBeInTheDocument();
-      expect(within(copyRow).queryByText("⇧")).not.toBeInTheDocument();
+      // Backend returned "Alt+R"; verify the read-mode display reflects it (not the submitted "Alt+Shift+C")
+      const display = within(copyRow).getByLabelText("Copy Last Transcription shortcut read-only");
+      expect(display).toHaveTextContent("Alt+R");
+      expect(display).not.toHaveTextContent("Shift");
     });
   });
 
@@ -492,6 +497,7 @@ describe("ShortcutsSection", () => {
       expect(within(holdRow).getByTitle("Save hotkey")).toBeEnabled();
     });
     await user.click(within(holdRow).getByTitle("Save hotkey"));
+    await user.click(within(holdRow).getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", {
@@ -535,6 +541,7 @@ describe("ShortcutsSection", () => {
       expect(within(copyRow).getByTitle("Save hotkey")).toBeEnabled();
     });
     await user.click(within(copyRow).getByTitle("Save hotkey"));
+    await user.click(within(copyRow).getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", {

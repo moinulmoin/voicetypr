@@ -52,6 +52,7 @@ pub enum TriggerKind {
     Combo,
     ModifierHold,
     DoubleTap,
+    IsolatedTap,
 }
 
 /// A side-specific modifier for native (`ModifierHold`/`DoubleTap`) bindings.

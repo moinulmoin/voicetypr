@@ -16,7 +16,7 @@ export type ShortcutAction =
 
 export type ShortcutTrigger = "pressed" | "hold";
 
-export type TriggerKind = "combo" | "modifier_hold" | "double_tap";
+export type TriggerKind = "combo" | "modifier_hold" | "double_tap" | "isolated_tap";
 export type ModifierKind = "alt" | "control" | "meta" | "shift";
 export type ModifierSide = "left" | "right" | "either";
 

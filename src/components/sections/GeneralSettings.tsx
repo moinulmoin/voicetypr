@@ -1,4 +1,4 @@
-import { HotkeyInput } from "@/components/HotkeyInput";
+import { HotkeyInput, type BareModifierSpec } from "@/components/HotkeyInput";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,14 +23,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { updateService } from "@/services/updateService";
 import { isMacOS, isWindows } from "@/lib/platform";
 import { PillIndicatorMode, PillIndicatorPosition, TranscriptionAcceleration } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertCircle, FolderOpen, HelpCircle, Keyboard, Mic, RefreshCw, Rocket, ToggleLeft } from "lucide-react";
+import type { ShortcutBinding, ShortcutSettings } from "@/types/shortcuts";
+import { AlertCircle, Check, Edit2, FolderOpen, HelpCircle, Mic, RefreshCw, Rocket, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { MicrophoneSelection } from "../MicrophoneSelection";
@@ -38,6 +38,32 @@ import { NetworkSharingCard } from "./NetworkSharingCard";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("settings");
+
+const BARE_MOD_ICONS: Record<string, string> = {
+  alt: "⌥", meta: "⌘", control: "⌃", shift: "⇧",
+};
+
+function formatModifierLabel(mod: { modifier: string; side: string }): string {
+  const sideLabel = mod.side === "right" ? "Right " : mod.side === "left" ? "Left " : "";
+  const modLabel = isMacOS
+    ? (BARE_MOD_ICONS[mod.modifier] ?? mod.modifier)
+    : mod.modifier.charAt(0).toUpperCase() + mod.modifier.slice(1);
+  return `${sideLabel}${modLabel}`;
+}
+
+function formatPrimaryHotkeyLabel(
+  binding: ShortcutBinding | null,
+  hotkey: string | undefined,
+): string {
+  if (binding?.modifier) {
+    const mod = formatModifierLabel(binding.modifier);
+    if (binding.trigger_kind === "isolated_tap") return `Tap ${mod} to toggle`;
+    if (binding.trigger_kind === "modifier_hold") return `Hold ${mod} to talk`;
+    return mod;
+  }
+  if (hotkey) return hotkey;
+  return "Not set";
+}
 
 
 export function GeneralSettings() {
@@ -47,6 +73,11 @@ export function GeneralSettings() {
   const [showAccessibilityWarning, setShowAccessibilityWarning] = useState(true);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const canAutoInsert = useCanAutoInsert();
+  const [nativeBinding, setNativeBinding] = useState<ShortcutBinding | null>(null);
+  const [isEditingHotkey, setIsEditingHotkey] = useState(false);
+  const [pendingHotkey, setPendingHotkey] = useState("");
+  const [pendingBareModifier, setPendingBareModifier] = useState<BareModifierSpec | null>(null);
+  const [holdToTalk, setHoldToTalk] = useState(false);
 
   useEffect(() => {
     const checkAutostart = async () => {
@@ -62,7 +93,129 @@ export function GeneralSettings() {
     setShowAccessibilityWarning(isMacOS);
   }, []);
 
+  useEffect(() => {
+    const hotkey = settings?.hotkey;
+    if (hotkey) {
+      setNativeBinding(null);
+      return;
+    }
+    let cancelled = false;
+    invoke<ShortcutSettings>("get_shortcut_settings")
+      .then((result) => {
+        if (cancelled) return;
+        const bs = result.bindings;
+        const found =
+          bs.find((b) => b.id === "onboarding-primary-hold") ??
+          bs.find(
+            (b) =>
+              b.enabled &&
+              (b.action === "hold_to_record" || b.action === "toggle_recording") &&
+              (b.trigger_kind === "modifier_hold" || b.trigger_kind === "double_tap" || b.trigger_kind === "isolated_tap"),
+          ) ??
+          null;
+        setNativeBinding(found);
+      })
+      .catch(() => {
+        if (!cancelled) setNativeBinding(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings?.hotkey]);
+
   if (!settings) return null;
+
+  const startEditing = () => {
+    setPendingHotkey(settings.hotkey || "");
+    setPendingBareModifier(null);
+    setHoldToTalk(
+      nativeBinding?.action === "hold_to_record" ||
+        (!nativeBinding && settings.recording_mode === "push_to_talk"),
+    );
+    setIsEditingHotkey(true);
+  };
+
+  const handleCancelHotkey = () => {
+    setIsEditingHotkey(false);
+    setPendingHotkey("");
+    setPendingBareModifier(null);
+  };
+
+  const handleSaveHotkey = async () => {
+    if (pendingBareModifier) {
+      try {
+        const existing = await invoke<ShortcutSettings>("get_shortcut_settings");
+        const existingPrimary =
+          existing.bindings.find((b) => b.id === "onboarding-primary-hold") ??
+          existing.bindings.find(
+            (b) =>
+              b.enabled &&
+              (b.action === "hold_to_record" || b.action === "toggle_recording") &&
+              (b.trigger_kind === "modifier_hold" ||
+                b.trigger_kind === "double_tap" ||
+                b.trigger_kind === "isolated_tap"),
+          );
+        const stableId = existingPrimary?.id ?? "onboarding-primary-hold";
+        const newBinding: ShortcutBinding = holdToTalk
+          ? {
+              id: stableId,
+              action: "hold_to_record",
+              shortcut: "",
+              trigger: "hold",
+              enabled: true,
+              allow_risky_combo: false,
+              trigger_kind: "modifier_hold",
+              modifier: {
+                modifier: pendingBareModifier.modifier as import("@/types/shortcuts").ModifierKind,
+                side: pendingBareModifier.side as import("@/types/shortcuts").ModifierSide,
+              },
+            }
+          : {
+              id: stableId,
+              action: "toggle_recording",
+              shortcut: "",
+              trigger: "pressed",
+              enabled: true,
+              allow_risky_combo: false,
+              trigger_kind: "isolated_tap",
+              modifier: {
+                modifier: pendingBareModifier.modifier as import("@/types/shortcuts").ModifierKind,
+                side: pendingBareModifier.side as import("@/types/shortcuts").ModifierSide,
+              },
+            };
+        const updatedBindings = existingPrimary
+          ? existing.bindings.map((b) => (b.id === stableId ? newBinding : b))
+          : [...existing.bindings, newBinding];
+        await invoke("update_shortcut_settings", {
+          settings: { bindings: updatedBindings },
+        });
+        if (settings.hotkey) {
+          await updateSettings({ hotkey: "" });
+        }
+        setNativeBinding(newBinding);
+        setIsEditingHotkey(false);
+        setPendingHotkey("");
+        setPendingBareModifier(null);
+        toast.success("Hotkey updated successfully!");
+      } catch (err) {
+        log.error("Failed to save bare modifier hotkey:", err);
+        toast.error("Failed to save hotkey. Please try again.");
+      }
+    } else if (pendingHotkey) {
+      try {
+        await invoke("set_global_shortcut", { shortcut: pendingHotkey });
+        await updateSettings({ hotkey: pendingHotkey });
+        setNativeBinding(null);
+        setIsEditingHotkey(false);
+        setPendingHotkey("");
+        toast.success("Hotkey updated successfully!");
+      } catch (err) {
+        log.error("Failed to update hotkey:", err);
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        toast.error(errorMessage || "Failed to update hotkey. Please try a different combination.");
+      }
+    }
+  };
 
   const handleAutostartToggle = async (checked: boolean) => {
     setAutostartLoading(true);
@@ -204,93 +357,84 @@ export function GeneralSettings() {
                 <FieldSet className="gap-4 border-t border-border/60 pt-5 first:border-t-0 first:pt-0">
                   <FieldLegend className="mb-1 text-base font-semibold">Capture controls</FieldLegend>
 
-                  <Field>
+                  <Field orientation="responsive" className="items-start gap-3">
                     <FieldContent>
-                      <FieldTitle>Recording Mode</FieldTitle>
+                      <FieldTitle>Recording Hotkey</FieldTitle>
                       <FieldDescription>
-                        {settings.recording_mode === "push_to_talk" ? (
-                          "Hold the hotkey to record, release to stop"
-                        ) : (
-                          <>
-                            Press the hotkey to start/stop recording · Press <Kbd>ESC</Kbd> twice to cancel
-                          </>
-                        )}
-                      </FieldDescription>
-                    </FieldContent>
-                    <ToggleGroup
-                      type="single"
-                      value={settings.recording_mode || "toggle"}
-                      onValueChange={async (value) => {
-                        if (!value) return;
-                        await updateSettings({
-                          recording_mode: value as "toggle" | "push_to_talk",
-                        });
-                        toast.success(
-                          `Recording mode changed to ${value === "push_to_talk" ? "Push-to-Talk" : "Toggle"}`,
-                        );
-                      }}
-                      variant="outline"
-                      className="w-full flex-wrap md:w-fit"
-                      data-testid="toggle-group"
-                      data-value={settings.recording_mode || "toggle"}
-                    >
-                      <ToggleGroupItem value="toggle">
-                        <ToggleLeft className="h-4 w-4" />
-                        Toggle
-                      </ToggleGroupItem>
-                      <ToggleGroupItem value="push_to_talk">
-                        <Keyboard className="h-4 w-4" />
-                        Push to Talk
-                      </ToggleGroupItem>
-                    </ToggleGroup>
-                  </Field>
-
-                  <Field orientation="responsive" className="items-center gap-3">
-                    <FieldContent>
-                      <FieldTitle>
-                        {settings.recording_mode === "push_to_talk" ? "Push-to-Talk Key" : "Toggle Hotkey"}
-                      </FieldTitle>
-                      <FieldDescription>
-                        {settings.recording_mode === "push_to_talk"
-                          ? "Hold this key to record."
-                          : "Use this key to start or stop recording from anywhere."}
+                        {isEditingHotkey
+                          ? "Press a key or modifier, then save."
+                          : formatPrimaryHotkeyLabel(nativeBinding, settings.hotkey)}
                       </FieldDescription>
                     </FieldContent>
                     <div className="w-full md:w-auto">
-                      <HotkeyInput
-                        value={settings.hotkey || ""}
-                        onChange={async (hotkey) => {
-                          try {
-                            await invoke("set_global_shortcut", { shortcut: hotkey });
-                            await updateSettings({ hotkey });
-                            toast.success("Hotkey updated successfully!");
-                          } catch (err) {
-                            log.error("Failed to update hotkey:", err);
-                            const errorMessage =
-                              err instanceof Error ? err.message : String(err);
-                            toast.error(
-                              errorMessage ||
-                                "Failed to update hotkey. Please try a different combination.",
-                            );
-                          }
-                        }}
-                        placeholder="Click to set"
-                      />
+                      {isEditingHotkey ? (
+                        <div className="space-y-3">
+                          <HotkeyInput
+                            value={pendingHotkey}
+                            onChange={(v) => {
+                              setPendingHotkey(v);
+                              setPendingBareModifier(null);
+                            }}
+                            allowBareModifier
+                            onBareModifier={(spec) => {
+                              setPendingBareModifier(spec);
+                              setPendingHotkey("");
+                            }}
+                            placeholder="Press a key..."
+                          />
+                          {pendingBareModifier && (
+                            <label className="flex cursor-pointer items-center gap-2 text-sm select-none">
+                              <Switch
+                                checked={holdToTalk}
+                                onCheckedChange={setHoldToTalk}
+                                id="hold-to-talk"
+                              />
+                              <span>Hold to talk (push-to-talk)</span>
+                            </label>
+                          )}
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={handleSaveHotkey}
+                              disabled={!pendingHotkey && !pendingBareModifier}
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                              Save
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={handleCancelHotkey}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <div className="flex min-h-9 items-center rounded-md border border-input bg-muted/30 px-3 text-sm">
+                            {formatPrimaryHotkeyLabel(nativeBinding, settings.hotkey)}
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={startEditing}
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                            Edit
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   </Field>
 
                   <p className="text-xs text-muted-foreground">
-                    {settings.recording_mode === "push_to_talk" ? (
-                      <>
-                        Primary push-to-talk key (modifier required here). For single-key push-to-talk, use{" "}
-                        <span className="font-medium text-foreground">Settings &#8594; Shortcuts &#8594; Hold to record</span>.
-                      </>
-                    ) : (
-                      <>
-                        Primary recording shortcut. Additional per-action shortcuts live in{" "}
-                        <span className="font-medium text-foreground">Settings &#8594; Shortcuts</span>.
-                      </>
-                    )}
+                    Primary recording shortcut. Additional per-action shortcuts live in{" "}
+                    <span className="font-medium text-foreground">Settings &#8594; Shortcuts</span>.
                   </p>
 
                   {!canAutoInsert && showAccessibilityWarning && (

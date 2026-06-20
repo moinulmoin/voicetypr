@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingDesktop } from "./OnboardingDesktop";
@@ -550,5 +550,103 @@ describe("OnboardingDesktop", () => {
     await user.click(screen.getByRole("button", { name: /continue/i })); // permissions→readiness
 
     expect(screen.queryByText(/use gpu acceleration/i)).not.toBeInTheDocument();
+  });
+
+  it("saves isolated_tap binding when bare modifier captured with Hold to talk OFF", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    // Navigate to hotkey step (macOS: welcome→source→permissions→readiness→hotkey)
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+
+    // Enter HotkeyInput edit mode
+    await user.click(screen.getByTitle("Change hotkey"));
+
+    // Simulate Right Alt bare modifier press + release; waitFor ensures the
+    // keydown listener is attached and pendingBareModifier is set before clicking Save.
+    fireEvent.keyDown(window, { key: "Alt", code: "AltRight", altKey: true });
+    fireEvent.keyUp(window, { key: "Alt", code: "AltRight" });
+    await waitFor(() => expect(screen.getByTitle("Save hotkey")).not.toBeDisabled());
+
+    // Save within HotkeyInput (the checkmark icon button)
+    await user.click(screen.getByTitle("Save hotkey"));
+
+    // Hold to talk is OFF by default; save the step
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    await screen.findByRole("button", { name: /review result/i });
+
+    // isolated_tap / toggle_recording / pressed
+    expect(invokeMock).toHaveBeenCalledWith("update_shortcut_settings", {
+      settings: {
+        bindings: [
+          expect.objectContaining({
+            id: "onboarding-primary-hold",
+            trigger_kind: "isolated_tap",
+            action: "toggle_recording",
+            trigger: "pressed",
+            modifier: { modifier: "alt", side: "right" },
+            shortcut: "",
+          }),
+        ],
+      },
+    });
+    expect(updateSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ recording_mode: "toggle" }),
+    );
+  });
+
+  it("saves modifier_hold binding when bare modifier captured with Hold to talk ON", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    // Navigate to hotkey step
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+
+    // Enter HotkeyInput edit mode
+    await user.click(screen.getByTitle("Change hotkey"));
+
+    // Simulate Right Alt bare modifier press + release
+    fireEvent.keyDown(window, { key: "Alt", code: "AltRight", altKey: true });
+    fireEvent.keyUp(window, { key: "Alt", code: "AltRight" });
+    await waitFor(() => expect(screen.getByTitle("Save hotkey")).not.toBeDisabled());
+
+    // Save within HotkeyInput
+    await user.click(screen.getByTitle("Save hotkey"));
+
+    // Toggle "Hold to talk" ON
+    await user.click(screen.getByRole("switch", { name: /hold to talk/i }));
+
+    // Save the step
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    await screen.findByRole("button", { name: /review result/i });
+
+    // modifier_hold / hold_to_record / hold
+    expect(invokeMock).toHaveBeenCalledWith("update_shortcut_settings", {
+      settings: {
+        bindings: [
+          expect.objectContaining({
+            id: "onboarding-primary-hold",
+            trigger_kind: "modifier_hold",
+            action: "hold_to_record",
+            trigger: "hold",
+            modifier: { modifier: "alt", side: "right" },
+            shortcut: "",
+          }),
+        ],
+      },
+    });
+    expect(updateSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ recording_mode: "push_to_talk" }),
+    );
   });
 });

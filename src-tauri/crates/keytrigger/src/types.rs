@@ -212,6 +212,10 @@ pub enum Trigger {
     ModifierHold { modifier: Modifier, side: Side },
     /// One-shot when the key/modifier is tapped twice within `within`.
     DoubleTap { key: TapKey, within: Duration },
+    /// One-shot when the key/modifier is tapped *alone* — pressed and released
+    /// with no other key in between — within `within`. Holding it together with
+    /// another key behaves as a normal key/modifier and never fires.
+    IsolatedTap { key: TapKey, within: Duration },
     /// Fires while `key` is down and all `mods` are held (sides ignored).
     Chord { mods: ModSet, key: KeySpec },
     /// Fires while `key` is down and NO modifiers are held.

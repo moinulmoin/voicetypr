@@ -57,6 +57,10 @@ pub struct Matcher {
     last_tap: HashMap<TapKey, (Instant, bool)>,
     /// Currently-active level triggers (so `Released` is emitted exactly once).
     active: HashMap<TriggerId, bool>,
+    /// Per concrete gesture currently down: (down time, still-isolated flag).
+    /// Drives [`Trigger::IsolatedTap`]: an entry stays isolated only while no
+    /// OTHER key is pressed during its hold.
+    isolated: HashMap<TapKey, (Instant, bool)>,
 }
 
 impl Matcher {
@@ -90,6 +94,7 @@ impl Matcher {
 
             if !repeat {
                 self.handle_double_tap(gesture, now, emit);
+                self.handle_isolated_down(gesture, now);
             }
         } else {
             match modifier {
@@ -103,6 +108,7 @@ impl Matcher {
             if let Some(entry) = self.last_tap.get_mut(&gesture) {
                 entry.1 = true; // saw_up
             }
+            self.handle_isolated_up(gesture, now, emit);
         }
 
         self.recompute_levels(emit);
@@ -183,6 +189,52 @@ impl Matcher {
         }
     }
 
+    /// Track the isolated-tap candidate for a non-repeat `gesture` down. Any
+    /// other key going down marks every *other* held candidate non-isolated; the
+    /// new candidate is isolated only if nothing else is currently down.
+    fn handle_isolated_down(&mut self, gesture: TapKey, now: Instant) {
+        for (k, (_, clean)) in self.isolated.iter_mut() {
+            if *k != gesture {
+                *clean = false;
+            }
+        }
+        let others_down = self.mods_down.len() + self.keys_down.len() > 1;
+        self.isolated.insert(gesture, (now, !others_down));
+    }
+
+    /// One-shot isolated-tap edge detection on `gesture` up: fire when the key
+    /// was tapped alone (no other key during its hold) within `within`.
+    fn handle_isolated_up(
+        &mut self,
+        gesture: TapKey,
+        now: Instant,
+        emit: &mut dyn FnMut(TriggerEvent),
+    ) {
+        let Some((down_time, clean)) = self.isolated.remove(&gesture) else {
+            return;
+        };
+        if !clean {
+            return;
+        }
+        let elapsed = now.duration_since(down_time);
+        let bindings = std::mem::take(&mut self.bindings);
+        for (id, trig) in &bindings {
+            if let Trigger::IsolatedTap { key, within } = trig {
+                if tapkey_matches(*key, gesture) && elapsed <= *within {
+                    emit(TriggerEvent {
+                        id: id.clone(),
+                        phase: KeyPhase::Pressed,
+                    });
+                    emit(TriggerEvent {
+                        id: id.clone(),
+                        phase: KeyPhase::Released,
+                    });
+                }
+            }
+        }
+        self.bindings = bindings;
+    }
+
     /// Re-evaluate all level triggers against current key/modifier state.
     fn recompute_levels(&mut self, emit: &mut dyn FnMut(TriggerEvent)) {
         let modset = self.current_modset();
@@ -200,6 +252,7 @@ impl Matcher {
                     self.keys_down.contains(key) && self.mods_down.is_empty()
                 }
                 Trigger::DoubleTap { .. } => continue, // edge trigger, handled elsewhere
+                Trigger::IsolatedTap { .. } => continue,
             };
             let was = self.active.get(id).copied().unwrap_or(false);
             if now_active && !was {
@@ -272,6 +325,7 @@ impl Matcher {
         self.keys_down.clear();
         self.mods_down.clear();
         self.last_tap.clear();
+        self.isolated.clear();
         self.active.clear();
     }
 
@@ -741,5 +795,175 @@ mod tests {
         assert!(out.contains(&press("a")));
         assert!(out.contains(&press("b")));
         assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn isolated_tap_alone_fires() {
+        let mut m = with_bindings(vec![(
+            "tap".into(),
+            Trigger::IsolatedTap {
+                key: TapKey::Mod(Modifier::Control, Side::Either),
+                within: Duration::from_millis(350),
+            },
+        )]);
+        let base = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (mdown(NamedKey::ControlLeft, Side::Left), base),
+                (
+                    mup(NamedKey::ControlLeft, Side::Left),
+                    base + Duration::from_millis(80),
+                ),
+            ],
+        );
+        assert_eq!(out, vec![press("tap"), release("tap")]);
+    }
+
+    #[test]
+    fn isolated_tap_with_other_key_does_not_fire() {
+        // Control held while another key is pressed = normal modifier use.
+        let mut m = with_bindings(vec![(
+            "tap".into(),
+            Trigger::IsolatedTap {
+                key: TapKey::Mod(Modifier::Control, Side::Either),
+                within: Duration::from_millis(350),
+            },
+        )]);
+        let base = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (mdown(NamedKey::ControlLeft, Side::Left), base),
+                (kdown(NamedKey::C), base + Duration::from_millis(30)),
+                (kup(NamedKey::C), base + Duration::from_millis(60)),
+                (
+                    mup(NamedKey::ControlLeft, Side::Left),
+                    base + Duration::from_millis(90),
+                ),
+            ],
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn isolated_tap_too_slow_does_not_fire() {
+        let mut m = with_bindings(vec![(
+            "tap".into(),
+            Trigger::IsolatedTap {
+                key: TapKey::Mod(Modifier::Control, Side::Either),
+                within: Duration::from_millis(350),
+            },
+        )]);
+        let base = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (mdown(NamedKey::ControlLeft, Side::Left), base),
+                (
+                    mup(NamedKey::ControlLeft, Side::Left),
+                    base + Duration::from_millis(500),
+                ),
+            ],
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn isolated_tap_pressed_while_other_held_does_not_fire() {
+        // Another key already down when the modifier is tapped = not isolated.
+        let mut m = with_bindings(vec![(
+            "tap".into(),
+            Trigger::IsolatedTap {
+                key: TapKey::Mod(Modifier::Control, Side::Either),
+                within: Duration::from_millis(350),
+            },
+        )]);
+        let base = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (mdown(NamedKey::ShiftLeft, Side::Left), base),
+                (
+                    mdown(NamedKey::ControlLeft, Side::Left),
+                    base + Duration::from_millis(20),
+                ),
+                (
+                    mup(NamedKey::ControlLeft, Side::Left),
+                    base + Duration::from_millis(60),
+                ),
+                (
+                    mup(NamedKey::ShiftLeft, Side::Left),
+                    base + Duration::from_millis(90),
+                ),
+            ],
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn isolated_tap_twice_fires_each_time() {
+        // Each clean tap toggles, so it fires every time (unlike double-tap).
+        let mut m = with_bindings(vec![(
+            "tap".into(),
+            Trigger::IsolatedTap {
+                key: TapKey::Mod(Modifier::Control, Side::Either),
+                within: Duration::from_millis(350),
+            },
+        )]);
+        let base = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (mdown(NamedKey::ControlLeft, Side::Left), base),
+                (
+                    mup(NamedKey::ControlLeft, Side::Left),
+                    base + Duration::from_millis(40),
+                ),
+                (
+                    mdown(NamedKey::ControlLeft, Side::Left),
+                    base + Duration::from_millis(400),
+                ),
+                (
+                    mup(NamedKey::ControlLeft, Side::Left),
+                    base + Duration::from_millis(440),
+                ),
+            ],
+        );
+        assert_eq!(
+            out,
+            vec![press("tap"), release("tap"), press("tap"), release("tap")]
+        );
+    }
+
+    #[test]
+    fn isolated_tap_with_normal_key_already_held_does_not_fire() {
+        // A normal (non-modifier) key already down when the modifier is tapped
+        // = not isolated. This is the anti-misfire guarantee: a bound modifier
+        // tapped mid-shortcut must never toggle recording.
+        let mut m = with_bindings(vec![(
+            "tap".into(),
+            Trigger::IsolatedTap {
+                key: TapKey::Mod(Modifier::Control, Side::Either),
+                within: Duration::from_millis(350),
+            },
+        )]);
+        let base = Instant::now();
+        let out = drive(
+            &mut m,
+            &[
+                (kdown(NamedKey::C), base),
+                (
+                    mdown(NamedKey::ControlLeft, Side::Left),
+                    base + Duration::from_millis(20),
+                ),
+                (
+                    mup(NamedKey::ControlLeft, Side::Left),
+                    base + Duration::from_millis(60),
+                ),
+                (kup(NamedKey::C), base + Duration::from_millis(90)),
+            ],
+        );
+        assert!(out.is_empty());
     }
 }

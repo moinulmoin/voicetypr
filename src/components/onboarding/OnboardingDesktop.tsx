@@ -248,6 +248,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   } | null>(null);
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [isSavingCompletion, setIsSavingCompletion] = useState(false);
+  const [holdToTalk, setHoldToTalk] = useState(false);
 
   useEffect(() => {
     sourceConfirmedRef.current = sourceConfirmed;
@@ -610,22 +611,39 @@ export const OnboardingDesktop = function OnboardingDesktop({
       //    set_global_shortcut("") is the backend's "clear primary" contract.
       await invoke("set_global_shortcut", { shortcut: "" });
 
-      // 2. Upsert the HoldToRecord modifier_hold binding with the stable id.
+      // 2. Upsert the native binding with the stable id, action determined by Hold to talk.
+      //    holdToTalk ON  → modifier_hold / hold_to_record (PTT).
+      //    holdToTalk OFF → isolated_tap  / toggle_recording (tap-to-toggle).
       const currentSettings = await invoke<ShortcutSettings>("get_shortcut_settings");
-      const newBinding: ShortcutBinding = {
-        id: ONBOARDING_HOLD_ID,
-        action: "hold_to_record",
-        shortcut: "",
-        trigger: "hold",
-        enabled: true,
-        allow_risky_combo: false,
-        trigger_kind: "modifier_hold",
-        modifier: {
-          modifier: capturedBareModifier.modifier as ModifierKind,
-          side: capturedBareModifier.side as ModifierSide,
-        },
-        double_tap_ms: null,
-      };
+      const newBinding: ShortcutBinding = holdToTalk
+        ? {
+            id: ONBOARDING_HOLD_ID,
+            action: "hold_to_record",
+            shortcut: "",
+            trigger: "hold",
+            enabled: true,
+            allow_risky_combo: false,
+            trigger_kind: "modifier_hold",
+            modifier: {
+              modifier: capturedBareModifier.modifier as ModifierKind,
+              side: capturedBareModifier.side as ModifierSide,
+            },
+            double_tap_ms: null,
+          }
+        : {
+            id: ONBOARDING_HOLD_ID,
+            action: "toggle_recording",
+            shortcut: "",
+            trigger: "pressed",
+            enabled: true,
+            allow_risky_combo: false,
+            trigger_kind: "isolated_tap",
+            modifier: {
+              modifier: capturedBareModifier.modifier as ModifierKind,
+              side: capturedBareModifier.side as ModifierSide,
+            },
+            double_tap_ms: null,
+          };
       await invoke("update_shortcut_settings", {
         settings: {
           bindings: [
@@ -635,10 +653,10 @@ export const OnboardingDesktop = function OnboardingDesktop({
         },
       });
 
-      // 3. Persist the remaining settings (hotkey=""; set_global_shortcut already
-      //    cleared it in the store, but we still need to write model/language etc.)
+      // 3. Persist the remaining settings.
       await updateSettings({
         hotkey: "",
+        recording_mode: holdToTalk ? "push_to_talk" : "toggle",
         current_model: selectedModelName || "",
         current_model_engine: selectedModel?.engine ?? "whisper",
         speech_language: "en",
@@ -663,6 +681,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
       // 3. Persist the remaining settings.
       await updateSettings({
         hotkey,
+        recording_mode: holdToTalk ? "push_to_talk" : "toggle",
         current_model: selectedModelName || "",
         current_model_engine: selectedModel?.engine ?? "whisper",
         speech_language: "en",
@@ -1210,8 +1229,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
         {currentStep === "hotkey" && (
           <OnboardingPanel
             eyebrow="Step 4"
-            title="Pick the hotkey you will remember"
-            description="This is the system-wide shortcut for starting and stopping recording. You can change it later."
+            title="Pick your hotkey and recording mode"
+            description="This is the system-wide shortcut for triggering VoiceTypr. You can change both later in Settings."
             footer={
               <StepFooter
                 onBack={handleBack}
@@ -1232,6 +1251,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-4">
+
                 <HotkeyInput
                   value={hotkey}
                   onChange={(v) => { setHotkey(v); setCapturedBareModifier(null); }}
@@ -1240,17 +1260,29 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   allowBareModifier
                   validationRules={ONBOARDING_HOTKEY_VALIDATION}
                   placeholder={capturedBareModifier
-                    ? `Hold ${formatBareModifierLabel(capturedBareModifier)} · push-to-talk`
+                    ? holdToTalk
+                      ? `Hold ${formatBareModifierLabel(capturedBareModifier)} · push-to-talk`
+                      : `Tap ${formatBareModifierLabel(capturedBareModifier)} · tap to toggle`
                     : undefined}
                 />
                 {capturedBareModifier ? (
-                  <Alert>
-                    <Info className="size-4" />
-                    <AlertTitle>Hold to record selected</AlertTitle>
-                    <AlertDescription>
-                      Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording — release to stop.
-                    </AlertDescription>
-                  </Alert>
+                  holdToTalk ? (
+                    <Alert>
+                      <Info className="size-4" />
+                      <AlertTitle>Hold to talk</AlertTitle>
+                      <AlertDescription>
+                        Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording — release to stop.
+                      </AlertDescription>
+                    </Alert>
+                  ) : (
+                    <Alert>
+                      <Info className="size-4" />
+                      <AlertTitle>Tap to toggle on/off</AlertTitle>
+                      <AlertDescription>
+                        Tap {formatBareModifierLabel(capturedBareModifier)} once to start recording, tap again to stop.
+                      </AlertDescription>
+                    </Alert>
+                  )
                 ) : (
                   <Alert>
                     <Info className="size-4" />
@@ -1260,6 +1292,16 @@ export const OnboardingDesktop = function OnboardingDesktop({
                     </AlertDescription>
                   </Alert>
                 )}
+                <div className="flex items-center gap-3">
+                  <Switch
+                    id="hold-to-talk"
+                    checked={holdToTalk}
+                    onCheckedChange={setHoldToTalk}
+                  />
+                  <label htmlFor="hold-to-talk" className="text-sm cursor-pointer select-none">
+                    Hold to talk (push-to-talk)
+                  </label>
+                </div>
               </CardContent>
             </Card>
           </OnboardingPanel>
@@ -1361,8 +1403,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
               </h1>
               <p className="text-muted-foreground">
                 {capturedBareModifier
-                  ? <>Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording — release to stop.</>
-                  : <>Press {formatHotkey(hotkey)} anywhere to start recording.</>}
+                  ? holdToTalk
+                    ? <>Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording — release to stop.</>
+                    : <>Tap {formatBareModifierLabel(capturedBareModifier)} anywhere to start or stop recording.</>
+                  : holdToTalk
+                    ? <>Hold {formatHotkey(hotkey)} anywhere to start recording — release to stop.</>
+                    : <>Press {formatHotkey(hotkey)} anywhere to start recording.</>}
               </p>
             </div>
             <Button size="lg" onClick={() => void completeOnboarding()} disabled={isSavingCompletion}>

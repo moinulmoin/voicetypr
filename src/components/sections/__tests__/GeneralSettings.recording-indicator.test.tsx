@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeneralSettings } from '../GeneralSettings';
+import { invoke } from '@tauri-apps/api/core';
 
 const mockUpdateSettings = vi.fn().mockResolvedValue(undefined);
 const baseSettings = {
@@ -33,7 +34,7 @@ vi.mock('@/lib/platform', () => ({
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue(undefined)
+  invoke: vi.fn()
 }));
 
 vi.mock('@tauri-apps/plugin-autostart', () => ({
@@ -42,8 +43,23 @@ vi.mock('@tauri-apps/plugin-autostart', () => ({
   isEnabled: vi.fn().mockResolvedValue(false)
 }));
 
+// Mock HotkeyInput with buttons to simulate combo and bare-modifier captures
 vi.mock('@/components/HotkeyInput', () => ({
-  HotkeyInput: () => <div data-testid="hotkey-input" />
+  HotkeyInput: ({ onChange, onBareModifier }: {
+    onChange?: (v: string) => void;
+    onBareModifier?: (spec: { modifier: string; side: string }) => void;
+  }) => (
+    <div data-testid="hotkey-input">
+      <button
+        data-testid="mock-trigger-combo"
+        onClick={() => onChange?.('Control+Space')}
+      />
+      <button
+        data-testid="mock-trigger-bare-modifier"
+        onClick={() => onBareModifier?.({ modifier: 'control', side: 'left' })}
+      />
+    </div>
+  )
 }));
 
 vi.mock('@/components/ui/scroll-area', () => ({
@@ -66,23 +82,6 @@ vi.mock('@/components/ui/switch', () => ({
       disabled={disabled}
       onClick={() => onCheckedChange?.(!checked)}
     />
-  )
-}));
-
-vi.mock('@/components/ui/toggle-group', () => ({
-  ToggleGroup: ({ children, value, onValueChange: _onValueChange }: {
-    children: React.ReactNode;
-    value?: string;
-    onValueChange?: (value: string) => void;
-  }) => (
-    <div data-testid="toggle-group" data-value={value}>
-      {children}
-    </div>
-  ),
-  ToggleGroupItem: ({ children, value }: { children: React.ReactNode; value: string }) => (
-    <button type="button" data-testid={`toggle-item-${value}`}>
-      {children}
-    </button>
   )
 }));
 
@@ -125,6 +124,15 @@ vi.mock('../NetworkSharingCard', () => ({
   NetworkSharingCard: () => <div data-testid="network-sharing-card" />
 }));
 
+/** Default invoke behavior: autostart=false, shortcut_settings empty, everything else undefined */
+function setupDefaultInvoke() {
+  vi.mocked(invoke).mockImplementation((cmd: string) => {
+    if (cmd === 'get_autostart_status') return Promise.resolve(false);
+    if (cmd === 'get_shortcut_settings') return Promise.resolve({ bindings: [] });
+    return Promise.resolve(undefined);
+  });
+}
+
 // ============================================================================
 // Recording Indicator Mode Tests
 // ============================================================================
@@ -133,6 +141,7 @@ describe('GeneralSettings recording indicator', () => {
   beforeEach(() => {
     mockSettings = { ...baseSettings };
     vi.clearAllMocks();
+    setupDefaultInvoke();
   });
 
   it('hides the position selector when mode is never', async () => {
@@ -222,6 +231,7 @@ describe('GeneralSettings sound settings', () => {
   beforeEach(() => {
     mockSettings = { ...baseSettings };
     vi.clearAllMocks();
+    setupDefaultInvoke();
   });
 
   it('displays Sound on Recording label', async () => {
@@ -341,12 +351,16 @@ describe('GeneralSettings sound settings', () => {
     });
   });
 });
+
+// ============================================================================
+// Clipboard Settings Tests
 // ============================================================================
 
 describe('GeneralSettings clipboard settings', () => {
   beforeEach(() => {
     mockSettings = { ...baseSettings };
     vi.clearAllMocks();
+    setupDefaultInvoke();
   });
 
   it('displays Keep Transcript in Clipboard label', async () => {
@@ -396,6 +410,7 @@ describe('GeneralSettings UI structure', () => {
   beforeEach(() => {
     mockSettings = { ...baseSettings };
     vi.clearAllMocks();
+    setupDefaultInvoke();
   });
 
   it('renders the Settings header', async () => {
@@ -412,8 +427,10 @@ describe('GeneralSettings UI structure', () => {
     });
   });
 
-  it('renders the hotkey input component', async () => {
+  it('shows hotkey input after clicking Edit', async () => {
     render(<GeneralSettings />);
+    const editButton = await screen.findByRole('button', { name: /edit/i });
+    fireEvent.click(editButton);
     await waitFor(() => {
       expect(screen.getByTestId('hotkey-input')).toBeInTheDocument();
     });
@@ -448,7 +465,7 @@ describe('GeneralSettings UI structure', () => {
           (_content, node) =>
             (node?.tagName === 'P' &&
               node.textContent?.includes(
-                'Press the hotkey to start/stop recording · Press ESC twice to cancel'
+                'Press twice while recording to cancel the current take.'
               )) ?? false
         )
       ).toBeInTheDocument();
@@ -457,71 +474,273 @@ describe('GeneralSettings UI structure', () => {
 });
 
 // ============================================================================
-// Recording Mode Tests
+// Recording Hotkey Editor Tests
 // ============================================================================
 
-describe('GeneralSettings recording mode', () => {
+describe('GeneralSettings recording hotkey editor', () => {
   beforeEach(() => {
     mockSettings = { ...baseSettings };
     vi.clearAllMocks();
+    setupDefaultInvoke();
   });
 
-  it('displays Recording Mode label', async () => {
+  it('displays the current combo hotkey in view mode', async () => {
     render(<GeneralSettings />);
     await waitFor(() => {
-      expect(screen.getByText('Recording Mode')).toBeInTheDocument();
+      // The label appears in both FieldDescription and the display box
+      expect(screen.getAllByText('CommandOrControl+Shift+Space').length).toBeGreaterThan(0);
     });
   });
 
-  it('renders toggle mode option', async () => {
+  it('displays "Not set" when no hotkey is configured', async () => {
+    mockSettings = { ...baseSettings, hotkey: '' };
     render(<GeneralSettings />);
     await waitFor(() => {
-      expect(screen.getByTestId('toggle-item-toggle')).toBeInTheDocument();
+      expect(screen.getAllByText('Not set').length).toBeGreaterThan(0);
     });
   });
 
-  it('renders push to talk mode option', async () => {
+  it('shows the Recording Hotkey field title', async () => {
     render(<GeneralSettings />);
     await waitFor(() => {
-      expect(screen.getByTestId('toggle-item-push_to_talk')).toBeInTheDocument();
+      expect(screen.getByText('Recording Hotkey')).toBeInTheDocument();
     });
   });
 
-  it('displays toggle mode description when in toggle mode', async () => {
-    mockSettings.recording_mode = 'toggle';
+  it('clicking Edit enters capture mode and shows HotkeyInput', async () => {
     render(<GeneralSettings />);
+    const editButton = await screen.findByRole('button', { name: /edit/i });
+    fireEvent.click(editButton);
     await waitFor(() => {
-      expect(
-        screen.getByText(
-          (_content, node) =>
-            (node?.tagName === 'P' &&
-              node.textContent?.includes('Press the hotkey to start/stop recording')) ?? false
-        )
-      ).toBeInTheDocument();
+      expect(screen.getByTestId('hotkey-input')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument();
     });
   });
 
-  it('displays push to talk description when in PTT mode', async () => {
-    mockSettings.recording_mode = 'push_to_talk';
+  it('Cancel returns to view mode without saving', async () => {
     render(<GeneralSettings />);
+    const editButton = await screen.findByRole('button', { name: /edit/i });
+    fireEvent.click(editButton);
+    await screen.findByTestId('hotkey-input');
+
+    const cancelButton = screen.getByRole('button', { name: /cancel/i });
+    fireEvent.click(cancelButton);
+
     await waitFor(() => {
-      expect(screen.getByText('Hold the hotkey to record, release to stop')).toBeInTheDocument();
+      expect(screen.queryByTestId('hotkey-input')).not.toBeInTheDocument();
+      expect(mockUpdateSettings).not.toHaveBeenCalled();
     });
   });
 
-  it('displays Toggle Hotkey label when in toggle mode', async () => {
-    mockSettings.recording_mode = 'toggle';
+  it('Save is disabled until a key is captured when no prior hotkey', async () => {
+    mockSettings = { ...baseSettings, hotkey: '' };
     render(<GeneralSettings />);
+    const editButton = await screen.findByRole('button', { name: /edit/i });
+    fireEvent.click(editButton);
+    await screen.findByTestId('hotkey-input');
+
+    const saveButton = screen.getByRole('button', { name: /save/i });
+    expect(saveButton).toBeDisabled();
+  });
+
+  it('capturing a combo enables Save and calls set_global_shortcut + updateSettings', async () => {
+    render(<GeneralSettings />);
+    const editButton = await screen.findByRole('button', { name: /edit/i });
+    fireEvent.click(editButton);
+    await screen.findByTestId('hotkey-input');
+
+    // Simulate capturing a combo
+    fireEvent.click(screen.getByTestId('mock-trigger-combo'));
+
+    const saveButton = screen.getByRole('button', { name: /save/i });
+    expect(saveButton).not.toBeDisabled();
+    fireEvent.click(saveButton);
+
     await waitFor(() => {
-      expect(screen.getByText('Toggle Hotkey')).toBeInTheDocument();
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('set_global_shortcut', { shortcut: 'Control+Space' });
+      expect(mockUpdateSettings).toHaveBeenCalledWith({ hotkey: 'Control+Space' });
     });
   });
 
-  it('displays Push-to-Talk Key label when in PTT mode', async () => {
-    mockSettings.recording_mode = 'push_to_talk';
+  it('after saving a combo, view mode returns showing the new hotkey', async () => {
+    render(<GeneralSettings />);
+    const editButton = await screen.findByRole('button', { name: /edit/i });
+    fireEvent.click(editButton);
+    await screen.findByTestId('hotkey-input');
+
+    fireEvent.click(screen.getByTestId('mock-trigger-combo'));
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('hotkey-input')).not.toBeInTheDocument();
+    });
+  });
+
+  it('capturing a bare modifier shows the Hold-to-talk switch', async () => {
+    render(<GeneralSettings />);
+    const editButton = await screen.findByRole('button', { name: /edit/i });
+    fireEvent.click(editButton);
+    await screen.findByTestId('hotkey-input');
+
+    fireEvent.click(screen.getByTestId('mock-trigger-bare-modifier'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('switch-hold-to-talk')).toBeInTheDocument();
+      expect(screen.getByText(/hold to talk/i)).toBeInTheDocument();
+    });
+  });
+
+  it('bare modifier + Hold-to-talk OFF → persists isolated_tap/toggle_recording/pressed', async () => {
+    render(<GeneralSettings />);
+    const editButton = await screen.findByRole('button', { name: /edit/i });
+    fireEvent.click(editButton);
+    await screen.findByTestId('hotkey-input');
+
+    // Capture bare modifier (Hold-to-talk defaults to OFF)
+    fireEvent.click(screen.getByTestId('mock-trigger-bare-modifier'));
+    await screen.findByTestId('switch-hold-to-talk');
+
+    // Verify switch is off (aria-checked=false)
+    expect(screen.getByTestId('switch-hold-to-talk')).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        'update_shortcut_settings',
+        expect.objectContaining({
+          settings: expect.objectContaining({
+            bindings: expect.arrayContaining([
+              expect.objectContaining({
+                trigger_kind: 'isolated_tap',
+                action: 'toggle_recording',
+                trigger: 'pressed',
+                modifier: { modifier: 'control', side: 'left' },
+              })
+            ])
+          })
+        })
+      );
+    });
+  });
+
+  it('bare modifier + Hold-to-talk ON → persists modifier_hold/hold_to_record/hold', async () => {
+    render(<GeneralSettings />);
+    const editButton = await screen.findByRole('button', { name: /edit/i });
+    fireEvent.click(editButton);
+    await screen.findByTestId('hotkey-input');
+
+    fireEvent.click(screen.getByTestId('mock-trigger-bare-modifier'));
+    await screen.findByTestId('switch-hold-to-talk');
+
+    // Toggle hold-to-talk ON
+    fireEvent.click(screen.getByTestId('switch-hold-to-talk'));
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
+        'update_shortcut_settings',
+        expect.objectContaining({
+          settings: expect.objectContaining({
+            bindings: expect.arrayContaining([
+              expect.objectContaining({
+                trigger_kind: 'modifier_hold',
+                action: 'hold_to_record',
+                trigger: 'hold',
+                modifier: { modifier: 'control', side: 'left' },
+              })
+            ])
+          })
+        })
+      );
+    });
+  });
+
+  it('saves bare modifier with stable id from existing binding', async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'get_autostart_status') return Promise.resolve(false);
+      if (cmd === 'get_shortcut_settings') return Promise.resolve({
+        bindings: [{
+          id: 'onboarding-primary-hold',
+          action: 'hold_to_record',
+          shortcut: '',
+          trigger: 'hold',
+          enabled: true,
+          allow_risky_combo: false,
+          trigger_kind: 'modifier_hold',
+          modifier: { modifier: 'alt', side: 'right' }
+        }]
+      });
+      return Promise.resolve(undefined);
+    });
+
+    render(<GeneralSettings />);
+    const editButton = await screen.findByRole('button', { name: /edit/i });
+    fireEvent.click(editButton);
+    await screen.findByTestId('hotkey-input');
+
+    fireEvent.click(screen.getByTestId('mock-trigger-bare-modifier'));
+    await screen.findByTestId('switch-hold-to-talk');
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => {
+      const calls = vi.mocked(invoke).mock.calls;
+      const saveCall = calls.find(([cmd]) => cmd === 'update_shortcut_settings');
+      expect(saveCall).toBeDefined();
+      const payload = saveCall![1] as { settings: { bindings: Array<{ id: string }> } };
+      expect(payload.settings.bindings[0].id).toBe('onboarding-primary-hold');
+    });
+  });
+
+  it('displays isolated_tap native binding as "Tap Left Control to toggle"', async () => {
+    mockSettings = { ...baseSettings, hotkey: '' };
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'get_autostart_status') return Promise.resolve(false);
+      if (cmd === 'get_shortcut_settings') return Promise.resolve({
+        bindings: [{
+          id: 'onboarding-primary-hold',
+          action: 'toggle_recording',
+          shortcut: '',
+          trigger: 'pressed',
+          enabled: true,
+          allow_risky_combo: false,
+          trigger_kind: 'isolated_tap',
+          modifier: { modifier: 'control', side: 'left' }
+        }]
+      });
+      return Promise.resolve(undefined);
+    });
+
     render(<GeneralSettings />);
     await waitFor(() => {
-      expect(screen.getByText('Push-to-Talk Key')).toBeInTheDocument();
+      expect(screen.getAllByText('Tap Left Control to toggle').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('displays modifier_hold native binding as "Hold Left Control to talk"', async () => {
+    mockSettings = { ...baseSettings, hotkey: '' };
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === 'get_autostart_status') return Promise.resolve(false);
+      if (cmd === 'get_shortcut_settings') return Promise.resolve({
+        bindings: [{
+          id: 'onboarding-primary-hold',
+          action: 'hold_to_record',
+          shortcut: '',
+          trigger: 'hold',
+          enabled: true,
+          allow_risky_combo: false,
+          trigger_kind: 'modifier_hold',
+          modifier: { modifier: 'control', side: 'left' }
+        }]
+      });
+      return Promise.resolve(undefined);
+    });
+
+    render(<GeneralSettings />);
+    await waitFor(() => {
+      expect(screen.getAllByText('Hold Left Control to talk').length).toBeGreaterThan(0);
     });
   });
 });
@@ -531,6 +750,10 @@ describe('GeneralSettings recording mode', () => {
 // ============================================================================
 
 describe('GeneralSettings null handling', () => {
+  beforeEach(() => {
+    setupDefaultInvoke();
+  });
+
   it('returns null when settings is null', async () => {
     // Create a separate mock for null settings
     const originalMock = vi.fn();
@@ -574,14 +797,14 @@ describe('GeneralSettings settings values', () => {
   beforeEach(() => {
     mockSettings = { ...baseSettings };
     vi.clearAllMocks();
+    setupDefaultInvoke();
   });
 
-  it('displays correct recording mode value', async () => {
-    mockSettings.recording_mode = 'toggle';
+  it('displays the current hotkey string in view mode', async () => {
+    mockSettings.hotkey = 'CommandOrControl+Shift+Space';
     render(<GeneralSettings />);
     await waitFor(() => {
-      const toggleGroup = screen.getByTestId('toggle-group');
-      expect(toggleGroup).toHaveAttribute('data-value', 'toggle');
+      expect(screen.getAllByText('CommandOrControl+Shift+Space').length).toBeGreaterThan(0);
     });
   });
 
