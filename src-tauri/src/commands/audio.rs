@@ -969,6 +969,9 @@ fn build_writing_history_metadata(
             "context_hint".into(),
             serde_json::to_value(&wr.context_hint).unwrap_or(serde_json::Value::Null),
         );
+        if wr.ai_applied && wr.raw_text != wr.final_text {
+            map.insert("original_text".into(), wr.raw_text.clone().into());
+        }
     }
     serde_json::Value::Object(map)
 }
@@ -1539,6 +1542,65 @@ mod tests {
         assert_eq!(metadata["output_language"], "en");
         assert!(metadata.get("raw_text").is_none());
         assert!(metadata.get("final_text").is_none());
+        assert_eq!(metadata["original_text"], "raw transcript");
+    }
+
+    #[test]
+    fn build_writing_history_metadata_omits_original_text_when_ai_not_applied() {
+        let transcription = crate::transcription::TranscriptionResult::new(
+            &build_transcription_job(
+                crate::transcription::TranscriptionSource::DesktopRecording,
+                "whisper",
+                "base",
+                Some("en".to_string()),
+                false,
+            ),
+            "raw transcript",
+        )
+        .with_transcript_language(Some("en".to_string()));
+        let writing_result = crate::writing::WritingResult {
+            raw_text: "raw transcript".to_string(),
+            final_text: "deterministic transcript".to_string(),
+            output_language: "en".to_string(),
+            mode: crate::writing::WritingMode::CleanDictation,
+            ai_applied: false,
+            applied_operations: vec![],
+            warnings: vec![],
+            context_hint: None,
+            ai_error: None,
+        };
+
+        let metadata = build_writing_history_metadata(&transcription, Some(&writing_result));
+        assert!(metadata.get("original_text").is_none());
+    }
+
+    #[test]
+    fn build_writing_history_metadata_omits_original_text_when_raw_equals_final() {
+        let transcription = crate::transcription::TranscriptionResult::new(
+            &build_transcription_job(
+                crate::transcription::TranscriptionSource::DesktopRecording,
+                "whisper",
+                "base",
+                Some("en".to_string()),
+                false,
+            ),
+            "same text",
+        )
+        .with_transcript_language(Some("en".to_string()));
+        let writing_result = crate::writing::WritingResult {
+            raw_text: "same text".to_string(),
+            final_text: "same text".to_string(),
+            output_language: "en".to_string(),
+            mode: crate::writing::WritingMode::CleanDictation,
+            ai_applied: true,
+            applied_operations: vec![],
+            warnings: vec![],
+            context_hint: None,
+            ai_error: None,
+        };
+
+        let metadata = build_writing_history_metadata(&transcription, Some(&writing_result));
+        assert!(metadata.get("original_text").is_none());
     }
 
     #[test]
@@ -2987,9 +3049,9 @@ fn recording_license_state(
 /// Pre-recording validation using the readiness state
 async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> {
     let validate_start = std::time::Instant::now();
-    log::info!("⏱️ [VALIDATE] starting recognition_availability_snapshot");
+    log::debug!("⏱️ [VALIDATE] starting recognition_availability_snapshot");
     let availability = crate::recognition_availability_snapshot(app).await;
-    log::info!(
+    log::debug!(
         "⏱️ [VALIDATE] recognition_availability_snapshot complete (+{}ms)",
         validate_start.elapsed().as_millis()
     );
@@ -3077,7 +3139,7 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
         }
     }
 
-    log::info!(
+    log::debug!(
         "⏱️ [VALIDATE] validation complete (+{}ms)",
         validate_start.elapsed().as_millis()
     );
@@ -3250,7 +3312,7 @@ pub async fn start_recording(
     let recording_start = Instant::now();
 
     log_start("RECORDING_START");
-    log::info!("⏱️ [REC TIMING] start_recording called (+0ms)");
+    log::debug!("⏱️ [REC TIMING] start_recording called (+0ms)");
     log_with_context(
         log::Level::Debug,
         "Recording command started",
@@ -3269,23 +3331,22 @@ pub async fn start_recording(
             Some("recover".to_string()),
         );
     }
-    log::info!(
+    log::debug!(
         "⏱️ [REC TIMING] state check complete (+{}ms)",
         recording_start.elapsed().as_millis()
     );
 
     // Validate all requirements upfront
     let validation_start = Instant::now();
-    log::info!(
+    log::debug!(
         "⏱️ [REC TIMING] starting validation (+{}ms)",
         recording_start.elapsed().as_millis()
     );
     match validate_recording_requirements(&app).await {
         Ok(_) => {
-            log_performance(
-                "RECORDING_VALIDATION",
-                validation_start.elapsed().as_millis() as u64,
-                Some("validation_passed"),
+            log::debug!(
+                "⚡ PERF: RECORDING_VALIDATION took {}ms validation_passed",
+                validation_start.elapsed().as_millis()
             );
         }
         Err(e) => {
@@ -3317,7 +3378,7 @@ pub async fn start_recording(
     }
 
     // All validation passed, update state to starting
-    log::info!(
+    log::debug!(
         "⏱️ [REC TIMING] validation complete (+{}ms)",
         recording_start.elapsed().as_millis()
     );
@@ -3338,7 +3399,7 @@ pub async fn start_recording(
     }
 
     // Play sound on recording start if enabled
-    log::info!(
+    log::debug!(
         "⏱️ [REC TIMING] about to play sound (+{}ms)",
         recording_start.elapsed().as_millis()
     );
@@ -3379,7 +3440,7 @@ pub async fn start_recording(
     };
 
     // Load recording config once to avoid repeated store access
-    log::info!(
+    log::debug!(
         "⏱️ [REC TIMING] loading recording config (+{}ms)",
         recording_start.elapsed().as_millis()
     );
@@ -3438,7 +3499,7 @@ pub async fn start_recording(
     }
 
     // Get selected microphone from settings (before acquiring recorder lock)
-    log::info!(
+    log::debug!(
         "⏱️ [REC TIMING] getting microphone settings (+{}ms)",
         recording_start.elapsed().as_millis()
     );
@@ -3462,7 +3523,7 @@ pub async fn start_recording(
     };
 
     // Start recording (scoped to release mutex before async operations)
-    log::info!(
+    log::debug!(
         "⏱️ [REC TIMING] acquiring recorder lock (+{}ms)",
         recording_start.elapsed().as_millis()
     );
@@ -3474,7 +3535,7 @@ pub async fn start_recording(
                 return Err(format!("Failed to acquire recorder lock: {}", e));
             }
         };
-        log::info!(
+        log::debug!(
             "⏱️ [REC TIMING] recorder lock acquired (+{}ms)",
             recording_start.elapsed().as_millis()
         );
@@ -3487,7 +3548,7 @@ pub async fn start_recording(
         }
 
         // Log the current audio device before starting
-        log::info!(
+        log::debug!(
             "⏱️ [REC TIMING] checking audio device (+{}ms)",
             recording_start.elapsed().as_millis()
         );
@@ -3526,7 +3587,7 @@ pub async fn start_recording(
         }
 
         // Try to start recording with graceful error handling
-        log::info!(
+        log::debug!(
             "⏱️ [REC TIMING] about to call recorder.start_recording (+{}ms)",
             recording_start.elapsed().as_millis()
         );
@@ -3545,7 +3606,7 @@ pub async fn start_recording(
         let (audio_level_rx, silence_event_rx) =
             match recorder.start_recording(audio_path_str, selected_microphone.clone()) {
                 Ok(_) => {
-                    log::info!(
+                    log::debug!(
                         "⏱️ [REC TIMING] recorder.start_recording returned Ok (+{}ms)",
                         recording_start.elapsed().as_millis()
                     );
@@ -4367,28 +4428,49 @@ pub async fn stop_recording(
             audio_path
         }
         _ => {
-            // Normalize captured audio to Whisper contract (WAV PCM s16, mono, 16k) via ffmpeg sidecar
+            // Normalize captured audio to Whisper contract (WAV PCM s16, mono, 16k):
+            // try in-process first (off the async runtime), fall back to ffmpeg sidecar.
             let parent_dir = audio_path
                 .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| std::path::Path::new(".").to_path_buf());
 
             let normalized_path = {
-                let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                let out_path = parent_dir.join(format!("normalized_{}.wav", ts));
-                if let Err(e) =
-                    crate::ffmpeg::normalize_streaming(&app, &audio_path, &out_path).await
-                {
-                    log::error!("Audio normalization (ffmpeg) failed: {}", e);
-                    update_recording_state(
-                        &app,
-                        RecordingState::Error,
-                        Some("Audio normalization failed".to_string()),
-                    );
-                    let _ = std::fs::remove_file(&audio_path);
-                    return Err("Audio normalization failed".to_string());
+                let a = audio_path.clone();
+                let d = parent_dir.clone();
+                let in_proc = tokio::task::spawn_blocking(move || {
+                    crate::audio::normalizer::normalize_to_whisper_wav(&a, &d)
+                })
+                .await;
+                match in_proc {
+                    Ok(Ok(path)) => path,
+                    other => {
+                        let other_err = match &other {
+                            Ok(Ok(_)) => unreachable!(),
+                            Ok(Err(e)) => e.clone(),
+                            Err(e) => e.to_string(),
+                        };
+                        log::warn!(
+                            "In-process audio normalization failed; falling back to ffmpeg: {:?}",
+                            other_err
+                        );
+                        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                        let out_path = parent_dir.join(format!("normalized_{}.wav", ts));
+                        if let Err(e) =
+                            crate::ffmpeg::normalize_streaming(&app, &audio_path, &out_path).await
+                        {
+                            log::error!("Audio normalization (ffmpeg) failed: {}", e);
+                            update_recording_state(
+                                &app,
+                                RecordingState::Error,
+                                Some("Audio normalization failed".to_string()),
+                            );
+                            let _ = std::fs::remove_file(&audio_path);
+                            return Err("Audio normalization failed".to_string());
+                        }
+                        out_path
+                    }
                 }
-                out_path
             };
 
             // Remove raw capture after successful normalization
@@ -4894,8 +4976,8 @@ pub async fn stop_recording(
                         }
                     }
 
-                    // Reduced delay to ensure UI is stable (was 100ms, now 50ms)
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    // Reduced delay to ensure focus stability after pill hide (was 50ms)
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
                     if !should_deliver {
                         update_recording_state(&app_for_process, RecordingState::Idle, None);

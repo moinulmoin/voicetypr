@@ -182,16 +182,6 @@ impl AudioRecorder {
                 config.sample_format()
             );
 
-            // List all available input devices for debugging
-            log::info!("Available input devices:");
-            if let Ok(devices) = host.input_devices() {
-                for (idx, dev) in devices.enumerate() {
-                    if let Ok(name) = dev.name() {
-                        log::info!("  {}. {}", idx + 1, name);
-                    }
-                }
-            }
-
             // Initialize silence detector and level meter
             let silence_detector = Arc::new(Mutex::new(SilenceDetector::new()));
             let level_meter = Arc::new(Mutex::new(

@@ -143,3 +143,70 @@ fn normalize_downmix_ignores_silent_channel() {
     let _ = fs::remove_file(&out_path);
     let _ = fs::remove_dir_all(&out_dir);
 }
+
+#[test]
+fn normalize_resamples_44100_to_16k_preserves_duration() {
+    let input = temp_file("resample_44100_in.wav");
+    let out_dir = temp_file("resample_44100_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    // 1 second of 1 kHz sine at 44.1 kHz, mono
+    write_sine_wav(&input, 44_100, 1, 1.0, 0.5, 1000.0, &[]);
+
+    let out_path = normalize_to_whisper_wav(&input, &out_dir).expect("normalize 44.1kHz");
+
+    let reader = hound::WavReader::open(&out_path).expect("open normalized");
+    let spec = reader.spec();
+    // Executor skip criteria: 16000 Hz / mono / 16-bit / Int
+    assert_eq!(spec.sample_rate, 16_000);
+    assert_eq!(spec.channels, 1);
+    assert_eq!(spec.bits_per_sample, 16);
+    assert_eq!(spec.sample_format, SampleFormat::Int);
+
+    // Duration should be roughly preserved (1.0 s input → ~1.0 s output, ±0.05 s tolerance)
+    let frames = reader.duration();
+    let duration = frames as f32 / spec.sample_rate as f32;
+    assert!(
+        (duration - 1.0).abs() < 0.05,
+        "duration {}s not ~1.0s after 44.1kHz→16kHz resample",
+        duration
+    );
+
+    // Cleanup
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn normalize_very_short_non_empty_wav_outputs_valid_16k_mono_s16() {
+    let input = temp_file("very_short_in.wav");
+    let out_dir = temp_file("very_short_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    // 0.1 s (well below the 0.5 s duration gate) — the normalizer must still succeed;
+    // the duration gate that rejects short clips operates AFTER normalization, not inside it.
+    write_sine_wav(&input, 16_000, 1, 0.1, 0.6, 440.0, &[]);
+
+    let out_path = normalize_to_whisper_wav(&input, &out_dir)
+        .expect("normalizer must succeed even on very short input");
+
+    let reader = hound::WavReader::open(&out_path).expect("open normalized");
+    let spec = reader.spec();
+    // Must satisfy all executor skip criteria regardless of duration
+    assert_eq!(spec.sample_rate, 16_000);
+    assert_eq!(spec.channels, 1);
+    assert_eq!(spec.bits_per_sample, 16);
+    assert_eq!(spec.sample_format, SampleFormat::Int);
+
+    // Must contain non-empty audio
+    let samples: Vec<i16> = hound::WavReader::open(&out_path)
+        .expect("re-open normalized")
+        .samples::<i16>()
+        .map(|s| s.unwrap())
+        .collect();
+    assert!(!samples.is_empty(), "output must be non-empty");
+
+    // Cleanup
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
