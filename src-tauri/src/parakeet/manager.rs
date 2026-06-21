@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use log::{debug, warn};
+use log::{trace, warn};
 use reqwest::Client;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -153,7 +153,7 @@ impl ParakeetManager {
         let complete = model_files_complete(&fluid_audio_model_path, definition);
 
         if complete {
-            debug!(
+            trace!(
                 "Found complete FluidAudio model at: {:?}",
                 fluid_audio_model_path
             );

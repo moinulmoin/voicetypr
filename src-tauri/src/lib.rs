@@ -113,33 +113,42 @@ pub use state::{
     update_recording_state, AppState, QueuedPillEvent, RecordingMode, RecordingState,
 };
 
+/// Shared log filter predicate applied to every tauri_plugin_log target.
+/// Drops noisy third-party logs:
+/// - Audio crates (always): whisper_rs, cpal, rubato, hound, audio::level_meter
+/// - HTTP/transport crates below Warn: h2, hyper, hyper_util, reqwest, tower
+fn log_filter_predicate(metadata: &log::Metadata) -> bool {
+    let target = metadata.target();
+    // Always drop low-level audio processing noise
+    if target.contains("whisper_rs")
+        || target.contains("audio::level_meter")
+        || target.contains("cpal")
+        || target.contains("rubato")
+        || target.contains("hound")
+    {
+        return false;
+    }
+    // Drop HTTP/transport framing noise at Info/Debug/Trace; keep Warn and Error
+    let is_http_transport = target == "h2"
+        || target.starts_with("h2::")
+        || target.starts_with("hyper")
+        || target.starts_with("hyper_util")
+        || target.starts_with("reqwest")
+        || target.starts_with("tower");
+    !(is_http_transport && metadata.level() > log::Level::Warn)
+}
+
 // Setup logging with daily rotation
 fn setup_logging() -> tauri_plugin_log::Builder {
     let today = Local::now().format("%Y-%m-%d").to_string();
 
     LogBuilder::default()
         .targets([
-            Target::new(TargetKind::Stdout).filter(|metadata| {
-                // Filter out noisy logs
-                let target = metadata.target();
-                !target.contains("whisper_rs")
-                    && !target.contains("audio::level_meter")
-                    && !target.contains("cpal")
-                    && !target.contains("rubato")
-                    && !target.contains("hound")
-            }),
+            Target::new(TargetKind::Stdout).filter(log_filter_predicate),
             Target::new(TargetKind::LogDir {
                 file_name: Some(format!("voicetypr-{}", today)),
             })
-            .filter(|metadata| {
-                // Filter out noisy logs from file as well
-                let target = metadata.target();
-                !target.contains("whisper_rs")
-                    && !target.contains("audio::level_meter")
-                    && !target.contains("cpal")
-                    && !target.contains("rubato")
-                    && !target.contains("hound")
-            }),
+            .filter(log_filter_predicate),
         ])
         .rotation_strategy(RotationStrategy::KeepAll)
         .max_file_size(10_000_000) // 10MB per file

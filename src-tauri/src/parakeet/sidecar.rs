@@ -2,7 +2,7 @@
 
 use super::error::ParakeetError;
 use super::messages::{ParakeetCommand, ParakeetResponse};
-use log::{error, warn};
+use log::{debug, error, trace, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,22 +23,16 @@ fn extract_json_payload(raw: &str) -> Option<&str> {
 fn parse_response_line(raw: &str) -> Result<ParakeetResponse, ParakeetError> {
     match serde_json::from_str::<ParakeetResponse>(raw) {
         Ok(response) => Ok(response),
-        Err(primary_error) => {
+        Err(_) => {
             let Some(payload) = extract_json_payload(raw) else {
-                error!("Failed to parse sidecar response: {primary_error}. raw={raw}");
                 return Err(ParakeetError::InvalidResponse);
             };
             match serde_json::from_str::<ParakeetResponse>(payload) {
                 Ok(response) => {
-                    warn!("Recovered Parakeet response from noisy stdout: {raw}");
+                    debug!("Recovered Parakeet response from a noisy sidecar line");
                     Ok(response)
                 }
-                Err(recovery_error) => {
-                    error!(
-                        "Failed to parse sidecar response: {primary_error}; recovery failed: {recovery_error}. raw={raw}"
-                    );
-                    Err(ParakeetError::InvalidResponse)
-                }
+                Err(_) => Err(ParakeetError::InvalidResponse),
             }
         }
     }
@@ -200,9 +194,13 @@ impl ParakeetSidecar {
                 Ok(response) => return Ok(response),
                 Err(err) => {
                     if from_stdout {
+                        error!(
+                            "Failed to parse Parakeet sidecar stdout protocol line ({} bytes)",
+                            trimmed.len()
+                        );
                         return Err(err);
                     }
-                    warn!("Parakeet sidecar stderr: {}", trimmed);
+                    trace!("Parakeet sidecar: {}", trimmed);
                 }
             }
         }
@@ -482,5 +480,38 @@ mod tests {
     fn parse_response_line_rejects_non_json_output() {
         let err = parse_response_line("definitely not json").expect_err("expected parse failure");
         assert!(matches!(err, ParakeetError::InvalidResponse));
+    }
+
+    #[test]
+    fn parse_response_line_accepts_transcription() {
+        let raw = r#"{"type":"transcription","text":"Hello world","segments":[],"language":"en","duration":1.25}"#;
+        let response = parse_response_line(raw).expect("expected valid transcription response");
+        match response {
+            ParakeetResponse::Transcription { text, duration, .. } => {
+                assert_eq!(text, "Hello world");
+                assert!((duration.unwrap() - 1.25_f32).abs() < 1e-4);
+            }
+            other => panic!("unexpected response: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_response_line_rejects_banner_line() {
+        let err = parse_response_line("🔄 LOAD MODEL REQUEST")
+            .expect_err("expected parse failure for banner");
+        assert!(matches!(err, ParakeetError::InvalidResponse));
+    }
+
+    #[test]
+    fn parse_response_line_recovers_transcription_from_noisy_line() {
+        let raw = r#"🔄 LOAD MODEL REQUEST {"type":"transcription","text":"Noisy","segments":[]}"#;
+        let response =
+            parse_response_line(raw).expect("expected recovery via extract_json_payload");
+        match response {
+            ParakeetResponse::Transcription { text, .. } => {
+                assert_eq!(text, "Noisy");
+            }
+            other => panic!("unexpected response: {:?}", other),
+        }
     }
 }

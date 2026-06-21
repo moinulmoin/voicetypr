@@ -111,7 +111,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
 ) -> Result<tauri::menu::Menu<R>, Box<dyn std::error::Error>> {
     use std::time::Instant;
     let build_start = Instant::now();
-    log::info!("⏱️ [TRAY BUILD TIMING] build_tray_menu called");
+    log::debug!("⏱️ [TRAY BUILD TIMING] build_tray_menu called");
 
     let (current_model, selected_microphone, onboarding_done) = {
         match app.store("settings") {
@@ -132,7 +132,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             Err(_) => ("".to_string(), None, false),
         }
     };
-    log::info!(
+    log::debug!(
         "⏱️ [TRAY BUILD TIMING] Settings loaded (+{}ms)",
         build_start.elapsed().as_millis()
     );
@@ -142,12 +142,12 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
     // The frontend/background tasks handle status polling separately
     let (effective_active_id, active_remote_display, active_remote_model, remote_connections) = {
         if let Some(remote_state) = app.try_state::<AsyncMutex<RemoteSettings>>() {
-            log::info!(
+            log::debug!(
                 "⏱️ [TRAY BUILD TIMING] Acquiring remote_settings lock... (+{}ms)",
                 build_start.elapsed().as_millis()
             );
             let settings = remote_state.lock().await;
-            log::info!(
+            log::debug!(
                 "⏱️ [TRAY BUILD TIMING] remote_settings lock acquired (+{}ms)",
                 build_start.elapsed().as_millis()
             );
@@ -159,7 +159,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
                     connections.push((conn.id.clone(), conn.display_name(), conn.model.clone()));
                 }
             }
-            log::info!(
+            log::debug!(
                 "⏱️ [TRAY BUILD TIMING] Loaded {} cached connections (+{}ms)",
                 connections.len(),
                 build_start.elapsed().as_millis()
@@ -185,7 +185,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
             (None, None, None, Vec::new())
         }
     };
-    log::info!(
+    log::debug!(
         "⏱️ [TRAY BUILD TIMING] Remote server info collected (+{}ms)",
         build_start.elapsed().as_millis()
     );
@@ -572,7 +572,7 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         .item(&quit_i)
         .build()?;
 
-    log::info!(
+    log::debug!(
         "⏱️ [TRAY BUILD TIMING] build_tray_menu COMPLETE - total: {}ms",
         build_start.elapsed().as_millis()
     );

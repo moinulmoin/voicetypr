@@ -1442,10 +1442,10 @@ pub async fn update_tray_menu_with_generation(
     let gen_info = my_generation
         .map(|g| format!(" (gen={})", g))
         .unwrap_or_default();
-    log::info!("⏱️ [TRAY TIMING] update_tray_menu called{}", gen_info);
+    log::debug!("⏱️ [TRAY TIMING] update_tray_menu called{}", gen_info);
 
     // Build the new menu
-    log::info!(
+    log::debug!(
         "⏱️ [TRAY TIMING] Building tray menu...{} (+{}ms)",
         gen_info,
         start_time.elapsed().as_millis()
@@ -1453,7 +1453,7 @@ pub async fn update_tray_menu_with_generation(
     let new_menu = crate::build_tray_menu(&app)
         .await
         .map_err(|e| format!("Failed to build tray menu: {}", e))?;
-    log::info!(
+    log::debug!(
         "⏱️ [TRAY TIMING] Tray menu built{} (+{}ms)",
         gen_info,
         start_time.elapsed().as_millis()
@@ -1463,7 +1463,7 @@ pub async fn update_tray_menu_with_generation(
     if let Some(my_gen) = my_generation {
         let current_gen = current_tray_menu_generation();
         if my_gen < current_gen {
-            log::info!(
+            log::debug!(
                 "⏱️ [TRAY TIMING] Skipping stale tray menu update (gen={} < current={})",
                 my_gen,
                 current_gen
@@ -1474,14 +1474,14 @@ pub async fn update_tray_menu_with_generation(
 
     // Update the tray menu
     if let Some(tray) = app.tray_by_id("main") {
-        log::info!(
+        log::debug!(
             "⏱️ [TRAY TIMING] Setting tray menu...{} (+{}ms)",
             gen_info,
             start_time.elapsed().as_millis()
         );
         tray.set_menu(Some(new_menu))
             .map_err(|e| format!("Failed to set tray menu: {}", e))?;
-        log::info!(
+        log::debug!(
             "⏱️ [TRAY TIMING] Tray menu set{} - total: {}ms",
             gen_info,
             start_time.elapsed().as_millis()

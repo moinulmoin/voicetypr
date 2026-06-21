@@ -255,11 +255,7 @@ pub fn update_recording_state(
         "error": error
     });
 
-    let _ = app.emit("recording-state-changed", payload.clone());
-
-    if let Some(pill_window) = app.get_webview_window("pill") {
-        let _ = pill_window.emit("recording-state-changed", payload);
-    }
+    let _ = app.emit("recording-state-changed", payload);
 }
 
 /// Helper function to get current recording state
