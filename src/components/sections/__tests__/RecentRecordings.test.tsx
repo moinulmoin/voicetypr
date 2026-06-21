@@ -344,3 +344,148 @@ it('uses Soniox when it is the current cloud transcription source', async () => 
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Before/after original text toggle
+// ---------------------------------------------------------------------------
+
+describe('original text toggle', () => {
+  const defaultInvoke = async (cmd: string) => {
+    if (cmd === 'check_recording_exists') return false;
+    if (cmd === 'get_active_remote_server') return null;
+    return null;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invokeMock.mockImplementation(defaultInvoke);
+  });
+
+  it('shows toggle button when ai_applied and original_text differs from text', async () => {
+    const item: TranscriptionHistory = {
+      id: 'toggle-1',
+      text: 'AI formatted text',
+      timestamp: new Date('2024-01-01T00:00:00Z'),
+      model: 'base.en',
+      writing: {
+        ai_applied: true,
+        original_text: 'raw transcript before AI',
+      },
+    };
+
+    render(<RecentRecordings history={[item]} onHistoryUpdate={vi.fn()} />);
+
+    expect(await screen.findByText('Show original')).toBeInTheDocument();
+  });
+
+  it('clicking toggle swaps displayed text to original and back', async () => {
+    const user = userEvent.setup();
+    const item: TranscriptionHistory = {
+      id: 'toggle-2',
+      text: 'AI formatted text',
+      timestamp: new Date('2024-01-01T00:00:00Z'),
+      model: 'base.en',
+      writing: {
+        ai_applied: true,
+        original_text: 'raw transcript before AI',
+      },
+    };
+
+    render(<RecentRecordings history={[item]} onHistoryUpdate={vi.fn()} />);
+
+    // Initially shows formatted text
+    expect(await screen.findByText('AI formatted text')).toBeInTheDocument();
+    expect(screen.queryByText('raw transcript before AI')).not.toBeInTheDocument();
+
+    // Click to show original
+    await user.click(screen.getByText('Show original'));
+    expect(await screen.findByText('raw transcript before AI')).toBeInTheDocument();
+    expect(screen.queryByText('AI formatted text')).not.toBeInTheDocument();
+    expect(screen.getByText('Show formatted')).toBeInTheDocument();
+
+    // Click again to restore formatted
+    await user.click(screen.getByText('Show formatted'));
+    expect(await screen.findByText('AI formatted text')).toBeInTheDocument();
+    expect(screen.queryByText('raw transcript before AI')).not.toBeInTheDocument();
+    expect(screen.getByText('Show original')).toBeInTheDocument();
+  });
+
+  it('copy button copies whichever text is currently shown', async () => {
+    const user = userEvent.setup();
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: writeTextMock } });
+
+    const item: TranscriptionHistory = {
+      id: 'toggle-3',
+      text: 'AI formatted text',
+      timestamp: new Date('2024-01-01T00:00:00Z'),
+      model: 'base.en',
+      writing: {
+        ai_applied: true,
+        original_text: 'raw transcript before AI',
+      },
+    };
+
+    render(<RecentRecordings history={[item]} onHistoryUpdate={vi.fn()} />);
+
+    // Default: copy copies formatted text
+    await user.click(await screen.findByTitle('Copy'));
+    expect(writeTextMock).toHaveBeenLastCalledWith('AI formatted text');
+
+    // After toggle: copy copies original text
+    await user.click(screen.getByText('Show original'));
+    await user.click(screen.getByTitle('Copy'));
+    expect(writeTextMock).toHaveBeenLastCalledWith('raw transcript before AI');
+  });
+
+  it('does not show toggle when original_text is absent', async () => {
+    const item: TranscriptionHistory = {
+      id: 'toggle-4',
+      text: 'Formatted text',
+      timestamp: new Date('2024-01-01T00:00:00Z'),
+      model: 'base.en',
+      writing: { ai_applied: true },
+    };
+
+    render(<RecentRecordings history={[item]} onHistoryUpdate={vi.fn()} />);
+
+    // Wait for row to appear, then assert no toggle
+    expect(await screen.findByText('Formatted text')).toBeInTheDocument();
+    expect(screen.queryByText('Show original')).not.toBeInTheDocument();
+  });
+
+  it('does not show toggle when original_text equals text (AI made no change)', async () => {
+    const item: TranscriptionHistory = {
+      id: 'toggle-5',
+      text: 'Same text',
+      timestamp: new Date('2024-01-01T00:00:00Z'),
+      model: 'base.en',
+      writing: {
+        ai_applied: true,
+        original_text: 'Same text',
+      },
+    };
+
+    render(<RecentRecordings history={[item]} onHistoryUpdate={vi.fn()} />);
+
+    expect(await screen.findByText('Same text')).toBeInTheDocument();
+    expect(screen.queryByText('Show original')).not.toBeInTheDocument();
+  });
+
+  it('does not show toggle when ai_applied is absent', async () => {
+    const item: TranscriptionHistory = {
+      id: 'toggle-6',
+      text: 'Plain text',
+      timestamp: new Date('2024-01-01T00:00:00Z'),
+      model: 'base.en',
+      writing: {
+        original_text: 'raw text',
+      },
+    };
+
+    render(<RecentRecordings history={[item]} onHistoryUpdate={vi.fn()} />);
+
+    expect(await screen.findByText('Plain text')).toBeInTheDocument();
+    expect(screen.queryByText('Show original')).not.toBeInTheDocument();
+  });
+});

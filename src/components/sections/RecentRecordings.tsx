@@ -123,6 +123,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
   const [sourceFilter, setSourceFilter] = useState("all");
   const [appFilter, setAppFilter] = useState("all");
   const [dateFilter, setDateFilter] = useState("all");
+  const [showOriginalIds, setShowOriginalIds] = useState<Set<string>>(new Set());
   const { settings } = useSettings();
   const readiness = useReadiness();
   const canRecord = readiness.canRecord;
@@ -641,6 +642,9 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                       // Persisted in_progress rows should already have been backend-reconciled before render.
                       const isPersistedInProgress = item.status === 'in_progress';
                       const isInProgress = reTranscribingIds.has(item.id) || isPersistedInProgress;
+                      const hasOriginal = Boolean(item.writing?.ai_applied && item.writing?.original_text && item.writing.original_text !== item.text);
+                      const showOriginal = hasOriginal && showOriginalIds.has(item.id);
+                      const displayText = showOriginal ? item.writing!.original_text! : item.text;
                       return (
                       <div
                         key={item.id}
@@ -654,7 +658,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                             : "border-border/50 hover:bg-accent/30 hover:border-border",
                           "transition-all duration-200"
                         )}
-                        onClick={() => !isFailed && !isInProgress && handleCopy(item.text)}
+                        onClick={() => !isFailed && !isInProgress && handleCopy(displayText)}
                       >
                         {/* Re-transcribing status bar */}
                         {isInProgress && (
@@ -711,7 +715,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                             "text-sm leading-relaxed line-clamp-5",
                             isFailed ? "text-muted-foreground italic" : "text-foreground"
                           )}>
-                            {item.text}
+                            {displayText}
                           </p>
                           {/* Bottom row: model name, time + action buttons */}
                           <div className="flex items-center justify-between mt-2">
@@ -731,7 +735,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      handleCopy(item.text);
+                                      handleCopy(displayText);
                                     }}
                                     className="p-1.5 rounded hover:bg-accent transition-colors"
                                     title="Copy"
@@ -751,6 +755,22 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                                     </button>
                                   )}
                                 </>
+                              )}
+                              {hasOriginal && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setShowOriginalIds(prev => {
+                                      const next = new Set(prev);
+                                      if (next.has(item.id)) { next.delete(item.id); } else { next.add(item.id); }
+                                      return next;
+                                    });
+                                  }}
+                                  className="px-1.5 py-0.5 text-xs rounded hover:bg-accent transition-colors text-muted-foreground"
+                                  title={showOriginal ? "Show AI-formatted text" : "Show original text before AI formatting"}
+                                >
+                                  {showOriginal ? "Show formatted" : "Show original"}
+                                </button>
                               )}
                               {/* Re-transcribe button - only show if recording file exists and verified */}
                               {verifiedRecordings.has(item.id) && (
