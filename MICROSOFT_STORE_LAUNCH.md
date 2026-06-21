@@ -34,6 +34,13 @@ Do not change these unless Partner Center product identity changes.
 - `internetClient` is needed for licensing/update/service calls.
 - `microphone` is needed for recording.
 
+## Bundled runtime (Visual C++)
+
+- The Store `voicetypr.exe` is built with the static CRT (`-C target-feature=+crt-static`), but `whisper-rs` enables OpenMP on Windows, which dynamically links `vcomp140.dll` (a Visual C++ Redistributable component with no static MSVC variant).
+- `scripts/build-msix-store.ps1` bundles the VC++ runtime DLLs (CRT + OpenMP) app-local, next to `voicetypr.exe` in the package, sourced from the VS redist folder via `vswhere`. The build fails if `vcomp140.dll` is not staged.
+- Because the dependency is integrated into the package, Store policy 10.2.4.1 (Software Dependencies) needs no description disclosure. Do not add VC++/runtime jargon to the public description.
+- Unlike the direct NSIS installer (which ships `vc_redist.x64.exe`), the MSIX must be fully self-contained; never rely on a machine-wide redistributable.
+
 ## Store vs direct updater rules
 
 - Store installs must not use the GitHub/Tauri updater.
@@ -52,6 +59,7 @@ For any Store MSIX artifact:
    <Identity ... Version="x.y.z.0" ... />
    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" ... />
    ```
+   - `vcomp140.dll` and the VC++ CRT DLLs sit next to `voicetypr.exe` in the package (bundled app-local by the build script).
 3. Confirm CI passes for frontend, macOS, and Windows.
 4. Upload the `.msix` to Partner Center.
 5. Partner Center warning for `runFullTrust` is expected; a hard package validation error is not.
@@ -67,6 +75,11 @@ Voicetypr provides offline voice typing and transcription for Windows. The deskt
 
 Voicetypr does not use runFullTrust to bypass user consent, access unrelated user data, or run hidden background services. The capability is required because the core product is a desktop utility that depends on native Windows desktop APIs and packaged helper executables.
 ```
+
+## Partner Center product declarations
+
+- Properties -> Product declarations: check "This product incorporates generative AI features, which utilize artificial intelligence to create new content - including text, images, audio, video, and code."
+- Required because Voicetypr's optional text cleanup sends transcripts to LLM providers (OpenAI / Anthropic / Google Gemini) that generate new text. This satisfies Store policy 11.16 (Live Generative AI Content). Keep it checked while AI enhancement ships.
 
 ## Store listing copy rules
 

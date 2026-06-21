@@ -85,6 +85,47 @@ foreach ($RelativePath in $Sidecars) {
     Copy-Item $Source (Join-Path $StageDir (Split-Path -Leaf $Source)) -Force
 }
 
+Write-Step "Bundling Visual C++ runtime (app-local)"
+# The Store MSIX must be self-contained: it cannot rely on a machine-wide
+# Visual C++ Redistributable being present. The main binary is built with the
+# static CRT, but whisper-rs enables OpenMP on Windows, which dynamically links
+# vcomp140.dll (a Visual C++ Redistributable component with no static MSVC
+# variant). The ffmpeg sidecar may also import the dynamic CRT. We deploy the
+# redistributable DLLs next to voicetypr.exe so they resolve from the package
+# directory ("local deployment"). This integrates the dependency, keeps the app
+# runnable on machines without the redistributable installed, and satisfies
+# Microsoft Store policy 10.2.4.1 without a description disclosure.
+$VsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+if (-not (Test-Path $VsWhere)) { throw "vswhere.exe not found: $VsWhere (Visual Studio with the C++ build tools is required)." }
+$VsInstallPath = (& $VsWhere -latest -prerelease -property installationPath | Select-Object -First 1)
+if ([string]::IsNullOrWhiteSpace($VsInstallPath)) { throw "Could not locate a Visual Studio installation via vswhere." }
+
+$RedistRoot = Join-Path $VsInstallPath "VC\Redist\MSVC"
+if (-not (Test-Path $RedistRoot)) { throw "VC redist root not found: $RedistRoot (install the 'C++ Redistributable' VS component)." }
+$RedistVersionDir = Get-ChildItem -Path $RedistRoot -Directory |
+    Where-Object { $_.Name -match '^\d+\.' } |
+    Sort-Object { [version]$_.Name } -Descending |
+    Select-Object -First 1
+if (-not $RedistVersionDir) { throw "No versioned VC redist directory under: $RedistRoot" }
+
+$RedistX64 = Join-Path $RedistVersionDir.FullName "x64"
+$RedistDllDirs = @(
+    (Get-ChildItem -Path $RedistX64 -Directory -Filter "Microsoft.VC*.CRT" -ErrorAction SilentlyContinue | Select-Object -First 1),
+    (Get-ChildItem -Path $RedistX64 -Directory -Filter "Microsoft.VC*.OpenMP" -ErrorAction SilentlyContinue | Select-Object -First 1)
+)
+foreach ($DllDir in $RedistDllDirs) {
+    if (-not $DllDir) { throw "Missing VC redist subfolder under $RedistX64 (expected Microsoft.VC*.CRT and Microsoft.VC*.OpenMP)." }
+    Get-ChildItem -Path $DllDir.FullName -Filter "*.dll" | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path $StageDir $_.Name) -Force
+    }
+}
+
+# vcomp140.dll is the load-bearing one (whisper OpenMP). Fail loudly if missing.
+if (-not (Test-Path (Join-Path $StageDir "vcomp140.dll"))) {
+    throw "vcomp140.dll was not bundled into the MSIX stage; the whisper-rs OpenMP runtime requires it."
+}
+Write-Success "Bundled Visual C++ runtime DLLs (CRT + OpenMP) into stage"
+
 $IconCopies = @{
     "StoreLogo.png" = "src-tauri\icons\StoreLogo.png"
     "Square44x44Logo.png" = "src-tauri\icons\Square44x44Logo.png"
