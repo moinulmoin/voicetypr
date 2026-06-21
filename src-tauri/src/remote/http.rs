@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 use super::server::{
@@ -146,10 +146,20 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
             "X-VoiceTypr-Transcription-Task",
         ))
         .and(warp::header::optional::<String>(CONTEXT_HEADER))
+        // Acquire a permit BEFORE the body is buffered: if the semaphore is
+        // exhausted the client gets a 429 immediately without us ever reading
+        // the (potentially ~50 MB) request body.
+        .and(with_transcription_permit(transcription_guard))
         .and(warp::body::content_length_limit(MAX_AUDIO_BODY_BYTES))
         .and(warp::body::bytes())
         .map(
-            |auth_key, content_type, spoken_language, transcription_task, request_context, body| {
+            |auth_key,
+             content_type,
+             spoken_language,
+             transcription_task,
+             request_context,
+             permit,
+             body| {
                 TranscribeRequestParts {
                     auth_key,
                     content_type,
@@ -157,12 +167,12 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
                     transcription_task,
                     request_context,
                     body,
+                    permit,
                 }
             },
         )
         .and(warp::filters::addr::remote())
         .and(with_context(ctx))
-        .and(with_transcription_guard(transcription_guard))
         .and(with_client_activity(client_activity))
         .and_then(handle_transcribe)
 }
@@ -202,11 +212,22 @@ fn with_context<T: ServerContext + 'static>(
     warp::any().map(move || ctx.clone())
 }
 
-/// Helper to inject transcription concurrency guard into the transcribe handler
-fn with_transcription_guard(
+/// Acquire an owned transcription permit, waiting if all permits are in use.
+/// This filter runs BEFORE the body filter, so a queued request never buffers
+/// the (potentially ~50 MB) request body — only the permit holder buffers,
+/// which bounds memory while preserving queueing instead of rejecting callers.
+fn with_transcription_permit(
     guard: Arc<Semaphore>,
-) -> impl Filter<Extract = (Arc<Semaphore>,), Error = std::convert::Infallible> + Clone {
-    warp::any().map(move || guard.clone())
+) -> impl Filter<Extract = (OwnedSemaphorePermit,), Error = Rejection> + Clone {
+    warp::any().and_then(move || {
+        let guard = guard.clone();
+        async move {
+            guard
+                .acquire_owned()
+                .await
+                .map_err(|_| warp::reject::reject())
+        }
+    })
 }
 
 /// Helper to inject the client-activity map into the transcribe handler
@@ -480,6 +501,9 @@ struct TranscribeRequestParts {
     transcription_task: Option<String>,
     request_context: Option<String>,
     body: bytes::Bytes,
+    /// Owned semaphore permit acquired before the body was buffered.
+    /// Held for the full duration of the blocking transcription work.
+    permit: OwnedSemaphorePermit,
 }
 
 /// Handle POST /api/v1/transcribe
@@ -487,7 +511,6 @@ async fn handle_transcribe<T: ServerContext + 'static>(
     parts: TranscribeRequestParts,
     client_addr: Option<SocketAddr>,
     ctx: Arc<RwLock<T>>,
-    transcription_guard: Arc<Semaphore>,
     client_activity: ClientActivityMap,
 ) -> Result<impl Reply, Rejection> {
     let TranscribeRequestParts {
@@ -497,6 +520,7 @@ async fn handle_transcribe<T: ServerContext + 'static>(
         transcription_task,
         request_context,
         body,
+        permit,
     } = parts;
 
     let audio_size_kb = body.len() as f64 / 1024.0;
@@ -565,12 +589,6 @@ async fn handle_transcribe<T: ServerContext + 'static>(
         "[Remote Server] Starting transcription with model '{}' for {:.1} KB audio",
         model_name, audio_size_kb
     );
-
-    let permit = transcription_guard
-        .acquire_owned()
-        .await
-        .expect("transcription semaphore closed");
-
     let request_context = decode_context_header(request_context);
 
     // Perform transcription on a blocking thread: transcribe_with_context is
@@ -1040,7 +1058,12 @@ mod tests {
         }));
 
         let ctx_for_handler = ctx.clone();
-        let guard_for_handler = guard.clone();
+        // Acquire the permit explicitly so the test can hand it to the handler
+        // (mirroring what the filter chain does before the body is read).
+        let permit = guard
+            .clone()
+            .try_acquire_owned()
+            .expect("semaphore has capacity");
         let handler_task = tokio::spawn(async move {
             handle_transcribe(
                 TranscribeRequestParts {
@@ -1050,10 +1073,10 @@ mod tests {
                     transcription_task: None,
                     request_context: None,
                     body: bytes::Bytes::from_static(b"audio"),
+                    permit,
                 },
                 None, // client_addr — not relevant to this permit-hold test
                 ctx_for_handler,
-                guard_for_handler,
                 test_client_activity(),
             )
             .await

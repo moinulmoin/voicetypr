@@ -1,5 +1,6 @@
 use std::env;
 use std::error::Error;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
@@ -66,8 +67,12 @@ struct TranscribeArgs {
     engine: Option<String>,
     #[arg(long)]
     server: Option<String>,
+    /// Remote server password. Prefer --password-stdin or VOICETYPR_REMOTE_PASSWORD for automation.
     #[arg(long)]
     password: Option<String>,
+    /// Read the remote server password from stdin (safer than --password for automation).
+    #[arg(long)]
+    password_stdin: bool,
     #[arg(long)]
     json: bool,
 }
@@ -82,8 +87,12 @@ struct RecordArgs {
     engine: Option<String>,
     #[arg(long)]
     server: Option<String>,
+    /// Remote server password. Prefer --password-stdin or VOICETYPR_REMOTE_PASSWORD for automation.
     #[arg(long)]
     password: Option<String>,
+    /// Read the remote server password from stdin (safer than --password for automation).
+    #[arg(long)]
+    password_stdin: bool,
     #[arg(long)]
     json: bool,
 }
@@ -95,11 +104,15 @@ pub fn maybe_run_from_env_with_context(
     let Some(first_arg) = first_arg.as_deref() else {
         return Ok(false);
     };
-    if !matches!(first_arg, "status" | "models" | "transcribe" | "record") {
+    let is_help_or_version = matches!(first_arg, "-h" | "--help" | "help" | "-V" | "--version");
+    if !is_help_or_version && !matches!(first_arg, "status" | "models" | "transcribe" | "record") {
         return Ok(false);
     }
 
-    let cli = Cli::try_parse()?;
+    let cli = match Cli::try_parse() {
+        Ok(c) => c,
+        Err(e) => e.exit(),
+    };
     let Some(command) = cli.command else {
         return Ok(false);
     };
@@ -227,7 +240,8 @@ async fn run_transcribe(
         check_license_status(app.clone()).await?;
     }
     let payload = if let Some(server) = args.server.as_deref() {
-        transcribe_via_remote(app, &args.file, server, args.password.clone()).await?
+        let password = resolve_password(args.password.clone(), args.password_stdin)?;
+        transcribe_via_remote(app, &args.file, server, password).await?
     } else {
         let settings = get_settings(app.clone()).await?;
         let model = args
@@ -272,6 +286,9 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
         "cli-recording-{}.wav",
         chrono::Utc::now().format("%Y%m%d%H%M%S")
     ));
+    let _recording_guard = TempRecording {
+        path: output_path.clone(),
+    };
 
     let mut recorder = AudioRecorder::new();
     recorder.start_recording(
@@ -284,8 +301,8 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
     let stop_message = recorder.wait_for_recording_end()?;
 
     let payload = if let Some(server) = args.server.as_deref() {
-        let mut payload =
-            transcribe_via_remote(app, &output_path, server, args.password.clone()).await?;
+        let password = resolve_password(args.password.clone(), args.password_stdin)?;
+        let mut payload = transcribe_via_remote(app, &output_path, server, password).await?;
         payload["stop_reason"] = json!(stop_message);
         payload
     } else {
@@ -309,8 +326,6 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
         .await?;
         json!({ "text": t.text, "words": t.words, "metadata": t.metadata, "model": model, "engine": engine, "stop_reason": stop_message })
     };
-
-    let _ = std::fs::remove_file(&output_path);
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&payload)?);
@@ -336,6 +351,24 @@ impl Drop for RemoteNormalizedAudio {
             if error.kind() != std::io::ErrorKind::NotFound {
                 log::warn!(
                     "Failed to remove CLI normalized temp file {:?}: {}",
+                    self.path,
+                    error
+                );
+            }
+        }
+    }
+}
+
+struct TempRecording {
+    path: PathBuf,
+}
+
+impl Drop for TempRecording {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log::warn!(
+                    "Failed to remove CLI temp recording {:?}: {}",
                     self.path,
                     error
                 );
@@ -413,6 +446,28 @@ async fn transcribe_via_remote(
         "model": response.model,
         "duration_ms": response.duration_ms,
     }))
+}
+
+fn resolve_password(
+    password: Option<String>,
+    password_stdin: bool,
+) -> Result<Option<String>, Box<dyn Error>> {
+    if password_stdin {
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        let trimmed = line.trim().to_owned();
+        return Ok(if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        });
+    }
+    if password.is_some() {
+        return Ok(password);
+    }
+    Ok(env::var("VOICETYPR_REMOTE_PASSWORD")
+        .ok()
+        .filter(|s| !s.is_empty()))
 }
 
 fn parse_server(value: &str) -> Result<(String, u16), Box<dyn Error>> {
