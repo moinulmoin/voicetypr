@@ -3,7 +3,6 @@ use crate::ai::contract::AiPolishRequest;
 use crate::ai::error::{user_facing_message, AiProviderError};
 use crate::ai::executor::AiExecutor;
 use crate::ai::genai_runtime::AiKeyResolver;
-use crate::ai::openai::{is_unsupported_token_parameter_error, model_uses_max_completion_tokens};
 use crate::ai::providers::{launch_providers, PROVIDER_CUSTOM};
 use crate::ai::EnhancementOptions;
 use crate::commands::audio::pill_toast;
@@ -122,48 +121,6 @@ fn normalize_chat_completions_url(base: &str) -> String {
     format!("{}/chat/completions", b)
 }
 
-fn normalize_models_url(base: &str) -> String {
-    let b = base.trim_end_matches('/');
-    format!("{}/models", b)
-}
-
-const OPENAI_PROBE_INITIAL_MAX_TOKENS: u32 = 10;
-const OPENAI_PROBE_FALLBACK_MAX_TOKENS: u32 = 32;
-
-fn is_probe_output_limit_error(error_text: &str) -> bool {
-    let haystack = error_text.to_ascii_lowercase();
-    haystack.contains("output limit was reached")
-        || haystack.contains("higher max_tokens")
-        || haystack.contains("higher max_completion_tokens")
-}
-
-fn build_openai_probe_payload(
-    model: &str,
-    use_max_completion_tokens: bool,
-    max_output_tokens: u32,
-) -> serde_json::Value {
-    let mut payload = serde_json::json!({
-        "model": model,
-        "messages": [{"role": "user", "content": "1"}],
-    });
-
-    if let Some(obj) = payload.as_object_mut() {
-        if use_max_completion_tokens {
-            obj.insert(
-                "max_completion_tokens".to_string(),
-                serde_json::json!(max_output_tokens),
-            );
-        } else {
-            obj.insert(
-                "max_tokens".to_string(),
-                serde_json::json!(max_output_tokens),
-            );
-        }
-    }
-
-    payload
-}
-
 fn load_models_by_provider<R: tauri::Runtime>(
     store: &tauri_plugin_store::Store<R>,
     current_provider: &str,
@@ -194,124 +151,52 @@ fn remember_provider_model(
     }
 }
 
-async fn run_openai_probe_request(
+async fn run_openai_chat_probe(
     client: &reqwest::Client,
     base_url: &str,
     model: &str,
     auth_header: Option<&str>,
-    allow_chat_probe_fallback: bool,
 ) -> Result<(), String> {
-    let models_url = normalize_models_url(base_url);
-
-    let mut models_req = client.get(&models_url);
+    let url = normalize_chat_completions_url(base_url);
+    let payload = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "Reply with OK."},
+            {"role": "user", "content": "ping"}
+        ],
+        "stream": false
+    });
+    let mut req = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&payload);
     if let Some(header) = auth_header {
-        models_req = models_req.header("Authorization", header);
+        req = req.header("Authorization", header);
     }
-
-    let models_response = models_req
+    let response = req
         .send()
         .await
         .map_err(|e| format!("Network error: {}", e))?;
-
-    let models_status = models_response.status();
-    let models_body = models_response.text().await.unwrap_or_default();
-
-    if models_status.is_success() {
-        if let Ok(json_body) = serde_json::from_str::<serde_json::Value>(&models_body) {
-            if let Some(data) = json_body.get("data").and_then(|d| d.as_array()) {
-                if !data.is_empty() {
-                    let model_exists = data.iter().any(|entry| {
-                        entry
-                            .get("id")
-                            .and_then(|id| id.as_str())
-                            .is_some_and(|id| id == model)
-                    });
-
-                    if !model_exists {
-                        return Err(format!(
-                            "Model '{}' not found in endpoint model list",
-                            model
-                        ));
-                    }
-                }
-            }
-        }
-
-        return Ok(());
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(match status.as_u16() {
+            401 | 403 => "Invalid API key (the endpoint rejected the credentials).".to_string(),
+            404 => "Endpoint or model not found (HTTP 404).".to_string(),
+            429 => "Rate limited by the provider (HTTP 429).".to_string(),
+            _ => format!("Endpoint returned HTTP {}", status.as_u16()),
+        });
     }
-
-    if !allow_chat_probe_fallback {
-        let snippet: String = models_body.chars().take(500).collect();
-        return Err(format!("HTTP {}: {}", models_status, snippet));
+    let value = serde_json::from_str::<serde_json::Value>(&body)
+        .map_err(|_| "The endpoint did not return a JSON chat-completion response.".to_string())?;
+    if value
+        .pointer("/choices/0/message/content")
+        .and_then(|v| v.as_str())
+        .is_none()
+    {
+        return Err("The endpoint response is not OpenAI chat-completions compatible.".to_string());
     }
-
-    if models_status.as_u16() != 404 && models_status.as_u16() != 405 {
-        let snippet: String = models_body.chars().take(500).collect();
-        return Err(format!("HTTP {}: {}", models_status, snippet));
-    }
-
-    let validate_url = normalize_chat_completions_url(base_url);
-    let mut use_max_completion_tokens = model_uses_max_completion_tokens(model);
-    let mut max_output_tokens = OPENAI_PROBE_INITIAL_MAX_TOKENS;
-
-    for _attempt in 0..4 {
-        let payload =
-            build_openai_probe_payload(model, use_max_completion_tokens, max_output_tokens);
-        let mut req = client
-            .post(&validate_url)
-            .header("Content-Type", "application/json")
-            .json(&payload);
-
-        if let Some(header) = auth_header {
-            req = req.header("Authorization", header);
-        }
-
-        let response = req
-            .send()
-            .await
-            .map_err(|e| format!("Network error: {}", e))?;
-
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-
-        if status.is_success() {
-            return Ok(());
-        }
-
-        let attempted_parameter = if use_max_completion_tokens {
-            "max_completion_tokens"
-        } else {
-            "max_tokens"
-        };
-
-        if is_unsupported_token_parameter_error(&body, attempted_parameter) {
-            log::warn!(
-                "OpenAI probe parameter '{}' unsupported for model '{}'; retrying with alternate parameter",
-                attempted_parameter,
-                model
-            );
-            use_max_completion_tokens = !use_max_completion_tokens;
-            continue;
-        }
-
-        if max_output_tokens < OPENAI_PROBE_FALLBACK_MAX_TOKENS
-            && is_probe_output_limit_error(&body)
-        {
-            log::warn!(
-                "OpenAI probe hit output limit at {} tokens for model '{}'; retrying with {}",
-                max_output_tokens,
-                model,
-                OPENAI_PROBE_FALLBACK_MAX_TOKENS
-            );
-            max_output_tokens = OPENAI_PROBE_FALLBACK_MAX_TOKENS;
-            continue;
-        }
-
-        let snippet: String = body.chars().take(500).collect();
-        return Err(format!("HTTP {}: {}", status, snippet));
-    }
-
-    Err("OpenAI-compatible probe failed after token parameter fallback".to_string())
+    Ok(())
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -607,7 +492,7 @@ pub async fn test_openai_endpoint(
         Some(format!("Bearer {}", key.trim()))
     };
 
-    run_openai_probe_request(&client, &base_url, &model, auth_header.as_deref(), true)
+    run_openai_chat_probe(&client, &base_url, &model, auth_header.as_deref())
         .await
         .map_err(|error| {
             log::error!(
@@ -1467,5 +1352,87 @@ mod tests {
         // Clear all
         cache.clear();
         assert!(cache.is_empty());
+    }
+
+    #[tokio::test]
+    async fn chat_probe_ok_on_valid_completion() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "OK"}}]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None).await;
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn chat_probe_errors_on_auth_failure() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("echoed-secret-sk-LEAK"))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None).await;
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("Invalid API key"),
+            "expected 'Invalid API key' in error, got: {}",
+            err
+        );
+        assert!(
+            !err.contains("echoed-secret-sk-LEAK"),
+            "error must not echo response body, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_probe_errors_on_non_chat_shape() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"foo": "bar"})),
+            )
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None).await;
+        assert!(result.is_err(), "expected Err for non-chat JSON shape");
+    }
+
+    #[tokio::test]
+    async fn chat_probe_errors_on_non_json() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html>nope</html>"))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None).await;
+        assert!(result.is_err(), "expected Err for non-JSON response");
     }
 }

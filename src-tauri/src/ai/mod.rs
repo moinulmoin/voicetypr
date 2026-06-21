@@ -3,7 +3,6 @@ pub mod contract;
 pub mod error;
 pub mod executor;
 pub mod genai_runtime;
-pub mod openai;
 pub mod openai_compatible;
 pub mod prompts;
 pub mod providers;
