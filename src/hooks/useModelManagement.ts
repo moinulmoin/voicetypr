@@ -370,14 +370,22 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
 
   // Setup event listeners BEFORE any other effects
   useEffect(() => {
-    let unregisterProgress: (() => void) | undefined;
-    let unregisterVerifying: (() => void) | undefined;
-    let unregisterComplete: (() => void) | undefined;
-    let unregisterCancelled: (() => void) | undefined;
-    let unregisterError: (() => void) | undefined;
+    let isMounted = true;
+    const unlisteners: Array<() => void> = [];
+
+    const register = async <T,>(eventName: string, handler: (payload: T) => void | Promise<void>) => {
+      const unlisten = await registerEvent<T>(eventName, handler);
+      if (typeof unlisten !== "function") return;
+      if (!isMounted) {
+        unlisten();
+        return;
+      }
+      unlisteners.push(unlisten);
+    };
+
     const setupListeners = async () => {
       // Progress updates
-      unregisterProgress = await registerEvent<{
+      await register<{
         model: string;
         engine?: string;
         downloaded: number;
@@ -412,7 +420,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       });
 
       // Model verifying (after download, before verification)
-      unregisterVerifying = await registerEvent<{
+      await register<{
         model: string;
         engine?: string;
         requestId?: string;
@@ -461,7 +469,7 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       });
 
       // Download complete
-      unregisterComplete = await registerEvent<{
+      await register<{
         model: string;
         engine?: string;
         requestId?: string;
@@ -509,8 +517,6 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           };
         });
 
-
-
         clearDownloadError(modelName);
         // Refresh model list
         await loadModels();
@@ -520,9 +526,8 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
         }
       });
 
-      // Download cancelled
-
-      unregisterError = await registerEvent<{
+      // Download error
+      await register<{
         model: string;
         engine?: string;
         requestId?: string;
@@ -562,7 +567,9 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
           });
         }
       });
-      unregisterCancelled = await registerEvent<{
+
+      // Download cancelled
+      await register<{
         model: string;
         engine?: string;
         requestId?: string;
@@ -592,15 +599,16 @@ export function useModelManagement(options: UseModelManagementOptions = {}) {
       });
     };
 
-    setupListeners();
+    void setupListeners();
 
     // Cleanup
     return () => {
-      unregisterProgress?.();
-      unregisterVerifying?.();
-      unregisterComplete?.();
-      unregisterCancelled?.();
-      unregisterError?.();
+      isMounted = false;
+      unlisteners.forEach((unlisten) => {
+        if (typeof unlisten === "function") {
+          unlisten();
+        }
+      });
     };
   }, [registerEvent, loadModels, showToasts, clearDownloadState, clearDownloadError]);
 

@@ -216,13 +216,13 @@ export function NetworkSharingCard() {
     }
   }, [currentModel, currentEngine]);
 
-  // Fetch status, model info, remote server state, and firewall status on mount
+  // Fetch status, remote server state, and firewall status on mount
+  // (fetchModelInfo is handled by the effect below, which also re-runs on currentModel change)
   useEffect(() => {
     fetchStatus();
-    fetchModelInfo();
     fetchActiveRemoteServer();
     fetchFirewallStatus();
-  }, [fetchStatus, fetchModelInfo, fetchActiveRemoteServer, fetchFirewallStatus]);
+  }, [fetchStatus, fetchActiveRemoteServer, fetchFirewallStatus]);
 
   // Refetch model info when current model changes
   useEffect(() => {

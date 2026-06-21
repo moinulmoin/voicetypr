@@ -97,35 +97,54 @@ export function useTranscriptionHistory({
   }, [includeTotalCount, limit]);
 
   useEffect(() => {
-    const loadInitialHistory = async () => {
-      await refreshHistory();
+    let isMounted = true;
+    const unlisteners: Array<() => void> = [];
+
+    const register = async <T,>(eventName: string, handler: (payload: T) => void | Promise<void>) => {
+      const unlisten = await registerEvent<T>(eventName, handler);
+      if (typeof unlisten !== "function") return;
+      if (!isMounted) {
+        unlisten();
+        return;
+      }
+      unlisteners.push(unlisten);
     };
 
-    void loadInitialHistory();
+    const setup = async () => {
+      await refreshHistory();
 
-    registerEvent<TranscriptionAddedEvent>("transcription-added", (data) => {
-      const newItem = fromAddedEvent(data);
-
-      setHistory((previous) => {
-        if (previous.some((item) => item.id === newItem.id)) {
-          return previous;
-        }
-
-        if (includeTotalCount) {
-          setTotalCount((count) => count + 1);
-        }
-
-        return [newItem, ...previous].slice(0, limit);
+      await register<TranscriptionAddedEvent>("transcription-added", (data) => {
+        const newItem = fromAddedEvent(data);
+        setHistory((previous) => {
+          if (previous.some((item) => item.id === newItem.id)) {
+            return previous;
+          }
+          if (includeTotalCount) {
+            setTotalCount((count) => count + 1);
+          }
+          return [newItem, ...previous].slice(0, limit);
+        });
       });
-    });
 
-    registerEvent("history-updated", () => {
-      void refreshHistory();
-    });
+      await register("history-updated", () => {
+        void refreshHistory();
+      });
 
-    registerEvent("transcription-updated", () => {
-      void refreshHistory();
-    });
+      await register("transcription-updated", () => {
+        void refreshHistory();
+      });
+    };
+
+    void setup();
+
+    return () => {
+      isMounted = false;
+      unlisteners.forEach((unlisten) => {
+        if (typeof unlisten === "function") {
+          unlisten();
+        }
+      });
+    };
   }, [includeTotalCount, limit, refreshHistory, registerEvent]);
 
   return {
