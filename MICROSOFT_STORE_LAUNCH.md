@@ -2,6 +2,26 @@
 
 Use this for every Microsoft Store submission/update. Keep direct GitHub installer releases separate from Store MSIX releases.
 
+## Recurring certification findings (check ALL every submission)
+
+VoiceTypr has been rejected for a different policy each round, so address all of these proactively:
+
+- **11.16 Live Generative AI Content** — AI text-cleanup uses OpenAI/Anthropic/Gemini. Partner Center -> Properties -> Product declarations -> check "This product incorporates generative AI features...". No code.
+- **10.2.4.1 Software Dependencies** — `vcomp140.dll` (VC++ OpenMP runtime, from whisper-rs `openmp`). Fixed by app-local bundling in `build-msix-store.ps1` (see "Bundled runtime" below); hedge with a first-two-lines description note: "This app includes the Microsoft Visual C++ Redistributable."
+- **10.1.5 Software Distribution** — the app downloads Whisper models from Hugging Face/GitHub. Allowed (per Microsoft AI Dev Gallery), but disclose external speech-model downloads in the listing and present model data clearly.
+- **runFullTrust** — expected; the Partner Center warning is normal (see justification below).
+
+### Third-party runtime inventory (the Store MSIX ships more than the main exe)
+
+| Ships in package | Third-party runtime | Status | Disclose? |
+| --- | --- | --- | --- |
+| `voicetypr.exe` | VC++ runtime (`vcomp140.dll` + CRT) | Bundled app-local | Flagged 10.2.4.1 -> disclose as hedge |
+| `ffmpeg.exe` / `ffprobe.exe` | FFmpeg binaries | Bundled (integrated) | No |
+| `whisper-vulkan-sidecar.exe` | Vulkan loader `vulkan-1.dll` | Not bundled; optional, auto CPU fallback | No (not required for primary functionality) |
+| UI (WebView) | MS Edge WebView2 runtime | System-provided, ubiquitous (Win10 19041+/11) | No |
+
+Do NOT bundle `vulkan-1.dll` — the loader needs the GPU driver's ICD, so bundling it alone is useless and can shadow the system loader.
+
 ## Build source of truth
 
 - Store artifact is built by `.github/workflows/store-msix.yml` or locally with:
