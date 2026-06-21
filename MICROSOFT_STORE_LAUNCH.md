@@ -92,14 +92,16 @@ For any Store MSIX artifact:
 
 ## Restricted capability justification
 
-Paste this when Partner Center asks why `runFullTrust` is needed:
+Partner Center limits this field, so use the concise version (the full 3-paragraph one gets truncated):
 
 ```text
-Voicetypr is a packaged desktop application built with Tauri. The app requires the runFullTrust capability to launch its Win32 desktop executable from the MSIX package.
+Voicetypr is a Tauri packaged desktop app; runFullTrust launches its Win32 executable from the MSIX. It needs native desktop APIs for microphone recording, system-wide global hotkeys, local audio processing, launching bundled helper binaries, and inserting transcription into the user's active app. It does not bypass user consent, access unrelated data, or run hidden background services.
+```
 
-Voicetypr provides offline voice typing and transcription for Windows. The desktop process is needed for microphone recording, system-wide global hotkeys, local audio processing, launching bundled helper binaries used by the app, and inserting completed transcription back into the user’s active application.
+Even shorter, if the field is tighter:
 
-Voicetypr does not use runFullTrust to bypass user consent, access unrelated user data, or run hidden background services. The capability is required because the core product is a desktop utility that depends on native Windows desktop APIs and packaged helper executables.
+```text
+Voicetypr is a Tauri MSIX desktop app. runFullTrust launches its Win32 executable and uses native desktop APIs for microphone recording, global hotkeys, local audio processing, bundled helpers, and pasting text into the active app. No hidden services or unrelated data access.
 ```
 
 ## Partner Center product declarations
