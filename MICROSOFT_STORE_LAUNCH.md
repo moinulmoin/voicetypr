@@ -7,9 +7,15 @@ Use this for every Microsoft Store submission/update. Keep direct GitHub install
 VoiceTypr has been rejected for a different policy each round, so address all of these proactively:
 
 - **11.16 Live Generative AI Content** — AI text-cleanup uses OpenAI/Anthropic/Gemini. Partner Center -> Properties -> Product declarations -> check "This product incorporates generative AI features...". No code.
-- **10.2.4.1 Software Dependencies** — `vcomp140.dll` (VC++ OpenMP runtime, from whisper-rs `openmp`). Fixed by app-local bundling in `build-msix-store.ps1` (see "Bundled runtime" below); hedge with a first-two-lines description note: "This app includes the Microsoft Visual C++ Redistributable."
-- **10.1.5 Software Distribution** — the app downloads Whisper models from Hugging Face/GitHub. Allowed (per Microsoft AI Dev Gallery), but disclose external speech-model downloads in the listing and present model data clearly.
+- **10.2.4.1 Software Dependencies** — `vcomp140.dll` (VC++ OpenMP runtime, from whisper-rs `openmp`). Fixed by app-local bundling in `build-msix-store.ps1` (see "Bundled runtime" below). Also name it in the listing opening (see "Listing opening" below).
+- **10.1.5 Software Distribution** — the app downloads Whisper models from Hugging Face/GitHub. Allowed (per Microsoft AI Dev Gallery), but disclose external model downloads in the listing opening (see below) and present model data clearly.
 - **runFullTrust** — expected; the Partner Center warning is normal (see justification below).
+
+### Listing opening — one disclosure covers 10.1.5 + 10.2.4.1
+
+The description's first two lines must name the Microsoft Visual C++ Redistributable (10.2.4.1) and disclose external model downloads (10.1.5). Fold both into the opening instead of bolting on a separate jargon sentence:
+
+> Voicetypr performs local speech-to-text on your Windows PC using speech recognition model files and the included Microsoft Visual C++ Redistributable. On first use, Voicetypr downloads the selected speech model once, stores it on your device, and then runs transcription locally without uploading your audio.
 
 ### Third-party runtime inventory (the Store MSIX ships more than the main exe)
 
@@ -58,7 +64,7 @@ Do not change these unless Partner Center product identity changes.
 
 - The Store `voicetypr.exe` is built with the static CRT (`-C target-feature=+crt-static`), but `whisper-rs` enables OpenMP on Windows, which dynamically links `vcomp140.dll` (a Visual C++ Redistributable component with no static MSVC variant).
 - `scripts/build-msix-store.ps1` bundles the VC++ runtime DLLs (CRT + OpenMP) app-local, next to `voicetypr.exe` in the package, sourced from the VS redist folder via `vswhere`. The build fails if `vcomp140.dll` is not staged.
-- Because the dependency is integrated into the package, Store policy 10.2.4.1 (Software Dependencies) needs no description disclosure. Do not add VC++/runtime jargon to the public description.
+- Bundling integrates the dependency, but the reviewer asks for it by name, so the listing opening still names the Microsoft Visual C++ Redistributable (see "Listing opening" above). Keep other dev jargon (Vulkan, sidecar, CPU/GPU internals) out of the description.
 - Unlike the direct NSIS installer (which ships `vc_redist.x64.exe`), the MSIX must be fully self-contained; never rely on a machine-wide redistributable.
 
 ## Store vs direct updater rules
