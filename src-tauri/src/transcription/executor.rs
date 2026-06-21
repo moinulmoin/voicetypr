@@ -218,7 +218,7 @@ async fn route_once(
                 }) => Ok(TranscriptionResult::new(job, text)
                     .with_transcript_language(language)
                     .with_segments(parakeet_segments_to_transcription_segments(segments))
-                    .with_audio_duration_ms(duration.map(|s| (s.max(0.0) * 1000.0) as u64))),
+                    .with_audio_duration_ms(effective_parakeet_audio_duration_ms(duration, input_path))),
                 Ok(ParakeetResponse::Error { code, message, .. }) => Err(TranscriptionError::new(
                     TranscriptionErrorCode::EngineFailed,
                     source,
@@ -399,6 +399,24 @@ fn wav_duration_ms(path: &Path) -> Option<u64> {
     )
 }
 
+/// Returns the audio duration in milliseconds for a Parakeet transcription.
+///
+/// The Parakeet sidecar's `duration` field is often `0.0` (a known FluidAudio
+/// bug). When `sidecar_secs` is `Some(s)` with `s > 0.0` we trust it; otherwise
+/// we fall back to reading the WAV header of `input_path` directly.
+fn effective_parakeet_audio_duration_ms(
+    sidecar_secs: Option<f32>,
+    input_path: &std::path::Path,
+) -> Option<u64> {
+    if let Some(s) = sidecar_secs {
+        if s > 0.0 {
+            return Some((s * 1000.0) as u64);
+        }
+    }
+    crate::parakeet::messages::wav_duration_seconds(input_path)
+        .map(|s| (s.max(0.0) * 1000.0) as u64)
+}
+
 /// The watchdog/timeout budget for an attempt, or `None` to run unbounded.
 fn watchdog_budget_for(attempt_path: &Path, policy: &TimeoutPolicy) -> Option<Duration> {
     match policy {
@@ -526,8 +544,8 @@ fn should_delete_input(policy: &CleanupPolicy, success: bool, retryable: bool) -
 mod tests {
     use super::should_delete_input;
     use super::{
-        deferred_executor_route_error, is_normalized_wav, remap_timed_out, watchdog_budget_for,
-        wav_duration_ms,
+        deferred_executor_route_error, effective_parakeet_audio_duration_ms, is_normalized_wav,
+        remap_timed_out, watchdog_budget_for, wav_duration_ms,
     };
     use crate::provider_capabilities::ProviderEngine;
     use crate::transcription::error::{TranscriptionError, TranscriptionErrorCode};
@@ -740,5 +758,40 @@ mod tests {
         );
         let budget = watchdog_budget_for(tmp.path(), &TimeoutPolicy::Interactive).unwrap();
         assert!(budget >= Duration::from_secs(180));
+    }
+
+    #[test]
+    fn effective_parakeet_audio_duration_ms_fallback_cases() {
+        // Write a 1-second 16 kHz mono WAV.
+        let tmp = NamedTempFile::new().unwrap();
+        write_wav(tmp.path(), 16_000, 1, 1.0);
+
+        // Sidecar reports a positive value — trust it.
+        assert_eq!(
+            effective_parakeet_audio_duration_ms(Some(5.0), tmp.path()),
+            Some(5000)
+        );
+
+        // Sidecar reports zero — fall back to WAV header (~1000 ms).
+        let from_zero = effective_parakeet_audio_duration_ms(Some(0.0), tmp.path())
+            .expect("should fall back to WAV header");
+        assert!(
+            (990..=1010).contains(&from_zero),
+            "expected ~1000 ms from WAV header, got {from_zero}"
+        );
+
+        // Sidecar absent — fall back to WAV header (~1000 ms).
+        let from_none = effective_parakeet_audio_duration_ms(None, tmp.path())
+            .expect("should fall back to WAV header");
+        assert!(
+            (990..=1010).contains(&from_none),
+            "expected ~1000 ms from WAV header, got {from_none}"
+        );
+
+        // Sidecar absent + nonexistent path — returns None, no panic.
+        assert_eq!(
+            effective_parakeet_audio_duration_ms(None, Path::new("/nonexistent/file.wav")),
+            None
+        );
     }
 }

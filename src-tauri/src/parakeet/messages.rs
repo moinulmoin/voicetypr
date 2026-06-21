@@ -129,7 +129,7 @@ fn transcribe_timeout_secs_for_duration(duration_secs: f64) -> u64 {
         .clamp(TRANSCRIBE_TIMEOUT_SECS, MAX_TRANSCRIBE_TIMEOUT_SECS)
 }
 
-fn wav_duration_seconds(audio_path: &Path) -> Option<f64> {
+pub(crate) fn wav_duration_seconds(audio_path: &Path) -> Option<f64> {
     let reader = hound::WavReader::open(audio_path).ok()?;
     let spec = reader.spec();
     if spec.sample_rate == 0 || spec.channels == 0 {
