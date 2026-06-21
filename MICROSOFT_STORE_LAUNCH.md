@@ -124,6 +124,8 @@ Use technical terms only where customers expect them, such as optional feature b
 ## Store description
 
 ```text
+Voicetypr performs local speech-to-text on your Windows PC using speech recognition model files and the included Microsoft Visual C++ Redistributable. On first use, Voicetypr downloads the selected speech model once, stores it on your device, and then runs transcription locally without uploading your audio.
+
 Voicetypr helps you type with your voice in the apps you already use.
 
 Press a hotkey, speak naturally, and Voicetypr places the text where your cursor is. Use it in email, chat, notes, documents, browsers, writing tools, coding tools, and everyday text fields without switching to a separate editor.
