@@ -21,6 +21,8 @@
 * **onboarding:** the first-transcription step now shows an example sentence to read aloud, an editable transcript box, and a "Skip for now" option
 * **onboarding:** add a delete action to the setup model cards so a model can be removed and re-downloaded without leaving onboarding
 * **logging:** route frontend logs through a leveled `logger` backed by `tauri-plugin-log`, so they land in the same rotated file as the Rust logs (and in Report Bug diagnostics) with a client-side level gate; collapse the model-status flood from ~14 log lines per refresh to a single summary line; and fetch model availability once through a shared provider instead of independently in every consumer
+* **history:** add a per-entry "Show original / Show formatted" toggle in Recent Recordings so the raw transcript can be compared against the AI-formatted result; the pre-AI transcript is stored in local history only (never written to logs) and the toggle appears only when AI actually changed the text
+* **shortcuts:** simplify setting a recording shortcut to one flow — current keys + Edit → press → Save/Cancel, with a single "Hold to talk" checkbox; removed the mode picker, left/right side selector, double-tap selector, and trigger-kind dropdowns from onboarding, General settings, and the Shortcuts list. A lone modifier now toggles recording on a single clean tap (new isolated-tap detector — a modifier tapped inside a real shortcut like ⌘C never toggles), or hold-to-talk when the checkbox is on
 
 ### Bug Fixes
 
@@ -30,6 +32,13 @@
 * **parakeet:** receive the sidecar's JSON protocol responses from stderr as well as stdout — the Swift sidecar emits its load/transcribe/status responses on stderr (its stdout is redirected around native CoreML calls), so the Rust side received nothing and every local transcription hung until the 300s/180s timeout fired; recording now completes (or fails fast) instead of sitting on "Transcribing…" indefinitely
 * **deps:** move the `hono` override from the deprecated `package.json` `pnpm.overrides` field to `pnpm-workspace.yaml`, restoring the supply-chain pin on pnpm v11 and silencing the "pnpm field is no longer read" warning
 * **recording:** render the recording pill on a dark surface again instead of white — the pill window never receives the `.dark` theme class, so its styling no longer falls back to the light base
+* **parakeet:** report the real recording length in Recent Recordings instead of 0:00 — the sidecar's FluidAudio `duration` is often 0.0, so the duration now falls back to measuring the transcribed WAV when the sidecar reports none
+* **parakeet:** stop the per-transcription "Failed to parse sidecar response" ERROR/WARN log flood — the sidecar's stderr status banners now log once at debug without their raw contents (which can include transcript text), and a genuine stdout protocol parse failure logs as ERROR with only a byte count
+* **ai:** validate a custom OpenAI-compatible connection by calling `/chat/completions` the same way formatting actually runs, instead of trusting the `/models` list — Test now correctly fails on a missing/invalid key or a non-chat-compatible endpoint (no more false "Connection successful" from a public `/models`) and correctly passes for usable models a curated/proxied `/models` doesn't advertise; provider error bodies are no longer surfaced to the UI or logs
+
+### Chores
+
+* **dev:** `pnpm tauri:dev` now reaps an orphaned previous dev process before launching, so a stale single-instance ghost from an interrupted session no longer makes the launch exit 143 — via a small cross-platform Node launcher (path-scoped `pkill` on macOS/Linux; Windows just launches). Docs now point at `pnpm tauri:dev`, which isolates the dev build from an installed one via the `.dev` identifier
 
 
 ## [1.12.5](https://github.com/moinulmoin/voicetypr/compare/v1.12.4...v1.12.5) (2026-06-02)
