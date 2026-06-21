@@ -178,7 +178,7 @@ describe("ShortcutsSection", () => {
     expect(screen.getByText("Toggle Recording")).toBeInTheDocument();
     expect(screen.getByText("Copy Last Transcription")).toBeInTheDocument();
     expect(screen.getByText("Open Dashboard")).toBeInTheDocument();
-    expect(screen.getAllByText("No shortcut set")).toHaveLength(actionDefinitions.length);
+    expect(screen.getAllByRole("button", { name: "Set shortcut" })).toHaveLength(actionDefinitions.length);
   });
 
   it("adds a copy-last shortcut and sends the full settings object", async () => {
@@ -186,10 +186,8 @@ describe("ShortcutsSection", () => {
     render(<ShortcutsSection />);
 
     const copyRow = await screen.findByRole("group", { name: "Copy Last Transcription" });
-    await user.click(within(copyRow).getByRole("button", { name: "Add shortcut" }));
-    await user.click(within(copyRow).getByTitle("Change hotkey"));
+    await user.click(within(copyRow).getByRole("button", { name: "Set shortcut" }));
     await user.keyboard("{Alt>}{Shift>}c{/Shift}{/Alt}");
-    await user.click(within(copyRow).getByTitle("Save hotkey"));
     await user.click(within(copyRow).getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
@@ -227,10 +225,8 @@ describe("ShortcutsSection", () => {
     render(<ShortcutsSection />);
 
     const pasteRow = await screen.findByRole("group", { name: "Paste Last Transcription" });
-    await user.click(within(pasteRow).getByRole("button", { name: "Add shortcut" }));
-    await user.click(within(pasteRow).getByTitle("Change hotkey"));
+    await user.click(within(pasteRow).getByRole("button", { name: "Set shortcut" }));
     await user.keyboard("{Alt>}c{/Alt}");
-    await user.click(within(pasteRow).getByTitle("Save hotkey"));
     await user.click(within(pasteRow).getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
@@ -259,10 +255,8 @@ describe("ShortcutsSection", () => {
     render(<ShortcutsSection />);
 
     const pasteRow = await screen.findByRole("group", { name: "Paste Last Transcription" });
-    await user.click(within(pasteRow).getByRole("button", { name: "Add shortcut" }));
-    await user.click(within(pasteRow).getByTitle("Change hotkey"));
+    await user.click(within(pasteRow).getByRole("button", { name: "Set shortcut" }));
     await user.keyboard("{Alt>}c{/Alt}");
-    await user.click(within(pasteRow).getByTitle("Save hotkey"));
     await user.click(within(pasteRow).getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
@@ -297,15 +291,13 @@ describe("ShortcutsSection", () => {
     render(<ShortcutsSection />);
 
     const copyRow = await screen.findByRole("group", { name: "Copy Last Transcription" });
-    await user.click(within(copyRow).getByRole("button", { name: "Add shortcut" }));
-    await user.click(within(copyRow).getByTitle("Change hotkey"));
+    await user.click(within(copyRow).getByRole("button", { name: "Set shortcut" }));
     await user.keyboard("{Alt>}{Shift>}c{/Shift}{/Alt}");
-    await user.click(within(copyRow).getByTitle("Save hotkey"));
     await user.click(within(copyRow).getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       // Backend returned "Alt+R"; verify the read-mode display reflects it (not the submitted "Alt+Shift+C")
-      const display = within(copyRow).getByLabelText("Copy Last Transcription shortcut read-only");
+      const display = within(copyRow).getByLabelText("Copy Last Transcription shortcut");
       expect(display).toHaveTextContent("Alt+R");
       expect(display).not.toHaveTextContent("Shift");
     });
@@ -316,187 +308,46 @@ describe("ShortcutsSection", () => {
     render(<ShortcutsSection />);
 
     const holdRow = await screen.findByRole("group", { name: "Hold to Record" });
-    await user.click(within(holdRow).getByRole("button", { name: "Add shortcut" }));
-    await user.click(within(holdRow).getByRole("switch", { name: "Use a single key" }));
-    await user.click(within(holdRow).getByTitle("Change hotkey"));
+    await user.click(within(holdRow).getByRole("button", { name: "Set shortcut" }));
 
     fireEvent.keyDown(window, { key: "a", code: "KeyA" });
     await waitFor(() => {
       expect(within(holdRow).getByText("a")).toBeInTheDocument();
-      expect(within(holdRow).getByTitle("Save hotkey")).toBeEnabled();
+      expect(within(holdRow).getByRole("button", { name: "Save" })).toBeEnabled();
     });
     fireEvent.keyDown(window, { key: "b", code: "KeyB" });
 
     expect(within(holdRow).getByText("Multi-key shortcuts must include at least one modifier key")).toBeInTheDocument();
-    expect(within(holdRow).getByTitle("Save hotkey")).toBeDisabled();
+    expect(within(holdRow).getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
-  it("enables single-key-friendly hold-to-record validation copy", async () => {
+  it("shows the simplified capture UI without a single-key toggle", async () => {
     const user = userEvent.setup();
     render(<ShortcutsSection />);
 
     const holdRow = await screen.findByRole("group", { name: "Hold to Record" });
-    await user.click(within(holdRow).getByRole("button", { name: "Add shortcut" }));
+    await user.click(within(holdRow).getByRole("button", { name: "Set shortcut" }));
 
-    expect(within(holdRow).getByText("Use a single key")).toBeInTheDocument();
-    expect(within(holdRow).queryByText("Single-key validation enabled.")).not.toBeInTheDocument();
-
-    await user.click(within(holdRow).getByRole("switch", { name: "Use a single key" }));
-
-    expect(within(holdRow).getByText("Single-key validation enabled.")).toBeInTheDocument();
+    expect(within(holdRow).queryByRole("switch", { name: "Use a single key" })).not.toBeInTheDocument();
+    expect(within(holdRow).queryByText(/Only non-typing keys are allowed/)).not.toBeInTheDocument();
+    expect(within(holdRow).getByText(/won't work/)).toBeInTheDocument();
   });
 
-  it("shows an empty shortcut as unconfigured while controls are read-only", async () => {
-    const user = userEvent.setup();
-    let resolveUpdate: (settings: ShortcutSettings) => void = () => {};
-    const updatePromise = new Promise<ShortcutSettings>((resolve) => {
-      resolveUpdate = resolve;
-    });
-    const settings: ShortcutSettings = {
-      bindings: [
-        {
-          id: "copy-binding",
-          action: "copy_last_transcription",
-          shortcut: "Alt+C",
-          trigger: "pressed",
-          enabled: true,
-          allow_risky_combo: false,
-        },
-        {
-          id: "paste-binding",
-          action: "paste_last_transcription",
-          shortcut: "",
-          trigger: "pressed",
-          enabled: false,
-          allow_risky_combo: false,
-        },
-      ],
-    };
-
-    arrangeInvoke(settings, () => updatePromise);
-
-    render(<ShortcutsSection />);
-
-    const copyRow = await screen.findByRole("group", { name: "Copy Last Transcription" });
-    const pasteRow = await screen.findByRole("group", { name: "Paste Last Transcription" });
-
-    await user.click(within(copyRow).getByRole("switch", { name: "Copy Last Transcription enabled" }));
-
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", expect.anything());
-    });
-
-    await waitFor(() => {
-      expect(within(pasteRow).getByLabelText("Paste Last Transcription shortcut read-only")).toHaveTextContent("No shortcut configured");
-    });
-    expect(within(pasteRow).queryByText("Click to set shortcut")).not.toBeInTheDocument();
-
-    resolveUpdate({
-      bindings: [
-        { ...settings.bindings[0], enabled: false },
-        settings.bindings[1],
-      ],
-    });
-
-    await waitFor(() => {
-      expect(within(copyRow).getByRole("switch", { name: "Copy Last Transcription enabled" })).toBeEnabled();
-    });
-  });
-
-  it("serializes shortcut mutations while a full settings save is in flight", async () => {
-    const user = userEvent.setup();
-    let resolveUpdate: (settings: ShortcutSettings) => void = () => {};
-    const updatePromise = new Promise<ShortcutSettings>((resolve) => {
-      resolveUpdate = resolve;
-    });
-    const settings: ShortcutSettings = {
-      bindings: [
-        {
-          id: "copy-binding",
-          action: "copy_last_transcription",
-          shortcut: "Alt+C",
-          trigger: "pressed",
-          enabled: true,
-          allow_risky_combo: false,
-        },
-        {
-          id: "paste-binding",
-          action: "paste_last_transcription",
-          shortcut: "Alt+V",
-          trigger: "pressed",
-          enabled: true,
-          allow_risky_combo: false,
-        },
-      ],
-    };
-
-    arrangeInvoke(settings, () => updatePromise);
-
-    render(<ShortcutsSection />);
-
-    const copyRow = await screen.findByRole("group", { name: "Copy Last Transcription" });
-    const pasteRow = await screen.findByRole("group", { name: "Paste Last Transcription" });
-
-    await user.click(within(copyRow).getByRole("switch", { name: "Copy Last Transcription enabled" }));
-
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", {
-        settings: {
-          bindings: [
-            expect.objectContaining({ id: "copy-binding", enabled: false }),
-            expect.objectContaining({ id: "paste-binding", enabled: true }),
-          ],
-        },
-      });
-    });
-
-    expect(within(copyRow).getByRole("button", { name: "Add shortcut" })).toBeDisabled();
-    expect(within(pasteRow).getByRole("switch", { name: "Paste Last Transcription enabled" })).toBeDisabled();
-    expect(within(pasteRow).getByRole("button", { name: "Delete Paste Last Transcription shortcut" })).toBeDisabled();
-    expect(within(pasteRow).queryByTitle("Change hotkey")).not.toBeInTheDocument();
-
-    await user.click(within(pasteRow).getByRole("switch", { name: "Paste Last Transcription enabled" }));
-    await user.click(within(pasteRow).getByRole("button", { name: "Delete Paste Last Transcription shortcut" }));
-
-    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "update_shortcut_settings")).toHaveLength(1);
-
-    resolveUpdate({
-      bindings: [
-        { ...settings.bindings[0], enabled: false },
-        settings.bindings[1],
-      ],
-    });
-
-    await waitFor(() => {
-      expect(within(pasteRow).getByRole("switch", { name: "Paste Last Transcription enabled" })).toBeEnabled();
-    });
-  });
-
-  it("surfaces the single-key option on Hold to Record and saves a single-key binding when enabled", async () => {
+  it("saves a single-key binding on Hold to Record", async () => {
     const user = userEvent.setup();
     arrangeInvoke({ bindings: [] });
     render(<ShortcutsSection />);
 
     const holdRow = await screen.findByRole("group", { name: "Hold to Record" });
 
-    // Add a Hold to Record binding — the single-key toggle must be discoverable immediately
-    await user.click(within(holdRow).getByRole("button", { name: "Add shortcut" }));
-
-    expect(within(holdRow).getByText("Use a single key")).toBeInTheDocument();
-    const singleKeySwitch = within(holdRow).getByRole("switch", { name: "Use a single key" });
-    expect(singleKeySwitch).not.toBeChecked();
-
-    // Enable single-key mode — updates draft locally (no shortcut yet)
-    await user.click(singleKeySwitch);
-    expect(singleKeySwitch).toBeChecked();
+    // Add a Hold to Record binding
+    await user.click(within(holdRow).getByRole("button", { name: "Set shortcut" }));
 
     // Enter a single key — valid because single-key validation is now active
-    await user.click(within(holdRow).getByTitle("Change hotkey"));
     fireEvent.keyDown(window, { key: "a", code: "KeyA" });
     await waitFor(() => {
-      expect(within(holdRow).getByTitle("Save hotkey")).toBeEnabled();
+      expect(within(holdRow).getByRole("button", { name: "Save" })).toBeEnabled();
     });
-    await user.click(within(holdRow).getByTitle("Save hotkey"));
     await user.click(within(holdRow).getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
@@ -513,34 +364,29 @@ describe("ShortcutsSection", () => {
     });
   });
 
-  it("offers the single-key toggle on a non-hold-to-record action", async () => {
+  it("does not show a single-key toggle on a non-recording action", async () => {
     const user = userEvent.setup();
     render(<ShortcutsSection />);
 
     const copyRow = await screen.findByRole("group", { name: "Copy Last Transcription" });
-    await user.click(within(copyRow).getByRole("button", { name: "Add shortcut" }));
+    await user.click(within(copyRow).getByRole("button", { name: "Set shortcut" }));
 
-    expect(within(copyRow).getByText("Use a single key")).toBeInTheDocument();
-    const singleKeySwitch = within(copyRow).getByRole("switch", { name: "Use a single key" });
-    expect(singleKeySwitch).not.toBeChecked();
+    expect(within(copyRow).queryByRole("switch", { name: "Use a single key" })).not.toBeInTheDocument();
+    expect(within(copyRow).queryByRole("switch", { name: "Hold to talk (push-to-talk)" })).not.toBeInTheDocument();
   });
 
-  it("saves a single-key F1 binding on a non-hold action when single-key mode is enabled", async () => {
+  it("saves a single-key F1 binding on a non-recording action", async () => {
     const user = userEvent.setup();
     arrangeInvoke({ bindings: [] });
     render(<ShortcutsSection />);
 
     const copyRow = await screen.findByRole("group", { name: "Copy Last Transcription" });
-    await user.click(within(copyRow).getByRole("button", { name: "Add shortcut" }));
+    await user.click(within(copyRow).getByRole("button", { name: "Set shortcut" }));
 
-    await user.click(within(copyRow).getByRole("switch", { name: "Use a single key" }));
-
-    await user.click(within(copyRow).getByTitle("Change hotkey"));
     fireEvent.keyDown(window, { key: "F1", code: "F1" });
     await waitFor(() => {
-      expect(within(copyRow).getByTitle("Save hotkey")).toBeEnabled();
+      expect(within(copyRow).getByRole("button", { name: "Save" })).toBeEnabled();
     });
-    await user.click(within(copyRow).getByTitle("Save hotkey"));
     await user.click(within(copyRow).getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
@@ -557,4 +403,120 @@ describe("ShortcutsSection", () => {
       });
     });
   });
+
+  it("removes an existing binding via Remove (no delete button or enable switch)", async () => {
+    const user = userEvent.setup();
+    arrangeInvoke({
+      bindings: [
+        {
+          id: "copy-binding",
+          action: "copy_last_transcription",
+          shortcut: "Alt+C",
+          trigger: "pressed",
+          enabled: true,
+          allow_risky_combo: false,
+        },
+      ],
+    });
+    render(<ShortcutsSection />);
+
+    const copyRow = await screen.findByRole("group", { name: "Copy Last Transcription" });
+    expect(within(copyRow).queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
+    expect(within(copyRow).queryByRole("switch", { name: /enabled/ })).not.toBeInTheDocument();
+
+    await user.click(within(copyRow).getByRole("button", { name: "Remove" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", {
+        settings: { bindings: [] },
+      });
+    });
+  });
+
+  it("offers only one shortcut slot per action (no add-another button once set)", async () => {
+    arrangeInvoke({
+      bindings: [
+        {
+          id: "copy-binding",
+          action: "copy_last_transcription",
+          shortcut: "Alt+C",
+          trigger: "pressed",
+          enabled: true,
+          allow_risky_combo: false,
+        },
+      ],
+    });
+    render(<ShortcutsSection />);
+
+    const copyRow = await screen.findByRole("group", { name: "Copy Last Transcription" });
+    expect(within(copyRow).queryByRole("button", { name: "Set shortcut" })).not.toBeInTheDocument();
+    expect(within(copyRow).queryByRole("button", { name: "Add shortcut" })).not.toBeInTheDocument();
+    expect(within(copyRow).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+  });
+
+  it("captures a bare modifier on Toggle Recording as isolated_tap", async () => {
+    const user = userEvent.setup();
+    arrangeInvoke({ bindings: [] });
+    render(<ShortcutsSection />);
+
+    const toggleRow = await screen.findByRole("group", { name: "Toggle Recording" });
+    await user.click(within(toggleRow).getByRole("button", { name: "Set shortcut" }));
+
+    // Bare Right Alt press+release → bare-modifier capture.
+    fireEvent.keyDown(window, { key: "Alt", code: "AltRight", altKey: true });
+    fireEvent.keyUp(window, { key: "Alt", code: "AltRight" });
+    await waitFor(() => {
+      expect(within(toggleRow).getByRole("button", { name: "Save" })).toBeEnabled();
+    });
+    await user.click(within(toggleRow).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", {
+        settings: {
+          bindings: [
+            expect.objectContaining({
+              action: "toggle_recording",
+              trigger_kind: "isolated_tap",
+              trigger: "pressed",
+              modifier: { modifier: "alt", side: "right" },
+              shortcut: "",
+            }),
+          ],
+        },
+      });
+    });
+  });
+
+  it("captures a bare modifier on Hold to Record as modifier_hold", async () => {
+    const user = userEvent.setup();
+    arrangeInvoke({ bindings: [] });
+    render(<ShortcutsSection />);
+
+    const holdRow = await screen.findByRole("group", { name: "Hold to Record" });
+    await user.click(within(holdRow).getByRole("button", { name: "Set shortcut" }));
+
+    fireEvent.keyDown(window, { key: "Alt", code: "AltRight", altKey: true });
+    fireEvent.keyUp(window, { key: "Alt", code: "AltRight" });
+    await waitFor(() => {
+      expect(within(holdRow).getByRole("button", { name: "Save" })).toBeEnabled();
+    });
+    await user.click(within(holdRow).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_shortcut_settings", {
+        settings: {
+          bindings: [
+            expect.objectContaining({
+              action: "hold_to_record",
+              trigger_kind: "modifier_hold",
+              trigger: "hold",
+              modifier: { modifier: "alt", side: "right" },
+              shortcut: "",
+            }),
+          ],
+        },
+      });
+    });
+  });
+
 });

@@ -370,6 +370,7 @@ export function GeneralSettings() {
                       {isEditingHotkey ? (
                         <div className="space-y-3">
                           <HotkeyInput
+                            inline
                             value={pendingHotkey}
                             onChange={(v) => {
                               setPendingHotkey(v);

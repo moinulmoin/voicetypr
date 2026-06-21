@@ -2,7 +2,6 @@ import { BareModifierSpec, HotkeyInput } from "@/components/HotkeyInput";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
-import { Switch } from "@/components/ui/switch";
 import { normalizeShortcutKeys, ValidationPresets } from "@/lib/keyboard-normalizer";
 import type {
   ModifierKind,
@@ -13,7 +12,7 @@ import type {
   ShortcutSettings,
 } from "@/types/shortcuts";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Keyboard, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, Check, Keyboard, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { createLogger } from "@/lib/logger";
@@ -73,12 +72,6 @@ const MOD_LABELS: Record<string, string> = {
   shift: "Shift",
 };
 
-function formatCapturedModifier(spec: BareModifierSpec): string {
-  const sideLabel = spec.side === "right" ? "Right " : spec.side === "left" ? "Left " : "";
-  const modLabel = MOD_LABELS[spec.modifier] ?? spec.modifier;
-  return `${sideLabel}${modLabel}`;
-}
-
 function formatBindingDisplay(binding: ShortcutBinding): string {
   const kind = binding.trigger_kind ?? "combo";
   const mod = binding.modifier;
@@ -97,8 +90,6 @@ type EditingCapture = {
   combo: string;
   /** Captured bare modifier (mutually exclusive with combo). */
   bareModifier: BareModifierSpec | null;
-  /** "Hold to talk" checkbox state — only meaningful for recording actions. */
-  holdToTalk: boolean;
   /** Mirrors allow_risky_combo for the draft being captured. */
   allowRiskyCombo: boolean;
 };
@@ -309,7 +300,6 @@ export function ShortcutsSection() {
       bindingId: binding.id,
       combo: binding.shortcut || "",
       bareModifier: null,
-      holdToTalk: (binding.trigger_kind ?? "combo") === "modifier_hold",
       allowRiskyCombo: binding.allow_risky_combo,
     });
   }, [editingDisabled]);
@@ -325,7 +315,7 @@ export function ShortcutsSection() {
 
   const saveEdit = useCallback(async () => {
     if (!editingCapture) return;
-    const { bindingId, combo, bareModifier, holdToTalk, allowRiskyCombo } = editingCapture;
+    const { bindingId, combo, bareModifier, allowRiskyCombo } = editingCapture;
 
     const originalBinding =
       settings.bindings.find((b) => b.id === bindingId) ??
@@ -339,37 +329,21 @@ export function ShortcutsSection() {
     let nextBinding: ShortcutBinding;
 
     if (bareModifier) {
-      if (holdToTalk) {
-        // Bare modifier + PTT → modifier_hold / hold_to_record
-        nextBinding = {
-          ...originalBinding,
-          trigger_kind: "modifier_hold",
-          action: "hold_to_record",
-          trigger: "hold",
-          modifier: {
-            modifier: bareModifier.modifier as ModifierKind,
-            side: bareModifier.side as ModifierSide,
-          },
-          shortcut: "",
-          enabled: true,
-          allow_risky_combo: allowRiskyCombo,
-        };
-      } else {
-        // Bare modifier + tap toggle → isolated_tap / toggle_recording
-        nextBinding = {
-          ...originalBinding,
-          trigger_kind: "isolated_tap",
-          action: "toggle_recording",
-          trigger: "pressed",
-          modifier: {
-            modifier: bareModifier.modifier as ModifierKind,
-            side: bareModifier.side as ModifierSide,
-          },
-          shortcut: "",
-          enabled: true,
-          allow_risky_combo: allowRiskyCombo,
-        };
-      }
+      // Mode comes from the action row, not a separate toggle: Hold to Record =
+      // push-to-talk (modifier_hold); Toggle Recording = tap (isolated_tap).
+      const isPushToTalk = originalBinding.action === "hold_to_record";
+      nextBinding = {
+        ...originalBinding,
+        trigger_kind: isPushToTalk ? "modifier_hold" : "isolated_tap",
+        trigger: isPushToTalk ? "hold" : "pressed",
+        modifier: {
+          modifier: bareModifier.modifier as ModifierKind,
+          side: bareModifier.side as ModifierSide,
+        },
+        shortcut: "",
+        enabled: true,
+        allow_risky_combo: allowRiskyCombo,
+      };
     } else {
       // Combo (or normal key) → combo kind
       nextBinding = {
@@ -379,7 +353,7 @@ export function ShortcutsSection() {
         modifier: null,
         shortcut: combo,
         enabled: !!combo,
-        allow_risky_combo: allowRiskyCombo,
+        allow_risky_combo: isSingleKeyShortcut(combo),
       };
     }
 
@@ -398,7 +372,6 @@ export function ShortcutsSection() {
       bindingId: newBinding.id,
       combo: "",
       bareModifier: null,
-      holdToTalk: false,
       allowRiskyCombo: false,
     });
   }, [editingDisabled, isCapturing]);
@@ -479,11 +452,12 @@ export function ShortcutsSection() {
 
                       return (
                         <div key={action.action} role="group" aria-label={action.label} className="space-y-3 p-4">
-                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                            <div className="min-w-0">
-                              <h3 className="font-medium">{action.label}</h3>
-                              <p className="mt-1 text-sm text-muted-foreground">{action.description}</p>
-                            </div>
+                          <div className="min-w-0">
+                            <h3 className="font-medium">{action.label}</h3>
+                            <p className="mt-1 text-sm text-muted-foreground">{action.description}</p>
+                          </div>
+
+                          {bindings.length === 0 ? (
                             <Button
                               type="button"
                               variant="outline"
@@ -492,57 +466,33 @@ export function ShortcutsSection() {
                               onClick={() => addDraftBinding(action)}
                             >
                               <Plus className="h-3.5 w-3.5" />
-                              Add shortcut
+                              Set shortcut
                             </Button>
-                          </div>
-
-                          {bindings.length === 0 ? (
-                            <div className="rounded-lg border border-dashed border-border/70 px-3 py-2 text-sm text-muted-foreground">
-                              No shortcut set
-                            </div>
                           ) : (
                             <div className="space-y-3">
                               {bindings.map((binding) => {
                                 const isEditing = editingCapture?.bindingId === binding.id;
                                 const isSaving = savingBindingId === binding.id;
-                                const canUseSingleKey = action.allows_single_key && binding.allow_risky_combo;
                                 const showRecordingCheckbox = action.action === "toggle_recording" || action.action === "hold_to_record";
 
                                 if (isEditing && editingCapture) {
                                   // ── Edit / capture mode ──────────────────────────
                                   return (
                                     <div key={binding.id} className="rounded-lg border border-primary/40 bg-primary/5 p-3 space-y-3">
-                                      {editingCapture.bareModifier ? (
-                                        // Show captured bare modifier as a pill; "Change" clears it
-                                        <div className="flex items-center justify-between rounded-md border border-border/60 bg-muted/30 px-3 py-2">
-                                          <span className="text-sm font-medium">
-                                            {formatCapturedModifier(editingCapture.bareModifier)}
-                                          </span>
-                                          <Button
-                                            type="button"
-                                            variant="ghost"
-                                            size="sm"
-                                            disabled={isSaving}
-                                            onClick={() =>
-                                              setEditingCapture((prev) =>
-                                                prev ? { ...prev, bareModifier: null } : prev
-                                              )
-                                            }
-                                          >
-                                            Change
-                                          </Button>
-                                        </div>
-                                      ) : (
+                                      <div className="flex items-start gap-2">
                                         <HotkeyInput
+                                          inline
                                           value={editingCapture.combo}
                                           onChange={(combo) =>
                                             setEditingCapture((prev) =>
-                                              prev ? { ...prev, combo, bareModifier: null } : prev
+                                              prev && prev.combo !== combo
+                                                ? { ...prev, combo, bareModifier: null }
+                                                : prev
                                             )
                                           }
                                           placeholder="Press a key or key combo"
                                           validationRules={
-                                            editingCapture.allowRiskyCombo && action.allows_single_key
+                                            action.allows_single_key
                                               ? singleKeyValidation
                                               : ValidationPresets.standard()
                                           }
@@ -553,163 +503,70 @@ export function ShortcutsSection() {
                                             )
                                           }
                                         />
-                                      )}
-
-                                      {showRecordingCheckbox && (
-                                        <label className="flex cursor-pointer select-none items-start gap-3 text-sm">
-                                          <Switch
-                                            aria-label="Hold to talk (push-to-talk)"
-                                            checked={editingCapture.holdToTalk}
-                                            onCheckedChange={(holdToTalk) =>
-                                              setEditingCapture((prev) =>
-                                                prev ? { ...prev, holdToTalk } : prev
-                                              )
-                                            }
-                                          />
-                                          <span>
-                                            <span className="block font-medium">Hold to talk (push-to-talk)</span>
-                                            <span className="block text-xs text-muted-foreground">
-                                              {editingCapture.holdToTalk
-                                                ? "Hold the key to record; release to stop"
-                                                : "Tap to toggle recording on/off"}
-                                            </span>
-                                          </span>
-                                        </label>
-                                      )}
-
-                                      {action.allows_single_key && (
-                                        <div className="rounded-md bg-muted/40 p-3">
-                                          <label className="flex items-start gap-3 text-sm">
-                                            <Switch
-                                              aria-label="Use a single key"
-                                              checked={editingCapture.allowRiskyCombo}
-                                              disabled={isSaving}
-                                              onCheckedChange={(allowRiskyCombo) =>
-                                                setEditingCapture((prev) =>
-                                                  prev ? { ...prev, allowRiskyCombo } : prev
-                                                )
-                                              }
-                                            />
-                                            <span>
-                                              <span className="block font-medium text-foreground">Use a single key</span>
-                                              <span className="block text-muted-foreground">
-                                                Only non-typing keys are allowed as single-key shortcuts: function keys (F1–F24), numpad keys, and navigation keys (Home, End, Page Up, Page Down, Insert). Typing keys are blocked globally when captured this way.
-                                              </span>
-                                              {editingCapture.allowRiskyCombo && (
-                                                <span className="mt-1 block text-xs text-muted-foreground">
-                                                  Single-key validation enabled.
-                                                </span>
-                                              )}
-                                            </span>
-                                          </label>
-                                        </div>
-                                      )}
-
-                                      <div className="flex items-center gap-2">
                                         <Button
                                           type="button"
-                                          size="sm"
+                                          size="icon-sm"
+                                          aria-label="Save"
+                                          className="bg-green-600 text-white hover:bg-green-600/90"
                                           disabled={
                                             isSaving ||
                                             (!editingCapture.combo && !editingCapture.bareModifier)
                                           }
                                           onClick={saveEdit}
                                         >
-                                          {isSaving && <Spinner className="mr-1 h-3.5 w-3.5" />}
-                                          Save
+                                          {isSaving ? <Spinner className="h-4 w-4" /> : <Check className="h-4 w-4" />}
                                         </Button>
                                         <Button
                                           type="button"
                                           variant="ghost"
-                                          size="sm"
+                                          size="icon-sm"
+                                          aria-label="Cancel"
                                           disabled={isSaving}
                                           onClick={cancelEdit}
                                         >
-                                          Cancel
+                                          <X className="h-4 w-4" />
                                         </Button>
                                       </div>
+
+                                      {!editingCapture.bareModifier && (
+                                        <p className="text-xs text-muted-foreground">
+                                          Use a key combo, a function key, or a numpad/navigation key. A bare letter or number won't work — it would block typing.
+                                        </p>
+                                      )}
                                     </div>
                                   );
                                 }
 
                                 // ── Read mode ────────────────────────────────────
                                 return (
-                                  <div key={binding.id} className="rounded-lg border border-border/60 p-3">
-                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                      <span
-                                        aria-label={`${action.label} shortcut read-only`}
-                                        className="font-mono text-sm"
+                                  <div key={binding.id} className="flex flex-col gap-3 rounded-lg border border-border/60 p-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <span aria-label={`${action.label} shortcut`} className="font-mono text-sm">
+                                      {formatBindingDisplay(binding)}
+                                    </span>
+                                    <div className="flex items-center gap-3">
+                                      {isSaving && <Spinner className="h-4 w-4 text-muted-foreground" />}
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={editingDisabled || isCapturing}
+                                        onClick={() => startEditing(binding)}
                                       >
-                                        {formatBindingDisplay(binding)}
-                                      </span>
-
-                                      <div className="flex flex-wrap items-center gap-3">
-                                        {isSaving && <Spinner className="h-4 w-4 text-muted-foreground" />}
-                                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                                          <Switch
-                                            aria-label={`${action.label} enabled`}
-                                            checked={binding.enabled}
-                                            disabled={
-                                              editingDisabled ||
-                                              isCapturing ||
-                                              (!binding.shortcut && !binding.modifier)
-                                            }
-                                            onCheckedChange={(enabled) =>
-                                              updateBinding({ ...binding, enabled })
-                                            }
-                                          />
-                                          Enabled
-                                        </label>
-                                        <Button
-                                          type="button"
-                                          variant="outline"
-                                          size="sm"
-                                          disabled={editingDisabled || isCapturing}
-                                          onClick={() => startEditing(binding)}
-                                        >
-                                          Edit
-                                        </Button>
-                                        <Button
-                                          type="button"
-                                          variant="ghost"
-                                          size="icon-sm"
-                                          aria-label={`Delete ${action.label} shortcut`}
-                                          disabled={editingDisabled || isCapturing}
-                                          onClick={() => deleteBinding(binding.id)}
-                                        >
-                                          <Trash2 className="h-4 w-4" />
-                                        </Button>
-                                      </div>
+                                        <Pencil className="mr-1 h-3.5 w-3.5" />
+                                        Edit
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon-sm"
+                                        aria-label="Remove"
+                                        className="text-muted-foreground hover:text-destructive"
+                                        disabled={editingDisabled || isCapturing}
+                                        onClick={() => void deleteBinding(binding.id)}
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
                                     </div>
-
-                                    {action.allows_single_key &&
-                                      (binding.trigger_kind ?? "combo") === "combo" && (
-                                        <div className="mt-3 rounded-md bg-muted/40 p-3">
-                                          <label className="flex items-start gap-3 text-sm">
-                                            <Switch
-                                              aria-label="Use a single key"
-                                              checked={binding.allow_risky_combo}
-                                              disabled={editingDisabled || isCapturing}
-                                              onCheckedChange={(allow_risky_combo) =>
-                                                updateBinding({ ...binding, allow_risky_combo })
-                                              }
-                                            />
-                                            <span>
-                                              <span className="block font-medium text-foreground">
-                                                Use a single key
-                                              </span>
-                                              <span className="block text-muted-foreground">
-                                                Only non-typing keys are allowed as single-key shortcuts: function keys (F1–F24), numpad keys, and navigation keys (Home, End, Page Up, Page Down, Insert). Typing keys are blocked globally when captured this way.
-                                              </span>
-                                              {canUseSingleKey && (
-                                                <span className="mt-1 block text-xs text-muted-foreground">
-                                                  Single-key validation enabled.
-                                                </span>
-                                              )}
-                                            </span>
-                                          </label>
-                                        </div>
-                                      )}
                                   </div>
                                 );
                               })}

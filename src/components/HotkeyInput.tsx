@@ -1,5 +1,5 @@
 import { Check, Edit2, X } from "lucide-react";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { isMacOS } from "@/lib/platform";
@@ -32,6 +32,10 @@ interface HotkeyInputProps {
   allowBareModifier?: boolean;
   /** Called when the user confirms a bare modifier selection. */
   onBareModifier?: (spec: BareModifierSpec) => void;
+  /** When true, render as a bare always-capturing field — no internal display/edit
+   *  toggle and no Save/Cancel/Edit buttons. Selections report live via onChange /
+   *  onBareModifier so the parent owns the controls. */
+  inline?: boolean;
 }
 
 const BARE_MOD_ICONS: Record<string, string> = {
@@ -54,6 +58,7 @@ export const HotkeyInput = React.memo(function HotkeyInput({
   onEditingChange,
   allowBareModifier = false,
   onBareModifier,
+  inline = false,
 }: HotkeyInputProps) {
   const [mode, setMode] = useState<"display" | "edit">("display");
   const [keys, setKeys] = useState<Set<string>>(new Set());
@@ -62,6 +67,12 @@ export const HotkeyInput = React.memo(function HotkeyInput({
   const [saveStatus, setSaveStatus] = useState<"idle" | "success" | "error">("idle");
   const [validationError, setValidationError] = useState<string>("");
   const [currentKeysDisplay, setCurrentKeysDisplay] = useState<string>("");
+  const onChangeRef = useRef(onChange);
+  const onBareModifierRef = useRef(onBareModifier);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+    onBareModifierRef.current = onBareModifier;
+  });
 
   const handleCancel = useCallback(() => {
     setPendingHotkey("");
@@ -75,7 +86,7 @@ export const HotkeyInput = React.memo(function HotkeyInput({
   }, [onEditingChange]);
 
   useEffect(() => {
-    if (mode !== "edit") return;
+    if (mode !== "edit" && !inline) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       e.preventDefault();
@@ -294,7 +305,23 @@ export const HotkeyInput = React.memo(function HotkeyInput({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [mode, keys, allowBareModifier]);
+  }, [mode, keys, allowBareModifier, inline]);
+
+  // Inline mode: report captured selections live; the parent persists.
+  useEffect(() => {
+    if (!inline) return;
+    if (pendingHotkey && !validationError) {
+      onChangeRef.current(normalizeShortcutKeys(pendingHotkey));
+    } else if (validationError) {
+      onChangeRef.current("");
+    }
+  }, [inline, pendingHotkey, validationError]);
+
+  useEffect(() => {
+    if (inline && pendingBareModifier) {
+      onBareModifierRef.current?.(pendingBareModifier);
+    }
+  }, [inline, pendingBareModifier]);
 
 
   const handleSave = useCallback(() => {
@@ -354,6 +381,29 @@ export const HotkeyInput = React.memo(function HotkeyInput({
     }
   }, [saveStatus]);
 
+
+  if (inline) {
+    return (
+      <div className="min-w-0 flex-1">
+        <div className="flex min-h-8 items-center font-mono text-sm">
+          {pendingBareModifier ? (
+            <span className="text-foreground">{formatBareModifierDisplay(pendingBareModifier)}</span>
+          ) : pendingHotkey ? (
+            formatHotkey(pendingHotkey)
+          ) : currentKeysDisplay ? (
+            <span className="text-foreground">{currentKeysDisplay}</span>
+          ) : value ? (
+            formatHotkey(value)
+          ) : (
+            <span className="text-muted-foreground">{placeholder || "Press keys…"}</span>
+          )}
+        </div>
+        {validationError && (
+          <p className="mt-1 text-xs text-destructive">{validationError}</p>
+        )}
+      </div>
+    );
+  }
 
   if (mode === "display") {
     return (

@@ -1,9 +1,10 @@
 //! macOS backend: a listen-only `CGEventTap` on a dedicated CFRunLoop thread.
 //!
 //! - ListenOnly tap (never consumes); callback returns `None` (pass-through).
-//! - `FlagsChanged` carries only the keycode of the modifier that changed and an
-//!   *aggregate* flag mask that cannot disambiguate sides, so down/up is derived
-//!   by per-keycode toggle tracking (the same fix the matcher uses for state).
+//! - `FlagsChanged` carries the changed modifier's keycode plus the post-change
+//!   aggregate flag mask. The keycode gives the side; the modifier's type bit in
+//!   the event flags gives authoritative down/up (`CGEventSourceKeyState` lags
+//!   the in-flight event inside a tap, inverting tap order).
 //! - Re-enable on `TapDisabledByTimeout/ByUserInput` directly in the callback via
 //!   a captured `CFMachPortRef` cell (the callback runs on the run-loop thread),
 //!   and signal the dispatcher to reset (events were missed).
@@ -17,10 +18,9 @@ use core_foundation::base::TCFType;
 use core_foundation::mach_port::CFMachPortRef;
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
-    CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType, CGKeyCode,
-    EventField, KeyCode,
+    CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+    CGEventType, CGKeyCode, EventField, KeyCode,
 };
-use core_graphics::event_source::CGEventSourceStateID;
 use parking_lot::Mutex;
 
 use crate::engine::{Control, KeyEventSource, Msg, ReadySignal};
@@ -30,9 +30,6 @@ extern "C" {
     /// Enable/disable an event tap. Declared here because `core-graphics` keeps
     /// it private; we need it to re-enable from inside the tap callback.
     fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
-    /// Authoritative per-keycode physical state, used to derive FlagsChanged
-    /// down/up without a desync-prone toggle.
-    fn CGEventSourceKeyState(state: CGEventSourceStateID, keycode: CGKeyCode) -> bool;
 }
 
 pub struct MacEventTap {
@@ -92,19 +89,24 @@ impl KeyEventSource for MacEventTap {
                     CGEventType::FlagsChanged => {
                         let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)
                             as CGKeyCode;
-                        // Authoritative physical state of the modifier that
-                        // changed: avoids the toggle desync when a modifier is
-                        // already held at tap start or an event was missed.
-                        let down = unsafe {
-                            CGEventSourceKeyState(CGEventSourceStateID::CombinedSessionState, code)
-                        };
                         let (key, side) = map_keycode(code);
-                        let _ = tx_cb.send(Msg::Raw(RawKeyEvent {
-                            key,
-                            side,
-                            down,
-                            is_repeat: false,
-                        }));
+                        // Down/up from the event's own post-change flag mask: the
+                        // modifier's type bit is set iff it is now physically
+                        // down. CGEventSourceKeyState lags the in-flight event in
+                        // a tap callback (reports the pre-event state), which
+                        // inverts tap order and stops IsolatedTap from ever
+                        // firing. The keycode still supplies the side.
+                        let down = modifier_flag(code)
+                            .map(|mask| event.get_flags().contains(mask))
+                            .unwrap_or(false);
+                        if side.is_some() {
+                            let _ = tx_cb.send(Msg::Raw(RawKeyEvent {
+                                key,
+                                side,
+                                down,
+                                is_repeat: false,
+                            }));
+                        }
                     }
                     _ => {}
                 }
@@ -271,5 +273,61 @@ fn map_keycode(code: CGKeyCode) -> (KeySpec, Option<Side>) {
     match named {
         Some(n) => (KeySpec::Named(n), None),
         None => (KeySpec::Raw(code as u32), None),
+    }
+}
+
+/// Device-independent modifier-type flag for a side-specific modifier keycode.
+/// FlagsChanged events carry the post-change flag mask, so testing this bit
+/// yields authoritative down/up for the modifier that changed (the keycode still
+/// supplies the side). Returns `None` for non-modifier and toggle keys, which
+/// the FlagsChanged forwarder then drops.
+fn modifier_flag(code: CGKeyCode) -> Option<CGEventFlags> {
+    match code {
+        KeyCode::COMMAND | KeyCode::RIGHT_COMMAND => Some(CGEventFlags::CGEventFlagCommand),
+        KeyCode::SHIFT | KeyCode::RIGHT_SHIFT => Some(CGEventFlags::CGEventFlagShift),
+        KeyCode::OPTION | KeyCode::RIGHT_OPTION => Some(CGEventFlags::CGEventFlagAlternate),
+        KeyCode::CONTROL | KeyCode::RIGHT_CONTROL => Some(CGEventFlags::CGEventFlagControl),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_keycode;
+    use crate::types::Side;
+    use core_graphics::event::KeyCode;
+
+    #[test]
+    fn side_specific_modifiers_carry_a_side() {
+        // These are the only FlagsChanged keys the matcher should ever see.
+        assert_eq!(map_keycode(KeyCode::CONTROL).1, Some(Side::Left));
+        assert_eq!(map_keycode(KeyCode::RIGHT_CONTROL).1, Some(Side::Right));
+        assert_eq!(map_keycode(KeyCode::COMMAND).1, Some(Side::Left));
+        assert_eq!(map_keycode(KeyCode::RIGHT_OPTION).1, Some(Side::Right));
+        assert_eq!(map_keycode(KeyCode::SHIFT).1, Some(Side::Left));
+    }
+
+    #[test]
+    fn toggle_and_phantom_modifiers_have_no_side() {
+        // Caps Lock and fn must report no side so the FlagsChanged forwarder
+        // drops them: Caps Lock's sticky "on" state would otherwise live in the
+        // matcher's keys_down forever and permanently block IsolatedTap.
+        assert_eq!(map_keycode(KeyCode::CAPS_LOCK).1, None);
+        assert_eq!(map_keycode(KeyCode::FUNCTION).1, None);
+    }
+
+    #[test]
+    fn modifier_flag_maps_side_modifiers_and_drops_toggles() {
+        use super::modifier_flag;
+        use core_graphics::event::CGEventFlags;
+        assert_eq!(modifier_flag(KeyCode::CONTROL), Some(CGEventFlags::CGEventFlagControl));
+        assert_eq!(
+            modifier_flag(KeyCode::RIGHT_COMMAND),
+            Some(CGEventFlags::CGEventFlagCommand)
+        );
+        assert_eq!(modifier_flag(KeyCode::OPTION), Some(CGEventFlags::CGEventFlagAlternate));
+        assert_eq!(modifier_flag(KeyCode::RIGHT_SHIFT), Some(CGEventFlags::CGEventFlagShift));
+        assert_eq!(modifier_flag(KeyCode::CAPS_LOCK), None);
+        assert_eq!(modifier_flag(KeyCode::FUNCTION), None);
     }
 }
