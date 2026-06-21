@@ -25,8 +25,8 @@ use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
-    UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE, WH_KEYBOARD_LL, WM_KEYDOWN,
-    WM_QUIT, WM_SYSKEYDOWN,
+    UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, PM_NOREMOVE,
+    WH_KEYBOARD_LL, WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN,
 };
 
 use crate::engine::{KeyEventSource, Msg, ReadySignal};
@@ -116,6 +116,17 @@ impl KeyEventSource for WinKeyboardHook {
 unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 {
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        // Ignore synthetic keystrokes (LLKHF_INJECTED). rdev's post-transcription
+        // paste is injected via SendInput, which sets this flag; forwarding it to
+        // the matcher could re-trigger a ModifierHold hotkey on Ctrl (the paste
+        // modifier), spuriously satisfy a DoubleTap/Chord, or wedge state if a
+        // synthetic key-up is missed. A WH_KEYBOARD_LL hook cannot see the
+        // injecting pid, so this also drops other tools' injected input (e.g.
+        // AutoHotkey firing the hotkey) — accepted: global hotkeys are physical
+        // input only. Still chain CallNextHookEx for pass-through.
+        if (kb.flags.0 & LLKHF_INJECTED.0) != 0 {
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
         let message = wparam.0 as u32;
         let down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
         let vk = kb.vkCode;

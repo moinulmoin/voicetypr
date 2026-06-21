@@ -53,6 +53,7 @@ impl KeyEventSource for MacEventTap {
         let port_cell: Rc<RefCell<Option<CFMachPortRef>>> = Rc::new(RefCell::new(None));
         let port_cb = Rc::clone(&port_cell);
         let tx_cb = tx.clone();
+        let own_pid = std::process::id() as i64;
 
         let tap = CGEventTap::new(
             CGEventTapLocation::HID,
@@ -64,6 +65,28 @@ impl KeyEventSource for MacEventTap {
                 CGEventType::FlagsChanged,
             ],
             move |_proxy, etype, event| {
+                // Ignore our OWN synthetic keystrokes (e.g. the post-transcription
+                // paste): feeding them to the matcher could re-trigger a ModifierHold
+                // hotkey (the paste presses the same modifier), spuriously satisfy a
+                // DoubleTap/Chord bound to that modifier, or wedge state if a
+                // synthetic key-up is dropped/coalesced. PID-scoped, so real user
+                // input (source pid 0) and other apps pass through untouched.
+                //
+                // Gated on key event types: TapDisabled callbacks are out-of-band
+                // and have no key behind them, so we must not read event fields for
+                // them. LIMITATION: this only catches rdev-posted CGEvents; the
+                // text.rs osascript/AppleScript paste fallback runs in a different
+                // process and is NOT covered here.
+                let is_key_event = matches!(
+                    etype,
+                    CGEventType::KeyDown | CGEventType::KeyUp | CGEventType::FlagsChanged
+                );
+                if is_key_event
+                    && event.get_integer_value_field(EventField::EVENT_SOURCE_UNIX_PROCESS_ID)
+                        == own_pid
+                {
+                    return None;
+                }
                 match etype {
                     CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
                         if let Some(port) = *port_cb.borrow() {
@@ -320,13 +343,22 @@ mod tests {
     fn modifier_flag_maps_side_modifiers_and_drops_toggles() {
         use super::modifier_flag;
         use core_graphics::event::CGEventFlags;
-        assert_eq!(modifier_flag(KeyCode::CONTROL), Some(CGEventFlags::CGEventFlagControl));
+        assert_eq!(
+            modifier_flag(KeyCode::CONTROL),
+            Some(CGEventFlags::CGEventFlagControl)
+        );
         assert_eq!(
             modifier_flag(KeyCode::RIGHT_COMMAND),
             Some(CGEventFlags::CGEventFlagCommand)
         );
-        assert_eq!(modifier_flag(KeyCode::OPTION), Some(CGEventFlags::CGEventFlagAlternate));
-        assert_eq!(modifier_flag(KeyCode::RIGHT_SHIFT), Some(CGEventFlags::CGEventFlagShift));
+        assert_eq!(
+            modifier_flag(KeyCode::OPTION),
+            Some(CGEventFlags::CGEventFlagAlternate)
+        );
+        assert_eq!(
+            modifier_flag(KeyCode::RIGHT_SHIFT),
+            Some(CGEventFlags::CGEventFlagShift)
+        );
         assert_eq!(modifier_flag(KeyCode::CAPS_LOCK), None);
         assert_eq!(modifier_flag(KeyCode::FUNCTION), None);
     }
