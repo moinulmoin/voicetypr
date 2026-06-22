@@ -64,6 +64,7 @@ use commands::{
         update_writing_settings, validate_ai_api_key,
     },
     audio::*,
+    cli_tool::{cli_tool_status, install_cli_tool, uninstall_cli_tool},
     clipboard::{copy_image_to_clipboard, save_image_to_file},
     debug::{debug_transcription_flow, test_transcription_event},
     device::get_device_id,
@@ -1390,6 +1391,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             set_autostart,
             get_device_id,
             get_system_specs,
+            // CLI launcher (voicetypr on PATH)
+            install_cli_tool,
+            uninstall_cli_tool,
+            cli_tool_status,
             // Remote transcription commands
             refresh_active_remote_server_status,
             get_recognition_availability_snapshot,

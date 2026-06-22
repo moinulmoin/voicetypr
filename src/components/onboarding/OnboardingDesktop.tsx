@@ -1411,6 +1411,15 @@ export const OnboardingDesktop = function OnboardingDesktop({
                     : <>Press {formatHotkey(hotkey)} anywhere to start recording.</>}
               </p>
             </div>
+            <div className="w-full rounded-lg border border-border/50 bg-card/50 p-3 text-sm text-muted-foreground">
+              <p>
+                Power tip: VoiceTypr ships a{" "}
+                <span className="font-mono text-foreground">voicetypr</span> command-line tool so AI
+                agents and scripts can drive transcription. Turn it on in{" "}
+                <span className="font-medium text-foreground">Settings → Advanced</span>. Try{" "}
+                <span className="font-mono text-foreground">voicetypr --help</span>.
+              </p>
+            </div>
             <Button size="lg" onClick={() => void completeOnboarding()} disabled={isSavingCompletion}>
               {isSavingCompletion ? <Spinner /> : null}
               Go to dashboard

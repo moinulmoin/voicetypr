@@ -109,6 +109,13 @@ pub fn maybe_run_from_env_with_context(
         return Ok(false);
     }
 
+    // Windows release builds are GUI-subsystem (see main.rs `windows_subsystem = "windows"`),
+    // so the process starts with no console and CLI output would vanish into a null handle.
+    // We've confirmed this is a CLI route, so attach the parent terminal's console before
+    // any println!/eprintln! or clap --help/--version output is produced.
+    #[cfg(windows)]
+    attach_parent_console();
+
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(e) => e.exit(),
@@ -134,6 +141,66 @@ pub fn maybe_run_from_env_with_context(
     })?;
 
     Ok(true)
+}
+
+/// Attach this (GUI-subsystem) process to the parent terminal's console so CLI output is
+/// visible on Windows. No-op when there is no parent console (e.g. a double-click launch).
+///
+/// Only streams the shell left unset are pointed at the console, so any redirection is
+/// preserved: `voicetypr ... > out.json`, `... 2> err.txt`, and
+/// `echo pw | voicetypr --password-stdin` keep their file/pipe handles, and stdin is never
+/// overridden. MUST run before the first println!/eprintln!: Rust resolves the std handles
+/// lazily on first use, so re-pointing them afterwards would be too late.
+#[cfg(windows)]
+fn attach_parent_console() {
+    use std::fs::OpenOptions;
+    use std::mem;
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+    use windows::Win32::System::Console::{
+        AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
+        STD_HANDLE, STD_OUTPUT_HANDLE,
+    };
+
+    // SAFETY: kernel32 FFI; ATTACH_PARENT_PROCESS is the documented sentinel process id.
+    unsafe {
+        if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
+            return;
+        }
+    }
+
+    // A stream needs the console screen buffer only when the shell did not already wire it to
+    // a file/pipe; GetStdHandle returns NULL for an unset stream on a GUI-subsystem process.
+    let needs_console = |which: STD_HANDLE| -> bool {
+        // SAFETY: kernel32 FFI.
+        match unsafe { GetStdHandle(which) } {
+            Ok(h) => h.0.is_null() || h == INVALID_HANDLE_VALUE,
+            Err(_) => true,
+        }
+    };
+
+    let out_unset = needs_console(STD_OUTPUT_HANDLE);
+    let err_unset = needs_console(STD_ERROR_HANDLE);
+    if !out_unset && !err_unset {
+        return;
+    }
+
+    // Point only the unset write streams at the console screen buffer; redirected streams keep
+    // their inherited handle. We leak the File (mem::forget) because SetStdHandle does not
+    // duplicate the handle and we need it for the process lifetime.
+    if let Ok(file) = OpenOptions::new().write(true).open("CONOUT$") {
+        let handle = HANDLE(file.as_raw_handle());
+        // SAFETY: valid console handle held for the process lifetime via mem::forget.
+        unsafe {
+            if out_unset {
+                let _ = SetStdHandle(STD_OUTPUT_HANDLE, handle);
+            }
+            if err_unset {
+                let _ = SetStdHandle(STD_ERROR_HANDLE, handle);
+            }
+        }
+        mem::forget(file);
+    }
 }
 
 async fn build_cli_app(

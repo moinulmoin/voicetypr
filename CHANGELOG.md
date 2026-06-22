@@ -10,6 +10,7 @@
 * **diarization:** add cloud speaker diarization for file uploads (Deepgram, Soniox); a diarization-capable provider produces a speaker-attributed transcript ("Speaker 0: … / Speaker 1: …") shown and saved to .txt/.md, while non-diarizing providers fall back to plain text
 * **history:** persist rich per-entry metadata (source, engine/model, language, duration, diarized, and — for opted-in dictation — the target app) and add source/app/date filters with per-entry detail
 * **cli:** make `--json` consistent across status/models/transcribe/record (human-readable by default) and emit the structured transcription artifact (text, words, metadata) from transcribe/record
+* **cli:** install the `voicetypr` command on your PATH from Settings → Advanced so terminals, scripts, and AI agents can drive transcription directly (`voicetypr transcribe <file> --json`, `voicetypr --help`); macOS installs a launcher in /usr/local/bin (prompts for admin only if needed), Windows adds the install directory to your user PATH, and onboarding now points to it
 * **feedback:** add actionable remediation to the pill feedback overlay so key recording/permission failures show how to fix them
 * **transcription:** let Windows users choose GPU / CPU / Auto transcription acceleration in Settings and onboarding (Auto uses the GPU when available and falls back to CPU; macOS stays on Metal)
 * **shortcuts:** make single-key push-to-talk a clear, first-class option on Hold-to-record, and clarify that General hosts your primary recording shortcut while Shortcuts hosts additional per-action bindings
@@ -35,6 +36,7 @@
 * **parakeet:** report the real recording length in Recent Recordings instead of 0:00 — the sidecar's FluidAudio `duration` is often 0.0, so the duration now falls back to measuring the transcribed WAV when the sidecar reports none
 * **parakeet:** stop the per-transcription "Failed to parse sidecar response" ERROR/WARN log flood — the sidecar's stderr status banners now log once at debug without their raw contents (which can include transcript text), and a genuine stdout protocol parse failure logs as ERROR with only a byte count
 * **ai:** validate a custom OpenAI-compatible connection by calling `/chat/completions` the same way formatting actually runs, instead of trusting the `/models` list — Test now correctly fails on a missing/invalid key or a non-chat-compatible endpoint (no more false "Connection successful" from a public `/models`) and correctly passes for usable models a curated/proxied `/models` doesn't advertise; provider error bodies are no longer surfaced to the UI or logs
+* **cli:** print CLI output on Windows — the GUI-subsystem executable now attaches to the parent terminal's console when invoked as a CLI, so `voicetypr … --json` and `--help` appear instead of vanishing into a null handle; existing shell redirection (`> out.json`, `2> err.txt`, piped `--password-stdin`) is preserved
 
 ### Chores
 

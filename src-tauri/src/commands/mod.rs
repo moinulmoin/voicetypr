@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod audio;
+pub mod cli_tool;
 pub mod clipboard;
 pub mod debug;
 pub mod device;

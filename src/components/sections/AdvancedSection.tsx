@@ -1,4 +1,5 @@
 import { PermissionErrorBoundary } from "@/components/PermissionErrorBoundary";
+import { AgentCliSection } from "./AgentCliSection";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -237,6 +238,8 @@ export function AdvancedSection() {
                 )}
               </div>
             )}
+
+            <AgentCliSection />
 
             {/* Reset Options Section */}
             <div className="space-y-4">
