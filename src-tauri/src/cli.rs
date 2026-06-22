@@ -39,32 +39,55 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum CliCommand {
+    /// Show version, the selected model/engine, language, and which engines are available.
     Status(StatusArgs),
+    /// List speech models and whether each one is downloaded.
     Models(OutputArgs),
+    /// Transcribe an audio file locally, or via a remote VoiceTypr server with --server.
     Transcribe(TranscribeArgs),
+    /// Record from the microphone until silence, then transcribe the result.
     Record(RecordArgs),
+}
+
+impl CliCommand {
+    /// Whether the invoked subcommand requested JSON output, so failures can be emitted
+    /// as a parseable error object too.
+    fn wants_json(&self) -> bool {
+        match self {
+            CliCommand::Status(a) => a.json,
+            CliCommand::Models(a) => a.json,
+            CliCommand::Transcribe(a) => a.json,
+            CliCommand::Record(a) => a.json,
+        }
+    }
 }
 
 #[derive(Args, Debug, Clone)]
 struct OutputArgs {
+    /// Emit JSON instead of human-readable text.
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
 struct StatusArgs {
+    /// Emit JSON instead of human-readable text.
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
 struct TranscribeArgs {
+    /// Path to the audio file to transcribe (wav, mp3, m4a, flac, ...).
     #[arg(long)]
     file: PathBuf,
+    /// Model to use (e.g. "base", "large-v3-turbo"); defaults to the app's selected model. Run `voicetypr models` to list installed models.
     #[arg(long)]
     model: Option<String>,
+    /// Engine override ("whisper" or "parakeet"); defaults to the selected model's engine.
     #[arg(long)]
     engine: Option<String>,
+    /// Transcribe via a remote VoiceTypr server given as host:port (e.g. 192.168.1.10:47842) instead of locally.
     #[arg(long)]
     server: Option<String>,
     /// Remote server password. Prefer --password-stdin or VOICETYPR_REMOTE_PASSWORD for automation.
@@ -73,18 +96,23 @@ struct TranscribeArgs {
     /// Read the remote server password from stdin (safer than --password for automation).
     #[arg(long)]
     password_stdin: bool,
+    /// Emit a JSON result (text, words, metadata); default prints just the transcript text.
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
 struct RecordArgs {
+    /// Stop recording automatically after a stretch of silence (currently required).
     #[arg(long)]
     until_silence: bool,
+    /// Model to use (e.g. "base", "large-v3-turbo"); defaults to the app's selected model. Run `voicetypr models` to list installed models.
     #[arg(long)]
     model: Option<String>,
+    /// Engine override ("whisper" or "parakeet"); defaults to the selected model's engine.
     #[arg(long)]
     engine: Option<String>,
+    /// Transcribe via a remote VoiceTypr server given as host:port (e.g. 192.168.1.10:47842) instead of locally.
     #[arg(long)]
     server: Option<String>,
     /// Remote server password. Prefer --password-stdin or VOICETYPR_REMOTE_PASSWORD for automation.
@@ -93,6 +121,7 @@ struct RecordArgs {
     /// Read the remote server password from stdin (safer than --password for automation).
     #[arg(long)]
     password_stdin: bool,
+    /// Emit a JSON result (text, words, metadata, stop_reason); default prints just the transcript text.
     #[arg(long)]
     json: bool,
 }
@@ -124,7 +153,8 @@ pub fn maybe_run_from_env_with_context(
         return Ok(false);
     };
 
-    tauri::async_runtime::block_on(async move {
+    let wants_json = command.wants_json();
+    let result = tauri::async_runtime::block_on(async move {
         let app = build_cli_app(context).await?;
         let app_handle = app.handle().clone();
         warm_ai_key_cache(&app_handle).await?;
@@ -138,9 +168,33 @@ pub fn maybe_run_from_env_with_context(
         }
 
         Ok::<(), Box<dyn Error>>(())
-    })?;
+    });
+
+    // Format failures for the human or the agent: --json gets a parseable {"error": ...}
+    // object on stderr, everyone else gets a plain "Error: ..." line. Either way exit 1 so
+    // scripts and agents can branch on the status code.
+    if let Err(e) = result {
+        emit_cli_error(&*e, wants_json);
+        std::process::exit(1);
+    }
 
     Ok(true)
+}
+
+/// Print a CLI error to stderr, honoring the subcommand's --json flag.
+fn emit_cli_error(err: &dyn Error, json: bool) {
+    eprintln!("{}", format_cli_error(&err.to_string(), json));
+}
+
+/// Format a CLI error message: a parseable `{"error": "..."}` object in --json mode (so
+/// agents can read the failure), or a plain `Error: ...` line otherwise.
+fn format_cli_error(message: &str, json: bool) -> String {
+    if json {
+        serde_json::to_string(&json!({ "error": message }))
+            .unwrap_or_else(|_| format!("{{\"error\":\"{}\"}}", message.replace('"', "'")))
+    } else {
+        format!("Error: {message}")
+    }
 }
 
 /// Attach this (GUI-subsystem) process to the parent terminal's console so CLI output is
@@ -303,6 +357,9 @@ async fn run_transcribe(
     app: &tauri::AppHandle,
     args: TranscribeArgs,
 ) -> Result<(), Box<dyn Error>> {
+    if !args.file.exists() {
+        return Err(format!("Audio file not found: {}", args.file.display()).into());
+    }
     if args.server.is_none() {
         check_license_status(app.clone()).await?;
     }
@@ -317,7 +374,7 @@ async fn run_transcribe(
             .or_else(|| {
                 (!settings.current_model.is_empty()).then_some(settings.current_model.clone())
             })
-            .ok_or_else(|| "No model specified and no current model is selected".to_string())?;
+            .ok_or_else(|| "No model specified and no model is selected in the app. Pass --model <name> (run `voicetypr models` to list installed models) or choose a default model in VoiceTypr settings.".to_string())?;
         let engine = args.engine.clone().or_else(|| {
             (!settings.current_model_engine.is_empty())
                 .then_some(settings.current_model_engine.clone())
@@ -342,7 +399,9 @@ async fn run_transcribe(
 
 async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<dyn Error>> {
     if !args.until_silence {
-        return Err("record currently requires --until-silence".into());
+        return Err(
+            "`record` currently supports only stop-on-silence. Re-run with --until-silence.".into(),
+        );
     }
 
     check_license_status(app.clone()).await?;
@@ -379,7 +438,7 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
             .or_else(|| {
                 (!settings.current_model.is_empty()).then_some(settings.current_model.clone())
             })
-            .ok_or_else(|| "No model specified and no current model is selected".to_string())?;
+            .ok_or_else(|| "No model specified and no model is selected in the app. Pass --model <name> (run `voicetypr models` to list installed models) or choose a default model in VoiceTypr settings.".to_string())?;
         let engine = args.engine.clone().or_else(|| {
             (!settings.current_model_engine.is_empty())
                 .then_some(settings.current_model_engine.clone())
@@ -538,10 +597,15 @@ fn resolve_password(
 }
 
 fn parse_server(value: &str) -> Result<(String, u16), Box<dyn Error>> {
-    let (host, port) = value
-        .rsplit_once(':')
-        .ok_or_else(|| "Server must be host:port".to_string())?;
-    let port = port.parse::<u16>()?;
+    let (host, port_str) = value.rsplit_once(':').ok_or_else(|| {
+        format!("Invalid --server '{value}': expected host:port, e.g. 192.168.1.10:47842")
+    })?;
+    if host.is_empty() {
+        return Err(format!("Invalid --server '{value}': missing host, expected host:port").into());
+    }
+    let port = port_str.parse::<u16>().map_err(|_| {
+        format!("Invalid --server '{value}': '{port_str}' is not a valid port (1-65535)")
+    })?;
     Ok((host.to_string(), port))
 }
 
@@ -687,5 +751,37 @@ mod tests {
             remote_available: false,
         };
         assert_eq!(format_availability(&snap), "none");
+    }
+
+    #[test]
+    fn format_cli_error_json_is_parseable() {
+        let s = format_cli_error("boom \"quoted\"", true);
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["error"], "boom \"quoted\"");
+    }
+
+    #[test]
+    fn format_cli_error_plain_is_prefixed() {
+        assert_eq!(format_cli_error("boom", false), "Error: boom");
+    }
+
+    #[test]
+    fn parse_server_rejects_nonnumeric_port() {
+        let err = parse_server("host:abc").unwrap_err().to_string();
+        assert!(err.contains("not a valid port"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_server_rejects_missing_host() {
+        let err = parse_server(":47842").unwrap_err().to_string();
+        assert!(err.contains("missing host"), "got: {err}");
+    }
+
+    #[test]
+    fn wants_json_reflects_flag() {
+        let cli = Cli::try_parse_from(["voicetypr", "status", "--json"]).unwrap();
+        assert!(cli.command.unwrap().wants_json());
+        let cli = Cli::try_parse_from(["voicetypr", "status"]).unwrap();
+        assert!(!cli.command.unwrap().wants_json());
     }
 }
