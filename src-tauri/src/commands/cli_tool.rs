@@ -127,29 +127,30 @@ mod macos {
 
         let shim = build_shim(exe_str);
 
-        // Write the shim to a temp file with std I/O so the exe path is never parsed by a
-        // shell, then place it. The temp/destination paths are fixed and contain no user
-        // input, keeping the privileged step injection-free.
-        let tmp = std::env::temp_dir().join("voicetypr-cli-shim");
-        {
-            let mut f =
-                std::fs::File::create(&tmp).map_err(|e| format!("Cannot stage command: {e}"))?;
-            f.write_all(shim.as_bytes())
-                .map_err(|e| format!("Cannot stage command: {e}"))?;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
-                .map_err(|e| format!("Cannot stage command: {e}"))?;
-        }
-        let tmp_str = tmp.to_str().ok_or("Temp path is not valid UTF-8")?;
+        // Stage the shim in a securely-created unique temp file (tempfile uses O_EXCL + a
+        // random name, mode 0600), so a local attacker can't pre-create or swap it before the
+        // privileged copy (no fixed-name TOCTOU). It is removed when `tmp` drops.
+        let mut tmp = tempfile::Builder::new()
+            .prefix("voicetypr-cli-shim-")
+            .tempfile()
+            .map_err(|e| format!("Cannot stage command: {e}"))?;
+        tmp.write_all(shim.as_bytes())
+            .map_err(|e| format!("Cannot stage command: {e}"))?;
+        tmp.flush()
+            .map_err(|e| format!("Cannot stage command: {e}"))?;
+        let tmp_str = tmp
+            .path()
+            .to_str()
+            .ok_or("Temp path is not valid UTF-8")?
+            .to_string();
 
         // Fast path: /usr/local/bin already writable (typical on Homebrew machines).
-        let result = if try_install_direct(tmp_str).is_ok() {
-            Ok(())
-        } else {
-            // Otherwise escalate with a single administrator prompt.
-            install_with_admin(tmp_str)
-        };
-        let _ = std::fs::remove_file(&tmp);
-        result
+        if try_install_direct(&tmp_str).is_ok() {
+            return Ok(());
+        }
+        // Otherwise escalate with one admin prompt. `tmp` (and its file) stays alive until
+        // this function returns, so the privileged copy can read it.
+        install_with_admin(&tmp_str)
     }
 
     pub fn uninstall() -> Result<(), String> {
@@ -159,7 +160,7 @@ mod macos {
         if std::fs::remove_file(MACOS_SHIM_PATH).is_ok() {
             return Ok(());
         }
-        run_osascript(&format!("rm -f '{MACOS_SHIM_PATH}'"))
+        run_osascript(&format!("rm -f {}", sh_single_quote(MACOS_SHIM_PATH)))
     }
 
     fn try_install_direct(tmp: &str) -> Result<(), String> {
@@ -172,7 +173,10 @@ mod macos {
 
     fn install_with_admin(tmp: &str) -> Result<(), String> {
         run_osascript(&format!(
-            "mkdir -p /usr/local/bin && cp '{tmp}' '{MACOS_SHIM_PATH}' && chmod 755 '{MACOS_SHIM_PATH}'"
+            "mkdir -p /usr/local/bin && cp {} {} && chmod 755 {}",
+            sh_single_quote(tmp),
+            sh_single_quote(MACOS_SHIM_PATH),
+            sh_single_quote(MACOS_SHIM_PATH)
         ))
     }
 
@@ -218,6 +222,12 @@ mod macos {
             .replace('$', "\\$")
             .replace('`', "\\`")
     }
+
+    /// Wrap a string as a safe single-quoted /bin/sh token (escaping embedded single quotes),
+    /// for a path interpolated into a `do shell script` command.
+    fn sh_single_quote(s: &str) -> String {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -237,14 +247,14 @@ mod windows_path {
     fn check_installed() -> Option<bool> {
         let dir = install_dir().ok()?;
         let env = open_env(false).ok()?;
-        let (current, _) = read_path(&env)?;
+        let (current, _) = read_path(&env).ok()??;
         Some(path_contains_dir(&current, &dir))
     }
 
     pub fn install() -> Result<(), String> {
         let dir = install_dir()?;
         let env = open_env(true)?;
-        let (current, vtype) = read_path(&env).unwrap_or((String::new(), RegType::REG_EXPAND_SZ));
+        let (current, vtype) = read_path(&env)?.unwrap_or((String::new(), RegType::REG_EXPAND_SZ));
         if path_contains_dir(&current, &dir) {
             return Ok(());
         }
@@ -262,7 +272,7 @@ mod windows_path {
     pub fn uninstall() -> Result<(), String> {
         let dir = install_dir()?;
         let env = open_env(true)?;
-        let Some((current, vtype)) = read_path(&env) else {
+        let Some((current, vtype)) = read_path(&env)? else {
             return Ok(());
         };
         if !path_contains_dir(&current, &dir) {
@@ -300,11 +310,23 @@ mod windows_path {
             .map_err(|e| format!("Cannot open user environment: {e}"))
     }
 
-    /// Read `Path` as a string, preserving its registry type (usually REG_EXPAND_SZ). Returns
-    /// None when the value is absent so callers can decide the default behaviour.
-    fn read_path(env: &RegKey) -> Option<(String, RegType)> {
-        let raw = env.get_raw_value("Path").ok()?;
-        Some((decode_reg_sz(&raw), raw.vtype))
+    /// Read `Path` as a string with its registry type. `Ok(None)` = value absent. `Err` = the
+    /// value exists but is not a string type (REG_SZ/REG_EXPAND_SZ); callers MUST NOT rewrite
+    /// it then, or they would corrupt a non-string PATH by re-encoding it under that type.
+    fn read_path(env: &RegKey) -> Result<Option<(String, RegType)>, String> {
+        let raw = match env.get_raw_value("Path") {
+            Ok(v) => v,
+            Err(_) => return Ok(None),
+        };
+        match &raw.vtype {
+            RegType::REG_SZ | RegType::REG_EXPAND_SZ => {
+                let vtype = raw.vtype.clone();
+                Ok(Some((decode_reg_sz(&raw), vtype)))
+            }
+            other => Err(format!(
+                "Refusing to modify PATH: HKCU\\Environment\\Path has unexpected type {other:?}"
+            )),
+        }
     }
 
     fn decode_reg_sz(value: &RegValue) -> String {

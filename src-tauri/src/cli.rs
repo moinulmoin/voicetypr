@@ -147,7 +147,25 @@ pub fn maybe_run_from_env_with_context(
 
     let cli = match Cli::try_parse() {
         Ok(c) => c,
-        Err(e) => e.exit(),
+        Err(e) => {
+            use clap::error::ErrorKind;
+            // Help/version aren't failures: let clap print them to stdout and exit 0.
+            if matches!(
+                e.kind(),
+                ErrorKind::DisplayHelp
+                    | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                    | ErrorKind::DisplayVersion
+            ) {
+                e.exit();
+            }
+            // A real usage error: in --json mode emit a parseable object so agents can read
+            // why parsing failed; otherwise use clap's human-readable usage output.
+            if env::args().skip(1).any(|a| a == "--json") {
+                eprintln!("{}", format_cli_error(&e.to_string(), true));
+                std::process::exit(2);
+            }
+            e.exit();
+        }
     };
     let Some(command) = cli.command else {
         return Ok(false);
@@ -606,6 +624,11 @@ fn parse_server(value: &str) -> Result<(String, u16), Box<dyn Error>> {
     let port = port_str.parse::<u16>().map_err(|_| {
         format!("Invalid --server '{value}': '{port_str}' is not a valid port (1-65535)")
     })?;
+    if port == 0 {
+        return Err(
+            format!("Invalid --server '{value}': '0' is not a valid port (1-65535)").into(),
+        );
+    }
     Ok((host.to_string(), port))
 }
 
@@ -775,6 +798,12 @@ mod tests {
     fn parse_server_rejects_missing_host() {
         let err = parse_server(":47842").unwrap_err().to_string();
         assert!(err.contains("missing host"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_server_rejects_port_zero() {
+        let err = parse_server("host:0").unwrap_err().to_string();
+        assert!(err.contains("not a valid port"), "got: {err}");
     }
 
     #[test]

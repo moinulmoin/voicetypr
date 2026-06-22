@@ -135,7 +135,16 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
     transcription_guard: Arc<Semaphore>,
     client_activity: ClientActivityMap,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    warp::path!("api" / "v1" / "transcribe")
+    // Auth preflight runs first and carries NO permit/body filters, so an unauthenticated
+    // client is rejected before it can take the single transcription permit or stream the
+    // body. Authenticated (or no-password) requests fall through to `main_route`.
+    let auth_error_route = warp::path!("api" / "v1" / "transcribe")
+        .and(warp::post())
+        .and(warp::header::optional::<String>(AUTH_HEADER))
+        .and(with_context(ctx.clone()))
+        .and_then(handle_transcribe_auth_preflight);
+
+    let main_route = warp::path!("api" / "v1" / "transcribe")
         .and(warp::post())
         .and(warp::header::optional::<String>(AUTH_HEADER))
         .and(warp::header::<String>("content-type"))
@@ -146,9 +155,8 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
             "X-VoiceTypr-Transcription-Task",
         ))
         .and(warp::header::optional::<String>(CONTEXT_HEADER))
-        // Acquire a permit BEFORE the body is buffered: if the semaphore is
-        // exhausted the client gets a 429 immediately without us ever reading
-        // the (potentially ~50 MB) request body.
+        // Acquire a permit BEFORE the body is buffered: only the permit holder buffers the
+        // (potentially ~50 MB) body, which bounds memory while preserving queueing.
         .and(with_transcription_permit(transcription_guard))
         .and(warp::body::content_length_limit(MAX_AUDIO_BODY_BYTES))
         .and(warp::body::bytes())
@@ -174,7 +182,37 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
         .and(warp::filters::addr::remote())
         .and(with_context(ctx))
         .and(with_client_activity(client_activity))
-        .and_then(handle_transcribe)
+        .and_then(handle_transcribe);
+
+    auth_error_route.or(main_route)
+}
+
+/// Auth preflight for POST /api/v1/transcribe. Runs BEFORE the permit/body filters so an
+/// unauthenticated client can never hold the single transcription permit or stream the body.
+/// On a password-protected server a missing/wrong key returns 401 here; otherwise it rejects
+/// with not_found so the request falls through to the main route. A server without a password
+/// leaves transcription open and always falls through. Mirrors the handler's own auth check,
+/// which stays as defense-in-depth.
+async fn handle_transcribe_auth_preflight<T: ServerContext + 'static>(
+    auth_key: Option<String>,
+    ctx: Arc<RwLock<T>>,
+) -> Result<Box<dyn Reply>, Rejection> {
+    let required_password = { ctx.read().await.get_password() };
+    let Some(required_password) = required_password else {
+        // Open server: no password configured.
+        return Err(warp::reject::not_found());
+    };
+    match auth_key {
+        Some(provided) if auth_matches(&provided, &required_password) => {
+            Err(warp::reject::not_found())
+        }
+        _ => Ok(Box::new(warp::reply::with_status(
+            warp::reply::json(&ErrorResponse {
+                error: "unauthorized".to_string(),
+            }),
+            StatusCode::UNAUTHORIZED,
+        ))),
+    }
 }
 
 /// GET/PATCH /api/v1/control/models - Password-gated remote model control

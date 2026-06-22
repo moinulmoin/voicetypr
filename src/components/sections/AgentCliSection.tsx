@@ -99,7 +99,7 @@ export function AgentCliSection() {
           command.
         </p>
 
-        {manageable && (
+        {(status === null || manageable) && (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               {status === null ? (
