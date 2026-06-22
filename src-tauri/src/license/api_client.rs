@@ -13,15 +13,20 @@ const MAX_RETRIES: u32 = 3;
 #[allow(dead_code)]
 const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 
+/// Base URL for the VoiceTypr backend API.
+/// Debug builds inherit `VOICETYPR_API_URL` from `.env`, else the local backend
+/// on port 4000. Release builds use the production host with NO env override —
+/// these endpoints carry license keys + device hashes, so an env-redirect would
+/// be a credential-exfiltration vector.
 fn get_api_base_url() -> String {
     #[cfg(debug_assertions)]
     {
         std::env::var("VOICETYPR_API_URL")
-            .unwrap_or_else(|_| "http://localhost:3000/api/v1".to_string())
+            .unwrap_or_else(|_| "http://localhost:4000/api/v1".to_string())
     }
     #[cfg(not(debug_assertions))]
     {
-        "https://voicetypr.com/api/v1".to_string()
+        "https://api.voicetypr.com/api/v1".to_string()
     }
 }
 
