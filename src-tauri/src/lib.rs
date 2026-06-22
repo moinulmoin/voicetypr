@@ -30,6 +30,7 @@ mod secure_store;
 mod simple_cache;
 mod state;
 mod state_machine;
+mod telemetry;
 pub mod transcription;
 mod trigger;
 mod utils;
@@ -55,6 +56,7 @@ pub fn hide_dock_icon(app: &tauri::AppHandle) {
 
 use audio::recorder::AudioRecorder;
 use commands::remote::load_remote_settings;
+use commands::telemetry::{get_telemetry_status, set_telemetry_consent};
 use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
@@ -200,6 +202,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("✅ Encryption initialized successfully");
     }
 
+    // Initialize opt-in, anonymous error reporting. No-op unless the user has
+    // opted in AND a DSN was baked in at build time. Native minidumps are
+    // disabled, so no raw process memory is ever captured. The guard must
+    // outlive the app, so it is held until `run()` returns.
+    let app_context = tauri::generate_context!();
+    let (telemetry_enabled, telemetry_install_id) =
+        telemetry::read_consent(app_context.config().identifier.as_str());
+    let sentry_guard = telemetry::init(telemetry_enabled, telemetry_install_id);
+
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(setup_logging().build())
@@ -234,6 +245,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init());
+
+    // Wire the Sentry plugin only when a client was actually created (opted in
+    // + DSN present). JS errors forward via IPC, so no direct webview network.
+    if let Some(guard) = sentry_guard.as_ref() {
+        builder = builder.plugin(tauri_plugin_sentry::init(guard));
+    }
 
     // Add NSPanel plugin on macOS
     #[cfg(target_os = "macos")]
@@ -1395,6 +1412,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             install_cli_tool,
             uninstall_cli_tool,
             cli_tool_status,
+            // Telemetry (opt-in error reporting) consent
+            get_telemetry_status,
+            set_telemetry_consent,
             // Remote transcription commands
             refresh_active_remote_server_status,
             get_recognition_availability_snapshot,
@@ -1437,7 +1457,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         })
-        .build(tauri::generate_context!())
+        .build(app_context)
         .map_err(|e| -> Box<dyn std::error::Error> {
             log_failed("APPLICATION_BUILD", &format!("Critical error building Tauri application: {}", e));
             log_with_context(log::Level::Error, "Application build failed", &[

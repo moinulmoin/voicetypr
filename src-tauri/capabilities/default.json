@@ -38,6 +38,7 @@
     "process:allow-exit",
     "os:default",
     "notification:default",
-    "log:default"
+    "log:default",
+    "sentry:default"
   ]
 }

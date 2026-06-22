@@ -16,6 +16,7 @@ pub mod settings;
 pub mod shortcuts;
 pub mod stt;
 pub mod system_info;
+pub mod telemetry;
 pub mod text;
 pub mod utils;
 pub mod window;

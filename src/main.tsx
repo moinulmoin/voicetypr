@@ -12,6 +12,9 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <AppErrorBoundary
       onError={(error, errorInfo) => {
         log.error('Root error boundary caught:', error, errorInfo);
+        // Reports only when the user opted in at startup; the Rust layer
+        // scrubs/drops when off, so this optional call is inherently gated.
+        window.Sentry?.captureException(error);
       }}
     >
       <App />
