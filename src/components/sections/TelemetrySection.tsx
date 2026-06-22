@@ -76,15 +76,16 @@ export function TelemetrySection() {
               Optional and off by default. When on, VoiceTypr sends anonymous
               crash and error reports to VoiceTypr-owned diagnostics. It never
               sends your audio, transcripts, prompts, API keys, file paths, the
-              names of apps you dictate into, or memory dumps. Changes to error
-              reporting take full effect after a restart.
+              names of apps you dictate into, or memory dumps. Turning this on
+              takes effect after a restart; turning it off stops reporting
+              immediately.
             </p>
           </div>
 
           <Switch
             className="shrink-0"
             checked={status?.enabled ?? false}
-            disabled={pending || status === null || !status.available}
+            disabled={pending || status === null || (!status.available && !status.enabled)}
             onCheckedChange={onCheckedChange}
             aria-label="Enable anonymous diagnostics"
           />
@@ -99,7 +100,7 @@ export function TelemetrySection() {
 
         {status !== null && !status.available && (
           <p className="text-xs text-muted-foreground">
-            Not available in this build.
+            Not available in this build — no reports are sent.
           </p>
         )}
       </div>

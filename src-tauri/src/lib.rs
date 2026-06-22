@@ -56,7 +56,7 @@ pub fn hide_dock_icon(app: &tauri::AppHandle) {
 
 use audio::recorder::AudioRecorder;
 use commands::remote::load_remote_settings;
-use commands::telemetry::{get_telemetry_status, set_telemetry_consent};
+use commands::telemetry::{get_telemetry_status, report_frontend_error, set_telemetry_consent};
 use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
@@ -209,7 +209,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app_context = tauri::generate_context!();
     let (telemetry_enabled, telemetry_install_id) =
         telemetry::read_consent(app_context.config().identifier.as_str());
-    let sentry_guard = telemetry::init(telemetry_enabled, telemetry_install_id);
+    // Held for the whole process so the Sentry client stays alive (Rust panics +
+    // frontend-error capture). We do NOT register tauri-plugin-sentry: no JS
+    // injection and no envelope/breadcrumb IPC, so `before_send` is the single
+    // egress chokepoint. Inert unless opted in AND a DSN was compiled in.
+    let _sentry_guard = telemetry::init(telemetry_enabled, telemetry_install_id);
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
@@ -245,12 +249,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init());
-
-    // Wire the Sentry plugin only when a client was actually created (opted in
-    // + DSN present). JS errors forward via IPC, so no direct webview network.
-    if let Some(guard) = sentry_guard.as_ref() {
-        builder = builder.plugin(tauri_plugin_sentry::init(guard));
-    }
 
     // Add NSPanel plugin on macOS
     #[cfg(target_os = "macos")]
@@ -1415,6 +1413,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Telemetry (opt-in error reporting) consent
             get_telemetry_status,
             set_telemetry_consent,
+            report_frontend_error,
             // Remote transcription commands
             refresh_active_remote_server_status,
             get_recognition_availability_snapshot,

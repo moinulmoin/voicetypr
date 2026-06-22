@@ -220,6 +220,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   } = modelManagement;
 
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
+  const [telemetryOptIn, setTelemetryOptIn] = useState(true);
   const [sourceType, setSourceType] = useState<SourceType>("local");
   const [sourceConfirmed, setSourceConfirmed] = useState(false);
   const sourceConfirmedRef = useRef(false);
@@ -699,6 +700,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
     onCompletionStart?.();
     try {
       await updateSettings({ onboarding_completed: true });
+      // Persist the diagnostics choice from the success step (pre-checked = opt-out).
+      try {
+        await invoke("set_telemetry_consent", { enabled: telemetryOptIn });
+      } catch (telemetryError) {
+        log.error("Failed to persist telemetry consent:", telemetryError);
+      }
       onComplete();
     } catch (error) {
       onCompletionError?.();
@@ -1420,6 +1427,19 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 <span className="font-mono text-foreground">voicetypr --help</span>.
               </p>
             </div>
+            <label className="flex w-full items-start gap-3 rounded-lg border border-border/50 bg-card/50 p-3 text-left text-sm">
+              <input
+                type="checkbox"
+                checked={telemetryOptIn}
+                onChange={(event) => setTelemetryOptIn(event.target.checked)}
+                className="mt-0.5 size-4 shrink-0 accent-primary"
+              />
+              <span className="text-muted-foreground">
+                Send anonymous error reports to help make VoiceTypr better. Never
+                your audio, transcripts, or personal data — just crash details.
+                Change this anytime in Settings → Advanced.
+              </span>
+            </label>
             <Button size="lg" onClick={() => void completeOnboarding()} disabled={isSavingCompletion}>
               {isSavingCompletion ? <Spinner /> : null}
               Go to dashboard

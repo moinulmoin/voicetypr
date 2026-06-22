@@ -4,20 +4,21 @@
 //! - Disabled by default. Only active when the user has opted in AND a DSN was
 //!   baked in at build time via `VOICETYPR_SENTRY_DSN`. OSS / dev builds have no
 //!   DSN, so the client is never created (fully inert).
-//! - No native minidumps: the `tauri-plugin-sentry` `minidump` feature is OFF and
-//!   `minidump::init` is never called, so no raw process-memory snapshot (which
-//!   could contain audio PCM, transcripts, or decrypted keys) is ever captured.
+//! - No native minidumps: we use the `sentry` crate directly — no
+//!   `tauri-plugin-sentry`, no browser-SDK injection, and no envelope/breadcrumb
+//!   IPC — so the only capture path is the Rust SDK and `before_send` is the
+//!   single egress chokepoint.
 //! - No breadcrumbs, no PII, `traces_sample_rate = 0`.
-//! - `before_send` rebuilds every event from a tiny allowlist and scrubs free
-//!   text, so transcripts, audio, file paths, URLs, keys, emails, and target
-//!   app/window names never leave the device.
+//! - `before_send` REBUILDS every event from a tiny allowlist (allowlist by
+//!   construction) and scrubs free text, so transcripts, audio, file paths, URLs,
+//!   IPs, emails, keys, and target app/window names never leave the device.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use regex::Regex;
-use sentry::protocol::Event;
+use sentry::protocol::{Event, Exception, Frame, Level, Stacktrace, Values};
 use sentry::ClientInitGuard;
 
 /// DSN baked in at build time for official builds. Absent in OSS / dev builds,
@@ -31,9 +32,9 @@ const SETTINGS_STORE_FILE: &str = "settings";
 pub const KEY_TELEMETRY_ENABLED: &str = "telemetry_enabled";
 pub const KEY_TELEMETRY_INSTALL_ID: &str = "telemetry_install_id";
 
-/// In-process consent gate, read on every `before_send`. Revoking consent stops
-/// egress immediately within the session; a full re-enable still needs a restart
-/// because the Sentry client/plugin are only wired at startup.
+/// In-process consent gate, read on every `before_send` and before every manual
+/// capture. Revoking consent stops egress immediately within the session; a full
+/// re-enable still needs a restart because the client is only wired at startup.
 static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// True when this build is capable of reporting at all (a DSN was compiled in).
@@ -54,14 +55,19 @@ pub fn set_enabled(enabled: bool) {
 // --- Scrubbing ---------------------------------------------------------------
 
 static RE_PATH: LazyLock<Regex> = LazyLock::new(|| {
-    // Unix home/system paths, Windows user paths, and JS `app:///`/`file://` URIs.
+    // Windows drive paths, UNC shares, drive-less user/system dirs, Unix home/
+    // system roots, and JS `file://`/`app://`/`asset://` URIs.
     Regex::new(
-        r#"(?i)([a-z]:\\[^\s"'`]*|/(?:users|home|var|private|tmp|library|applications)/[^\s"'`]*|(?:file|app|asset)://[^\s"'`]*)"#,
+        r#"(?i)([a-z]:\\[^\s"'`]*|\\\\[^\s"'`]+|\\(?:users|windows|programdata)\\[^\s"'`]*|/(?:users|home|var|private|tmp|library|applications)/[^\s"'`]*|(?:file|app|asset)://[^\s"'`]*)"#,
     )
     .expect("valid path regex")
 });
 static RE_URL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?i)https?://[^\s"'`]+"#).expect("valid url regex"));
+static RE_IP: LazyLock<Regex> = LazyLock::new(|| {
+    // Bare IPv4, with optional :port (covers LAN endpoints like 192.168.1.20:8080).
+    Regex::new(r#"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b"#).expect("valid ip regex")
+});
 static RE_EMAIL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"#).expect("valid email regex")
 });
@@ -72,86 +78,83 @@ static RE_LONG_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Redacts free-form text that may carry user content or environment detail.
 pub fn scrub_text(input: &str) -> String {
+    // Order matters: paths and URLs first so their inner hosts/IPs are consumed.
     let mut s = RE_PATH.replace_all(input, "[path]").into_owned();
     s = RE_URL.replace_all(&s, "[url]").into_owned();
+    s = RE_IP.replace_all(&s, "[ip]").into_owned();
     s = RE_EMAIL.replace_all(&s, "[email]").into_owned();
     s = RE_LONG_TOKEN.replace_all(&s, "[redacted]").into_owned();
     s
 }
 
-/// Rebuilds an event from an allowlist: keep the exception type + scrubbed
-/// message + stack *shape*; drop every section that can carry PII; re-attach
-/// only coarse, non-identifying tags.
-pub fn scrub_event(mut event: Event<'static>, install_id: Option<&str>) -> Event<'static> {
-    // Drop entire PII-bearing sections outright.
-    event.user = None;
-    event.request = None;
-    event.server_name = None;
-    event.extra.clear();
-    event.contexts.clear();
-    event.tags.clear();
-    event.breadcrumbs.values.clear();
+/// Rebuilds an event from scratch — allowlist by construction. Only known-safe,
+/// non-identifying fields are carried over; everything else (contexts, extra,
+/// user, request, server_name, modules, fingerprint, culprit, transaction,
+/// logger, sdk, debug_meta, breadcrumbs, threads, ...) is dropped because it is
+/// never copied into the fresh event.
+pub fn scrub_event(event: Event<'static>, install_id: Option<&str>) -> Event<'static> {
+    let mut clean = Event {
+        event_id: event.event_id,
+        level: event.level,
+        timestamp: event.timestamp,
+        platform: event.platform,
+        // Our own release string ("voicetypr@<version>") — not identifying.
+        release: event.release,
+        message: event.message.map(|m| scrub_text(&m)),
+        exception: Values {
+            values: event
+                .exception
+                .values
+                .into_iter()
+                .map(scrub_exception)
+                .collect(),
+        },
+        ..Default::default()
+    };
 
-    // Scrub the top-level message if present.
-    if let Some(message) = event.message.take() {
-        event.message = Some(scrub_text(&message));
-    }
-
-    // Scrub exception messages and strip file paths / locals from frames, but
-    // keep function / module / line — that is the stack shape we want.
-    for exception in event.exception.values.iter_mut() {
-        if let Some(value) = exception.value.take() {
-            exception.value = Some(scrub_text(&value));
-        }
-        for stacktrace in exception
-            .stacktrace
-            .iter_mut()
-            .chain(exception.raw_stacktrace.iter_mut())
-        {
-            scrub_stacktrace(stacktrace);
-        }
-    }
-
-    // Threads carry the same stack-frame leak vector (paths, locals, context).
-    for thread in event.threads.values.iter_mut() {
-        for stacktrace in thread
-            .stacktrace
-            .iter_mut()
-            .chain(thread.raw_stacktrace.iter_mut())
-        {
-            scrub_stacktrace(stacktrace);
-        }
-    }
-
-    // Drop remaining free-text / path-bearing sections entirely.
-    event.logentry = None;
-    event.debug_meta = Default::default();
-
-    // Re-attach a tiny, non-identifying allowlist.
-    event.tags.insert("os".into(), std::env::consts::OS.into());
-    event
+    // Re-attach a tiny, non-identifying allowlist as tags.
+    clean.tags.insert("os".into(), std::env::consts::OS.into());
+    clean
         .tags
         .insert("arch".into(), std::env::consts::ARCH.into());
-    event
+    clean
         .tags
         .insert("app_version".into(), env!("CARGO_PKG_VERSION").into());
     if let Some(id) = install_id {
-        event.tags.insert("install_id".into(), id.into());
+        clean.tags.insert("install_id".into(), id.into());
     }
 
-    event
+    clean
 }
 
-/// Strips file paths and local-variable/context data from a stacktrace while
-/// keeping the call shape (function / module / line).
-fn scrub_stacktrace(stacktrace: &mut sentry::protocol::Stacktrace) {
-    for frame in stacktrace.frames.iter_mut() {
-        frame.abs_path = None;
-        frame.filename = frame.filename.take().map(|f| scrub_text(&f));
-        frame.context_line = None;
-        frame.pre_context.clear();
-        frame.post_context.clear();
-        frame.vars.clear();
+/// Keeps the exception type + scrubbed message + sanitized stack; drops module,
+/// mechanism, raw stacktrace, thread id (all potentially path/host-bearing).
+fn scrub_exception(exception: Exception) -> Exception {
+    Exception {
+        ty: exception.ty,
+        value: exception.value.map(|v| scrub_text(&v)),
+        stacktrace: exception.stacktrace.map(scrub_stacktrace),
+        ..Default::default()
+    }
+}
+
+/// Keeps only the frame call shape; drops registers and frame-omitted markers.
+fn scrub_stacktrace(stacktrace: Stacktrace) -> Stacktrace {
+    Stacktrace {
+        frames: stacktrace.frames.into_iter().map(scrub_frame).collect(),
+        ..Default::default()
+    }
+}
+
+/// Keeps function / line / column / in-app only. Drops filename, abs_path,
+/// module, package, symbol, all addresses, context lines, and local variables.
+fn scrub_frame(frame: Frame) -> Frame {
+    Frame {
+        function: frame.function,
+        lineno: frame.lineno,
+        colno: frame.colno,
+        in_app: frame.in_app,
+        ..Default::default()
     }
 }
 
@@ -193,14 +196,15 @@ pub fn read_consent_from_path(path: &Path) -> (bool, Option<String>) {
     (enabled, install_id)
 }
 
-// --- Init --------------------------------------------------------------------
+// --- Init + capture ----------------------------------------------------------
 
 /// Initializes Sentry when (and only when) the user has opted in and a DSN was
 /// compiled in. Returns the guard, which the caller MUST keep alive for the
-/// program's lifetime; returns `None` (no client created) otherwise.
+/// program's lifetime; returns `None` (no client created) otherwise. We do NOT
+/// register `tauri-plugin-sentry` (no JS injection / no envelope IPC) — JS errors
+/// are captured explicitly via `capture_frontend_error`, so `before_send` is the
+/// single egress chokepoint.
 pub fn init(enabled: bool, install_id: Option<String>) -> Option<ClientInitGuard> {
-    // Always sync the gate so `before_send` and callers agree, even when we do
-    // not actually create a client.
     set_enabled(enabled);
 
     let dsn = SENTRY_DSN?;
@@ -229,68 +233,99 @@ pub fn init(enabled: bool, install_id: Option<String>) -> Option<ClientInitGuard
     Some(guard)
 }
 
+/// Captures a frontend-reported error as a Sentry event. Gated on consent and
+/// routed through `capture_event` so `before_send` scrubs it. No-op when
+/// telemetry is disabled or no client was initialized.
+pub fn capture_frontend_error(name: Option<&str>, message: &str) {
+    if !is_enabled() {
+        return;
+    }
+    let event = Event {
+        level: Level::Error,
+        exception: Values {
+            values: vec![Exception {
+                ty: name.unwrap_or("FrontendError").to_string(),
+                value: Some(message.to_string()),
+                ..Default::default()
+            }],
+        },
+        ..Default::default()
+    };
+    sentry::capture_event(event);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sentry::protocol::{Event, Exception, Frame, Stacktrace};
 
     #[test]
     fn scrub_text_redacts_sensitive_runs() {
-        let input = "open /Users/alice/Documents/secret.txt from https://api.example.com/x key sk_live_ABCDEFGHIJKLMNOPQRSTUVWX mail a@b.com";
+        let input = r"open C:\Users\alice\secret.txt and \\fileserver\share\x from https://api.example.com/p at 10.0.0.5:9000 key sk_live_ABCDEFGHIJKLMNOPQRSTUVWX mail a@b.com";
         let out = scrub_text(input);
-        assert!(!out.contains("/Users/alice"), "path leaked: {out}");
+        assert!(!out.contains("alice"), "win path leaked: {out}");
+        assert!(!out.contains("fileserver"), "unc path leaked: {out}");
         assert!(!out.contains("api.example.com"), "url leaked: {out}");
+        assert!(!out.contains("10.0.0.5"), "ip leaked: {out}");
         assert!(
             !out.contains("sk_live_ABCDEFGHIJKLMNOPQRSTUVWX"),
             "token leaked: {out}"
         );
         assert!(!out.contains("a@b.com"), "email leaked: {out}");
-        assert!(out.contains("[path]") && out.contains("[url]") && out.contains("[email]"));
     }
 
     #[test]
-    fn scrub_event_keeps_shape_drops_pii() {
-        let mut event = Event {
-            server_name: Some("alices-macbook".into()),
-            ..Default::default()
-        };
-        event
-            .extra
-            .insert("transcript".into(), "my secret words".into());
-
+    fn scrub_event_rebuilds_from_allowlist() {
         let frame = Frame {
             function: Some("do_work".into()),
             filename: Some("/Users/alice/app/src/main.rs".into()),
             abs_path: Some("/Users/alice/app/src/main.rs".into()),
+            module: Some("app::secret".into()),
             lineno: Some(42),
             ..Default::default()
         };
         let exception = Exception {
             ty: "PanicException".into(),
-            value: Some("failed reading /Users/alice/secret.txt".into()),
+            value: Some("failed reading /Users/alice/secret.txt at 192.168.1.20:8080".into()),
+            module: Some("app::io".into()),
             stacktrace: Some(Stacktrace {
                 frames: vec![frame],
                 ..Default::default()
             }),
             ..Default::default()
         };
-        event.exception.values.push(exception);
+        let mut event = Event {
+            server_name: Some("alices-macbook".into()),
+            transaction: Some("/Users/alice/route".into()),
+            exception: Values {
+                values: vec![exception],
+            },
+            ..Default::default()
+        };
+        event
+            .extra
+            .insert("transcript".into(), "my secret words".into());
+        event.tags.insert("device".into(), "alices-macbook".into());
 
         let scrubbed = scrub_event(event, Some("install-123"));
 
-        // PII gone.
+        // Whole PII-bearing sections gone (dropped by reconstruction).
         assert!(scrubbed.server_name.is_none());
+        assert!(scrubbed.transaction.is_none());
         assert!(scrubbed.extra.is_empty());
         let ex = &scrubbed.exception.values[0];
         assert_eq!(ex.ty, "PanicException", "error type must be kept");
-        assert!(!ex.value.as_deref().unwrap().contains("/Users/alice"));
+        assert!(ex.module.is_none(), "exception.module must be dropped");
+        let value = ex.value.as_deref().unwrap();
+        assert!(!value.contains("/Users/alice"), "path leaked: {value}");
+        assert!(!value.contains("192.168.1.20"), "ip leaked: {value}");
         let frame = &ex.stacktrace.as_ref().unwrap().frames[0];
-        assert!(frame.abs_path.is_none());
-        assert!(!frame.filename.as_deref().unwrap().contains("/Users/alice"));
-        // Shape kept.
-        assert_eq!(frame.function.as_deref(), Some("do_work"));
+        assert_eq!(frame.function.as_deref(), Some("do_work"), "shape kept");
         assert_eq!(frame.lineno, Some(42));
-        // Allowlisted tags re-attached.
+        assert!(frame.filename.is_none(), "filename dropped");
+        assert!(frame.abs_path.is_none(), "abs_path dropped");
+        assert!(frame.module.is_none(), "frame.module dropped");
+        // Only the allowlisted tags survive (the injected "device" is gone).
+        assert!(!scrubbed.tags.contains_key("device"));
         assert_eq!(
             scrubbed.tags.get("os").map(|s| s.as_str()),
             Some(std::env::consts::OS)
@@ -305,16 +340,13 @@ mod tests {
     fn read_consent_is_fail_closed() {
         let dir = tempfile::tempdir().unwrap();
 
-        // Missing file.
         let missing = dir.path().join("settings");
         assert_eq!(read_consent_from_path(&missing), (false, None));
 
-        // Malformed JSON.
         let bad = dir.path().join("bad");
         std::fs::write(&bad, b"not json").unwrap();
         assert_eq!(read_consent_from_path(&bad), (false, None));
 
-        // Valid opt-in with install id.
         let good = dir.path().join("good");
         std::fs::write(
             &good,
@@ -326,7 +358,6 @@ mod tests {
             (true, Some("abc".to_string()))
         );
 
-        // Explicit opt-out.
         let off = dir.path().join("off");
         std::fs::write(&off, br#"{"telemetry_enabled": false}"#).unwrap();
         assert_eq!(read_consent_from_path(&off), (false, None));

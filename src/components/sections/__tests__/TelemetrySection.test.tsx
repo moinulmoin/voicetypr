@@ -80,7 +80,37 @@ describe('TelemetrySection', () => {
     });
 
     expect(
-      await screen.findByText('Not available in this build.'),
+      await screen.findByText(/Not available in this build/),
     ).toBeInTheDocument();
+  });
+
+  it('allows opting out even when telemetry is unavailable', async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'get_telemetry_status') {
+        return Promise.resolve({ enabled: true, available: false });
+      }
+      if (command === 'set_telemetry_consent') {
+        return Promise.resolve({ enabled: false, restart_required: false });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<TelemetrySection />);
+
+    const sw = await screen.findByRole('switch');
+    await waitFor(() => {
+      expect(sw).toBeChecked();
+    });
+    expect(sw).toBeEnabled();
+
+    await act(async () => {
+      fireEvent.click(sw);
+    });
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith('set_telemetry_consent', {
+        enabled: false,
+      });
+    });
   });
 });

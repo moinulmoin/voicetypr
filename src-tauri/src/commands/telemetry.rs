@@ -1,4 +1,5 @@
-//! Tauri commands backing the Diagnostics (opt-in error reporting) consent toggle.
+//! Tauri commands backing the Diagnostics (opt-in error reporting) consent
+//! toggle and the frontend error-capture bridge.
 //!
 //! Consent is stored as dedicated keys in the `settings` store (read at startup
 //! by a raw, fail-closed reader in `crate::telemetry`) and is owned exclusively
@@ -49,6 +50,12 @@ pub async fn set_telemetry_consent(
     app: AppHandle,
     enabled: bool,
 ) -> Result<TelemetryConsentResult, String> {
+    // On opt-out, stop egress IMMEDIATELY — before any (possibly failing) store
+    // write — so no in-flight error can slip through after the user said no.
+    if !enabled {
+        telemetry::set_enabled(false);
+    }
+
     let store = app.store(SETTINGS_STORE_FILE).map_err(|e| e.to_string())?;
     let was_enabled = store
         .get(telemetry::KEY_TELEMETRY_ENABLED)
@@ -72,13 +79,24 @@ pub async fn set_telemetry_consent(
     }
     store.save().map_err(|e| e.to_string())?;
 
-    // Flip the in-process gate. Disabling stops egress immediately; enabling is
-    // only fully effective after a restart (client/plugin are wired at startup).
-    telemetry::set_enabled(enabled);
+    // Only turn the gate ON after a successful persist; enabling is fully
+    // effective next launch (the client/panic hook are wired at startup).
+    if enabled {
+        telemetry::set_enabled(true);
+    }
     let restart_required = enabled && !was_enabled;
 
     Ok(TelemetryConsentResult {
         enabled,
         restart_required,
     })
+}
+
+/// Bridges a frontend-reported error (e.g. from the React error boundary) into
+/// the Rust Sentry client, where it is scrubbed by `before_send`. Gated on
+/// consent and a no-op when telemetry is disabled.
+#[tauri::command]
+pub async fn report_frontend_error(name: Option<String>, message: String) -> Result<(), String> {
+    telemetry::capture_frontend_error(name.as_deref(), &message);
+    Ok(())
 }
