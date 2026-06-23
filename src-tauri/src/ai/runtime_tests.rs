@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod tests {
-    use super::super::contract::{AiPolishRequest, AiReasoningEffort};
+    use super::super::contract::AiPolishRequest;
     use super::super::error::AiProviderError;
     use super::super::executor::AiExecutor;
     use super::super::genai_runtime::AiKeyResolver;
     use super::super::providers::PROVIDER_CUSTOM;
     use reqwest::header::AUTHORIZATION;
-    use serde_json::{json, Value};
+    use serde_json::json;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -52,7 +52,7 @@ mod tests {
             let executor = executor_for(*case, &server, true, false);
 
             let result = executor
-                .polish(request(*case, 1_000, None), CancellationToken::new())
+                .polish(request(*case, 1_000), CancellationToken::new())
                 .await
                 .unwrap();
 
@@ -71,7 +71,7 @@ mod tests {
             let executor = executor_for(*case, &server, true, false);
 
             let error = executor
-                .polish(request(*case, 1_000, None), CancellationToken::new())
+                .polish(request(*case, 1_000), CancellationToken::new())
                 .await
                 .unwrap_err();
 
@@ -96,7 +96,7 @@ mod tests {
             let executor = executor_for(*case, &server, true, false);
 
             let result = executor
-                .polish(request(*case, 1_000, None), CancellationToken::new())
+                .polish(request(*case, 1_000), CancellationToken::new())
                 .await
                 .unwrap();
 
@@ -121,7 +121,7 @@ mod tests {
             let executor = executor_for(*case, &server, true, false);
 
             let result = executor
-                .polish(request(*case, 1_000, None), CancellationToken::new())
+                .polish(request(*case, 1_000), CancellationToken::new())
                 .await
                 .unwrap();
 
@@ -146,7 +146,7 @@ mod tests {
             let executor = executor_for(*case, &server, true, false);
 
             let error = executor
-                .polish(request(*case, 1_000, None), CancellationToken::new())
+                .polish(request(*case, 1_000), CancellationToken::new())
                 .await
                 .unwrap_err();
 
@@ -168,7 +168,7 @@ mod tests {
             let started = Instant::now();
 
             let error = executor
-                .polish(request(*case, 150, None), CancellationToken::new())
+                .polish(request(*case, 150), CancellationToken::new())
                 .await
                 .unwrap_err();
 
@@ -191,7 +191,7 @@ mod tests {
             let executor = executor_for(*case, &server, true, false);
             let token = CancellationToken::new();
             let child = token.clone();
-            let request = request(*case, 2_000, None);
+            let request = request(*case, 2_000);
             let handle = tokio::spawn(async move { executor.polish(request, child).await });
             tokio::time::sleep(Duration::from_millis(50)).await;
             token.cancel();
@@ -210,40 +210,11 @@ mod tests {
             let executor = executor_for(*case, &server, true, false);
 
             let error = executor
-                .polish(request(*case, 1_000, None), CancellationToken::new())
+                .polish(request(*case, 1_000), CancellationToken::new())
                 .await
                 .unwrap_err();
 
             assert_eq!(error, AiProviderError::BadResponse);
-        }
-    }
-
-    #[tokio::test]
-    async fn ai_runtime_reasoning_effort_is_native_only() {
-        for case in PROVIDERS {
-            let server = MockServer::start().await;
-            mount_sequence(&server, case.id, vec![ok_response(case.id, "polished")]).await;
-            let executor = executor_for(*case, &server, true, false);
-
-            executor
-                .polish(
-                    request(*case, 1_000, Some(AiReasoningEffort::Low)),
-                    CancellationToken::new(),
-                )
-                .await
-                .unwrap();
-
-            let requests = server.received_requests().await.unwrap();
-            let payload: Value = serde_json::from_slice(&requests[0].body).unwrap();
-            match case.id {
-                PROVIDER_OPENAI => assert_eq!(payload["reasoning_effort"], "low"),
-                PROVIDER_ANTHROPIC => assert!(payload.get("thinking").is_some()),
-                PROVIDER_GEMINI => assert!(payload
-                    .pointer("/generationConfig/thinkingConfig")
-                    .is_some()),
-                PROVIDER_CUSTOM => assert!(payload.get("reasoning_effort").is_none()),
-                _ => unreachable!(),
-            }
         }
     }
 
@@ -255,7 +226,7 @@ mod tests {
             let executor = executor_for(*case, &server, true, false);
 
             executor
-                .polish(request(*case, 1_000, None), CancellationToken::new())
+                .polish(request(*case, 1_000), CancellationToken::new())
                 .await
                 .unwrap();
 
@@ -272,7 +243,7 @@ mod tests {
         let executor = executor_for(custom, &server, false, true);
 
         executor
-            .polish(request(custom, 1_000, None), CancellationToken::new())
+            .polish(request(custom, 1_000), CancellationToken::new())
             .await
             .unwrap();
 
@@ -299,7 +270,7 @@ mod tests {
         let executor = executor_for(case, &server, true, false);
 
         let error = executor
-            .polish(request(case, 1_000, None), CancellationToken::new())
+            .polish(request(case, 1_000), CancellationToken::new())
             .await
             .unwrap_err();
 
@@ -327,7 +298,7 @@ mod tests {
         let started = Instant::now();
 
         let error = executor
-            .polish(request(case, 150, None), CancellationToken::new())
+            .polish(request(case, 150), CancellationToken::new())
             .await
             .unwrap_err();
 
@@ -360,7 +331,7 @@ mod tests {
         let started = Instant::now();
 
         let result = executor
-            .polish(request(case, 1_000, None), CancellationToken::new())
+            .polish(request(case, 1_000), CancellationToken::new())
             .await
             .unwrap();
 
@@ -393,7 +364,7 @@ mod tests {
         let started = Instant::now();
 
         let result = executor
-            .polish(request(case, 3_500, None), CancellationToken::new())
+            .polish(request(case, 3_500), CancellationToken::new())
             .await
             .unwrap();
 
@@ -422,7 +393,7 @@ mod tests {
         let executor = executor_for(case, &server, true, false);
         let token = CancellationToken::new();
         let child = token.clone();
-        let request = request(case, 5_000, None);
+        let request = request(case, 5_000);
         let started = Instant::now();
         let handle = tokio::spawn(async move { executor.polish(request, child).await });
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -454,8 +425,8 @@ mod tests {
         let executor = executor_for(case, &server, true, false);
         let first = executor.clone();
         let second = executor.clone();
-        let first_request = request(case, 1_000, None);
-        let second_request = request(case, 1_000, None);
+        let first_request = request(case, 1_000);
+        let second_request = request(case, 1_000);
 
         let (first_result, second_result) = tokio::join!(
             first.polish(first_request, CancellationToken::new()),
@@ -486,7 +457,7 @@ mod tests {
         let executor = executor_for(case, &server, true, false);
 
         let error = executor
-            .polish(request(case, 100, None), CancellationToken::new())
+            .polish(request(case, 100), CancellationToken::new())
             .await
             .unwrap_err();
 
@@ -540,18 +511,13 @@ mod tests {
         )
     }
 
-    fn request(
-        case: ProviderCase,
-        timeout_ms: u64,
-        reasoning_effort: Option<AiReasoningEffort>,
-    ) -> AiPolishRequest {
+    fn request(case: ProviderCase, timeout_ms: u64) -> AiPolishRequest {
         AiPolishRequest {
             provider_id: case.id.to_string(),
             model_id: case.model.to_string(),
             input_text: "raw transcript".to_string(),
             prompt: "polish the transcript".to_string(),
             timeout_ms,
-            reasoning_effort,
         }
     }
 

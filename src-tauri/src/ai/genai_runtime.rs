@@ -1,8 +1,8 @@
-use super::contract::{AiPolishRequest, AiReasoningEffort};
+use super::contract::AiPolishRequest;
 use super::error::{map_genai_error, AiProviderError, MappedAiProviderError};
 use crate::ai::catalog;
 use genai::adapter::AdapterKind;
-use genai::chat::{ChatOptions, ChatRequest, ReasoningEffort};
+use genai::chat::ChatRequest;
 use genai::resolver::{AuthData, Endpoint};
 use genai::{Client, ClientBuilder, ModelIden, ServiceTarget};
 use std::collections::HashMap;
@@ -49,13 +49,10 @@ impl GenaiRuntime {
         let model = ModelIden::new(adapter_kind, model_str);
         let chat_request =
             ChatRequest::from_user(request.input_text.clone()).with_system(request.prompt.clone());
-        let options = request.reasoning_effort.map(|effort| {
-            ChatOptions::default().with_reasoning_effort(map_reasoning_effort(effort))
-        });
 
         let response = self
             .client
-            .exec_chat(model, chat_request, options.as_ref())
+            .exec_chat(model, chat_request, None)
             .await
             .map_err(|error| map_genai_error(&error))?;
 
@@ -88,14 +85,6 @@ fn namespaced_model(provider_id: &str, model_id: &str) -> String {
     match catalog::namespace(provider_id) {
         Some(namespace) => format!("{namespace}{model_id}"),
         None => model_id.to_string(),
-    }
-}
-
-fn map_reasoning_effort(effort: AiReasoningEffort) -> ReasoningEffort {
-    match effort {
-        AiReasoningEffort::Low => ReasoningEffort::Low,
-        AiReasoningEffort::Medium => ReasoningEffort::Medium,
-        AiReasoningEffort::High => ReasoningEffort::High,
     }
 }
 

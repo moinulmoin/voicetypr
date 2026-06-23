@@ -36,7 +36,7 @@ const desktopWithApp = makeItem({
     engine: "parakeet",
     audio_duration_ms: 5000,
     diarized: false,
-    context_hint: { app_name: "Notion", app_category: "productivity" },
+    context_hint: { app_name: "Notion" },
   },
 });
 

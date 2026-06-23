@@ -6,7 +6,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { toast } from 'sonner'
 import { SettingsProvider } from '@/contexts/SettingsContext'
 import { hasApiKey, saveApiKey } from '@/utils/keyring'
-import { defaultWritingSettings } from '@/types/writing'
+import { defaultWritingSettings, mergeWritingSettings } from '@/types/writing'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -235,13 +238,14 @@ describe('EnhancementsSection', () => {
     renderWithProviders()
 
     await waitFor(() => {
+      expect(screen.getByText('AI polish (optional)')).toBeInTheDocument()
+      expect(screen.getByText('Your text rules (always on)')).toBeInTheDocument()
       expect(screen.getByText('AI Providers')).toBeInTheDocument()
-      expect(screen.getByText('Formatting Options')).toBeInTheDocument()
       expect(screen.getByText('Corrections')).toBeInTheDocument()
       expect(screen.getByText('Words & Names')).toBeInTheDocument()
       expect(screen.getByText('Text Shortcuts')).toBeInTheDocument()
       expect(screen.getByText('Voice Commands')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Dictation (no AI)' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Personal Dictation' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /Code \(requires AI formatting\)/i })).toBeInTheDocument()
       expect(screen.getByText('OpenAI')).toBeInTheDocument()
       expect(screen.getByText('Google Gemini')).toBeInTheDocument()
@@ -261,7 +265,7 @@ describe('EnhancementsSection', () => {
         'title',
         'Writing requires AI formatting. Turn on AI formatting with a selected provider model.',
       )
-      expect(screen.getByRole('button', { name: 'Dictation (no AI)' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'Personal Dictation' })).toBeEnabled()
     })
 
     expect(
@@ -274,7 +278,7 @@ describe('EnhancementsSection', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('AI cleanup sends text to your connected provider; Personal Dictation stays no-AI.'),
+        screen.getByText('Rewrites your words for meaning and format. Needs a provider. Off by default.'),
       ).toBeInTheDocument()
       expect(
         screen.getByText('Add an API key and choose a model below to turn on AI formatting.'),
@@ -407,7 +411,7 @@ describe('EnhancementsSection', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('preset save failed')
       expect(
-        screen.getByText(/Transcription plus local mechanical cleanup/i),
+        screen.getByText(/Just transcription with local cleanup/i),
       ).toBeInTheDocument()
     })
   })
@@ -482,7 +486,7 @@ describe('EnhancementsSection', () => {
         }),
       })
       expect(toast.success).toHaveBeenCalledWith(
-        'AI formatting disabled. Switched to Dictation (no AI).',
+        'AI formatting disabled. Switched to Personal Dictation.',
       )
     })
   })
@@ -554,19 +558,81 @@ describe('EnhancementsSection', () => {
     })
   })
 
-  it('saves context-aware cleanup changes', async () => {
+  it('renders the two labeled zones with their copy', async () => {
     renderWithProviders()
 
-    const contextSwitch = await screen.findByRole('switch', { name: 'Context-aware cleanup' })
-    fireEvent.click(contextSwitch)
-
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('update_writing_settings', {
-        settings: expect.objectContaining({
-          context_policy: 'app_hint_only',
-        }),
-      })
+      expect(screen.getByText('AI polish (optional)')).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'Rewrites your words for meaning and format. Needs a provider. Off by default.',
+        ),
+      ).toBeInTheDocument()
+      expect(screen.getByText('Your text rules (always on)')).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'Exact, predictable edits. Run on every transcription, with or without AI.',
+        ),
+      ).toBeInTheDocument()
     })
+  })
+
+  it('does not render a context_policy control after the app-hint removal', async () => {
+    renderWithProviders()
+
+    await waitFor(() => expect(screen.getByText('AI Providers')).toBeInTheDocument())
+    expect(
+      screen.queryByRole('switch', { name: 'Context-aware cleanup' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders the deterministic editors in Zone B with AI off', async () => {
+    renderWithProviders()
+
+    await waitFor(() => expect(screen.getByText('Corrections')).toBeInTheDocument())
+    expect(screen.getByText('Words & Names')).toBeInTheDocument()
+    expect(screen.getByText('Voice Commands')).toBeInTheDocument()
+    expect(screen.getByText('Text Shortcuts')).toBeInTheDocument()
+  })
+
+  it('keeps AiProviderStatus single-sourced and drops the app-hint field on merge', () => {
+    const projectRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '..',
+      '..',
+      '..',
+      '..',
+    )
+    const aiSrc = readFileSync(path.join(projectRoot, 'src/types/ai.ts'), 'utf8')
+    const providersSrc = readFileSync(path.join(projectRoot, 'src/types/providers.ts'), 'utf8')
+    expect(providersSrc).toMatch(/export type AiProviderStatus/)
+    expect(aiSrc).not.toMatch(/AiProviderStatus/)
+
+    const legacy = {
+      replacements: [{ from: 'x', to: 'y', language: null, enabled: true }],
+      custom_words: [],
+      snippets: [],
+      voice_commands: [],
+      context_policy: 'app_hint_only',
+    } as unknown as Partial<typeof defaultWritingSettings>
+    const merged = mergeWritingSettings(legacy)
+    expect(merged.replacements).toHaveLength(1)
+    expect(merged.app_formatting_rules).toEqual([])
+    expect('context_policy' in merged).toBe(false)
+    expect(mergeWritingSettings({})).toEqual(defaultWritingSettings)
+  })
+
+  it('deletes the unused ProviderCard component', () => {
+    const projectRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '..',
+      '..',
+      '..',
+      '..',
+    )
+    expect(() =>
+      readFileSync(path.join(projectRoot, 'src/components/ProviderCard.tsx'), 'utf8'),
+    ).toThrow()
   })
 
   it('does not persist placeholder writing settings before backend settings load', async () => {
@@ -574,11 +640,11 @@ describe('EnhancementsSection', () => {
     let resolveWritingSettings: (settings: typeof defaultWritingSettings) => void = () => {}
     const loadedWritingSettings = {
       ...defaultWritingSettings,
-      voice_commands: [
+      replacements: [
         {
-          phrase: 'insert period',
-          output: 'period',
-          language: 'en',
+          from: 'voice typer',
+          to: 'VoiceTypr',
+          language: null,
           enabled: true,
         },
       ],
@@ -634,26 +700,33 @@ describe('EnhancementsSection', () => {
 
     renderWithProviders()
 
-    const contextSwitch = await screen.findByRole('switch', { name: 'Context-aware cleanup' })
-    expect(contextSwitch).toBeDisabled()
-    fireEvent.click(contextSwitch)
+    const correctionsHeading = await screen.findByText('Corrections')
+    const correctionsCard = correctionsHeading.parentElement?.parentElement
+    expect(correctionsCard).toBeTruthy()
+    const addRuleButton = within(correctionsCard as HTMLElement).getByRole('button', {
+      name: /add rule/i,
+    })
+    expect(addRuleButton).toBeDisabled()
+    fireEvent.click(addRuleButton)
     expect(
       (invoke as ReturnType<typeof vi.fn>).mock.calls.some(
         ([cmd, args]) =>
           cmd === 'update_writing_settings' &&
-          (args as { settings?: typeof defaultWritingSettings })?.settings?.voice_commands.length === 0,
+          (args as { settings?: typeof defaultWritingSettings })?.settings?.replacements.length === 0,
       ),
     ).toBe(false)
 
     resolveWritingSettings(loadedWritingSettings)
-    await waitFor(() => expect(contextSwitch).toBeEnabled())
-    await user.click(contextSwitch)
+    await waitFor(() => expect(addRuleButton).toBeEnabled())
+    await user.click(addRuleButton)
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('update_writing_settings', {
         settings: expect.objectContaining({
-          context_policy: 'app_hint_only',
-          voice_commands: loadedWritingSettings.voice_commands,
+          replacements: [
+            ...loadedWritingSettings.replacements,
+            expect.objectContaining({ from: '', to: '', enabled: true }),
+          ],
         }),
       })
     })

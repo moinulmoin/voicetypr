@@ -127,8 +127,8 @@ function AppFormattingRulesEditor({
         <div>
           <FieldLegend className="mb-1 text-sm">App Rules</FieldLegend>
           <FieldDescription>
-            Switch formatting mode when the active app name matches. Matches the foreground app
-            name only — not URLs, document titles, or clipboard content.
+            Switch mode when the active app matches. Uses the app name only — not URLs, titles, or
+            clipboard.
           </FieldDescription>
         </div>
         <Button
@@ -278,9 +278,7 @@ function ReplacementEditor({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <FieldLegend className="mb-1">Corrections</FieldLegend>
-          <FieldDescription>
-            Deterministic corrections applied before optional AI cleanup.
-          </FieldDescription>
+          <FieldDescription>Find-and-replace rules. Always applied, with or without AI.</FieldDescription>
         </div>
         <Button
           type="button"
@@ -423,8 +421,8 @@ function VoiceCommandEditor({
         <div>
           <FieldLegend className="mb-1">Voice Commands</FieldLegend>
           <FieldDescription>
-            Deterministic spoken punctuation and breaks applied on-device after transcription.
-            Not AI. Phrases like <span className="font-mono">new paragraph</span> insert a break.
+            Spoken phrases that insert punctuation or breaks. Not AI. Example:{" "}
+            <span className="font-mono">new paragraph</span> starts a new paragraph.
           </FieldDescription>
         </div>
         <Button
@@ -667,7 +665,7 @@ function CustomWordEditor({
         <div>
           <FieldLegend className="mb-1">Words & Names</FieldLegend>
           <FieldDescription>
-            Preserve names and domain terms with canonical spellings and optional spoken forms.
+            Used to correct spelling; also improves recognition on Whisper, Parakeet, and Soniox.
           </FieldDescription>
         </div>
         <Button
@@ -814,7 +812,7 @@ function SnippetEditor({
         <div>
           <FieldLegend className="mb-1">Text Shortcuts</FieldLegend>
           <FieldDescription>
-            Whole-utterance template expansions. Literal shortcuts skip cleanup unless disabled.
+            Replace a whole spoken phrase with a template. "Preserve literally" skips cleanup.
           </FieldDescription>
         </div>
         <Button
@@ -991,13 +989,11 @@ export function EnhancementSettings({
     <div className={`space-y-4 ${disabled ? "opacity-60" : ""}`}>
       <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
         <FieldLegend className="mb-1">Formatting mode</FieldLegend>
-        <FieldDescription className="mb-3">
-          Choose how VoiceTypr structures your final text.
-        </FieldDescription>
+        <FieldDescription className="mb-3">Pick how the final text is shaped.</FieldDescription>
         {!aiFormattingEnabled && selectedRequiresAi && (
           <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-            {formattingModeLabel(preset)} requires AI formatting. Turn on AI formatting with a
-            selected provider model, or switch to Dictation (no AI).
+            {formattingModeLabel(preset)} needs AI. Turn on AI with a provider model, or pick
+            Personal Dictation.
           </div>
         )}
         <ButtonGroup className="w-full flex-wrap md:w-fit">
@@ -1036,28 +1032,25 @@ export function EnhancementSettings({
           })}
         </ButtonGroup>
         <FieldDescription className="mt-3">
-          {preset === "PersonalDictation" &&
-            "Transcription plus local mechanical cleanup and Personal Library rules. No semantic AI rewriting."}
-          {preset === "CleanDictation" &&
-            "Sends dictated text to the connected provider for grammar, punctuation, and intent-preserving cleanup."}
-          {preset === "Writing" &&
-            "Sends dictated text to the connected provider to polish it into clear, well-structured prose."}
-          {preset === "Notes" &&
-            "Sends dictated text to the connected provider to organize it into concise, structured notes."}
-          {preset === "Message" &&
-            "Sends dictated text to the connected provider to format a clear message."}
-          {preset === "Code" &&
-            "Sends dictated text to the connected provider to create conventional commits and code annotations."}
+          {preset === "PersonalDictation" && "Just transcription with local cleanup. No AI."}
+          {preset === "CleanDictation" && "AI fixes grammar and punctuation. Keeps your meaning."}
+          {preset === "Writing" && "AI polishes it into clear prose."}
+          {preset === "Notes" && "AI turns it into short, structured notes."}
+          {preset === "Message" && "AI formats it as a short message."}
+          {preset === "Code" && "AI formats commits and code notes."}
         </FieldDescription>
       </FieldSet>
 
       <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
         <FieldLegend className="mb-1">Final Text Language</FieldLegend>
         <FieldDescription className="mb-3">
-          Keep the transcript language, or request a final written language. English can use
-          native speech translation when supported; other targets rely on AI cleanup or
-          translation.
+          Keep the transcript language, or pick a different written language. Changing it needs AI.
         </FieldDescription>
+        {!aiFormattingEnabled && finalTextLanguage !== "same_as_transcript" && (
+          <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            Turn on AI and pick an AI mode to use a final text language different from the transcript.
+          </div>
+        )}
 
         <ButtonGroup className="w-full flex-wrap md:w-fit">
           <Button
@@ -1093,44 +1086,21 @@ export function EnhancementSettings({
         )}
       </FieldSet>
 
-      <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
-        <Field orientation="horizontal" className="items-start justify-between gap-4">
-          <FieldContent>
-            <FieldTitle>Context-aware cleanup</FieldTitle>
-            <FieldDescription>
-              Optionally pass the active app name/category as a privacy-safe writing hint. No
-              document contents or clipboard data are shared automatically.
-            </FieldDescription>
-          </FieldContent>
-          <Switch
-            aria-label="Context-aware cleanup"
-            checked={writingSettings.context_policy === "app_hint_only"}
-            disabled={writingSettingsDisabled}
-            onCheckedChange={(checked) =>
-              onWritingSettingsChange({
-                ...writingSettings,
-                context_policy: checked ? "app_hint_only" : "off",
-              })
-            }
-          />
-        </Field>
+      <AppFormattingRulesEditor
+        rules={writingSettings.app_formatting_rules}
+        disabled={writingSettingsDisabled}
+        aiFormattingEnabled={aiFormattingEnabled}
+        onChange={(app_formatting_rules) =>
+          onWritingSettingsChange({ ...writingSettings, app_formatting_rules })
+        }
+      />
 
-        <AppFormattingRulesEditor
-          rules={writingSettings.app_formatting_rules}
-          disabled={writingSettingsDisabled}
-          aiFormattingEnabled={aiFormattingEnabled}
-          onChange={(app_formatting_rules) =>
-            onWritingSettingsChange({ ...writingSettings, app_formatting_rules })
-          }
-        />
-      </FieldSet>
-
-      <p className="text-xs text-muted-foreground">
-        When Soniox or cloud transcription is selected, VoiceTypr may send Personal Library words,
-        names, and corrections as transcription context to improve recognition. Text Shortcuts are not
-        sent.
-      </p>
-
+      <header className="pt-2">
+        <h2 className="text-base font-semibold">Your text rules (always on)</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Exact, predictable edits. Run on every transcription, with or without AI.
+        </p>
+      </header>
       <ReplacementEditor
         replacements={writingSettings.replacements}
         disabled={writingSettingsDisabled}

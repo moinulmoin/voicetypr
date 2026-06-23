@@ -13,7 +13,6 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   Field,
-  FieldDescription,
   FieldGroup,
   FieldLegend,
   FieldSet,
@@ -471,7 +470,7 @@ export function EnhancementsSection() {
       }
 
       if (!enabled && presetChanged) {
-        toast.success("AI formatting disabled. Switched to Dictation (no AI).");
+        toast.success("AI formatting disabled. Switched to Personal Dictation.");
       } else {
         toast.success(enabled ? "AI formatting enabled" : "AI formatting disabled");
       }
@@ -643,26 +642,23 @@ export function EnhancementsSection() {
                 <DialogContent className="sm:max-w-lg">
                   <DialogHeader>
                     <DialogTitle>Formatting guide</DialogTitle>
-                    <DialogDescription>
-                      Use modes for the shape of the final text. Corrections, words & names, text
-                      shortcuts, and language rules still apply before optional AI cleanup.
-                    </DialogDescription>
+                  <DialogDescription>
+                    Modes shape the final text. Your text rules (corrections, words & names, voice
+                    commands, shortcuts) always run first.
+                  </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-3 text-sm leading-6 text-muted-foreground">
                     <p><strong className="text-foreground">Setup</strong> works in order: set up one provider, save its API key, select a model, then turn on AI formatting when you want language conversion or heavier cleanup.</p>
-                    <p><strong className="text-foreground">Personal Dictation</strong> transcribes with local mechanical cleanup and Personal Library rules, without semantic AI rewriting.</p>
-                    <p><strong className="text-foreground">Clean Dictation</strong> fixes punctuation and grammar without changing intent.</p>
-                    <p><strong className="text-foreground">Writing</strong> polishes dictated text into clear prose.</p>
-                    <p><strong className="text-foreground">Notes</strong> organizes speech into concise structured notes.</p>
-                    <p><strong className="text-foreground">Message</strong> formats a concise message for chat or email.</p>
-                    <p><strong className="text-foreground">Code</strong> creates conventional commits and code annotations.</p>
+                    <p><strong className="text-foreground">Personal Dictation</strong> is no AI. Just transcription with local cleanup and your text rules.</p>
+                    <p><strong className="text-foreground">Clean Dictation</strong> uses AI to fix grammar and punctuation. Keeps your meaning.</p>
+                    <p><strong className="text-foreground">Writing</strong> uses AI to polish it into clear prose.</p>
+                    <p><strong className="text-foreground">Notes</strong> uses AI to turn it into short, structured notes.</p>
+                    <p><strong className="text-foreground">Message</strong> uses AI to format a short message.</p>
+                    <p><strong className="text-foreground">Code</strong> uses AI to format commits and code notes.</p>
                   </div>
                 </DialogContent>
               </Dialog>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              AI cleanup sends text to your connected provider; Personal Dictation stays no-AI.
-            </p>
           </div>
           <div className="flex flex-col items-end gap-1">
             <Field orientation="horizontal" className="w-auto items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-1.5">
@@ -686,6 +682,12 @@ export function EnhancementsSection() {
 
       <ScrollArea className="flex-1 min-h-0">
         <div className="space-y-5 p-6">
+          <header>
+            <h2 className="text-base font-semibold">AI polish (optional)</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Rewrites your words for meaning and format. Needs a provider. Off by default.
+            </p>
+          </header>
           <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
               <FieldLegend className="mb-0 text-sm">AI Providers</FieldLegend>
@@ -977,31 +979,16 @@ export function EnhancementsSection() {
             </FieldGroup>
           </FieldSet>
 
-          <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
-            <FieldLegend className="mb-1 text-sm">Formatting Options</FieldLegend>
-            <FieldDescription className="mb-3">
-              Configure output style, language targeting, and deterministic corrections.
-            </FieldDescription>
-
-            {!aiSettings.enabled &&
-              effectiveFinalTextLanguage !== "same_as_transcript" && (
-                <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                  Choose an AI-capable mode and turn on AI formatting to use a final text language
-                  different from the transcript.
-                </div>
-              )}
-
-            <EnhancementSettings
-              preset={enhancementOptions.preset}
-              finalTextLanguage={effectiveFinalTextLanguage}
-              writingSettings={writingSettings}
-              aiFormattingEnabled={aiSettings.enabled}
-              onPresetChange={handlePresetChange}
-              onFinalTextLanguageChange={handleFinalTextLanguageChange}
-              onWritingSettingsChange={handleWritingSettingsChange}
-              writingSettingsDisabled={!settingsLoaded}
-            />
-          </FieldSet>
+          <EnhancementSettings
+            preset={enhancementOptions.preset}
+            finalTextLanguage={effectiveFinalTextLanguage}
+            writingSettings={writingSettings}
+            aiFormattingEnabled={aiSettings.enabled}
+            onPresetChange={handlePresetChange}
+            onFinalTextLanguageChange={handleFinalTextLanguageChange}
+            onWritingSettingsChange={handleWritingSettingsChange}
+            writingSettingsDisabled={!settingsLoaded}
+          />
 
         </div>
       </ScrollArea>

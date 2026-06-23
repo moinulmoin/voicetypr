@@ -450,7 +450,6 @@ pub async fn validate_ai_api_key(
         input_text: "ok".to_string(),
         prompt: "Reply with exactly: ok".to_string(),
         timeout_ms: 10_000,
-        reasoning_effort: None,
     };
 
     executor
@@ -889,7 +888,6 @@ async fn polish_text_with_prompt_typed(
         input_text: text.to_string(),
         prompt,
         timeout_ms: 30_000,
-        reasoning_effort: None,
     };
     let result = executor
         .polish(request, tokio_util::sync::CancellationToken::new())
@@ -912,8 +910,7 @@ pub async fn polish_text_typed(
     context: Option<&str>,
 ) -> Result<String, crate::ai::error::AiProviderError> {
     let (provider, model) = selected_ai_provider_and_model(app)?;
-    let prompt =
-        crate::ai::prompts::build_enhancement_prompt(text, context, options, output_language);
+    let prompt = crate::ai::prompts::build_enhancement_prompt(context, options, output_language);
     polish_text_with_prompt_typed(app, text, model, provider, prompt).await
 }
 
@@ -1041,7 +1038,6 @@ pub(crate) async fn enhance_transcription_internal(
         language
     );
     let prompt = crate::ai::prompts::build_enhancement_prompt(
-        &text,
         context_override.as_deref(),
         &enhancement_options,
         language.as_deref(),

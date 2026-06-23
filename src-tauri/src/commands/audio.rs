@@ -1132,7 +1132,6 @@ pub fn compile_remote_request_context(
     crate::writing::compile_context_for_target(
         &settings,
         transcript_language,
-        None,
         crate::writing::ProviderContextTarget::WhisperInitialPrompt,
     )
 }
@@ -2069,7 +2068,6 @@ mod tests {
             warnings: vec![],
             context_hint: Some(crate::writing::ContextHint {
                 app_name: Some("Finder".into()),
-                app_category: Some("productivity".into()),
             }),
             ai_error: None,
         }
@@ -2147,7 +2145,6 @@ mod tests {
         // context_hint present with expected values
         let hint = &obj["context_hint"];
         assert_eq!(hint["app_name"].as_str().unwrap(), "Finder");
-        assert_eq!(hint["app_category"].as_str().unwrap(), "productivity");
     }
 
     // --- save_transcription metadata persistence ---

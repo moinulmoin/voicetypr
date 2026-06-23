@@ -24,7 +24,7 @@ export const presetRequiresAiFormatting = (preset: EnhancementPreset): boolean =
 export const presetDisplayLabel = (preset: EnhancementPreset): string => {
   switch (preset) {
     case 'PersonalDictation':
-      return 'Dictation (no AI)';
+      return 'Personal Dictation';
     case 'CleanDictation':
       return 'Clean Dictation';
     case 'Writing':
@@ -40,8 +40,6 @@ export const presetDisplayLabel = (preset: EnhancementPreset): string => {
 
 export const defaultPresetForAiEnabled = (aiEnabled: boolean): EnhancementPreset =>
   aiEnabled ? 'CleanDictation' : 'PersonalDictation';
-
-export type AiProviderStatus = 'production' | 'experimental' | 'hidden';
 
 /** Migrate a backend preset value (possibly legacy) to the V2 contract. */
 export const migratePreset = (raw: string, aiEnabled = false): EnhancementPreset => {

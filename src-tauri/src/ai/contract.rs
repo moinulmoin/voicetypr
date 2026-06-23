@@ -25,7 +25,6 @@ pub struct AiPolishRequest {
     pub input_text: String,
     pub prompt: String,
     pub timeout_ms: u64,
-    pub reasoning_effort: Option<AiReasoningEffort>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -34,13 +33,4 @@ pub struct AiPolishResult {
     pub provider_id: String,
     pub model_id: String,
     pub duration_ms: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// Reasoning effort is part of the frozen runtime contract; UI construction ships later.
-#[allow(dead_code)]
-pub enum AiReasoningEffort {
-    Low,
-    Medium,
-    High,
 }
