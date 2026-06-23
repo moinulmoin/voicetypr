@@ -3944,6 +3944,7 @@ pub async fn stop_recording(
     app: AppHandle,
     state: State<'_, RecorderState>,
 ) -> Result<String, String> {
+    #[cfg(debug_assertions)]
     let stop_start = Instant::now();
 
     log_start("RECORDING_STOP");

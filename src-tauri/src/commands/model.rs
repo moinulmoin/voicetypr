@@ -10,6 +10,7 @@ use crate::whisper::manager::{ModelInfo, WhisperManager};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+#[cfg(debug_assertions)]
 use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -81,6 +82,7 @@ pub async fn download_model(
     parakeet_manager: State<'_, ParakeetManager>,
     active_downloads: ActiveDownloadsState<'_>,
 ) -> Result<(), String> {
+    #[cfg(debug_assertions)]
     let download_start = Instant::now();
 
     // Create and register cancellation flag before any await to avoid startup races.
