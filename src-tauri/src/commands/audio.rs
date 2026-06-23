@@ -2788,6 +2788,9 @@ async fn abort_due_to_missing_model(
 
     // Show pill toast for no models error
     pill_toast(app, user_message, 2000);
+    // Bring the dashboard forward so the no-models error is actionable
+    // (the main window normally stays hidden in tray/pill mode).
+    let _ = crate::commands::window::focus_main_window(app.clone()).await;
 
     // Also emit domain event for main window
     let _ = emit_to_window(
@@ -3081,6 +3084,9 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
                     .to_string(),
             )
             };
+        // Bring the dashboard forward so the error toast + onboarding are visible
+        // (the main window normally stays hidden in tray/pill mode).
+        let _ = crate::commands::window::focus_main_window(app.clone()).await;
         let _ = emit_to_window(
             app,
             "main",
@@ -3104,10 +3110,7 @@ async fn validate_recording_requirements(app: &AppHandle) -> Result<(), String> 
                 log::warn!("Recording blocked: license is {:?}", cached.status.status);
             }
 
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            let _ = crate::commands::window::focus_main_window(app.clone()).await;
 
             let _ = emit_to_all(
                 app,
