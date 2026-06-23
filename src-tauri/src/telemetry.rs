@@ -1,9 +1,9 @@
 //! Opt-in, anonymous error reporting (Sentry SDK -> self-hosted Bugsink).
 //!
 //! Privacy posture (non-negotiable):
-//! - Disabled by default. Only active when the user has opted in AND a DSN was
-//!   baked in at build time via `VOICETYPR_SENTRY_DSN`. OSS / dev builds have no
-//!   DSN, so the client is never created (fully inert).
+//! - Disabled by default. Only active when the user has opted in AND it is a
+//!   release build: the DSN is compiled in for release only, so dev/debug builds
+//!   have no DSN and the client is never created (fully inert).
 //! - No native minidumps: we use the `sentry` crate directly — no
 //!   `tauri-plugin-sentry`, no browser-SDK injection, and no envelope/breadcrumb
 //!   IPC — so the only capture path is the Rust SDK and `before_send` is the
@@ -21,9 +21,14 @@ use regex::Regex;
 use sentry::protocol::{Event, Exception, Frame, Level, Stacktrace, Values};
 use sentry::ClientInitGuard;
 
-/// DSN baked in at build time for official builds. Absent in OSS / dev builds,
-/// in which case telemetry is fully compiled-inert (no client is ever created).
-const SENTRY_DSN: Option<&str> = option_env!("VOICETYPR_SENTRY_DSN");
+/// Bugsink DSN. Compiled into RELEASE builds only; dev/debug builds have no DSN
+/// and are fully inert (no client is ever created). A DSN is a client ingestion
+/// key — it can only send events, never read — so embedding it is expected/safe.
+#[cfg(debug_assertions)]
+const SENTRY_DSN: Option<&str> = None;
+#[cfg(not(debug_assertions))]
+const SENTRY_DSN: Option<&str> =
+    Some("https://2d96c3759e8742309e92a0eb9c9659b4@bugsink.ideaplexa.com/1");
 
 /// Store file (tauri-plugin-store) + keys that hold consent state. The store is
 /// a flat top-level JSON object, so a raw reader can parse these keys before the
