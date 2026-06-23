@@ -6,12 +6,12 @@ use std::thread;
 use std::time::Duration;
 use tauri_plugin_store::StoreExt;
 
-// rdev keyboard simulation (non-macOS paste; macOS pastes via core-graphics directly).
-#[cfg(not(target_os = "macos"))]
+// rdev keyboard simulation (Linux paste only; macOS uses core-graphics, Windows uses Win32 SendInput).
+#[cfg(target_os = "linux")]
 use rdev::{simulate, EventType, Key as RdevKey, SimulateError};
 
-// Import Enigo only for non-macOS platforms where it's used
-#[cfg(not(target_os = "macos"))]
+// Enigo is only used by the Linux paste fallback below.
+#[cfg(target_os = "linux")]
 use enigo::{
     Direction::{Click, Press, Release},
     Enigo, Key, Keyboard, Settings,
@@ -557,9 +557,9 @@ fn try_paste_with_applescript() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        // Windows doesn't need enigo fallback - rdev is sufficient
-        log::debug!("No Enigo fallback for Windows - rdev should have worked");
-        Err("Windows paste failed with rdev (no fallback needed)".to_string())
+        // Windows has no fallback: paste_windows' batched SendInput is the only path.
+        log::debug!("No fallback for Windows - SendInput paste should have worked");
+        Err("Windows paste failed (SendInput, no fallback)".to_string())
     }
 }
 
@@ -572,8 +572,8 @@ impl Drop for InsertionGuard {
     }
 }
 
-// Helper function to send events with proper timing (only used on Windows/Linux)
-#[cfg(not(target_os = "macos"))]
+// Helper function to send events with proper timing (Linux paste only)
+#[cfg(target_os = "linux")]
 fn send_key_event(event_type: &EventType) -> Result<(), SimulateError> {
     match simulate(event_type) {
         Ok(()) => {
@@ -611,7 +611,7 @@ fn try_paste_with_rdev() -> Result<(), String> {
 
         #[cfg(target_os = "windows")]
         {
-            paste_windows().map_err(|e| format!("Failed to paste on Windows: {:?}", e))
+            paste_windows()
         }
 
         #[cfg(target_os = "linux")]
@@ -680,45 +680,73 @@ fn paste_mac() -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn paste_windows() -> Result<(), SimulateError> {
-    log::debug!("Starting Windows paste simulation with rdev");
+fn paste_windows() -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+        VIRTUAL_KEY, VK_CONTROL, VK_V,
+    };
 
-    // Add initial delay to match macOS timing for better reliability
-    thread::sleep(Duration::from_millis(50));
+    log::debug!("Starting Windows paste simulation (batched SendInput Ctrl+V)");
 
-    // Try paste with retry logic
-    for attempt in 1..=2 {
-        log::debug!("Windows paste attempt {}/2", attempt);
-
-        let result = (|| {
-            send_key_event(&EventType::KeyPress(RdevKey::ControlLeft))?;
-            send_key_event(&EventType::KeyPress(RdevKey::KeyV))?;
-            send_key_event(&EventType::KeyRelease(RdevKey::KeyV))?;
-            send_key_event(&EventType::KeyRelease(RdevKey::ControlLeft))?;
-            Ok::<(), SimulateError>(())
-        })();
-
-        match result {
-            Ok(_) => {
-                log::debug!("Windows paste simulation completed on attempt {}", attempt);
-                return Ok(());
-            }
-            Err(e) if attempt < 2 => {
-                log::warn!(
-                    "Windows paste attempt {} failed: {:?}, retrying...",
-                    attempt,
-                    e
-                );
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => {
-                log::error!("Windows paste failed after 2 attempts: {:?}", e);
-                return Err(e);
-            }
+    fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: if up {
+                        KEYEVENTF_KEYUP
+                    } else {
+                        KEYBD_EVENT_FLAGS(0)
+                    },
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
         }
     }
 
-    unreachable!()
+    // Ctrl down, V down, V up, Ctrl up injected as ONE atomic batch: a single
+    // SendInput call is serialized by Win32 and never interleaved with other input,
+    // so V is always processed with Ctrl held. Deterministic analogue of the macOS
+    // core-graphics fix, replacing rdev's four separate injections (which could let V
+    // land before the held Ctrl registered).
+    let inputs = [
+        key(VK_CONTROL, false),
+        key(VK_V, false),
+        key(VK_V, true),
+        key(VK_CONTROL, true),
+    ];
+    let cb = std::mem::size_of::<INPUT>() as i32;
+
+    // Settle before injecting (matches prior Windows timing).
+    thread::sleep(Duration::from_millis(50));
+
+    // SAFETY: `inputs` is a valid, correctly-sized slice of INPUT for the call.
+    let sent = unsafe { SendInput(&inputs, cb) } as usize;
+    if sent == inputs.len() {
+        log::debug!("Windows paste injected {} events", sent);
+        return Ok(());
+    }
+
+    // SendInput reports the count actually inserted; 0 means fully blocked (e.g. another
+    // thread's BlockInput / UIPI) so nothing happened and a retry is safe. A partial
+    // inject (1..=3) is NOT retried, to avoid a double paste.
+    if sent == 0 {
+        log::warn!("Windows paste blocked (0 events); retrying once");
+        thread::sleep(Duration::from_millis(50));
+        let retry = unsafe { SendInput(&inputs, cb) } as usize;
+        if retry == inputs.len() {
+            return Ok(());
+        }
+    }
+
+    Err(format!(
+        "SendInput injected {}/{} Ctrl+V events (input blocked?)",
+        sent,
+        inputs.len()
+    ))
 }
 
 #[cfg(target_os = "linux")]
