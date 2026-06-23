@@ -6,7 +6,8 @@ use std::thread;
 use std::time::Duration;
 use tauri_plugin_store::StoreExt;
 
-// Import rdev for more reliable keyboard simulation
+// rdev keyboard simulation (non-macOS paste; macOS pastes via core-graphics directly).
+#[cfg(not(target_os = "macos"))]
 use rdev::{simulate, EventType, Key as RdevKey, SimulateError};
 
 // Import Enigo only for non-macOS platforms where it's used
@@ -605,7 +606,7 @@ fn try_paste_with_rdev() -> Result<(), String> {
     let result = {
         #[cfg(target_os = "macos")]
         {
-            paste_mac().map_err(|e| format!("Failed to paste on macOS: {:?}", e))
+            paste_mac()
         }
 
         #[cfg(target_os = "windows")]
@@ -642,61 +643,40 @@ fn try_paste_with_rdev() -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn paste_mac() -> Result<(), SimulateError> {
-    log::debug!("Starting macOS paste simulation with rdev");
+fn paste_mac() -> Result<(), String> {
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
-    // Add initial delay to match Windows timing for better reliability
+    // Virtual keycode for 'V' (kVK_ANSI_V).
+    const VK_V: u16 = 9;
+
+    log::debug!("Starting macOS paste simulation (core-graphics ⌘V)");
+
+    // Settle delay (kept from the previous implementation).
     thread::sleep(Duration::from_millis(15));
 
-    // Try paste with retry logic
-    for attempt in 1..=2 {
-        log::debug!("macOS paste attempt {}/2", attempt);
+    // Build ⌘V deterministically: the Command flag is set ON the V key events
+    // themselves, so the paste no longer depends on the OS tracking a separately
+    // posted synthetic Cmd key-down (rdev's approach, which intermittently dropped
+    // the modifier and pasted a bare "v").
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|_| "Failed to create CGEventSource".to_string())?;
+    let cmd = CGEventFlags::CGEventFlagCommand;
 
-        let result = (|| {
-            // Press Cmd (Meta) key first and hold it
-            log::debug!("Pressing MetaLeft (Cmd)");
-            simulate(&EventType::KeyPress(RdevKey::MetaLeft))?;
-            thread::sleep(Duration::from_millis(15)); // Give OS time to register modifier
+    let key_down = CGEvent::new_keyboard_event(source.clone(), VK_V, true)
+        .map_err(|_| "Failed to create Cmd+V key-down event".to_string())?;
+    key_down.set_flags(cmd);
+    key_down.post(CGEventTapLocation::HID);
 
-            // While Cmd is held, press V
-            log::debug!("Pressing KeyV while Cmd is held");
-            simulate(&EventType::KeyPress(RdevKey::KeyV))?;
-            thread::sleep(Duration::from_millis(15));
+    thread::sleep(Duration::from_millis(15));
 
-            // Release V first
-            log::debug!("Releasing KeyV");
-            simulate(&EventType::KeyRelease(RdevKey::KeyV))?;
-            thread::sleep(Duration::from_millis(15));
+    let key_up = CGEvent::new_keyboard_event(source, VK_V, false)
+        .map_err(|_| "Failed to create Cmd+V key-up event".to_string())?;
+    key_up.set_flags(cmd);
+    key_up.post(CGEventTapLocation::HID);
 
-            // Then release Cmd
-            log::debug!("Releasing MetaLeft (Cmd)");
-            simulate(&EventType::KeyRelease(RdevKey::MetaLeft))?;
-            thread::sleep(Duration::from_millis(15));
-
-            Ok::<(), SimulateError>(())
-        })();
-
-        match result {
-            Ok(_) => {
-                log::debug!("macOS paste simulation completed on attempt {}", attempt);
-                return Ok(());
-            }
-            Err(e) if attempt < 2 => {
-                log::warn!(
-                    "macOS paste attempt {} failed: {:?}, retrying...",
-                    attempt,
-                    e
-                );
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => {
-                log::error!("macOS paste failed after 2 attempts: {:?}", e);
-                return Err(e);
-            }
-        }
-    }
-
-    unreachable!()
+    log::debug!("macOS paste simulation completed (core-graphics)");
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
