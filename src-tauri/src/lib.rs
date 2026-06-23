@@ -54,6 +54,132 @@ pub fn hide_dock_icon(app: &tauri::AppHandle) {
     log::debug!("Dock icon hidden (ActivationPolicy::Accessory)");
 }
 
+/// Show the main window and keep the macOS Dock icon in sync. Single entry point so
+/// no caller forgets to reveal the Dock icon when the window becomes visible.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        #[cfg(target_os = "macos")]
+        show_dock_icon(app);
+    }
+}
+
+/// Hide the main window and the macOS Dock icon — back to the menubar/tray.
+fn hide_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(e) = window.hide() {
+            log::error!("Failed to hide main window: {}", e);
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        hide_dock_icon(app);
+    }
+}
+
+#[cfg(target_os = "macos")]
+const APP_QUIT_TO_TRAY_ID: &str = "app-quit-to-tray";
+#[cfg(target_os = "macos")]
+const HELP_CHECK_UPDATES_ID: &str = "help-check-updates";
+#[cfg(target_os = "macos")]
+const HELP_REPORT_ISSUE_ID: &str = "help-report-issue";
+#[cfg(target_os = "macos")]
+const HELP_RELEASE_NOTES_ID: &str = "help-release-notes";
+
+/// Custom macOS app menu. Mirrors Tauri's default but: (1) the app-menu Quit (Cmd+Q)
+/// is a normal item that hides to the tray instead of the predefined Quit (which maps
+/// to native `terminate:` and can't be intercepted) — true quit stays on the tray menu
+/// and Dock -> Quit; (2) About/Hide labels are branded "Voicetypr" with Ideaplexa LLC
+/// metadata; (3) a Help submenu links updates, issues, and release notes.
+#[cfg(target_os = "macos")]
+fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{AboutMetadataBuilder, Menu, MenuItem, PredefinedMenuItem, Submenu};
+
+    let about_metadata = AboutMetadataBuilder::new()
+        .name(Some("Voicetypr"))
+        .version(Some(env!("CARGO_PKG_VERSION")))
+        .copyright(Some("© Ideaplexa LLC"))
+        .authors(Some(vec!["Ideaplexa LLC".to_string()]))
+        .website(Some("https://voicetypr.com"))
+        .website_label(Some("voicetypr.com"))
+        .build();
+
+    let quit_to_tray = MenuItem::with_id(
+        app,
+        APP_QUIT_TO_TRAY_ID,
+        "Quit Voicetypr",
+        true,
+        Some("CmdOrCtrl+Q"),
+    )?;
+
+    let app_menu = Submenu::with_items(
+        app,
+        "Voicetypr",
+        true,
+        &[
+            &PredefinedMenuItem::about(app, Some("About Voicetypr"), Some(about_metadata))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, Some("Hide Voicetypr"))?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &quit_to_tray,
+        ],
+    )?;
+
+    let edit_menu = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+
+    let check_updates = MenuItem::with_id(
+        app,
+        HELP_CHECK_UPDATES_ID,
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
+    let report_issue = MenuItem::with_id(
+        app,
+        HELP_REPORT_ISSUE_ID,
+        "Report an Issue",
+        true,
+        None::<&str>,
+    )?;
+    let release_notes = MenuItem::with_id(
+        app,
+        HELP_RELEASE_NOTES_ID,
+        "Release Notes",
+        true,
+        None::<&str>,
+    )?;
+
+    let help_menu = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[
+            &check_updates,
+            &PredefinedMenuItem::separator(app)?,
+            &report_issue,
+            &release_notes,
+        ],
+    )?;
+
+    Menu::with_items(app, &[&app_menu, &edit_menu, &help_menu])
+}
+
 use audio::recorder::AudioRecorder;
 use commands::remote::load_remote_settings;
 use commands::telemetry::{get_telemetry_status, report_frontend_error, set_telemetry_consent};
@@ -226,10 +352,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // When a second instance is launched, bring the existing window to focus
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
-                let _ = win.set_focus();
-            }
+            show_main_window(app);
         }))
         .plugin({
             #[cfg(target_os = "macos")]
@@ -255,7 +378,28 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         builder = builder
             .plugin(tauri_nspanel::init())
-            .plugin(tauri_plugin_macos_permissions::init());
+            .plugin(tauri_plugin_macos_permissions::init())
+            .menu(build_app_menu)
+            .on_menu_event(|app, event| {
+                use tauri_plugin_opener::OpenerExt;
+                let id = event.id();
+                if id == APP_QUIT_TO_TRAY_ID {
+                    // Cmd+Q / app-menu Quit: hide to tray instead of terminating.
+                    hide_main_window(app);
+                } else if id == HELP_CHECK_UPDATES_ID {
+                    let _ = app.emit("tray-check-updates", ());
+                } else if id == HELP_REPORT_ISSUE_ID {
+                    let _ = app.opener().open_url(
+                        "https://github.com/moinulmoin/voicetypr/issues",
+                        None::<&str>,
+                    );
+                } else if id == HELP_RELEASE_NOTES_ID {
+                    let _ = app.opener().open_url(
+                        "https://github.com/moinulmoin/voicetypr/releases",
+                        None::<&str>,
+                    );
+                }
+            });
     }
 
     builder
@@ -343,7 +487,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
 
-            // Set activation policy on macOS to prevent focus stealing
+            // Accessory by default: VoiceTypr is a background/menubar app, so it shows
+            // no Dock icon until a window is open (show_dock_icon -> Regular). Hiding the
+            // window returns to Accessory, mirroring the Windows close-to-tray behaviour.
+            // The recording pill is a non-activating NSPanel.
             #[cfg(target_os = "macos")]
             {
                 log_start("MACOS_SETUP");
@@ -674,9 +821,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let event_id = event.id.as_ref().to_string();
 
                     if event_id == "dashboard" {
+                        show_main_window(app);
                         if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
                             let _ = window.emit("navigate-to-overview", ());
                         }
                     } else if event_id == "quit" {
@@ -838,13 +984,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     } = event
                     {
                         let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                            // Show dock icon when main window is shown via tray icon
-                            #[cfg(target_os = "macos")]
-                            show_dock_icon(app);
-                        }
+                        show_main_window(app);
                     }
                 })
                 .build(app)?;
@@ -1286,13 +1426,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if should_hide_main {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
-                    log::info!("Main window hidden - menubar mode active");
-                }
-                // Keep dock icon hidden when main window is hidden
-                #[cfg(target_os = "macos")]
-                hide_dock_icon(app.app_handle());
+                hide_main_window(app.app_handle());
+                log::info!("Main window hidden - menubar mode active");
             } else {
                 log::info!("👋 First launch or no source configured - keeping main window visible");
                 // Show dock icon when main window is visible
@@ -1445,14 +1580,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 // Only hide the window instead of closing it (except for pill)
                 if window.label() == "main" {
                     api.prevent_close();
-                    if let Err(e) = window.hide() {
-                        log::error!("Failed to hide main window: {}", e);
-                    } else {
-                        log::info!("Main window hidden instead of closed");
-                        // Hide dock icon when main window is hidden
-                        #[cfg(target_os = "macos")]
-                        hide_dock_icon(window.app_handle());
-                    }
+                    hide_main_window(window.app_handle());
+                    log::info!("Main window hidden instead of closed");
                 }
             }
         })
@@ -1470,12 +1599,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
                 if !has_visible_windows {
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        // Show dock icon when main window is shown
-                        show_dock_icon(app_handle);
-                    }
+                    show_main_window(app_handle);
                 }
             }
         });
@@ -1650,11 +1774,7 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
                 .unwrap_or(false);
 
             if onboarding_completed {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
-                }
-                #[cfg(target_os = "macos")]
-                hide_dock_icon(&app);
+                hide_main_window(&app);
             }
         }
     }
@@ -1662,11 +1782,7 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
     if !availability.any_available() {
         log::warn!("⚠️  No speech recognition engines are ready");
         let _ = app.emit("no-models-on-startup", ());
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.show();
-        }
-        #[cfg(target_os = "macos")]
-        show_dock_icon(&app);
+        show_main_window(&app);
     } else {
         log::info!("✅ At least one speech recognition engine is ready");
     }
