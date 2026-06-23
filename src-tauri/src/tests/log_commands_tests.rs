@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn test_redact_home_directory_paths_with_spaces() {
-        let input = "Config loaded from /Users/jane doe/Library/Application Support/VoiceTypr/settings.json";
+        let input = "Config loaded from /Users/jane doe/Library/Application Support/Voicetypr/settings.json";
         let redacted = redact_log_content(input);
         assert!(!redacted.contains("/Users/jane doe"));
         assert!(redacted.contains("[HOME_DIR]"));
@@ -260,10 +260,10 @@ mod tests {
 
     #[test]
     fn test_redact_macos_library_paths() {
-        let input = "Log file at /Library/Application Support/VoiceTypr/system.log";
+        let input = "Log file at /Library/Application Support/Voicetypr/system.log";
         let redacted = redact_log_content(input);
         assert!(!redacted.contains("/Library/Application"));
-        assert!(!redacted.contains("Support/VoiceTypr/system.log"));
+        assert!(!redacted.contains("Support/Voicetypr/system.log"));
         assert!(redacted.contains("[PATH_REDACTED]"));
     }
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Release script for VoiceTypr with Separate Architecture Binaries and Built-in Tauri Notarization
+# Release script for Voicetypr with Separate Architecture Binaries and Built-in Tauri Notarization
 # Usage: 
 #   ./scripts/release-separate.sh [patch|minor|major]            - Full release
 #   ./scripts/release-separate.sh [patch|minor|major] --dry-run  - Preview what would happen
@@ -160,9 +160,9 @@ fi
 export CI=true
 
 if [[ "$BUILD_ONLY" == true ]]; then
-    echo -e "${GREEN}🔨 Starting VoiceTypr BUILD-ONLY mode${NC}"
+    echo -e "${GREEN}🔨 Starting Voicetypr BUILD-ONLY mode${NC}"
 else
-    echo -e "${GREEN}🚀 Starting VoiceTypr release process (${RELEASE_TYPE})${NC}"
+    echo -e "${GREEN}🚀 Starting Voicetypr release process (${RELEASE_TYPE})${NC}"
 fi
 
 require_cmd git
@@ -428,9 +428,9 @@ APP_BUNDLE_PATH=$(find "$AARCH64_APP_DIR" -maxdepth 1 -name "*.app" | head -n 1)
 if [[ -n "${APP_BUNDLE_PATH}" && -d "$APP_BUNDLE_PATH" ]]; then
     cd "$AARCH64_APP_DIR"
     APP_BUNDLE_NAME=$(basename "$APP_BUNDLE_PATH")
-    COPYFILE_DISABLE=1 tar -czf "VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz" --exclude='._*' --exclude='.DS_Store' "$APP_BUNDLE_NAME"
+    COPYFILE_DISABLE=1 tar -czf "Voicetypr_${NEW_VERSION}_aarch64.app.tar.gz" --exclude='._*' --exclude='.DS_Store' "$APP_BUNDLE_NAME"
     cd - > /dev/null
-    AARCH64_APP_TAR="$AARCH64_APP_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz"
+    AARCH64_APP_TAR="$AARCH64_APP_DIR/Voicetypr_${NEW_VERSION}_aarch64.app.tar.gz"
 else
     echo -e "${RED}Error: aarch64 app bundle not found${NC}"
     exit 1
@@ -442,8 +442,8 @@ if [[ -z "$AARCH64_DMG" ]]; then
 fi
 
 # Copy aarch64 artifacts
-cp "$AARCH64_DMG" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.dmg"
-cp "$AARCH64_APP_TAR" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz"
+cp "$AARCH64_DMG" "$OUTPUT_DIR/Voicetypr_${NEW_VERSION}_aarch64.dmg"
+cp "$AARCH64_APP_TAR" "$OUTPUT_DIR/Voicetypr_${NEW_VERSION}_aarch64.app.tar.gz"
 
 # Sign aarch64 update artifact
 sign_update_artifact "$AARCH64_APP_TAR" || {
@@ -451,7 +451,7 @@ sign_update_artifact "$AARCH64_APP_TAR" || {
     exit 1
 }
 if [[ -f "${AARCH64_APP_TAR}.sig" ]]; then
-    cp "${AARCH64_APP_TAR}.sig" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig"
+    cp "${AARCH64_APP_TAR}.sig" "$OUTPUT_DIR/Voicetypr_${NEW_VERSION}_aarch64.app.tar.gz.sig"
 fi
 
 # Build x86_64 (Intel Mac) binary with automatic notarization
@@ -471,9 +471,9 @@ X86_64_APP_BUNDLE_PATH=$(find "$X86_64_APP_DIR" -maxdepth 1 -name "*.app" | head
 if [[ -n "${X86_64_APP_BUNDLE_PATH}" && -d "$X86_64_APP_BUNDLE_PATH" ]]; then
     cd "$X86_64_APP_DIR"
     X86_64_APP_BUNDLE_NAME=$(basename "$X86_64_APP_BUNDLE_PATH")
-    COPYFILE_DISABLE=1 tar -czf "VoiceTypr_${NEW_VERSION}_x86_64.app.tar.gz" --exclude='._*' --exclude='.DS_Store' "$X86_64_APP_BUNDLE_NAME"
+    COPYFILE_DISABLE=1 tar -czf "Voicetypr_${NEW_VERSION}_x86_64.app.tar.gz" --exclude='._*' --exclude='.DS_Store' "$X86_64_APP_BUNDLE_NAME"
     cd - > /dev/null
-    X86_64_APP_TAR="$X86_64_APP_DIR/VoiceTypr_${NEW_VERSION}_x86_64.app.tar.gz"
+    X86_64_APP_TAR="$X86_64_APP_DIR/Voicetypr_${NEW_VERSION}_x86_64.app.tar.gz"
 else
     echo -e "${RED}Error: x86_64 app bundle not found${NC}"
     exit 1
@@ -485,8 +485,8 @@ if [[ -z "$X86_64_DMG" ]]; then
 fi
 
 # Copy x86_64 artifacts
-cp "$X86_64_DMG" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x86_64.dmg"
-cp "$X86_64_APP_TAR" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x86_64.app.tar.gz"
+cp "$X86_64_DMG" "$OUTPUT_DIR/Voicetypr_${NEW_VERSION}_x86_64.dmg"
+cp "$X86_64_APP_TAR" "$OUTPUT_DIR/Voicetypr_${NEW_VERSION}_x86_64.app.tar.gz"
 
 # Sign x86_64 update artifact
 sign_update_artifact "$X86_64_APP_TAR" || {
@@ -494,23 +494,23 @@ sign_update_artifact "$X86_64_APP_TAR" || {
     exit 1
 }
 if [[ -f "${X86_64_APP_TAR}.sig" ]]; then
-    cp "${X86_64_APP_TAR}.sig" "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x86_64.app.tar.gz.sig"
+    cp "${X86_64_APP_TAR}.sig" "$OUTPUT_DIR/Voicetypr_${NEW_VERSION}_x86_64.app.tar.gz.sig"
 fi
 
 # Create latest.json for updater (both architectures)
 echo -e "${YELLOW}Creating latest.json...${NC}"
 
 # Get aarch64 signature from the sig file if it exists
-if [[ -f "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig" ]]; then
-    AARCH64_SIGNATURE=$(cat "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_aarch64.app.tar.gz.sig" | tr -d '\n')
+if [[ -f "$OUTPUT_DIR/Voicetypr_${NEW_VERSION}_aarch64.app.tar.gz.sig" ]]; then
+    AARCH64_SIGNATURE=$(cat "$OUTPUT_DIR/Voicetypr_${NEW_VERSION}_aarch64.app.tar.gz.sig" | tr -d '\n')
 else
     echo -e "${RED}Error: No aarch64 signature file found${NC}"
     exit 1
 fi
 
 # Get x86_64 signature from the sig file if it exists
-if [[ -f "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x86_64.app.tar.gz.sig" ]]; then
-    X86_64_SIGNATURE=$(cat "$OUTPUT_DIR/VoiceTypr_${NEW_VERSION}_x86_64.app.tar.gz.sig" | tr -d '\n')
+if [[ -f "$OUTPUT_DIR/Voicetypr_${NEW_VERSION}_x86_64.app.tar.gz.sig" ]]; then
+    X86_64_SIGNATURE=$(cat "$OUTPUT_DIR/Voicetypr_${NEW_VERSION}_x86_64.app.tar.gz.sig" | tr -d '\n')
 else
     echo -e "${RED}Error: No x86_64 signature file found${NC}"
     exit 1
@@ -524,11 +524,11 @@ printf '{
   "platforms": {
     "darwin-aarch64": {
       "signature": "%s",
-      "url": "https://github.com/moinulmoin/voicetypr/releases/download/v%s/VoiceTypr_%s_aarch64.app.tar.gz"
+      "url": "https://github.com/moinulmoin/voicetypr/releases/download/v%s/Voicetypr_%s_aarch64.app.tar.gz"
     },
     "darwin-x86_64": {
       "signature": "%s",
-      "url": "https://github.com/moinulmoin/voicetypr/releases/download/v%s/VoiceTypr_%s_x86_64.app.tar.gz"
+      "url": "https://github.com/moinulmoin/voicetypr/releases/download/v%s/Voicetypr_%s_x86_64.app.tar.gz"
     }
   }
 }\n' "$NEW_VERSION" "$NEW_VERSION" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$AARCH64_SIGNATURE" "$NEW_VERSION" "$NEW_VERSION" "$X86_64_SIGNATURE" "$NEW_VERSION" "$NEW_VERSION" > "$OUTPUT_DIR/latest.json"
@@ -580,7 +580,7 @@ if [[ "$BUILD_ONLY" == false ]]; then
 
     # Create draft GitHub release
     echo -e "${YELLOW}Creating draft GitHub release...${NC}"
-    gh release create "v${NEW_VERSION}" --draft --title "VoiceTypr v${NEW_VERSION}" --generate-notes
+    gh release create "v${NEW_VERSION}" --draft --title "Voicetypr v${NEW_VERSION}" --generate-notes
     echo -e "${GREEN}✓ Draft release v${NEW_VERSION} created${NC}"
 fi
 

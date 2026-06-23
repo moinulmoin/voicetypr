@@ -2,7 +2,7 @@
 
 ## Overview
 
-Replace the current user-mediated bug/crash reporting paths with a private submit flow. VoiceTypr desktop will collect manual bug reports and React crash reports, include latest app log context and system information, then POST to a `voicetypr-web` API endpoint. The web API will validate, rate-limit, and forward the report privately to Discord using a server-side webhook secret.
+Replace the current user-mediated bug/crash reporting paths with a private submit flow. Voicetypr desktop will collect manual bug reports and React crash reports, include latest app log context and system information, then POST to a `voicetypr-web` API endpoint. The web API will validate, rate-limit, and forward the report privately to Discord using a server-side webhook secret.
 
 The desktop UI should say **Submit**, not "Email" or "Open in GitHub", only after the API endpoint exists and the button truly sends the report.
 
@@ -245,7 +245,7 @@ Web repo (`../voicetypr-web`):
 
 **Approach:**
 - Mark clean startup/shutdown state in a small app-state flag.
-- If previous session ended uncleanly, show a startup prompt: “VoiceTypr closed unexpectedly. Submit crash report?”
+- If previous session ended uncleanly, show a startup prompt: “Voicetypr closed unexpectedly. Submit crash report?”
 - Include latest log and system info; do not claim exact crash cause unless captured.
 
 **Test scenarios:**

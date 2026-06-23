@@ -287,15 +287,19 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
 
     let separator1 = PredefinedMenuItem::separator(app)?;
     let settings_i = MenuItem::with_id(app, "settings", "Dashboard", true, None::<&str>)?;
-    let check_updates_i = MenuItem::with_id(
-        app,
-        "check_updates",
-        "Check for Updates",
-        true,
-        None::<&str>,
-    )?;
+    let check_updates_i = if crate::commands::distribution::is_store_install() {
+        None
+    } else {
+        Some(MenuItem::with_id(
+            app,
+            "check_updates",
+            "Check for Updates",
+            true,
+            None::<&str>,
+        )?)
+    };
     let separator2 = PredefinedMenuItem::separator(app)?;
-    let quit_i = MenuItem::with_id(app, "quit", "Quit VoiceTypr", true, None::<&str>)?;
+    let quit_i = MenuItem::with_id(app, "quit", "Quit Voicetypr", true, None::<&str>)?;
 
     let mut menu_builder = MenuBuilder::new(app);
 
@@ -318,13 +322,13 @@ pub async fn build_tray_menu<R: tauri::Runtime>(
         Submenu::with_id_and_items(app, "recording_mode", "Recording Mode", true, &mode_items)?;
     menu_builder = menu_builder.item(&mode_submenu);
 
-    let menu = menu_builder
-        .item(&separator1)
-        .item(&settings_i)
-        .item(&check_updates_i)
-        .item(&separator2)
-        .item(&quit_i)
-        .build()?;
+    let mut menu_builder = menu_builder.item(&separator1).item(&settings_i);
+
+    if let Some(check_updates_i) = &check_updates_i {
+        menu_builder = menu_builder.item(check_updates_i);
+    }
+
+    let menu = menu_builder.item(&separator2).item(&quit_i).build()?;
 
     Ok(menu)
 }

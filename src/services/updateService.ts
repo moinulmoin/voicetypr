@@ -5,6 +5,10 @@ import { sendNotification, isPermissionGranted, requestPermission } from '@tauri
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import type { AppSettings } from '@/types';
+import {
+  isStoreDistribution,
+  type DistributionInfo,
+} from '@/types/distribution';
 
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const LAST_UPDATE_CHECK_KEY = 'last_update_check';
@@ -18,6 +22,8 @@ export class UpdateService {
   private pendingRelaunch = false;
   private pendingUpdateVersion: string | null = null;
   private installUpdatesAutomatically = false;
+  private distributionInfo: DistributionInfo | null = null;
+  private distributionInfoPromise: Promise<DistributionInfo> | null = null;
 
   private constructor() {}
 
@@ -40,6 +46,10 @@ export class UpdateService {
    * Perform relaunch with backend verification and error handling
    */
   private async performRelaunch(): Promise<void> {
+    if (await this.usesStoreUpdates()) {
+      return;
+    }
+
     // Final safety check: verify with backend that no session is active
     try {
       const currentState = await invoke<{ state: string }>('get_current_recording_state');
@@ -76,6 +86,11 @@ export class UpdateService {
    * Returns null if no marker exists.
    */
   getJustUpdatedVersion(): string | null {
+    if (isStoreDistribution(this.distributionInfo)) {
+      localStorage.removeItem(JUST_UPDATED_KEY);
+      return null;
+    }
+
     const version = localStorage.getItem(JUST_UPDATED_KEY);
     if (version) {
       localStorage.removeItem(JUST_UPDATED_KEY);
@@ -90,13 +105,45 @@ export class UpdateService {
     return UpdateService.instance;
   }
 
+  private async getDistributionInfo(): Promise<DistributionInfo> {
+    if (this.distributionInfo) {
+      return this.distributionInfo;
+    }
+
+    if (!this.distributionInfoPromise) {
+      this.distributionInfoPromise = invoke<DistributionInfo>('get_distribution_info')
+        .then((info) => {
+          this.distributionInfo = info;
+          return info;
+        })
+        .catch((error) => {
+          console.error('Failed to read distribution info, assuming direct install:', error);
+          const fallback: DistributionInfo = {
+            channel: 'direct',
+            is_store_install: false,
+            package_family_name: null,
+          };
+          this.distributionInfo = fallback;
+          return fallback;
+        });
+    }
+
+    return this.distributionInfoPromise;
+  }
+
+  private async usesStoreUpdates(): Promise<boolean> {
+    return isStoreDistribution(await this.getDistributionInfo());
+  }
+
   /**
    * Initialize the update service
    * - Checks for updates on startup if enabled
    * - Never downloads or installs an update until the user confirms
    */
   async initialize(settings: AppSettings): Promise<void> {
-    // Check for updates automatically by default, but only install automatically after explicit opt-in.
+    if (await this.usesStoreUpdates()) {
+      return;
+    }
     const autoUpdateEnabled = settings.check_updates_automatically ?? true;
     this.installUpdatesAutomatically = settings.install_updates_automatically ?? false;
 
@@ -116,6 +163,10 @@ export class UpdateService {
    * Request notification permission (call after onboarding)
    */
   async requestNotificationPermission(): Promise<boolean> {
+    if (await this.usesStoreUpdates()) {
+      return false;
+    }
+
     try {
       let permitted = await isPermissionGranted();
       if (!permitted) {
@@ -165,8 +216,12 @@ export class UpdateService {
       return;
     }
 
+    this.checkInProgress = true;
     try {
-      this.checkInProgress = true;
+      if (await this.usesStoreUpdates()) {
+        return;
+      }
+
       // Check if we should skip based on last check time
       const lastCheck = localStorage.getItem(LAST_UPDATE_CHECK_KEY);
       if (lastCheck) {
@@ -204,8 +259,13 @@ export class UpdateService {
       return;
     }
 
+    this.checkInProgress = true;
     try {
-      this.checkInProgress = true;
+      if (await this.usesStoreUpdates()) {
+        toast.info('Updates are handled by Microsoft Store');
+        return;
+      }
+
       toast.info('Checking for updates...');
       
       const update = await check();
@@ -287,7 +347,7 @@ export class UpdateService {
       this.pendingRelaunch = true;
       this.pendingUpdateVersion = update.version;
       toast.dismiss(toastId);
-      await this.sendSystemNotification('Update Ready', 'VoiceTypr will restart when recording ends');
+      await this.sendSystemNotification('Update Ready', 'Voicetypr will restart when recording ends');
       return;
     }
 
@@ -316,7 +376,7 @@ export class UpdateService {
         await update.downloadAndInstall();
         // Notify if relaunch will be deferred due to active session
         if (this.isSessionActive) {
-          await this.sendSystemNotification('Update Ready', 'VoiceTypr will restart when recording ends');
+          await this.sendSystemNotification('Update Ready', 'Voicetypr will restart when recording ends');
         }
         this.pendingUpdateVersion = update.version;
         await this.performRelaunch();

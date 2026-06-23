@@ -5,6 +5,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { open } from '@tauri-apps/plugin-shell';
 import { getVersion } from '@tauri-apps/api/app';
+import { invoke } from '@tauri-apps/api/core';
 import { 
   ExternalLink,
   Globe,
@@ -16,10 +17,15 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { updateService } from '@/services/updateService';
 import { useSettings } from '@/contexts/SettingsContext';
+import {
+  isStoreDistribution,
+  type DistributionInfo,
+} from '@/types/distribution';
 
 export function AboutSection() {
   const [appVersion, setAppVersion] = useState<string>('');
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [updatesManagedByStore, setUpdatesManagedByStore] = useState<boolean | null>(null);
   const { settings, updateSettings } = useSettings();
 
   useEffect(() => {
@@ -33,7 +39,18 @@ export function AboutSection() {
       }
     };
 
+    const fetchDistributionInfo = async () => {
+      try {
+        const info = await invoke<DistributionInfo>('get_distribution_info');
+        setUpdatesManagedByStore(isStoreDistribution(info));
+      } catch (error) {
+        console.error('Failed to get distribution info:', error);
+        setUpdatesManagedByStore(false);
+      }
+    };
+
     fetchVersion();
+    fetchDistributionInfo();
   }, []);
 
   const handleCheckUpdate = async () => {
@@ -96,33 +113,44 @@ export function AboutSection() {
                 </Badge>
               </div>
 
-              <div className="flex justify-center">
-                <Button
-                  onClick={handleCheckUpdate}
-                  disabled={isCheckingUpdate}
-                  variant="ghost"
-                  size="sm"
-                >
-                  <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
-                  {isCheckingUpdate ? 'Checking...' : 'Check for Updates'}
-                </Button>
-              </div>
-
-              <div className="flex items-center justify-between gap-4 rounded-lg border border-border/40 bg-background/50 p-3">
-                <div className="space-y-0.5">
-                  <Label htmlFor="install-updates-automatically" className="text-sm font-medium">
-                    Download and install updates automatically
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    If off, VoiceTypr only shows an update prompt and waits for you to click Update.
+              {updatesManagedByStore === null ? null : updatesManagedByStore ? (
+                <div className="rounded-lg border border-border/40 bg-background/50 p-3">
+                  <p className="text-sm font-medium">Updates managed by Microsoft Store</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Voicetypr will receive updates through Microsoft Store on this installation.
                   </p>
                 </div>
-                <Switch
-                  id="install-updates-automatically"
-                  checked={settings?.install_updates_automatically ?? false}
-                  onCheckedChange={handleAutoInstallToggle}
-                />
-              </div>
+              ) : (
+                <>
+                  <div className="flex justify-center">
+                    <Button
+                      onClick={handleCheckUpdate}
+                      disabled={isCheckingUpdate}
+                      variant="ghost"
+                      size="sm"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
+                      {isCheckingUpdate ? 'Checking...' : 'Check for Updates'}
+                    </Button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border border-border/40 bg-background/50 p-3">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="install-updates-automatically" className="text-sm font-medium">
+                        Download and install updates automatically
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        If off, Voicetypr only shows an update prompt and waits for you to click Update.
+                      </p>
+                    </div>
+                    <Switch
+                      id="install-updates-automatically"
+                      checked={settings?.install_updates_automatically ?? false}
+                      onCheckedChange={handleAutoInstallToggle}
+                    />
+                  </div>
+                </>
+              )}
             </div>
           </div>
 

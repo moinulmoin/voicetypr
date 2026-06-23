@@ -1,7 +1,7 @@
 # Plan: Silence-warning redesign
 
 ## Summary
-Replace VoiceTypr’s current destructive 10s silence auto-stop with a tiered, non-destructive silence state machine. The recorder audio callback will only emit sparse `Copy` tier-transition events over a new `std::sync::mpsc` side channel; it will no longer stop the recorder for silence. A backend listener in `commands/audio.rs` will turn warning tiers into persistent pill-toast warnings and will perform the 60s terminal action deliberately: `TimeoutWithSpeech` goes through the full stop/transcribe/paste/history flow, while `TimeoutNoSpeech` calls the existing cancel/discard flow. The existing recorder watchdog stays focused on genuine recorder worker self-termination, such as device errors and the unchanged 500MB backstop.
+Replace Voicetypr’s current destructive 10s silence auto-stop with a tiered, non-destructive silence state machine. The recorder audio callback will only emit sparse `Copy` tier-transition events over a new `std::sync::mpsc` side channel; it will no longer stop the recorder for silence. A backend listener in `commands/audio.rs` will turn warning tiers into persistent pill-toast warnings and will perform the 60s terminal action deliberately: `TimeoutWithSpeech` goes through the full stop/transcribe/paste/history flow, while `TimeoutNoSpeech` calls the existing cancel/discard flow. The existing recorder watchdog stays focused on genuine recorder worker self-termination, such as device errors and the unchanged 500MB backstop.
 
 ## Assumptions and decisions
 - No user-facing configurability for the 5s/10s/60s thresholds in this change.

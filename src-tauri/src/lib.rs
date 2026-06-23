@@ -58,6 +58,7 @@ use commands::{
     clipboard::{copy_image_to_clipboard, save_image_to_file},
     debug::{debug_transcription_flow, test_transcription_event},
     device::get_device_id,
+    distribution::get_distribution_info,
     keyring::{keyring_delete, keyring_get, keyring_has, keyring_set},
     license::*,
     logs::{clear_old_logs, get_latest_log_for_bug_report, get_log_directory, open_logs_folder},
@@ -220,6 +221,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .setup(move |app| {
             let setup_start = Instant::now();
             log::info!("🚀 App setup START - version: {}", app_version);
+            let distribution_info = commands::distribution::get_distribution_info();
+            log::info!(
+                "Distribution channel: channel={}, store_install={}, package_family_name={:?}",
+                distribution_info.channel,
+                distribution_info.is_store_install,
+                distribution_info.package_family_name
+            );
 
             // Keyring is now used instead of Stronghold for API keys
             // Much faster and uses OS-native secure storage
@@ -494,7 +502,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             let _tray = TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
-                .tooltip("VoiceTypr")
+                .tooltip("Voicetypr")
                 .menu(&menu)
                 .on_menu_event(move |app, event| {
                     log::info!("Tray menu event: {:?}", event.id);
@@ -1149,6 +1157,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_autostart_status,
             set_autostart,
             get_device_id,
+            get_distribution_info,
             get_system_specs,
         ])
         .on_window_event(|window, event| {
@@ -1174,7 +1183,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ("stage", "application_build"),
                 ("total_startup_time_ms", app_start.elapsed().as_millis().to_string().as_str())
             ]);
-            eprintln!("VoiceTypr failed to start: {}", e);
+            eprintln!("Voicetypr failed to start: {}", e);
             Box::new(e)
         })?
         .run(|app_handle, event| {

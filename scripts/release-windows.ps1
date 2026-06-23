@@ -53,11 +53,11 @@ if (-not $Version) {
     $Version = $packageJson.version
 }
 
-Write-Step "VoiceTypr Windows Release v$Version"
+Write-Step "Voicetypr Windows Release v$Version"
 
 $ReleaseTag = "v$Version"
 $OutputDir = "release-windows-$Version"
-$InstallerName = "VoiceTypr_${Version}_x64-setup.exe"
+$InstallerName = "Voicetypr_${Version}_x64-setup.exe"
 
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null

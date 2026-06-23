@@ -171,7 +171,7 @@ export function AppContainer() {
     trackEvent(registerEvent<string>("parakeet-unavailable", (message) => {
       const description = typeof message === "string" && message.trim().length > 0
         ? message
-        : "Parakeet is unavailable on this Mac. Please reinstall VoiceTypr or remove the quarantine flag.";
+        : "Parakeet is unavailable on this Mac. Please reinstall Voicetypr or remove the quarantine flag.";
       console.error("Parakeet unavailable:", description);
       toast.error("Parakeet Unavailable", {
         description,
@@ -326,7 +326,7 @@ export function AppContainer() {
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Sparkles className="h-5 w-5 text-primary" />
-                VoiceTypr Updated
+                Voicetypr Updated
               </DialogTitle>
               <DialogDescription>
                 Successfully updated to version {justUpdatedVersion}

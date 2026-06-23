@@ -173,7 +173,7 @@ export function CrashReportDialog({
             Something went wrong
           </DialogTitle>
           <DialogDescription>
-            VoiceTypr hit an unexpected error. Submit a crash report with system info
+            Voicetypr hit an unexpected error. Submit a crash report with system info
             and the latest app log so we can fix it.
           </DialogDescription>
         </DialogHeader>

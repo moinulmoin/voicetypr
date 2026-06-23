@@ -21,7 +21,7 @@ export interface UsePermissionsReturn {
 }
 
 /**
- * Comprehensive hook for managing all VoiceTypr permissions
+ * Comprehensive hook for managing all Voicetypr permissions
  * Handles checking, requesting, and monitoring permission states
  */
 export function usePermissions(options?: {
@@ -85,7 +85,7 @@ export function usePermissions(options?: {
           permissions.accessibility === 'denied';
         
         if (hadDeniedPermission) {
-          toast.success('All permissions granted! You\'re ready to use VoiceTypr.');
+          toast.success('All permissions granted! You\'re ready to use Voicetypr.');
         }
       }
     } catch (err) {

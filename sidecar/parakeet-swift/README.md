@@ -202,4 +202,4 @@ swift build -c release
 
 ## License
 
-Same as VoiceTypr parent project.
+Same as Voicetypr parent project.

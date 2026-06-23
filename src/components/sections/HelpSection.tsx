@@ -39,6 +39,7 @@ import {
   formatHotkeyDiagnosticLines,
   type HotkeyDiagnostics,
 } from "@/utils/hotkeyDiagnostics";
+import type { AccelerationStatus } from "@/types/acceleration";
 
 interface QuickFix {
   id: string;
@@ -57,6 +58,7 @@ interface ReadinessSnapshot {
   has_models: boolean | null;
   selected_model_available: boolean | null;
 }
+
 
 interface DiagnosticsSummary {
   status: DiagnosticsStatus;
@@ -77,14 +79,38 @@ function buildSystemDiagnostics(params: {
   canRecord: boolean;
   canAutoInsert: boolean;
   hotkeyDiag: HotkeyDiagnostics | null;
+  accelerationStatus: AccelerationStatus | null;
 }): string {
-  const { appVer, os, osVer, deviceId, model, canRecord, canAutoInsert, hotkeyDiag } = params;
+  const {
+    appVer,
+    os,
+    osVer,
+    deviceId,
+    model,
+    canRecord,
+    canAutoInsert,
+    hotkeyDiag,
+    accelerationStatus,
+  } = params;
   const lines: string[] = [
     `App Version: ${appVer}`,
     `OS: ${os} ${osVer}`,
     `Device ID: ${deviceId}`,
     `Model: ${model}`,
+    `Acceleration Mode: ${accelerationStatus?.mode ?? "Unknown"}`,
+    `Acceleration Backend: ${accelerationStatus?.effective_backend ?? "Unknown"}`,
+    `GPU Available: ${
+      accelerationStatus?.gpu_available === null || accelerationStatus?.gpu_available === undefined
+        ? "Unknown"
+        : String(accelerationStatus.gpu_available)
+    }`,
+    `GPU Diagnostic: ${accelerationStatus?.diagnostic_code ?? "not_checked"}`,
+    `GPU Recommended Action: ${accelerationStatus?.recommended_action ?? "none"}`,
   ];
+
+  if (accelerationStatus?.last_error) {
+    lines.push(`GPU Last Error: ${accelerationStatus.last_error}`);
+  }
 
   if (os !== "windows") {
     lines.push(
@@ -246,6 +272,7 @@ export function HelpSection() {
   const [deviceId, setDeviceId] = useState<string>("Unknown");
   const [openItems, setOpenItems] = useState<string[]>([]);
   const [hotkeyDiagnostics, setHotkeyDiagnostics] = useState<HotkeyDiagnostics | null>(null);
+  const [accelerationStatus, setAccelerationStatus] = useState<AccelerationStatus | null>(null);
   const [testingHotkey, setTestingHotkey] = useState(false);
   const [hotkeyTestIssue, setHotkeyTestIssue] = useState<string | null>(null);
   const [lastDiagnosticsCheckAt, setLastDiagnosticsCheckAt] = useState<string | null>(null);
@@ -288,12 +315,13 @@ export function HelpSection() {
   useEffect(() => {
     const fetchSystemInfo = async () => {
       try {
-        const [appVer, os, osVer, deviceId, hotkeyDiag] = await Promise.all([
+        const [appVer, os, osVer, deviceId, hotkeyDiag, accelerationDiag] = await Promise.all([
           getVersion(),
           platform(),
           osVersion(),
           invoke<string>("get_device_id").catch(() => "Unknown"),
           invoke<HotkeyDiagnostics>("get_hotkey_diagnostics").catch(() => null),
+          invoke<AccelerationStatus>("get_transcription_acceleration_status").catch(() => null),
         ]);
 
         setAppVersion(appVer);
@@ -302,6 +330,7 @@ export function HelpSection() {
         setDeviceId(deviceId);
         setPlatformName(`${os} ${osVer}`);
         setHotkeyDiagnostics(hotkeyDiag);
+        setAccelerationStatus(accelerationDiag);
         setLastDiagnosticsCheckAt(new Date().toISOString());
       } catch (error) {
         console.error("Failed to get system info:", error);
@@ -328,7 +357,7 @@ export function HelpSection() {
       issue: "Global hotkey doesn't trigger recording",
       solution:
         osPlatform === "windows"
-          ? "Use Test Hotkey to confirm Windows detects the shortcut. If it fails, try another combination and allow VoiceTypr in your security or antivirus software."
+          ? "Use Test Hotkey to confirm Windows detects the shortcut. If it fails, try another combination and allow Voicetypr in your security or antivirus software."
           : osPlatform === "macos"
             ? "Use Test Hotkey to confirm macOS detects the shortcut. If it fails, try another combination and check macOS Keyboard Shortcuts for conflicts."
             : "Use Test Hotkey to confirm shortcut input.",
@@ -362,7 +391,7 @@ export function HelpSection() {
   };
 
   const handleEmailSupport = () => {
-    const subject = "VoiceTypr Support Request";
+    const subject = "Voicetypr Support Request";
     const body = `
 ${diagnostics}
 
@@ -571,6 +600,7 @@ Actual behavior:
         canRecord,
         canAutoInsert,
         hotkeyDiag: hotkeyDiagnostics,
+        accelerationStatus,
       }),
     [
       appVersion,
@@ -581,6 +611,7 @@ Actual behavior:
       canRecord,
       canAutoInsert,
       hotkeyDiagnostics,
+      accelerationStatus,
     ],
   );
 
@@ -776,7 +807,7 @@ Actual behavior:
 
           <div className="pt-4">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>VoiceTypr v{appVersion}</span>
+              <span>Voicetypr v{appVersion}</span>
               <span>{platformName}</span>
             </div>
           </div>

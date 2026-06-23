@@ -310,6 +310,14 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         .and_then(|v| v.as_u64())
         .map(|v| v as u32)
         .unwrap_or_else(|| Settings::default().pill_indicator_offset);
+    let old_transcription_acceleration = normalize_transcription_acceleration(
+        store
+            .get("transcription_acceleration")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .as_deref(),
+    );
+    let normalized_transcription_acceleration =
+        normalize_transcription_acceleration(Some(&settings.transcription_acceleration));
 
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
@@ -375,9 +383,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     );
     store.set(
         "transcription_acceleration",
-        json!(normalize_transcription_acceleration(Some(
-            &settings.transcription_acceleration
-        ))),
+        json!(&normalized_transcription_acceleration),
     );
     store.set(
         "auto_paste_transcription",
@@ -401,6 +407,14 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     if let Ok(mut mode_guard) = app_state.recording_mode.lock() {
         *mode_guard = recording_mode;
         log::info!("Recording mode updated to: {:?}", recording_mode);
+    }
+
+    if old_transcription_acceleration != normalized_transcription_acceleration {
+        log::info!(
+            "Transcription acceleration updated: {} -> {}",
+            old_transcription_acceleration,
+            normalized_transcription_acceleration
+        );
     }
 
     // Handle PTT shortcut registration if needed
@@ -1037,6 +1051,8 @@ pub async fn get_transcription_acceleration_status(
             gpu_available: None,
             message: "CPU mode is selected. GPU acceleration will not be used.".to_string(),
             last_error: None,
+            diagnostic_code: "cpu_selected".to_string(),
+            recommended_action: "none".to_string(),
         });
     }
 
@@ -1052,6 +1068,8 @@ pub async fn get_transcription_acceleration_status(
             gpu_available: None,
             message: "This acceleration setting applies to Windows Vulkan builds.".to_string(),
             last_error: None,
+            diagnostic_code: "unsupported_platform".to_string(),
+            recommended_action: "none".to_string(),
         })
     }
 
