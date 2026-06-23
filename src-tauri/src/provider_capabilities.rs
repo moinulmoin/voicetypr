@@ -76,7 +76,28 @@ impl ProviderEngine {
                 supports_vocabulary_terms: false,
                 supports_translate_task: false,
             },
-            Self::Openai | Self::Groq | Self::Deepgram | Self::Cohere => ProviderCapabilities {
+            Self::Openai => ProviderCapabilities {
+                shareable_remote: false,
+                supports_initial_prompt: true,
+                supports_structured_terms: false,
+                supports_vocabulary_terms: false,
+                supports_translate_task: false,
+            },
+            Self::Groq => ProviderCapabilities {
+                shareable_remote: false,
+                supports_initial_prompt: true,
+                supports_structured_terms: false,
+                supports_vocabulary_terms: false,
+                supports_translate_task: false,
+            },
+            Self::Deepgram => ProviderCapabilities {
+                shareable_remote: false,
+                supports_initial_prompt: false,
+                supports_structured_terms: false,
+                supports_vocabulary_terms: true,
+                supports_translate_task: false,
+            },
+            Self::Cohere => ProviderCapabilities {
                 shareable_remote: false,
                 supports_initial_prompt: false,
                 supports_structured_terms: false,
@@ -177,7 +198,7 @@ mod tests {
             ProviderEngine::Openai.capabilities(),
             ProviderCapabilities {
                 shareable_remote: false,
-                supports_initial_prompt: false,
+                supports_initial_prompt: true,
                 supports_structured_terms: false,
                 supports_vocabulary_terms: false,
                 supports_translate_task: false,
@@ -187,7 +208,7 @@ mod tests {
             ProviderEngine::Groq.capabilities(),
             ProviderCapabilities {
                 shareable_remote: false,
-                supports_initial_prompt: false,
+                supports_initial_prompt: true,
                 supports_structured_terms: false,
                 supports_vocabulary_terms: false,
                 supports_translate_task: false,
@@ -199,7 +220,7 @@ mod tests {
                 shareable_remote: false,
                 supports_initial_prompt: false,
                 supports_structured_terms: false,
-                supports_vocabulary_terms: false,
+                supports_vocabulary_terms: true,
                 supports_translate_task: false,
             }
         );
@@ -243,7 +264,14 @@ mod tests {
             .copied()
             .filter(|engine| engine.capabilities().supports_initial_prompt)
             .collect();
-        assert_eq!(initial_prompt_engines, vec![ProviderEngine::Whisper]);
+        assert_eq!(
+            initial_prompt_engines,
+            vec![
+                ProviderEngine::Whisper,
+                ProviderEngine::Openai,
+                ProviderEngine::Groq
+            ]
+        );
 
         let structured_terms_engines: Vec<_> = engines
             .iter()
@@ -267,7 +295,10 @@ mod tests {
             .copied()
             .filter(|engine| engine.capabilities().supports_vocabulary_terms)
             .collect();
-        assert_eq!(vocabulary_terms_engines, vec![ProviderEngine::Parakeet]);
+        assert_eq!(
+            vocabulary_terms_engines,
+            vec![ProviderEngine::Parakeet, ProviderEngine::Deepgram]
+        );
 
         let translate_task_engines: Vec<_> = engines
             .iter()

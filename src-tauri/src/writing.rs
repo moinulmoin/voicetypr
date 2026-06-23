@@ -1451,6 +1451,36 @@ pub fn compile_parakeet_custom_vocabulary(
     terms
 }
 
+/// Maximum number of `keyterm` query-param values Deepgram Nova-3 accepts in a
+/// single request (see developers.deepgram.com/docs/keyterm).
+const DEEPGRAM_KEYTERM_MAX: usize = 100;
+
+/// Compile the personal dictionary into the flat list of `keyterm` values
+/// Deepgram Nova-3 expects as repeatable query params. Only enabled,
+/// language-matching entries contribute: each phrase is emitted, plus its
+/// spoken form as a separate keyterm (the recognizer reconciles both against
+/// the audio). Terms are control-stripped, deduped case-insensitively, and
+/// capped at [`DEEPGRAM_KEYTERM_MAX`]. Returns an empty vec when the dictionary
+/// holds no matching entries.
+pub fn compile_deepgram_keyterms(
+    settings: &WritingSettings,
+    transcript_language: Option<&str>,
+) -> Vec<String> {
+    let mut terms: Vec<String> = Vec::new();
+
+    for word in settings.custom_words.iter().filter(|word| {
+        word.enabled && language_scope_matches(word.language.as_deref(), transcript_language)
+    }) {
+        push_unique_term(&mut terms, &strip_control_chars(&word.phrase));
+        if let Some(spoken_form) = word.spoken_form.as_deref() {
+            push_unique_term(&mut terms, &strip_control_chars(spoken_form));
+        }
+    }
+
+    terms.truncate(DEEPGRAM_KEYTERM_MAX);
+    terms
+}
+
 fn soniox_context_byte_len(context: &SonioxContext) -> usize {
     serde_json::to_vec(context)
         .map(|bytes| bytes.len())
@@ -3538,6 +3568,99 @@ mod tests {
         assert!(parsed.is_object());
         assert!(context.text.is_none());
         assert!(context.terms.len() < unpruned.terms.len());
+    }
+
+    #[test]
+    fn test_compile_deepgram_keyterms_includes_enabled_language_matching_phrases() {
+        let settings = WritingSettings {
+            custom_words: vec![
+                custom_word("VoiceTypr", Some("voice typer"), Some("en"), true),
+                custom_word("DisabledTerm", None, Some("en"), false),
+                custom_word("TermeFrançais", None, Some("fr"), true),
+            ],
+            ..WritingSettings::default()
+        };
+
+        let terms = compile_deepgram_keyterms(&settings, Some("en"));
+
+        assert_eq!(
+            terms,
+            vec!["VoiceTypr".to_string(), "voice typer".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_compile_deepgram_keyterms_emits_spoken_forms_as_separate_terms() {
+        let settings = WritingSettings {
+            custom_words: vec![custom_word("shadcn/ui", Some("shad cn"), Some("en"), true)],
+            ..WritingSettings::default()
+        };
+
+        let terms = compile_deepgram_keyterms(&settings, Some("en"));
+
+        assert_eq!(terms, vec!["shadcn/ui".to_string(), "shad cn".to_string()]);
+    }
+
+    #[test]
+    fn test_compile_deepgram_keyterms_dedupes_case_insensitively() {
+        let settings = WritingSettings {
+            custom_words: vec![
+                custom_word("Tauri", Some("tauri"), Some("en"), true),
+                custom_word("TAURI", Some("TAURI"), Some("en"), true),
+            ],
+            ..WritingSettings::default()
+        };
+
+        let terms = compile_deepgram_keyterms(&settings, Some("en"));
+
+        assert_eq!(terms, vec!["Tauri".to_string()]);
+    }
+
+    #[test]
+    fn test_compile_deepgram_keyterms_strips_control_chars() {
+        let settings = WritingSettings {
+            custom_words: vec![custom_word(
+                "Tau\tri",
+                Some("tori\nbreak"),
+                Some("en"),
+                true,
+            )],
+            ..WritingSettings::default()
+        };
+
+        let terms = compile_deepgram_keyterms(&settings, Some("en"));
+
+        assert_eq!(terms, vec!["Tauri".to_string(), "toribreak".to_string()]);
+    }
+
+    #[test]
+    fn test_compile_deepgram_keyterms_is_empty_when_no_dictionary() {
+        assert!(compile_deepgram_keyterms(&WritingSettings::default(), Some("en")).is_empty());
+    }
+
+    #[test]
+    fn test_compile_deepgram_keyterms_caps_at_hundred_terms() {
+        let mut custom_words = Vec::new();
+        for index in 0..150 {
+            // Each word yields two keyterms: its phrase and its spoken form.
+            custom_words.push(custom_word(
+                &format!("term{index}"),
+                Some(&format!("spoken{index}")),
+                Some("en"),
+                true,
+            ));
+        }
+        let settings = WritingSettings {
+            custom_words,
+            ..WritingSettings::default()
+        };
+
+        let terms = compile_deepgram_keyterms(&settings, Some("en"));
+
+        assert_eq!(terms.len(), 100);
+        // Truncation preserves insertion order: phrase then spoken form.
+        assert_eq!(terms[0], "term0");
+        assert_eq!(terms[99], "spoken49");
     }
 
     #[test]

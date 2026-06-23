@@ -20,17 +20,21 @@ pub(super) async fn validate_key(key: &str) -> Result<(), String> {
 }
 
 pub(super) async fn transcribe_typed(
-    _app: &AppHandle,
+    app: &AppHandle,
     key: &str,
     audio_path: &Path,
     language: Option<&str>,
 ) -> Result<String, common::SttError> {
+    // The personal dictionary is reused as the recognizer's initial prompt so
+    // jargon/brand names are reconciled against the audio at recognition time.
+    let prompt = crate::commands::audio::compile_remote_request_context(app, language);
     common::openai_compatible_transcribe(
         BASE,
         key,
         MODEL,
         audio_path,
         language,
+        prompt.as_deref(),
         "Groq transcription",
     )
     .await

@@ -20,14 +20,72 @@ pub(super) async fn validate_key(key: &str) -> Result<(), String> {
     .await
     .map_err(|e| e.message("Deepgram"))
 }
+/// Returns true for the Nova-3 model family, the only Deepgram models that
+/// accept the repeatable `keyterm` query param. Nova-2 exposes a different
+/// `keywords` knob (out of scope), so vocabulary terms are emitted only here.
+fn is_nova3(model: &str) -> bool {
+    model.eq_ignore_ascii_case("nova-3") || model.to_lowercase().starts_with("nova-3-")
+}
+
+/// Build the repeatable query params for a `/v1/listen` request. The model and
+/// `smart_format=true` are always present; `diarize` and `language` are added
+/// when requested. Vocabulary `keyterm` params are appended (one per term, in
+/// order) only for Nova-3 model ids.
+fn build_listen_params(
+    model: &str,
+    language: Option<&str>,
+    keyterms: &[String],
+    diarize: bool,
+) -> Vec<(&'static str, String)> {
+    let mut params: Vec<(&'static str, String)> = vec![
+        ("model", model.to_string()),
+        ("smart_format", "true".to_string()),
+    ];
+    if diarize {
+        params.push(("diarize", "true".to_string()));
+    }
+    if let Some(lang) = language.map(str::trim).filter(|lang| !lang.is_empty()) {
+        params.push(("language", lang.to_string()));
+    }
+    if is_nova3(model) {
+        for term in keyterms {
+            params.push(("keyterm", term.clone()));
+        }
+    }
+    params
+}
+
+/// Load the personal dictionary and compile it into Deepgram keyterms. Failures
+/// to read settings are non-fatal (transcription continues without vocabulary),
+/// mirroring how Soniox loads its context.
+fn compile_keyterms(app: &AppHandle, language: Option<&str>) -> Vec<String> {
+    match crate::writing::load_writing_settings(app) {
+        Ok(settings) => crate::writing::compile_deepgram_keyterms(&settings, language),
+        Err(err) => {
+            log::warn!(
+                "Failed to load writing settings for Deepgram keyterms; continuing without vocabulary: {err}"
+            );
+            Vec::new()
+        }
+    }
+}
 
 pub(super) async fn transcribe_typed(
-    _app: &AppHandle,
+    app: &AppHandle,
     key: &str,
     audio_path: &Path,
     language: Option<&str>,
 ) -> Result<String, common::SttError> {
-    transcribe_at("https://api.deepgram.com", key, audio_path, language).await
+    let keyterms = compile_keyterms(app, language);
+    transcribe_at(
+        "https://api.deepgram.com",
+        key,
+        audio_path,
+        language,
+        MODEL,
+        &keyterms,
+    )
+    .await
 }
 
 pub(super) async fn transcribe_at(
@@ -35,6 +93,8 @@ pub(super) async fn transcribe_at(
     key: &str,
     audio_path: &Path,
     language: Option<&str>,
+    model: &str,
+    keyterms: &[String],
 ) -> Result<String, common::SttError> {
     use tokio::fs;
 
@@ -42,20 +102,19 @@ pub(super) async fn transcribe_at(
         .await
         .map_err(|_| common::SttError::BadResponse)?;
 
-    let mut url = format!("{}/v1/listen?model={}&smart_format=true", base_url, MODEL);
-    if let Some(lang) = language.map(str::trim).filter(|lang| !lang.is_empty()) {
-        url.push_str("&language=");
-        url.push_str(lang);
-    }
+    let params = build_listen_params(model, language, keyterms, false);
+    let endpoint = format!("{}/v1/listen", base_url);
 
     let client = common::http_client();
     common::with_retry(|| {
         let body = bytes.clone();
         let client = client.clone();
-        let url = url.clone();
+        let params = params.clone();
+        let endpoint = endpoint.clone();
         async move {
             let resp = client
-                .post(&url)
+                .post(&endpoint)
+                .query(&params)
                 .header("Authorization", format!("Token {}", key))
                 .header("Content-Type", "audio/wav")
                 .body(body)
@@ -81,12 +140,21 @@ pub(super) async fn transcribe_at(
 }
 
 pub(super) async fn transcribe_typed_diarized(
-    _app: &AppHandle,
+    app: &AppHandle,
     key: &str,
     audio_path: &Path,
     language: Option<&str>,
 ) -> Result<super::CloudTranscript, common::SttError> {
-    transcribe_at_diarized("https://api.deepgram.com", key, audio_path, language).await
+    let keyterms = compile_keyterms(app, language);
+    transcribe_at_diarized(
+        "https://api.deepgram.com",
+        key,
+        audio_path,
+        language,
+        MODEL,
+        &keyterms,
+    )
+    .await
 }
 
 pub(super) async fn transcribe_at_diarized(
@@ -94,6 +162,8 @@ pub(super) async fn transcribe_at_diarized(
     key: &str,
     audio_path: &Path,
     language: Option<&str>,
+    model: &str,
+    keyterms: &[String],
 ) -> Result<super::CloudTranscript, common::SttError> {
     use tokio::fs;
 
@@ -101,23 +171,19 @@ pub(super) async fn transcribe_at_diarized(
         .await
         .map_err(|_| common::SttError::BadResponse)?;
 
-    let mut url = format!(
-        "{}/v1/listen?model={}&smart_format=true&diarize=true",
-        base_url, MODEL
-    );
-    if let Some(lang) = language.map(str::trim).filter(|lang| !lang.is_empty()) {
-        url.push_str("&language=");
-        url.push_str(lang);
-    }
+    let params = build_listen_params(model, language, keyterms, true);
+    let endpoint = format!("{}/v1/listen", base_url);
 
     let client = common::http_client();
     common::with_retry(|| {
         let body = bytes.clone();
         let client = client.clone();
-        let url = url.clone();
+        let params = params.clone();
+        let endpoint = endpoint.clone();
         async move {
             let resp = client
-                .post(&url)
+                .post(&endpoint)
+                .query(&params)
                 .header("Authorization", format!("Token {}", key))
                 .header("Content-Type", "audio/wav")
                 .body(body)
@@ -183,7 +249,9 @@ fn parse_deepgram_word(w: &serde_json::Value) -> Option<crate::transcription::Tr
 
 #[cfg(test)]
 mod tests {
-    use super::{common, parse_deepgram_word, parse_diarized_response, transcribe_at};
+    use super::{
+        common, parse_deepgram_word, parse_diarized_response, transcribe_at, transcribe_at_diarized,
+    };
     use std::io::Write;
     use tempfile::NamedTempFile;
     use wiremock::matchers::{header, method, path};
@@ -216,9 +284,16 @@ mod tests {
             .await;
         let audio = audio_file();
 
-        let text = transcribe_at(&server.uri(), "k", audio.path(), Some("en"))
-            .await
-            .unwrap();
+        let text = transcribe_at(
+            &server.uri(),
+            "k",
+            audio.path(),
+            Some("en"),
+            super::MODEL,
+            &[],
+        )
+        .await
+        .unwrap();
 
         assert_eq!(text, "hi");
         let requests = server.received_requests().await.unwrap();
@@ -241,12 +316,143 @@ mod tests {
             .await;
         let audio = audio_file();
 
-        let error = transcribe_at(&server.uri(), "k", audio.path(), None)
+        let error = transcribe_at(&server.uri(), "k", audio.path(), None, super::MODEL, &[])
             .await
             .unwrap_err();
 
         assert!(matches!(error, common::SttError::Auth));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn transcribe_at_appends_nova3_keyterm_params() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/listen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": {
+                    "channels": [{ "alternatives": [{ "transcript": "hi" }] }]
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let audio = audio_file();
+        let keyterms = vec!["shadcn ui".to_string(), "Tauri".to_string()];
+
+        transcribe_at(
+            &server.uri(),
+            "k",
+            audio.path(),
+            Some("en"),
+            super::MODEL,
+            &keyterms,
+        )
+        .await
+        .unwrap();
+
+        let request = &server.received_requests().await.unwrap()[0];
+        let emitted: Vec<String> = request
+            .url
+            .query_pairs()
+            .filter(|(k, _)| k.as_ref() == "keyterm")
+            .map(|(_, v)| v.to_string())
+            .collect();
+        assert_eq!(emitted, vec!["shadcn ui".to_string(), "Tauri".to_string()]);
+        // Terms with spaces/slashes are URL-encoded by reqwest but decode back
+        // intact, and the model stays Nova-3 with smart_format on.
+        let model = request
+            .url
+            .query_pairs()
+            .find(|(k, _)| k.as_ref() == "model")
+            .map(|(_, v)| v.to_string());
+        assert_eq!(model, Some("nova-3".to_string()));
+    }
+
+    #[tokio::test]
+    async fn transcribe_at_omits_keyterm_params_for_non_nova3_model() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/listen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": {
+                    "channels": [{ "alternatives": [{ "transcript": "hi" }] }]
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let audio = audio_file();
+        // Terms are supplied but Nova-2 has no keyterm knob, so none may be sent.
+        let keyterms = vec!["shadcn ui".to_string()];
+
+        transcribe_at(
+            &server.uri(),
+            "k",
+            audio.path(),
+            Some("en"),
+            "nova-2",
+            &keyterms,
+        )
+        .await
+        .unwrap();
+
+        let request = &server.received_requests().await.unwrap()[0];
+        let has_keyterm = request
+            .url
+            .query_pairs()
+            .any(|(k, _)| k.as_ref() == "keyterm");
+        assert!(!has_keyterm);
+        let model = request
+            .url
+            .query_pairs()
+            .find(|(k, _)| k.as_ref() == "model")
+            .map(|(_, v)| v.to_string());
+        assert_eq!(model, Some("nova-2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn transcribe_at_diarized_appends_nova3_keyterm_params() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/listen"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": {
+                    "channels": [{
+                        "alternatives": [{ "transcript": "hi", "words": [] }]
+                    }]
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let audio = audio_file();
+        let keyterms = vec!["Tauri".to_string()];
+
+        transcribe_at_diarized(
+            &server.uri(),
+            "k",
+            audio.path(),
+            Some("en"),
+            super::MODEL,
+            &keyterms,
+        )
+        .await
+        .unwrap();
+
+        let request = &server.received_requests().await.unwrap()[0];
+        let emitted: Vec<String> = request
+            .url
+            .query_pairs()
+            .filter(|(k, _)| k.as_ref() == "keyterm")
+            .map(|(_, v)| v.to_string())
+            .collect();
+        assert_eq!(emitted, vec!["Tauri".to_string()]);
+        let diarize = request
+            .url
+            .query_pairs()
+            .find(|(k, _)| k.as_ref() == "diarize")
+            .map(|(_, v)| v.to_string());
+        assert_eq!(diarize, Some("true".to_string()));
     }
 
     #[test]

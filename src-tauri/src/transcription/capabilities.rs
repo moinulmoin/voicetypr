@@ -28,9 +28,9 @@ mod tests {
             (ProviderEngine::Whisper, true, true, true),
             (ProviderEngine::Parakeet, false, true, true),
             (ProviderEngine::Soniox, false, true, false),
-            (ProviderEngine::Openai, false, false, false),
-            (ProviderEngine::Groq, false, false, false),
-            (ProviderEngine::Deepgram, false, false, false),
+            (ProviderEngine::Openai, false, true, false),
+            (ProviderEngine::Groq, false, true, false),
+            (ProviderEngine::Deepgram, false, true, false),
             (ProviderEngine::Cohere, false, false, false),
             (ProviderEngine::Remote, true, false, false),
         ];

@@ -138,6 +138,22 @@ pub(super) async fn get_validate(
     .await
 }
 
+/// OpenAI/Groq only honor the final ~224 tokens of `prompt`, so an oversized
+/// dictionary would be truncated from the front by the provider. Cap it here on
+/// a separator (~3 chars/token for jargon-dense terms) so whole early terms win.
+fn cap_transcription_prompt(prompt: &str) -> String {
+    const MAX_BYTES: usize = 672;
+    if prompt.len() <= MAX_BYTES {
+        return prompt.to_string();
+    }
+    let mut end = MAX_BYTES;
+    while end > 0 && !prompt.is_char_boundary(end) {
+        end -= 1;
+    }
+    let cut = prompt[..end].rfind([',', ' ']).unwrap_or(end);
+    prompt[..cut].trim_end_matches([',', ' ']).to_string()
+}
+
 /// Transcribe via an OpenAI-compatible multipart `/audio/transcriptions`
 /// endpoint (OpenAI, Groq). `base_url` excludes the trailing path.
 pub(super) async fn openai_compatible_transcribe(
@@ -146,6 +162,7 @@ pub(super) async fn openai_compatible_transcribe(
     model: &str,
     audio_path: &Path,
     language: Option<&str>,
+    prompt: Option<&str>,
     label: &str,
 ) -> Result<String, SttError> {
     use futures_util::stream;
@@ -169,6 +186,10 @@ pub(super) async fn openai_compatible_transcribe(
         .map(str::trim)
         .filter(|lang| !lang.is_empty())
         .map(str::to_string);
+    let prompt = prompt
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .map(cap_transcription_prompt);
     let client = http_client();
     let url = format!("{}/audio/transcriptions", base_url);
 
@@ -176,6 +197,7 @@ pub(super) async fn openai_compatible_transcribe(
         let client = client.clone();
         let filename = filename.clone();
         let language = language.clone();
+        let prompt = prompt.clone();
         let url = url.clone();
         async move {
             let file = File::open(audio_path)
@@ -202,6 +224,9 @@ pub(super) async fn openai_compatible_transcribe(
             if let Some(lang) = language {
                 form = form.text("language", lang);
             }
+            if let Some(prompt) = prompt {
+                form = form.text("prompt", prompt);
+            }
 
             let resp = client
                 .post(&url)
@@ -226,6 +251,23 @@ mod tests {
     use tempfile::NamedTempFile;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+    #[test]
+    fn transcription_prompt_capped_to_token_budget_on_term_boundary() {
+        // Short prompts pass through untouched.
+        let short = "Preferred spellings: shadcn/ui, Tauri.";
+        assert_eq!(super::cap_transcription_prompt(short), short);
+
+        // A large dictionary is capped (OpenAI/Groq honor only the final ~224
+        // tokens) on a separator, so whole leading terms survive with no
+        // mid-token cut.
+        let many: Vec<String> = (0..300).map(|i| format!("term{i}")).collect();
+        let long = format!("Preferred spellings: {}.", many.join(", "));
+        let capped = super::cap_transcription_prompt(&long);
+        assert!(capped.len() <= 672, "capped len was {}", capped.len());
+        assert!(!capped.ends_with(',') && !capped.ends_with(' '));
+        assert!(long.starts_with(&capped));
+    }
 
     fn audio_file() -> NamedTempFile {
         let mut file = NamedTempFile::new().unwrap();
@@ -270,6 +312,7 @@ mod tests {
             "gpt-4o-transcribe",
             audio.path(),
             None,
+            None,
             "OpenAI transcription",
         )
         .await
@@ -295,6 +338,83 @@ mod tests {
         assert!(body.contains("name=\"model\""));
         assert!(body.contains("gpt-4o-transcribe"));
     }
+    #[tokio::test]
+    async fn openai_compatible_transcribe_includes_prompt_field_when_provided() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/audio/transcriptions"))
+            .and(header("authorization", "Bearer k"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": "ok"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let audio = audio_file();
+        let prompt = "Preferred spellings: VoiceTypr, Tauri.";
+
+        let text = openai_compatible_transcribe(
+            &server.uri(),
+            "k",
+            "gpt-4o-transcribe",
+            audio.path(),
+            None,
+            Some(prompt),
+            "OpenAI transcription",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(text, "ok");
+        let request = &server.received_requests().await.unwrap()[0];
+        let body = String::from_utf8_lossy(&request.body);
+        assert!(body.contains("name=\"prompt\""));
+        assert!(body.contains("Preferred spellings: VoiceTypr, Tauri."));
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_transcribe_omits_prompt_field_when_empty_or_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": "ok"
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let audio = audio_file();
+
+        // Empty/whitespace prompt must not produce a `prompt` part.
+        openai_compatible_transcribe(
+            &server.uri(),
+            "k",
+            "gpt-4o-transcribe",
+            audio.path(),
+            None,
+            Some("   "),
+            "OpenAI transcription",
+        )
+        .await
+        .unwrap();
+        // `None` prompt must not produce a `prompt` part either.
+        openai_compatible_transcribe(
+            &server.uri(),
+            "k",
+            "gpt-4o-transcribe",
+            audio.path(),
+            None,
+            None,
+            "OpenAI transcription",
+        )
+        .await
+        .unwrap();
+
+        for request in server.received_requests().await.unwrap() {
+            let body = String::from_utf8_lossy(&request.body);
+            assert!(!body.contains("name=\"prompt\""));
+        }
+    }
 
     #[tokio::test]
     async fn openai_compatible_transcribe_retries_500_once_then_succeeds() {
@@ -316,6 +436,7 @@ mod tests {
             "k",
             "gpt-4o-transcribe",
             audio.path(),
+            None,
             None,
             "OpenAI transcription",
         )
@@ -358,6 +479,7 @@ mod tests {
             "gpt-4o-transcribe",
             audio.path(),
             None,
+            None,
             "OpenAI transcription",
         )
         .await
@@ -386,6 +508,7 @@ mod tests {
             "gpt-4o-transcribe",
             audio.path(),
             None,
+            None,
             "OpenAI transcription",
         )
         .await
@@ -413,6 +536,7 @@ mod tests {
             "k",
             "gpt-4o-transcribe",
             audio.path(),
+            None,
             None,
             "OpenAI transcription",
         )
