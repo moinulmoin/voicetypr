@@ -90,12 +90,16 @@ impl DeviceWatcher {
         let app = self.app.clone();
 
         let handle = thread::spawn(move || {
-            let mut last_devices: Vec<String> = Vec::new();
+            // The first enumeration is the startup baseline (the tray built during
+            // setup already reflects it), so we skip just that one redundant rebuild.
+            // Option<> means an empty initial list still counts as the baseline; every
+            // real change afterward rebuilds.
+            let mut last_devices: Option<Vec<String>> = None;
 
             while !stop_flag.load(Ordering::Relaxed) {
                 let devices = AudioRecorder::get_devices();
 
-                if devices != last_devices {
+                if last_devices.as_deref() != Some(devices.as_slice()) {
                     log::info!("Audio devices changed: {:?}", devices);
 
                     if let Err(err) = app.emit("audio-devices-updated", &devices) {
@@ -104,11 +108,18 @@ impl DeviceWatcher {
 
                     let app_for_tasks = app.clone();
                     let devices_for_tasks = devices.clone();
+                    let skip_tray_rebuild = last_devices.is_none();
 
                     tauri::async_runtime::spawn(async move {
-                        // Refresh tray regardless of selection outcome.
-                        if let Err(err) = update_tray_menu(app_for_tasks.clone()).await {
-                            log::warn!("Failed to update tray menu after device change: {}", err);
+                        // Refresh tray on real device changes only (the startup baseline
+                        // is already reflected in the tray built during setup).
+                        if !skip_tray_rebuild {
+                            if let Err(err) = update_tray_menu(app_for_tasks.clone()).await {
+                                log::warn!(
+                                    "Failed to update tray menu after device change: {}",
+                                    err
+                                );
+                            }
                         }
 
                         match get_settings(app_for_tasks.clone()).await {
@@ -153,7 +164,7 @@ impl DeviceWatcher {
                         }
                     });
 
-                    last_devices = devices;
+                    last_devices = Some(devices);
                 }
 
                 thread::sleep(Duration::from_millis(1500));
