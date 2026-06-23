@@ -1,4 +1,4 @@
-use super::normalizer::normalize_to_whisper_wav;
+use super::normalizer::{normalize_to_whisper_wav, peak_normalization_gain};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use std::f32::consts::PI;
 use std::fs;
@@ -40,6 +40,173 @@ fn write_sine_wav(
         }
     }
     writer.finalize().expect("finalize wav");
+}
+
+fn write_noise_wav(path: &Path, sample_rate: u32, secs: f32, amp: f32) {
+    let spec = WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
+    };
+    let mut writer = WavWriter::create(path, spec).expect("create wav");
+    let total_frames = (secs * sample_rate as f32) as usize;
+    let mut state = 0x1234_5678u32;
+
+    for _ in 0..total_frames {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let unit = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+        let sample = (unit * amp).clamp(-1.0, 1.0);
+        writer
+            .write_sample((sample * 32767.0) as i16)
+            .expect("write sample");
+    }
+
+    writer.finalize().expect("finalize wav");
+}
+
+/// Mono tone bursts separated by true silence — a syllabic envelope so the
+/// modulation gate sees a wide loud-vs-quiet swing (like real quiet speech),
+/// unlike a continuous tone or steady noise.
+fn write_gapped_tone_wav(
+    path: &Path,
+    sample_rate: u32,
+    secs: f32,
+    amp: f32,
+    freq: f32,
+    on_ms: u32,
+    off_ms: u32,
+) {
+    let spec = WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
+    };
+    let mut writer = WavWriter::create(path, spec).expect("create wav");
+    let total_frames = (secs * sample_rate as f32) as usize;
+    let on_frames = (on_ms * sample_rate / 1000) as usize;
+    let off_frames = (off_ms * sample_rate / 1000) as usize;
+    let cycle = (on_frames + off_frames).max(1);
+
+    for n in 0..total_frames {
+        let sample = if (n % cycle) < on_frames {
+            let t = n as f32 / sample_rate as f32;
+            (amp * (2.0 * PI * freq * t).sin()).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        writer
+            .write_sample((sample * 32767.0) as i16)
+            .expect("write sample");
+    }
+    writer.finalize().expect("finalize wav");
+}
+
+fn read_peak(path: &Path) -> f32 {
+    let samples: Vec<i16> = hound::WavReader::open(path)
+        .expect("open wav")
+        .samples::<i16>()
+        .map(|s| s.unwrap())
+        .collect();
+    samples
+        .iter()
+        .map(|&sample| i32::from(sample).abs())
+        .max()
+        .unwrap_or(0) as f32
+        / i16::MAX as f32
+}
+
+#[test]
+fn speech_gated_gain_boosts_soft_gapped_speech_beyond_previous_cap() {
+    let input = temp_file("soft_speech_in.wav");
+    let out_dir = temp_file("soft_speech_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    // Soft, syllabic (gapped) tone ~ real quiet speech: voiced bursts + silent gaps.
+    write_gapped_tone_wav(&input, 16_000, 1.2, 0.03, 220.0, 200, 120);
+
+    let out_path = normalize_to_whisper_wav(&input, &out_dir).expect("normalize");
+    let peak = read_peak(&out_path);
+
+    assert!(
+        peak > 0.65 && peak <= 0.85,
+        "soft gapped speech should reach the target peak instead of the previous ~0.30 cap; got {peak}"
+    );
+
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn speech_gated_gain_keeps_steady_moderate_noise_capped() {
+    let input = temp_file("steady_noise_in.wav");
+    let out_dir = temp_file("steady_noise_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    // Moderate steady ambient (~fan/HVAC): RMS above the voice floor but a flat
+    // envelope. Must stay at the historical 10x cap, not the 32x quiet-speech cap.
+    write_noise_wav(&input, 16_000, 0.6, 0.012);
+
+    let out_path = normalize_to_whisper_wav(&input, &out_dir).expect("normalize");
+    let peak = read_peak(&out_path);
+
+    assert!(
+        peak <= 0.13,
+        "steady moderate noise must stay near the 10x cap (~0.12), not be speech-boosted; got {peak}"
+    );
+
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn speech_gated_gain_keeps_steady_tone_capped() {
+    let input = temp_file("steady_tone_in.wav");
+    let out_dir = temp_file("steady_tone_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    // A continuous tone has voiced energy but a flat envelope -> not speech-like.
+    write_sine_wav(&input, 16_000, 1, 0.5, 0.03, 220.0, &[]);
+
+    let out_path = normalize_to_whisper_wav(&input, &out_dir).expect("normalize");
+    let peak = read_peak(&out_path);
+
+    assert!(
+        peak <= 0.33,
+        "a steady tone must stay near the 10x cap (~0.30), not be speech-boosted; got {peak}"
+    );
+
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn speech_gated_gain_keeps_near_silent_noise_at_previous_cap() {
+    let input = temp_file("near_silent_noise_in.wav");
+    let out_dir = temp_file("near_silent_noise_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    write_noise_wav(&input, 16_000, 0.5, 0.0004);
+
+    let out_path = normalize_to_whisper_wav(&input, &out_dir).expect("normalize");
+    let peak = read_peak(&out_path);
+
+    assert!(
+        peak <= 0.006,
+        "near-silent noise should stay near the historical 10x cap, not be speech-boosted; got {peak}"
+    );
+
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn speech_gated_gain_leaves_normal_loud_peak_limited_clips_unchanged() {
+    assert_eq!(peak_normalization_gain(0.5, false), 1.6);
+    assert_eq!(peak_normalization_gain(0.5, true), 1.6);
+    assert_eq!(peak_normalization_gain(0.08, false), 10.0);
+    assert_eq!(peak_normalization_gain(0.08, true), 10.0);
 }
 
 #[test]

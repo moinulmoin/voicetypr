@@ -10,10 +10,13 @@ const TARGET_RATE: u32 = 16_000;
 const TARGET_CHANNELS: u16 = 1;
 const TARGET_BITS: u16 = 16;
 const TARGET_PEAK: f32 = 0.8; // ~ -1.9 dBFS
+const STANDARD_MAX_GAIN: f32 = 10.0;
+const SPEECH_MAX_GAIN: f32 = 32.0;
+const SPEECH_RMS_FLOOR: f32 = crate::audio::silence_detector::VOICE_RMS_THRESHOLD;
 const SILENCE_RMS_THRESHOLD: f32 = 1e-4; // ~ -80 dBFS
 
-/// Normalize any WAV (our recorder output) to Whisper contract:
-/// WAV PCM S16LE, mono, 16 kHz, peak-normalized with light dither.
+/// Normalize any WAV (our recorder output) to the local engine contract:
+/// WAV PCM S16LE, mono, 16 kHz, peak-normalized with speech-gated quiet-clip gain and light dither.
 pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<PathBuf, String> {
     if !input_wav.exists() {
         return Err(format!("Input WAV does not exist: {:?}", input_wav));
@@ -67,13 +70,12 @@ pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<Path
         mono
     };
 
-    // Peak normalize to TARGET_PEAK with a soft clamp
+    // Peak-normalize to TARGET_PEAK with the historical 10x safety cap. Only unlock
+    // the larger quiet-speech cap when the clip is modulated like real speech
+    // (voiced energy AND genuine near-silent gaps); steady noise/tones stay at 10x.
     let peak = resampled.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
-    let gain = if peak > 0.0 {
-        (TARGET_PEAK / peak).min(10.0)
-    } else {
-        1.0
-    };
+    let speech_like = has_speech_like_modulation(&resampled);
+    let gain = peak_normalization_gain(peak, speech_like);
     let normalized: Vec<f32> = if (gain - 1.0).abs() > 1e-3 {
         resampled
             .iter()
@@ -114,6 +116,57 @@ pub fn normalize_to_whisper_wav(input_wav: &Path, out_dir: &Path) -> Result<Path
         .map_err(|e| format!("WAV finalize failed: {}", e))?;
 
     Ok(out_path)
+}
+
+pub(crate) fn peak_normalization_gain(peak: f32, speech_like: bool) -> f32 {
+    if peak <= 0.0 {
+        return 1.0;
+    }
+
+    let max_gain = if speech_like {
+        SPEECH_MAX_GAIN
+    } else {
+        STANDARD_MAX_GAIN
+    };
+
+    (TARGET_PEAK / peak).min(max_gain)
+}
+
+fn has_speech_like_modulation(samples: &[f32]) -> bool {
+    const WINDOW_SAMPLES: usize = TARGET_RATE as usize / 50; // 20 ms at 16 kHz.
+    const REQUIRED_VOICED_WINDOWS: usize = 15; // >= 300 ms of voiced energy.
+    const MODULATION_RATIO: f32 = 4.0; // ~12 dB loud-vs-quiet envelope swing of speech.
+
+    let mut window_rms: Vec<f32> = samples
+        .chunks(WINDOW_SAMPLES)
+        .filter(|window| !window.is_empty())
+        .map(|window| {
+            let sumsq: f32 = window.iter().map(|sample| sample * sample).sum();
+            (sumsq / window.len() as f32).sqrt()
+        })
+        .collect();
+    if window_rms.len() < REQUIRED_VOICED_WINDOWS {
+        return false;
+    }
+
+    // Enough genuine voiced energy to be worth boosting.
+    let voiced = window_rms
+        .iter()
+        .filter(|&&rms| rms >= SPEECH_RMS_FLOOR)
+        .count();
+    if voiced < REQUIRED_VOICED_WINDOWS {
+        return false;
+    }
+
+    // Per-clip dynamic range: speech swings between loud (vowels) and quiet
+    // (pauses / the clip's own noise floor); steady noise and pure tones have a
+    // flat envelope. Comparing the clip's 90th- vs 10th-percentile window energy
+    // keeps the boost alive on real (slightly noisy) mics while rejecting steady
+    // signals regardless of their absolute level.
+    window_rms.sort_by(f32::total_cmp);
+    let floor = window_rms[window_rms.len() / 10].max(SILENCE_RMS_THRESHOLD);
+    let loud = window_rms[window_rms.len() * 9 / 10];
+    loud >= floor * MODULATION_RATIO
 }
 
 fn downmix_equal_power_ignore_silent(input: &[f32], channels: usize) -> Vec<f32> {
