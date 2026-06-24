@@ -298,12 +298,12 @@ export function AddServerModal({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Server className="h-5 w-5" />
-            {isEditMode ? "Edit Remote VoiceTypr" : "Add Remote VoiceTypr"}
+            {isEditMode ? "Edit Remote Voicetypr" : "Add Remote Voicetypr"}
           </DialogTitle>
           <DialogDescription>
             {isEditMode
-              ? "Update connection details for this remote VoiceTypr"
-              : "Connect to another VoiceTypr over the network"}
+              ? "Update connection details for this remote Voicetypr"
+              : "Connect to another Voicetypr over the network"}
           </DialogDescription>
         </DialogHeader>
 

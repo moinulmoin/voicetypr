@@ -30,8 +30,9 @@ import { isMacOS, isWindows } from "@/lib/platform";
 import { PillIndicatorMode, PillIndicatorPosition, TranscriptionAcceleration } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import type { ShortcutBinding, ShortcutSettings } from "@/types/shortcuts";
+import type { AccelerationStatus } from "@/types/acceleration";
 import { AlertCircle, Check, Edit2, FolderOpen, HelpCircle, Mic, RefreshCw, Rocket, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { MicrophoneSelection } from "../MicrophoneSelection";
 import { NetworkSharingCard } from "./NetworkSharingCard";
@@ -65,6 +66,85 @@ function formatPrimaryHotkeyLabel(
   return "Not set";
 }
 
+function isAccelerationStatus(value: unknown): value is AccelerationStatus {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const status = value as Record<string, unknown>;
+  return (
+    typeof status.message === "string" &&
+    typeof status.effective_backend === "string" &&
+    typeof status.diagnostic_code === "string" &&
+    typeof status.recommended_action === "string"
+  );
+}
+
+function isMetalOnUnsupportedPlatformStatus(
+  status: AccelerationStatus,
+): boolean {
+  return (
+    status.diagnostic_code === "unsupported_platform" &&
+    status.effective_backend === "metal"
+  );
+}
+
+function getRecommendedActionDescription(action: string): string | undefined {
+  switch (action) {
+    case "download_model":
+      return "Download or select a local Whisper model, then retry Test GPU.";
+    case "update_graphics_driver":
+      return "Update or install your graphics driver, then retry Test GPU.";
+    case "use_cpu":
+      return "Use CPU mode for now, or retry GPU after updating your graphics driver.";
+    case "report_bug":
+      return "Report this with logs so we can inspect the packaged GPU helper.";
+    default:
+      return undefined;
+  }
+}
+
+function getAccelerationGuidance(status: AccelerationStatus | null): string {
+  if (!status) {
+    return "Voicetypr will test GPU acceleration when needed and keep CPU transcription available.";
+  }
+
+  if (isMetalOnUnsupportedPlatformStatus(status)) {
+    return "Metal acceleration is active on this Mac.";
+  }
+
+  switch (status.diagnostic_code) {
+    case "ready":
+      return "GPU acceleration is ready.";
+    case "unsupported_platform":
+      return "GPU acceleration is not available on this platform. Voicetypr will keep using CPU transcription safely.";
+    case "vulkan_loader_missing":
+    case "vulkan_device_missing":
+    case "driver_or_runtime_failed":
+      return "GPU acceleration needs a Vulkan-capable NVIDIA, AMD, or Intel graphics driver. Update or install your graphics driver, then retry Test GPU. Voicetypr will keep using CPU transcription safely until GPU acceleration is available.";
+    case "sidecar_missing":
+    case "sidecar_protocol_error":
+      return "Voicetypr has a package or runtime issue. Please report this with logs. Voicetypr will keep using CPU transcription safely.";
+    case "sidecar_timeout":
+      return "The Vulkan helper did not respond in time. Voicetypr will keep using CPU transcription safely; retry Test GPU after updating your graphics driver.";
+    case "model_missing":
+      return "Download or select a local Whisper model before testing GPU acceleration. Voicetypr will keep using CPU transcription safely.";
+    default:
+      return (
+        getRecommendedActionDescription(status.recommended_action) ||
+        "Voicetypr will keep using CPU transcription safely."
+      );
+  }
+}
+
+function getAccelerationToastDescription(status: AccelerationStatus): string | undefined {
+  return (
+    getRecommendedActionDescription(status.recommended_action) ||
+    status.last_error ||
+    undefined
+  );
+}
+
 
 export function GeneralSettings() {
   const { settings, updateSettings } = useSettings();
@@ -78,6 +158,9 @@ export function GeneralSettings() {
   const [pendingHotkey, setPendingHotkey] = useState("");
   const [pendingBareModifier, setPendingBareModifier] = useState<BareModifierSpec | null>(null);
   const [holdToTalk, setHoldToTalk] = useState(false);
+  const [accelerationStatus, setAccelerationStatus] =
+    useState<AccelerationStatus | null>(null);
+  const [testingAcceleration, setTestingAcceleration] = useState(false);
 
   useEffect(() => {
     const checkAutostart = async () => {
@@ -92,6 +175,23 @@ export function GeneralSettings() {
     checkAutostart();
     setShowAccessibilityWarning(isMacOS);
   }, []);
+
+  const loadAccelerationStatus = useCallback(async () => {
+    try {
+      const status = await invoke<AccelerationStatus>(
+        "get_transcription_acceleration_status",
+      );
+      if (isAccelerationStatus(status)) {
+        setAccelerationStatus(status);
+      }
+    } catch (error) {
+      log.error("Failed to check acceleration status:", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAccelerationStatus();
+  }, [loadAccelerationStatus]);
 
   useEffect(() => {
     const hotkey = settings?.hotkey;
@@ -247,6 +347,45 @@ export function GeneralSettings() {
     }
   };
 
+  const handleAccelerationChange = async (value: TranscriptionAcceleration) => {
+    await updateSettings({ transcription_acceleration: value });
+    await loadAccelerationStatus();
+    toast.success(
+      value === "auto"
+        ? "Acceleration set to Auto"
+        : value === "gpu"
+          ? "GPU acceleration preferred"
+          : "CPU-only transcription enabled",
+    );
+  };
+
+  const handleTestAcceleration = async () => {
+    setTestingAcceleration(true);
+    try {
+      const status = await invoke<AccelerationStatus>(
+        "test_transcription_acceleration",
+      );
+      if (isAccelerationStatus(status)) {
+        setAccelerationStatus(status);
+        if (status.gpu_available === true) {
+          toast.success(status.message || "GPU acceleration is available");
+        } else if (status.gpu_available === false) {
+          toast.warning(status.message, {
+            description: getAccelerationToastDescription(status),
+          });
+        } else {
+          toast.info(status.message);
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error("GPU acceleration test failed", { description: message });
+      await loadAccelerationStatus();
+    } finally {
+      setTestingAcceleration(false);
+    }
+  };
+
   return (
     <div className="h-full min-h-0 flex flex-col">
       <div className="shrink-0 border-b border-border/40 px-6 py-4">
@@ -294,7 +433,7 @@ export function GeneralSettings() {
               <Field orientation="responsive" className="items-center gap-4">
                 <FieldContent>
                   <FieldTitle>Launch at Startup</FieldTitle>
-                  <FieldDescription>Start VoiceTypr automatically after login.</FieldDescription>
+                  <FieldDescription>Start Voicetypr automatically after login.</FieldDescription>
                 </FieldContent>
                 <div className="flex items-center justify-end gap-2">
                   {autostartLoading && <Spinner className="h-4 w-4 text-muted-foreground" />}
@@ -448,13 +587,13 @@ export function GeneralSettings() {
                               Accessibility permission required
                             </p>
                             <p className="text-xs text-amber-800 dark:text-amber-500">
-                              VoiceTypr needs accessibility permission for global hotkeys and auto-insert.
+                              Voicetypr needs accessibility permission for global hotkeys and auto-insert.
                             </p>
                           </div>
                           <ol className="list-decimal space-y-0.5 pl-4 text-xs text-amber-800 dark:text-amber-500">
                             <li>Open System Settings</li>
                             <li>Go to Privacy &amp; Security → Accessibility</li>
-                            <li>Add VoiceTypr and enable it</li>
+                            <li>Add Voicetypr and enable it</li>
                           </ol>
                           <Button
                             type="button"
@@ -595,39 +734,74 @@ export function GeneralSettings() {
                 </FieldSet>
 
                 {isWindows && (
-                  <FieldSet className="gap-4 border-t border-border/60 pt-5">
-                    <FieldLegend className="mb-1 text-base font-semibold">Transcription performance</FieldLegend>
+                <FieldSet className="gap-4 border-t border-border/60 pt-5">
+                  <FieldLegend className="mb-1 text-base font-semibold">Transcription performance</FieldLegend>
 
-                    <Field orientation="responsive" className="items-center gap-3">
-                      <FieldContent>
-                        <FieldTitle>Acceleration</FieldTitle>
-                        <FieldDescription>
-                          {(settings.transcription_acceleration ?? 'auto') === 'auto'
-                            ? 'Use GPU when available, fall back to CPU (recommended)'
-                            : (settings.transcription_acceleration ?? 'auto') === 'gpu'
-                              ? 'Always use the GPU'
-                              : 'Always use the CPU'}
-                        </FieldDescription>
-                      </FieldContent>
-                      <Select
-                        value={settings.transcription_acceleration ?? 'auto'}
-                        onValueChange={async (value: TranscriptionAcceleration) => {
-                          await updateSettings({
-                            transcription_acceleration: value,
-                          });
-                        }}
-                      >
-                        <SelectTrigger className="w-full md:w-[190px]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="auto">Auto</SelectItem>
-                          <SelectItem value="gpu">GPU</SelectItem>
-                          <SelectItem value="cpu">CPU</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </Field>
-                  </FieldSet>
+                  <Field orientation="responsive" className="items-center gap-3">
+                    <FieldContent>
+                      <FieldTitle>Acceleration</FieldTitle>
+                      <FieldDescription>
+                        {(settings.transcription_acceleration ?? 'auto') === 'auto'
+                          ? 'Use GPU when available, fall back to CPU (recommended)'
+                          : (settings.transcription_acceleration ?? 'auto') === 'gpu'
+                            ? 'Always use the GPU'
+                            : 'Always use the CPU'}
+                      </FieldDescription>
+                    </FieldContent>
+                    <Select
+                      value={settings.transcription_acceleration ?? 'auto'}
+                      onValueChange={(value: TranscriptionAcceleration) => {
+                        void handleAccelerationChange(value);
+                      }}
+                    >
+                      <SelectTrigger className="w-full md:w-[190px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">Auto</SelectItem>
+                        <SelectItem value="gpu">GPU</SelectItem>
+                        <SelectItem value="cpu">CPU</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+
+                  <div className="flex items-start justify-between gap-4 rounded-lg bg-muted/40 p-3">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">
+                        {accelerationStatus?.effective_backend === "vulkan"
+                          ? "GPU acceleration ready"
+                          : accelerationStatus?.effective_backend === "metal"
+                            ? "Using Metal acceleration"
+                            : accelerationStatus?.effective_backend === "cpu"
+                              ? "Using CPU mode"
+                              : "Acceleration status"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {accelerationStatus?.message ??
+                          "Voicetypr will test GPU acceleration when needed."}
+                      </p>
+                      {accelerationStatus?.diagnostic_code !== "ready" && (
+                        <p className="text-xs text-muted-foreground">
+                          {getAccelerationGuidance(accelerationStatus)}
+                        </p>
+                      )}
+                      {accelerationStatus?.last_error && (
+                        <p className="text-xs text-amber-600 dark:text-amber-500">
+                          {accelerationStatus.last_error}
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleTestAcceleration}
+                      disabled={testingAcceleration}
+                    >
+                      {testingAcceleration ? "Checking..." : isWindows ? "Test GPU" : "Check Status"}
+                    </Button>
+                  </div>
+                </FieldSet>
                 )}
 
                 <FieldSet className="gap-4 border-t border-border/60 pt-5">
@@ -839,7 +1013,6 @@ export function GeneralSettings() {
           </div>
 
           <NetworkSharingCard />
-
         </div>
       </ScrollArea>
     </div>

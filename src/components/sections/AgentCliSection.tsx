@@ -92,7 +92,7 @@ export function AgentCliSection() {
       <div className="rounded-lg border border-border/50 bg-card p-4 space-y-4">
         <p className="text-sm text-muted-foreground">
           Run transcription from your terminal — and let AI agents and scripts
-          drive VoiceTypr — with the{" "}
+          drive Voicetypr — with the{" "}
           <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
             voicetypr
           </code>{" "}

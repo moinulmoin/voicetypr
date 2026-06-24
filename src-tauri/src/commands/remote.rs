@@ -183,7 +183,7 @@ impl SharingStatusView {
 // Server Mode Commands
 // ============================================================================
 
-/// Start sharing the currently selected model with other VoiceTypr instances
+/// Start sharing the currently selected model with other Voicetypr instances
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn start_sharing(
@@ -217,7 +217,7 @@ pub async fn start_sharing(
         hostname::get()
             .ok()
             .and_then(|h| h.into_string().ok())
-            .unwrap_or_else(|| "VoiceTypr Server".to_string())
+            .unwrap_or_else(|| "Voicetypr Server".to_string())
     });
 
     // Get current model and engine from store
@@ -324,7 +324,7 @@ pub async fn start_sharing(
     Ok(())
 }
 
-/// Stop sharing models with other VoiceTypr instances
+/// Stop sharing models with other Voicetypr instances
 #[tauri::command]
 pub async fn stop_sharing(
     app: AppHandle,
@@ -568,7 +568,7 @@ fn apply_server_update(
 fn ensure_sharing_can_start(settings: &RemoteSettings) -> Result<(), String> {
     if settings.active_connection_id.is_some() {
         return Err(
-            "Network sharing is unavailable while using a remote VoiceTypr instance as your model source."
+            "Network sharing is unavailable while using a remote Voicetypr instance as your model source."
                 .to_string(),
         );
     }
@@ -585,7 +585,7 @@ fn ensure_remote_selection_is_allowed(
         .ok_or_else(|| format!("Server '{}' not found", server_id))?;
 
     if matches!(connection.status, ConnectionStatus::SelfConnection) {
-        return Err("Cannot use this VoiceTypr instance as its own remote server".to_string());
+        return Err("Cannot use this Voicetypr instance as its own remote server".to_string());
     }
 
     Ok(())
@@ -1053,7 +1053,7 @@ pub async fn set_active_remote_server(
 
         let refreshed_server = refresh_saved_connection_status(&app, id).await?;
         if matches!(refreshed_server.status, ConnectionStatus::SelfConnection) {
-            return Err("Cannot use this VoiceTypr instance as its own remote server".to_string());
+            return Err("Cannot use this Voicetypr instance as its own remote server".to_string());
         }
 
         log::info!(
@@ -1245,7 +1245,7 @@ pub async fn set_active_remote_server(
         let server_name = hostname::get()
             .ok()
             .and_then(|h| h.into_string().ok())
-            .unwrap_or_else(|| "VoiceTypr Server".to_string());
+            .unwrap_or_else(|| "Voicetypr Server".to_string());
 
         log::info!(
             "⏱️ [TIMING] Getting model path... (+{}ms)",
@@ -1755,7 +1755,7 @@ pub fn load_remote_settings(app: &AppHandle) -> RemoteSettings {
     settings
 }
 
-/// Get the unique machine ID for this VoiceTypr instance
+/// Get the unique machine ID for this Voicetypr instance
 /// Used to prevent adding self as a remote server
 #[tauri::command]
 pub fn get_local_machine_id() -> Result<String, String> {
@@ -1771,7 +1771,7 @@ pub fn get_local_machine_id() -> Result<String, String> {
 pub struct FirewallStatus {
     /// Whether the system firewall is enabled
     pub firewall_enabled: bool,
-    /// Whether VoiceTypr is allowed through the firewall
+    /// Whether Voicetypr is allowed through the firewall
     pub app_allowed: bool,
     /// Whether incoming connections may be blocked
     pub may_be_blocked: bool,
@@ -1803,7 +1803,7 @@ pub fn get_firewall_status() -> FirewallStatus {
             };
         }
 
-        // Check if VoiceTypr is in the allow list
+        // Check if Voicetypr is in the allow list
         // The output format is:
         //   60 : /Applications/Voicetypr.app
         //              (Allow incoming connections)
@@ -1849,7 +1849,7 @@ pub fn get_firewall_status() -> FirewallStatus {
         // On Windows, we don't show a proactive firewall warning because:
         // 1. Windows Firewall shows its own popup when an app starts listening on a port
         // 2. We can't reliably detect if traffic is actually blocked without testing
-        // 3. Checking for a rule named "VoiceTypr" is unreliable - user may have clicked
+        // 3. Checking for a rule named "Voicetypr" is unreliable - user may have clicked
         //    "Allow" in the Windows popup, which creates a rule with a different name
         //
         // If users have connection issues, they'll troubleshoot from there.
@@ -2019,7 +2019,7 @@ mod tests {
         assert_eq!(
             result,
             Err(
-                "Network sharing is unavailable while using a remote VoiceTypr instance as your model source."
+                "Network sharing is unavailable while using a remote Voicetypr instance as your model source."
                     .to_string()
             )
         );
@@ -2069,7 +2069,7 @@ mod tests {
 
         assert_eq!(
             result,
-            Err("Cannot use this VoiceTypr instance as its own remote server".to_string())
+            Err("Cannot use this Voicetypr instance as its own remote server".to_string())
         );
     }
 

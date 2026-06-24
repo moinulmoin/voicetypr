@@ -1,6 +1,6 @@
 //! Remote transcription server
 //!
-//! HTTP server that allows other VoiceTypr instances to use this machine's
+//! HTTP server that allows other Voicetypr instances to use this machine's
 //! transcription capabilities.
 
 use serde::{ser::SerializeStruct, Deserialize, Serialize};

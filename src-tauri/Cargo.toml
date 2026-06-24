@@ -96,9 +96,11 @@ whisper-rs = { version = "0.16.0" }
 [target.'cfg(target_os = "windows")'.dependencies]
 whisper-rs = { version = "0.16.0", features = ["openmp"] }
 windows = { version = "0.62", features = [
+    "ApplicationModel",
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_LibraryLoader",
     "Media_Control",
     "Foundation",
     "Win32_Graphics_Dxgi",

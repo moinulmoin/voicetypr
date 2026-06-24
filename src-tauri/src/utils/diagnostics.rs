@@ -1,4 +1,4 @@
-/// Unified diagnostics module for VoiceTypr
+/// Unified diagnostics module for Voicetypr
 ///
 /// This module consolidates system monitoring, network diagnostics, and operational logging
 /// into a cohesive interface that provides comprehensive debugging capabilities while

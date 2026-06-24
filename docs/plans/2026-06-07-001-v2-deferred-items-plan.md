@@ -1,4 +1,4 @@
-# VoiceTypr V2 — Deferred Items Execution Plan
+# Voicetypr V2 — Deferred Items Execution Plan
 
 - **Date:** 2026-06-07
 - **Branch:** `plan/v2-roadmap`
@@ -51,7 +51,7 @@ graph TD
 - **Scope:** Verify the packaged Windows x64 app on real Windows hardware/runner: GPU (Vulkan sidecar) path, CPU fallback, updater artifact/signature.
 - **Key files:** `.github/workflows/release.yml` (Windows job), `scripts/release-windows.ps1`, `src-tauri/build.rs` (x64 sidecar TARGET gate), `src-tauri/windows/assert-no-vulkan-import.ps1`, `src-tauri/tauri.windows.conf.json`, `src-tauri/windows/installer-hooks.nsh`.
 - **Acceptance:**
-  - `workflow_dispatch` build produces `VoiceTypr_<version>_x64-setup.exe` + `.sig`.
+  - `workflow_dispatch` build produces `Voicetypr_<version>_x64-setup.exe` + `.sig`.
   - `assert-no-vulkan-import.ps1` passes on `voicetypr.exe` (main process is CPU-safe, no `vulkan-1.dll` import).
   - Installs cleanly; launches without requiring `vulkan-1.dll` for the main process.
   - Acceleration `cpu`: known WAV transcribes, logs show CPU path.

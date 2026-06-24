@@ -205,13 +205,13 @@ describe("OnboardingDesktop", () => {
     expect(startRecordingMock).toHaveBeenCalledTimes(1);
 
     emit("transcription-added", {
-      text: "Hello from VoiceTypr onboarding.",
+      text: "Hello from Voicetypr onboarding.",
       model: "base.en",
       timestamp: "2026-05-18T00:00:00Z",
     });
 
     await waitFor(() => expect(reviewButton).toBeEnabled());
-    expect(screen.getByText("Hello from VoiceTypr onboarding.")).toBeInTheDocument();
+    expect(screen.getByText("Hello from Voicetypr onboarding.")).toBeInTheDocument();
 
     await user.click(reviewButton);
     await user.click(screen.getByRole("button", { name: /go to dashboard/i }));
@@ -431,7 +431,7 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use another VoiceTypr"));
+    await user.click(screen.getByText("Use another Voicetypr"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
@@ -441,7 +441,7 @@ describe("OnboardingDesktop", () => {
     expect(screen.getByText(/select a downloaded model/i)).toBeInTheDocument();
   });
 
-  it("allows an online remote VoiceTypr source without a local model", async () => {
+  it("allows an online remote Voicetypr source without a local model", async () => {
     const user = userEvent.setup();
     settingsState.current_model = "";
     modelManagement.models = {} as Record<string, any>;
@@ -486,7 +486,7 @@ describe("OnboardingDesktop", () => {
     renderOnboarding();
 
     await user.click(screen.getByRole("button", { name: /start setup/i }));
-    await user.click(screen.getByText("Use another VoiceTypr"));
+    await user.click(screen.getByText("Use another Voicetypr"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.click(screen.getByRole("button", { name: /continue/i }));
 

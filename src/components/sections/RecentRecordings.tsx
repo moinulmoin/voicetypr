@@ -132,19 +132,19 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     readiness.licenseStatus === "expired" || readiness.licenseStatus === "none"
       ? "Activate a license to record again."
       : readiness.hasModels === false || readiness.selectedModelAvailable === false
-        ? "Choose a ready local model, cloud provider, or remote VoiceTypr source in Models."
+        ? "Choose a ready local model, cloud provider, or remote Voicetypr source in Models."
         : isMacOS && readiness.hasMicrophonePermission === false
           ? "Allow microphone access in macOS Settings."
           : "Finish setup in Settings before recording.";
 
   const resolveCurrentTranscriptionSource = useCallback(async (): Promise<CurrentTranscriptionSource | null> => {
     const activeRemoteServerId = await invoke<string | null>("get_active_remote_server").catch((error) => {
-      log.error("Failed to resolve active remote VoiceTypr:", error);
+      log.error("Failed to resolve active remote Voicetypr:", error);
       return null;
     });
 
     if (activeRemoteServerId) {
-      let displayBase = "Remote VoiceTypr";
+      let displayBase = "Remote Voicetypr";
       let remoteModel = "";
 
       try {
@@ -155,7 +155,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
           remoteModel = server.model ?? "";
         }
       } catch (error) {
-        log.error("Failed to load active remote VoiceTypr label:", error);
+        log.error("Failed to load active remote Voicetypr label:", error);
       }
 
       const modelDisplayName = getModelDisplayName(remoteModel) ?? remoteModel;
@@ -298,7 +298,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
 
       if (currentSource.type === 'remote') {
         if (!currentSource.serverId) {
-          throw new Error("No active remote VoiceTypr source selected");
+          throw new Error("No active remote Voicetypr source selected");
         }
 
         result = await invoke<string>('transcribe_remote', {

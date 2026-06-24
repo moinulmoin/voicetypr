@@ -562,6 +562,14 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         .and_then(|v| v.as_u64())
         .map(|v| v as u32)
         .unwrap_or_else(|| Settings::default().pill_indicator_offset);
+    let old_transcription_acceleration = normalize_stored_transcription_acceleration(
+        store
+            .get("transcription_acceleration")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .as_deref(),
+    );
+    let normalized_transcription_acceleration =
+        normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
 
     if settings.recording_mode == "push_to_talk" && settings.use_different_ptt_key {
         if let Some(ptt_hotkey) = settings.ptt_hotkey.as_deref() {
@@ -693,7 +701,7 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     );
     store.set(
         "transcription_acceleration",
-        json!(settings.transcription_acceleration),
+        json!(&normalized_transcription_acceleration),
     );
 
     // Network sharing settings
@@ -745,6 +753,14 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     if let Ok(mut mode_guard) = app_state.recording_mode.lock() {
         *mode_guard = recording_mode;
         log::info!("Recording mode updated to: {:?}", recording_mode);
+    }
+
+    if old_transcription_acceleration != normalized_transcription_acceleration {
+        log::info!(
+            "Transcription acceleration updated: {} -> {}",
+            old_transcription_acceleration,
+            normalized_transcription_acceleration
+        );
     }
 
     // Invalidate recording config cache when settings change
@@ -1208,7 +1224,7 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
                 .ok_or_else(|| format!("Connection '{}' not found", connection_id))?;
 
             if !should_include_remote_connection_in_tray(&connection.status) {
-                return Err("Cannot select this VoiceTypr instance as a remote server".to_string());
+                return Err("Cannot select this Voicetypr instance as a remote server".to_string());
             }
         }
 
@@ -1218,7 +1234,7 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
             refreshed_connection.status,
             ConnectionStatus::SelfConnection
         ) {
-            return Err("Cannot use this VoiceTypr instance as its own remote server".to_string());
+            return Err("Cannot use this Voicetypr instance as its own remote server".to_string());
         }
 
         // Stop network sharing if enabled (can't share while using remote)
@@ -1298,7 +1314,7 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
             let server_name = hostname::get()
                 .ok()
                 .and_then(|h| h.into_string().ok())
-                .unwrap_or_else(|| "VoiceTypr Server".to_string());
+                .unwrap_or_else(|| "Voicetypr Server".to_string());
 
             log::info!(
                 "🔧 [TRAY] Auto-restoring network sharing on port {} with model {}",
@@ -1590,6 +1606,89 @@ pub async fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String
     log::info!("Autostart set: requested={}, actual={}", enabled, actual);
 
     Ok(actual)
+}
+
+#[tauri::command]
+pub async fn get_transcription_acceleration_status(
+    app: AppHandle,
+) -> Result<crate::whisper::gpu_sidecar::AccelerationRuntimeStatus, String> {
+    let settings = get_settings(app.clone()).await?;
+    let mode =
+        normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
+
+    if mode == "cpu" {
+        return Ok(crate::whisper::gpu_sidecar::AccelerationRuntimeStatus {
+            mode,
+            effective_backend: "cpu".to_string(),
+            gpu_available: None,
+            message: "CPU mode is selected. GPU acceleration will not be used.".to_string(),
+            last_error: None,
+            diagnostic_code: "cpu_selected".to_string(),
+            recommended_action: "none".to_string(),
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(crate::whisper::gpu_sidecar::AccelerationRuntimeStatus {
+            mode,
+            effective_backend: if cfg!(target_os = "macos") {
+                "metal".to_string()
+            } else {
+                "cpu".to_string()
+            },
+            gpu_available: None,
+            message: "This acceleration setting applies to Windows Vulkan builds.".to_string(),
+            last_error: None,
+            diagnostic_code: "unsupported_platform".to_string(),
+            recommended_action: "none".to_string(),
+        })
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+        let mut status = client.status().await;
+        status.mode = mode;
+        Ok(status)
+    }
+}
+
+#[tauri::command]
+pub async fn test_transcription_acceleration(
+    app: AppHandle,
+) -> Result<crate::whisper::gpu_sidecar::AccelerationRuntimeStatus, String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        get_transcription_acceleration_status(app).await
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let settings = get_settings(app.clone()).await?;
+        if settings.current_model_engine != "whisper" {
+            return Err(
+                "GPU acceleration testing is only available for local Whisper models.".to_string(),
+            );
+        }
+
+        let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
+        let model_path = {
+            let manager = whisper_state.read().await;
+            manager
+                .get_model_path(&settings.current_model)
+                .ok_or_else(|| {
+                    "Select or download a local Whisper model before testing GPU acceleration."
+                        .to_string()
+                })?
+        };
+
+        let mode =
+            normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
+        let client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
+        client.probe(&app, &model_path, &mode).await?;
+        Ok(client.status().await)
+    }
 }
 
 #[cfg(test)]

@@ -2057,7 +2057,7 @@ mod tests {
     fn test_compile_parakeet_custom_vocabulary_includes_enabled_words_only() {
         let settings = WritingSettings {
             custom_words: vec![
-                custom_word("VoiceTypr", Some("voice typer"), Some("en"), true),
+                custom_word("Voicetypr", Some("voice typer"), Some("en"), true),
                 custom_word("DisabledTerm", Some("disabled term"), Some("en"), false),
             ],
             ..WritingSettings::default()
@@ -2065,7 +2065,7 @@ mod tests {
 
         let terms = compile_parakeet_custom_vocabulary(&settings, Some("en"));
         assert_eq!(terms.len(), 1);
-        assert_eq!(terms[0].text, "VoiceTypr");
+        assert_eq!(terms[0].text, "Voicetypr");
         assert_eq!(terms[0].aliases, vec!["voice typer"]);
     }
 
@@ -2073,7 +2073,7 @@ mod tests {
     fn test_compile_parakeet_custom_vocabulary_honors_language_scope() {
         let settings = WritingSettings {
             custom_words: vec![
-                custom_word("VoiceTypr", None, Some("en"), true),
+                custom_word("Voicetypr", None, Some("en"), true),
                 custom_word("TermeFrançais", None, Some("fr"), true),
                 custom_word("GlobalTerm", None, None, true),
             ],
@@ -2082,7 +2082,7 @@ mod tests {
 
         let terms = compile_parakeet_custom_vocabulary(&settings, Some("en"));
         let texts: Vec<&str> = terms.iter().map(|term| term.text.as_str()).collect();
-        assert_eq!(texts, vec!["VoiceTypr", "GlobalTerm"]);
+        assert_eq!(texts, vec!["Voicetypr", "GlobalTerm"]);
     }
 
     #[test]
@@ -2106,7 +2106,7 @@ mod tests {
         let settings = WritingSettings {
             custom_words: vec![
                 custom_word("React", Some("react"), Some("en"), true),
-                custom_word("VoiceTypr", Some(" voice typer "), Some("en"), true),
+                custom_word("Voicetypr", Some(" voice typer "), Some("en"), true),
                 custom_word("Tauri", Some("   "), Some("en"), true),
             ],
             ..WritingSettings::default()
@@ -2122,16 +2122,16 @@ mod tests {
     fn test_compile_parakeet_custom_vocabulary_dedupes_terms_and_aliases() {
         let settings = WritingSettings {
             custom_words: vec![
-                custom_word("VoiceTypr", Some("voice typer"), Some("en"), true),
+                custom_word("Voicetypr", Some("voice typer"), Some("en"), true),
                 custom_word("voicetypr", Some("voice type her"), Some("en"), true),
-                custom_word("VoiceTypr", Some("VOICE TYPER"), Some("en"), true),
+                custom_word("Voicetypr", Some("VOICE TYPER"), Some("en"), true),
             ],
             ..WritingSettings::default()
         };
 
         let terms = compile_parakeet_custom_vocabulary(&settings, Some("en"));
         assert_eq!(terms.len(), 1);
-        assert_eq!(terms[0].text, "VoiceTypr");
+        assert_eq!(terms[0].text, "Voicetypr");
         assert_eq!(terms[0].aliases, vec!["voice typer", "voice type her"]);
     }
 
@@ -2139,7 +2139,7 @@ mod tests {
     fn test_compile_parakeet_custom_vocabulary_strips_control_chars() {
         let settings = WritingSettings {
             custom_words: vec![custom_word(
-                " Voice\0Typr\n ",
+                " Voice\0typr\n ",
                 Some("voice\ttyp\0er"),
                 Some("en"),
                 true,
@@ -2148,7 +2148,7 @@ mod tests {
         };
 
         let terms = compile_parakeet_custom_vocabulary(&settings, Some("en"));
-        assert_eq!(terms[0].text, "VoiceTypr");
+        assert_eq!(terms[0].text, "Voicetypr");
         assert_eq!(terms[0].aliases, vec!["voicetyper"]);
     }
 
@@ -2157,7 +2157,7 @@ mod tests {
         let settings = WritingSettings {
             replacements: vec![TextReplacementRule {
                 from: "voice typer".to_string(),
-                to: "VoiceTypr".to_string(),
+                to: "Voicetypr".to_string(),
                 language: Some("en".to_string()),
                 enabled: true,
             }],
@@ -2369,7 +2369,7 @@ mod tests {
             replacements: vec![
                 TextReplacementRule {
                     from: " voice typer ".to_string(),
-                    to: " VoiceTypr ".to_string(),
+                    to: " Voicetypr ".to_string(),
                     language: Some(" en ".to_string()),
                     enabled: true,
                 },
@@ -2399,7 +2399,7 @@ mod tests {
 
         assert_eq!(settings.replacements.len(), 1);
         assert_eq!(settings.replacements[0].from, "voice typer");
-        assert_eq!(settings.replacements[0].to, "VoiceTypr");
+        assert_eq!(settings.replacements[0].to, "Voicetypr");
         assert_eq!(settings.custom_words.len(), 1);
         assert_eq!(settings.custom_words[0].phrase, "OpenAI");
         assert_eq!(
@@ -2415,12 +2415,12 @@ mod tests {
     fn test_apply_text_replacements_prefers_explicit_rules() {
         let replacements = vec![TextReplacementRule {
             from: "voice typer".to_string(),
-            to: "VoiceTypr".to_string(),
+            to: "Voicetypr".to_string(),
             language: Some("en".to_string()),
             enabled: true,
         }];
         let custom_words = vec![CustomWord {
-            phrase: "VoiceTypr".to_string(),
+            phrase: "Voicetypr".to_string(),
             spoken_form: Some("voice typer".to_string()),
             language: Some("en".to_string()),
             enabled: true,
@@ -2433,7 +2433,7 @@ mod tests {
             Some("en"),
         );
 
-        assert_eq!(text, "VoiceTypr rules");
+        assert_eq!(text, "Voicetypr rules");
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].kind, WritingOperationKind::Replacement);
     }
@@ -2444,7 +2444,7 @@ mod tests {
             "voice typer launched",
             &[],
             &[CustomWord {
-                phrase: "VoiceTypr".to_string(),
+                phrase: "Voicetypr".to_string(),
                 spoken_form: Some("voice typer".to_string()),
                 language: Some("en".to_string()),
                 enabled: true,
@@ -2452,7 +2452,7 @@ mod tests {
             Some("en"),
         );
 
-        assert_eq!(text, "VoiceTypr launched");
+        assert_eq!(text, "Voicetypr launched");
         assert_eq!(ops.len(), 1);
     }
 
@@ -2578,7 +2578,7 @@ mod tests {
     fn test_smart_formatting_ai_context_supplies_flat_term_list() {
         let settings = WritingSettings {
             custom_words: vec![CustomWord {
-                phrase: "VoiceTypr".to_string(),
+                phrase: "Voicetypr".to_string(),
                 spoken_form: Some("voice typer".to_string()),
                 language: Some("en".to_string()),
                 enabled: true,
@@ -2590,7 +2590,7 @@ mod tests {
 
         // Flat, terms-only list: mishearing bridge rendered, no framing
         // sentence, no app hint.
-        assert_eq!(context, "VoiceTypr (may be heard as: voice typer)");
+        assert_eq!(context, "Voicetypr (may be heard as: voice typer)");
         assert!(!context.contains("Preferred"));
         assert!(!context.contains("Preserve"));
         assert!(!context.contains("Mail"));
@@ -2600,7 +2600,7 @@ mod tests {
     fn test_build_ai_context_emits_terms_only() {
         let context = build_ai_context(
             &[CustomWord {
-                phrase: "VoiceTypr".to_string(),
+                phrase: "Voicetypr".to_string(),
                 spoken_form: Some("voice typer".to_string()),
                 language: Some("en".to_string()),
                 enabled: true,
@@ -2609,7 +2609,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(context, "VoiceTypr (may be heard as: voice typer)");
+        assert_eq!(context, "Voicetypr (may be heard as: voice typer)");
         assert!(!context.contains("Mail"));
     }
 
@@ -2662,7 +2662,7 @@ mod tests {
     fn test_compile_context_removes_nul_bytes() {
         let settings = WritingSettings {
             custom_words: vec![CustomWord {
-                phrase: "Voice\0Typr".to_string(),
+                phrase: "Voice\0typr".to_string(),
                 spoken_form: Some("voice\0typer".to_string()),
                 language: Some("en".to_string()),
                 enabled: true,
@@ -2678,7 +2678,7 @@ mod tests {
         .unwrap();
 
         assert!(!context.contains('\0'));
-        assert!(context.contains("VoiceTypr"));
+        assert!(context.contains("Voicetypr"));
     }
 
     #[test]
@@ -2751,7 +2751,7 @@ mod tests {
         let context = build_ai_context(
             &[
                 CustomWord {
-                    phrase: "VoiceTypr".to_string(),
+                    phrase: "Voicetypr".to_string(),
                     spoken_form: Some("voice typer".to_string()),
                     language: Some("en".to_string()),
                     enabled: true,
@@ -2773,7 +2773,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(context.contains("VoiceTypr"));
+        assert!(context.contains("Voicetypr"));
         assert!(!context.contains("DisabledTerm"));
         assert!(!context.contains("TermeFrançais"));
     }
@@ -2783,7 +2783,7 @@ mod tests {
         let settings = WritingSettings {
             replacements: vec![TextReplacementRule {
                 from: "voice typer".to_string(),
-                to: "VoiceTypr".to_string(),
+                to: "Voicetypr".to_string(),
                 language: Some("en".to_string()),
                 enabled: true,
             }],
@@ -2818,7 +2818,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(context.contains("VoiceTypr"));
+        assert!(context.contains("Voicetypr"));
         assert!(context.contains("voice typer"));
         assert!(context.contains("Tauri"));
         assert!(!context.contains("DisabledTerm"));
@@ -2858,7 +2858,7 @@ mod tests {
             "voice typer uses react",
             &[TextReplacementRule {
                 from: "voice typer".to_string(),
-                to: "VoiceTypr".to_string(),
+                to: "Voicetypr".to_string(),
                 language: Some("en".to_string()),
                 enabled: true,
             }],
@@ -2871,10 +2871,10 @@ mod tests {
             Some("en"),
         );
 
-        assert_eq!(result.text, "VoiceTypr uses React");
+        assert_eq!(result.text, "Voicetypr uses React");
         assert_eq!(result.provenance.len(), 2);
         assert_eq!(result.provenance[0].source_form, "voice typer");
-        assert_eq!(result.provenance[0].target_text, "VoiceTypr");
+        assert_eq!(result.provenance[0].target_text, "Voicetypr");
         assert_eq!(
             result.provenance[0].source_kind,
             LibraryRuleSourceKind::ExplicitReplacement
@@ -2904,13 +2904,13 @@ mod tests {
             "voice typer",
             &[TextReplacementRule {
                 from: "voice typer".to_string(),
-                to: "VoiceTypr".to_string(),
+                to: "Voicetypr".to_string(),
                 language: Some("en".to_string()),
                 enabled: true,
             }],
             &[
                 CustomWord {
-                    phrase: "VoiceTypr".to_string(),
+                    phrase: "Voicetypr".to_string(),
                     spoken_form: Some("voice typer".to_string()),
                     language: Some("en".to_string()),
                     enabled: true,
@@ -2931,7 +2931,7 @@ mod tests {
             Some("en"),
         );
 
-        assert_eq!(result.text, "VoiceTypr");
+        assert_eq!(result.text, "Voicetypr");
         assert_eq!(result.provenance.len(), 1);
         assert_eq!(
             result.provenance[0].source_kind,
@@ -2945,7 +2945,7 @@ mod tests {
             "voice typer is fast",
             &[TextReplacementRule {
                 from: "voice typer".to_string(),
-                to: "VoiceTypr".to_string(),
+                to: "Voicetypr".to_string(),
                 language: Some("en".to_string()),
                 enabled: true,
             }],
@@ -2960,7 +2960,7 @@ mod tests {
             false,
         );
 
-        assert_eq!(guarded, "VoiceTypr is fast");
+        assert_eq!(guarded, "Voicetypr is fast");
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].kind, WritingOperationKind::FinalGuard);
 
@@ -2974,7 +2974,7 @@ mod tests {
     fn test_final_guard_skips_literal_and_language_transform_paths() {
         let provenance = vec![LibraryRuleApplication {
             source_form: "voice typer".to_string(),
-            target_text: "VoiceTypr".to_string(),
+            target_text: "Voicetypr".to_string(),
             source_kind: LibraryRuleSourceKind::ExplicitReplacement,
             language_scope: Some("en".to_string()),
             start: 0,
@@ -3350,7 +3350,7 @@ mod tests {
     fn test_voice_commands_refresh_final_guard_positions() {
         let settings = WritingSettings {
             custom_words: vec![CustomWord {
-                phrase: "VoiceTypr".to_string(),
+                phrase: "Voicetypr".to_string(),
                 spoken_form: Some("voice typer".to_string()),
                 language: Some("en".to_string()),
                 enabled: true,
@@ -3367,11 +3367,11 @@ mod tests {
 
         apply_voice_command_stage(&mut result, &settings, Some("en"), &mut ops);
 
-        assert_eq!(result.text, "hello, VoiceTypr");
+        assert_eq!(result.text, "hello, Voicetypr");
         assert_eq!(result.provenance[0].target_start, 7);
         let (guarded, guard_ops) =
             apply_final_restoration_guard("hello, voice typer", &result.provenance, false, false);
-        assert_eq!(guarded, "hello, VoiceTypr");
+        assert_eq!(guarded, "hello, Voicetypr");
         assert_eq!(guard_ops.len(), 1);
     }
 
@@ -3394,7 +3394,7 @@ mod tests {
         let settings = WritingSettings {
             custom_words: vec![
                 CustomWord {
-                    phrase: "VoiceTypr".to_string(),
+                    phrase: "Voicetypr".to_string(),
                     spoken_form: Some("voice typer".to_string()),
                     language: Some("en".to_string()),
                     enabled: true,
@@ -3425,7 +3425,7 @@ mod tests {
 
         assert_eq!(
             context.terms,
-            vec!["VoiceTypr".to_string(), "React".to_string()]
+            vec!["Voicetypr".to_string(), "React".to_string()]
         );
         assert!(!context.terms.iter().any(|term| term == "DisabledTerm"));
         assert!(!context.terms.iter().any(|term| term == "TermeFrançais"));
@@ -3436,14 +3436,14 @@ mod tests {
     fn test_compile_soniox_context_puts_spoken_forms_and_sources_in_text() {
         let settings = WritingSettings {
             custom_words: vec![CustomWord {
-                phrase: "VoiceTypr".to_string(),
+                phrase: "Voicetypr".to_string(),
                 spoken_form: Some("voice typer".to_string()),
                 language: Some("en".to_string()),
                 enabled: true,
             }],
             replacements: vec![TextReplacementRule {
                 from: "voice type her".to_string(),
-                to: "VoiceTypr".to_string(),
+                to: "Voicetypr".to_string(),
                 language: Some("en".to_string()),
                 enabled: true,
             }],
@@ -3453,8 +3453,8 @@ mod tests {
         let context = compile_soniox_context(&settings, Some("en")).unwrap();
         let text = context.text.unwrap();
 
-        assert!(text.contains("voice typer -> VoiceTypr"));
-        assert!(text.contains("voice type her -> VoiceTypr"));
+        assert!(text.contains("voice typer -> Voicetypr"));
+        assert!(text.contains("voice type her -> Voicetypr"));
         assert!(!context.terms.contains(&"voice typer".to_string()));
         assert!(!context.terms.contains(&"voice type her".to_string()));
     }
@@ -3463,7 +3463,7 @@ mod tests {
     fn test_compile_soniox_context_excludes_snippets() {
         let settings = WritingSettings {
             custom_words: vec![CustomWord {
-                phrase: "VoiceTypr".to_string(),
+                phrase: "Voicetypr".to_string(),
                 spoken_form: None,
                 language: Some("en".to_string()),
                 enabled: true,
@@ -3489,14 +3489,14 @@ mod tests {
     fn test_compile_soniox_context_strips_nul_bytes() {
         let settings = WritingSettings {
             custom_words: vec![CustomWord {
-                phrase: "Voice\0Typr".to_string(),
+                phrase: "Voice\0typr".to_string(),
                 spoken_form: Some("voice \0typer".to_string()),
                 language: Some("en".to_string()),
                 enabled: true,
             }],
             replacements: vec![TextReplacementRule {
                 from: "voice type\0 her".to_string(),
-                to: "Voice\0Typr".to_string(),
+                to: "Voice\0typr".to_string(),
                 language: Some("en".to_string()),
                 enabled: true,
             }],
@@ -3507,8 +3507,8 @@ mod tests {
         let serialized = serde_json::to_string(&context).unwrap();
 
         assert!(!serialized.contains('\0'));
-        assert!(context.terms.contains(&"VoiceTypr".to_string()));
-        assert!(context.text.unwrap().contains("voice typer -> VoiceTypr"));
+        assert!(context.terms.contains(&"Voicetypr".to_string()));
+        assert!(context.text.unwrap().contains("voice typer -> Voicetypr"));
     }
 
     #[test]
@@ -3544,7 +3544,7 @@ mod tests {
             custom_words,
             replacements: vec![TextReplacementRule {
                 from: "voice type her".to_string(),
-                to: "VoiceTypr".to_string(),
+                to: "Voicetypr".to_string(),
                 language: Some("en".to_string()),
                 enabled: true,
             }],
@@ -3574,7 +3574,7 @@ mod tests {
     fn test_compile_deepgram_keyterms_includes_enabled_language_matching_phrases() {
         let settings = WritingSettings {
             custom_words: vec![
-                custom_word("VoiceTypr", Some("voice typer"), Some("en"), true),
+                custom_word("Voicetypr", Some("voice typer"), Some("en"), true),
                 custom_word("DisabledTerm", None, Some("en"), false),
                 custom_word("TermeFrançais", None, Some("fr"), true),
             ],
@@ -3585,7 +3585,7 @@ mod tests {
 
         assert_eq!(
             terms,
-            vec!["VoiceTypr".to_string(), "voice typer".to_string()]
+            vec!["Voicetypr".to_string(), "voice typer".to_string()]
         );
     }
 

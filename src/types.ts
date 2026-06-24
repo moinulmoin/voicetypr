@@ -1,7 +1,7 @@
 export type SpeechModelEngine = 'whisper' | 'parakeet' | 'soniox' | 'openai' | 'groq' | 'deepgram' | 'cohere';
 export type ModelKind = 'local' | 'cloud';
 
-/** A downloaded shareable model exposed by a remote VoiceTypr host. */
+/** A downloaded shareable model exposed by a remote Voicetypr host. */
 export interface RemoteShareableModel {
   id: string;
   display_name: string;

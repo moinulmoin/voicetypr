@@ -61,7 +61,7 @@ Clicking the icon shows a popout menu:
 - Header: "Re-transcribe using..."
 - Lists all available transcription sources:
   - Local models (downloaded Whisper models)
-  - Remote models (connected VoiceTypr instances that are online)
+  - Remote models (connected Voicetypr instances that are online)
   - API sources (e.g., Soniox if configured)
 - Only shows sources that are currently available/online
 

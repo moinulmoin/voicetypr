@@ -235,7 +235,7 @@ Behavior (snapshot at start; one route; return existing `TranscriptionResult`):
 - Change `/api/v1/transcribe` to multipart or touch `StatusResponse` /
   `RemoteCapabilities` / `ErrorResponse` wire shapes (Stages 4-5).
 - Delete `TranscriptionFailure`, `remote::client::TranscriptionRequest`, base64
-  `X-VoiceTypr-Context`, or any duplicate engine-routing branch (Stage 6).
+  `X-Voicetypr-Context`, or any duplicate engine-routing branch (Stage 6).
 - Add the `TranscriptionExecutor` trait (Stage 4).
 
 ## Tests (focused, no real keys/engines)

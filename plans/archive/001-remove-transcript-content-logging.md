@@ -22,7 +22,7 @@
 
 ## Why this matters
 
-VoiceTypr's product promise is private, offline dictation. Today every
+Voicetypr's product promise is private, offline dictation. Today every
 transcription is written **in full** to the app's rotating log files: the text
 placed on the clipboard is logged, the clipboard is read back and logged again,
 and each Whisper segment is logged individually. The bug-report feature

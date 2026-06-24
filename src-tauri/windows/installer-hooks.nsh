@@ -1,5 +1,5 @@
 ; Windows installer hook: VC++ runtime + optional bundled Vulkan Runtime installer.
-; VoiceTypr's main executable is CPU-safe; Vulkan is isolated in a sidecar.
+; Voicetypr's main executable is CPU-safe; Vulkan is isolated in a sidecar.
 
 !include "LogicLib.nsh"
 
@@ -29,7 +29,7 @@
             DetailPrint "Visual C++ Runtime already installed (newer or same version)"
         ${Else}
             DetailPrint "Visual C++ Runtime installer returned code $1"
-            MessageBox MB_ICONEXCLAMATION "Visual C++ Runtime installation returned code $1. VoiceTypr may fail to start if the runtime is missing."
+            MessageBox MB_ICONEXCLAMATION "Visual C++ Runtime installation returned code $1. Voicetypr may fail to start if the runtime is missing."
         ${EndIf}
 
         Delete "$TEMP\vc_redist.x64.exe"
@@ -53,7 +53,7 @@
         ${ElseIf} $1 == 1638
             DetailPrint "Vulkan Runtime already installed (newer or same version)"
         ${Else}
-            DetailPrint "Vulkan Runtime installer returned code $1; VoiceTypr will use CPU fallback if GPU acceleration is unavailable"
+            DetailPrint "Vulkan Runtime installer returned code $1; Voicetypr will use CPU fallback if GPU acceleration is unavailable"
         ${EndIf}
 
         Delete "$TEMP\VulkanRT-Installer.exe"

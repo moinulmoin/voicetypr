@@ -125,7 +125,7 @@ On a modifier press transition matching (modifier, side|Either) → `Pressed`; o
 On a press of the TapKey (for `Mod`, a FlagsChanged/VK modifier press; for `Key`, a KeyDown), if a previous press of the *same* TapKey occurred within `within` AND a release was seen in between (`saw_up`) AND the current press is not a repeat → emit `Pressed` then `Released` **same-tick** (one-shot; no separate `Fired` phase — keeps the existing pressed/toggle state machine intact). Reset the tap record after firing. For `Mod`, side semantics follow `Side` (Left/Right/Either); Left-Cmd then Right-Cmd is NOT a double-tap unless `Either`.
 
 ### 6.6 Reset / set_bindings / stop ordering (BLOCKER fix)
-Before clearing any `active`/`keys_down`/`mods_down` or swapping bindings, **synthesize `Released` for every currently-active `TriggerId` and dispatch it through the normal `on_event` path** so VoiceTypr's pressed/hold/toggle AppState clears (no stuck recording). `set_bindings` diff: for bindings removed or whose `Trigger` changed while active, emit synthetic `Released` first, then apply.
+Before clearing any `active`/`keys_down`/`mods_down` or swapping bindings, **synthesize `Released` for every currently-active `TriggerId` and dispatch it through the normal `on_event` path** so Voicetypr's pressed/hold/toggle AppState clears (no stuck recording). `set_bindings` diff: for bindings removed or whose `Trigger` changed while active, emit synthetic `Released` first, then apply.
 
 ### 6.7 Session/desync reconciliation (SHOULD-FIX)
 - On (re)start, tap re-enable, and focus/session events: reset `keys_down`/`mods_down`/`active` (after synthesizing Released per §6.6).
@@ -148,7 +148,7 @@ Matcher is a pure function of (normalized event stream, bindings, injected clock
 
 ---
 
-## 8. VoiceTypr integration
+## 8. Voicetypr integration
 
 - New module `src-tauri/src/trigger/`: `engine_host.rs` (owns engine, lifecycle, accessibility subscription), `mapping.rs` (`ShortcutBinding`→`Trigger`), `dispatch.rs` (`on_event`→action).
 - **Seam fix (BLOCKER):** `dispatch_custom_shortcut` is private + `RegisteredShortcutBinding` is tauri-`Shortcut`-shaped (no Shortcut for ModifierHold/DoubleTap). Introduce `EngineBinding{ id, action: ShortcutAction, trigger: ShortcutTrigger }` and a `pub(crate) fn dispatch_engine_event(app,&AppState,&EngineBinding, KeyPhase→ShortcutState)` that reuses `pressed_shortcut_should_run`/`hold_shortcut_transition` and the action match arms (refactor the match body out of `dispatch_custom_shortcut` into a shared `pub(crate)` `dispatch_action(app,&AppState,action,trigger,id,state)`; legacy path keeps its Shortcut lookup). Engine bindings live in their own `AppState` vec + active sets; legacy `Shortcut`-matching stays isolated.
@@ -165,7 +165,7 @@ Matcher is a pure function of (normalized event stream, bindings, injected clock
 
 ### P1 — `keytrigger` crate
 Scaffold + workspace wiring; full API; pure `Matcher` (§6); `MacEventTap` (ListenOnly, captured-port re-enable, CFRunLoop stop, reconciliation hooks); `WinKeyboardHook` (ready-handshake, unhook, restart-on-failure); `examples/print_triggers.rs`.
-- **Acceptance:** builds on macOS, compiles for Windows in CI; matcher unit tests cover §6.1-6.7 (hold, chord-every-event, single-bare, double-tap key+modifier, autorepeat, reset/set_bindings synth-release ordering, reconciliation); macOS example prints Pressed/Released for hold-Right-Option and double-tap-Cmd and survives an induced tap-timeout (re-enables). No VoiceTypr behavior change.
+- **Acceptance:** builds on macOS, compiles for Windows in CI; matcher unit tests cover §6.1-6.7 (hold, chord-every-event, single-bare, double-tap key+modifier, autorepeat, reset/set_bindings synth-release ordering, reconciliation); macOS example prints Pressed/Released for hold-Right-Option and double-tap-Cmd and survives an induced tap-timeout (re-enables). No Voicetypr behavior change.
 
 ### P2 — additive integration (ship the primary need) — **transitional**
 `trigger/` host+mapping+dispatch; engine in AppState; backend accessibility-grant subscription; `EngineBinding` seam; schema additions + routing so **ModifierHold/DoubleTap never enter the `global_shortcut` registration vector and Combo/SingleKey never enter engine bindings** (routing tests required). Picker UI. New availability: HoldToRecord via ModifierHold (Right-Option), ToggleRecording via DoubleTap.

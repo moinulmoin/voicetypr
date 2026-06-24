@@ -477,7 +477,7 @@ mod tests {
             audio_path: "/tmp/audio.wav".to_string(),
             language: Some("en".to_string()),
             translate: false,
-            initial_prompt: Some("VoiceTypr".to_string()),
+            initial_prompt: Some("Voicetypr".to_string()),
         };
 
         let json = serde_json::to_string(&original).expect("request should serialize");
@@ -498,7 +498,7 @@ mod tests {
                 assert_eq!(audio_path, "/tmp/audio.wav");
                 assert_eq!(language.as_deref(), Some("en"));
                 assert!(!translate);
-                assert_eq!(initial_prompt.as_deref(), Some("VoiceTypr"));
+                assert_eq!(initial_prompt.as_deref(), Some("Voicetypr"));
             }
             _ => panic!("expected transcribe request"),
         }

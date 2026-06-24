@@ -504,7 +504,7 @@ export function NetworkSharingCard() {
             <div>
               <h3 className="font-medium">Remote Transcription</h3>
               <p className="text-xs text-muted-foreground">
-                Use this device's transcription from another VoiceTypr app
+                Use this device's transcription from another Voicetypr app
               </p>
             </div>
           </div>
@@ -557,10 +557,10 @@ export function NetworkSharingCard() {
             <Network className="h-4 w-4 text-blue-500 mt-0.5 flex-shrink-0" />
             <div>
               <p className="text-sm font-medium text-blue-700 dark:text-blue-400">
-                Using remote VoiceTypr
+                Using remote Voicetypr
               </p>
               <p className="text-xs text-blue-600 dark:text-blue-500">
-                Remote transcription is unavailable while using another VoiceTypr device as your model source.
+                Remote transcription is unavailable while using another Voicetypr device as your model source.
               </p>
             </div>
           </div>
@@ -571,7 +571,7 @@ export function NetworkSharingCard() {
       {hasShareableModel && currentSelectionShareable && !status.enabled && modelDisplayName && !activeRemoteServer && (
         <div className="px-4 py-3">
           <p className="text-xs text-muted-foreground">
-            When enabled, another VoiceTypr app can use this device's{" "}
+            When enabled, another Voicetypr app can use this device's{" "}
             <span className="font-medium text-foreground">{modelDisplayName}</span>{" "}
             model for transcription.
           </p>
@@ -614,7 +614,7 @@ export function NetworkSharingCard() {
                         <li>Open <strong>System Settings → Network → Firewall</strong></li>
                         <li>Click <strong>Options...</strong></li>
                         <li>Click the <strong>+</strong> button at the bottom of the app list</li>
-                        <li>Navigate to <strong>Applications</strong> and select <strong>VoiceTypr</strong></li>
+                        <li>Navigate to <strong>Applications</strong> and select <strong>Voicetypr</strong></li>
                         <li>Ensure it's set to <strong>Allow incoming connections</strong></li>
                       </ol>
                     </>
@@ -629,14 +629,14 @@ export function NetworkSharingCard() {
                         <li>Click <strong>Allow an app through firewall</strong></li>
                         <li>Click <strong>Change settings</strong> (may require admin)</li>
                         <li>Click <strong>Allow another app...</strong></li>
-                        <li>Browse to and select <strong>VoiceTypr</strong></li>
+                        <li>Browse to and select <strong>Voicetypr</strong></li>
                         <li>Check both <strong>Private</strong> and <strong>Public</strong> networks</li>
                       </ol>
                     </>
                   )}
                   {!isMacOS && !isWindows && (
                     <p className="text-xs text-amber-600 dark:text-amber-500 mb-2">
-                      Your firewall may be blocking incoming connections. Please configure your firewall to allow VoiceTypr.
+                      Your firewall may be blocking incoming connections. Please configure your firewall to allow Voicetypr.
                     </p>
                   )}
                   <div className="flex items-center gap-3">
@@ -681,7 +681,7 @@ export function NetworkSharingCard() {
                   <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
                     <p className="font-medium">No network address available</p>
                     <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">
-                      Connect this device to Wi-Fi or Ethernet so other VoiceTypr apps can reach it.
+                      Connect this device to Wi-Fi or Ethernet so other Voicetypr apps can reach it.
                     </p>
                   </div>
                 ) : (
@@ -734,7 +734,7 @@ export function NetworkSharingCard() {
               </div>
               {reachableBindings.length > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  Enter one of these addresses in VoiceTypr on another device on the same network.
+                  Enter one of these addresses in Voicetypr on another device on the same network.
                 </p>
               )}
               {status.binding_results.filter((r) => !r.success && r.ip !== "127.0.0.1").length > 0 && (

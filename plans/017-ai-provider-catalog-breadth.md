@@ -24,10 +24,10 @@
 
 Replace Plan 016's static four-entry provider table with a **generated,
 committed catalog** and a broad, searchable provider/model picker — behind the
-same VoiceTypr contract types. No runtime changes.
+same Voicetypr contract types. No runtime changes.
 
 Catalog source: pinned snapshot of `models.dev/api.json` (MIT, hourly-synced
-upstream) + a VoiceTypr **overlay** file. Source-verified findings that shape
+upstream) + a Voicetypr **overlay** file. Source-verified findings that shape
 this design:
 
 - models.dev provider schema has `env` (auth env vars), `npm`, optional `api`

@@ -1,6 +1,6 @@
 //! Native key-trigger engine integration (plan 022, P2).
 //!
-//! Wires the standalone `keytrigger` crate into VoiceTypr so trigger kinds that
+//! Wires the standalone `keytrigger` crate into Voicetypr so trigger kinds that
 //! `tauri-plugin-global-shortcut` cannot express — modifier-only holds (e.g.
 //! hold Right-Option to talk) and double-taps — drive the same shortcut actions.
 //! Observation-only and additive: Combo/SingleKey bindings still use

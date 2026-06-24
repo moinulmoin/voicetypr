@@ -1,7 +1,7 @@
 //! Tests for the remote transcription server module
 //!
 //! These tests verify the HTTP server functionality for sharing
-//! transcription capabilities with other VoiceTypr instances.
+//! transcription capabilities with other Voicetypr instances.
 
 use crate::remote::server::{
     RemoteServerConfig, ServerStatus, StatusResponse, TranscribeResponse, REMOTE_PROTOCOL_VERSION,

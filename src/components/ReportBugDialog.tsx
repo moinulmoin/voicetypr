@@ -201,8 +201,8 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
             Report a Bug
           </DialogTitle>
           <DialogDescription>
-            Tell us what happened. VoiceTypr will include your system info and the
-            latest app log excerpt, then submit the report directly to VoiceTypr
+            Tell us what happened. Voicetypr will include your system info and the
+            latest app log excerpt, then submit the report directly to Voicetypr
             Support.
           </DialogDescription>
         </DialogHeader>

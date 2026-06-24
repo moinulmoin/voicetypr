@@ -60,7 +60,7 @@ can execute mechanically.
   routing (`match engine.as_str()`). Errors: `String`, returned verbatim to
   LAN clients (`remote/http.rs:497-505`).
 - Remote wire protocol: `remote/http.rs:18-26,396-455` — raw audio body;
-  metadata in headers (`X-VoiceTypr-Key`, `X-VoiceTypr-Context` base64,
+  metadata in headers (`X-Voicetypr-Key`, `X-Voicetypr-Context` base64,
   language/task as query/headers — verify exact extraction at `:90-110`).
   The deferred-items plan (`docs/plans/2026-06-07-001-v2-deferred-items-plan.md:82-95`)
   already specifies the successor: multipart audio + JSON metadata,

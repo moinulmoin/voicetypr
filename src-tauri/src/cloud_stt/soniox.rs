@@ -480,9 +480,9 @@ mod tests {
                     key: "domain".to_string(),
                     value: "Software".to_string(),
                 }],
-                terms: vec!["VoiceTypr".to_string(), "Tauri".to_string()],
+                terms: vec!["Voicetypr".to_string(), "Tauri".to_string()],
                 text: Some(
-                    "Spoken forms map to canonical spellings: voice typer -> VoiceTypr."
+                    "Spoken forms map to canonical spellings: voice typer -> Voicetypr."
                         .to_string(),
                 ),
             }),
@@ -497,11 +497,11 @@ mod tests {
         );
         assert_eq!(
             payload["context"]["terms"].as_array().unwrap()[0].as_str(),
-            Some("VoiceTypr")
+            Some("Voicetypr")
         );
         assert_eq!(
             payload["context"]["text"].as_str(),
-            Some("Spoken forms map to canonical spellings: voice typer -> VoiceTypr.")
+            Some("Spoken forms map to canonical spellings: voice typer -> Voicetypr.")
         );
     }
 

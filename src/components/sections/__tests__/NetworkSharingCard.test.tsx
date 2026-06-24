@@ -189,7 +189,7 @@ describe("NetworkSharingCard", () => {
       });
 
       expect(
-        screen.getByText(/another VoiceTypr app can use this device's/)
+        screen.getByText(/another Voicetypr app can use this device's/)
       ).toBeInTheDocument();
     });
 
@@ -313,7 +313,7 @@ describe("NetworkSharingCard", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText("Use this device's transcription from another VoiceTypr app")
+          screen.getByText("Use this device's transcription from another Voicetypr app")
         ).toBeInTheDocument();
       });
     });
@@ -468,15 +468,15 @@ describe("NetworkSharingCard", () => {
       });
     });
 
-    it("shows warning when using remote VoiceTypr", async () => {
+    it("shows warning when using remote Voicetypr", async () => {
       renderWithProviders(<NetworkSharingCard />);
 
       await waitFor(() => {
-        expect(screen.getByText("Using remote VoiceTypr")).toBeInTheDocument();
+        expect(screen.getByText("Using remote Voicetypr")).toBeInTheDocument();
       });
 
       expect(
-        screen.getByText(/Remote transcription is unavailable while using another VoiceTypr/)
+        screen.getByText(/Remote transcription is unavailable while using another Voicetypr/)
       ).toBeInTheDocument();
     });
 
@@ -537,7 +537,7 @@ describe("NetworkSharingCard", () => {
       }
 
       await waitFor(() => {
-        expect(screen.getByText("Using remote VoiceTypr")).toBeInTheDocument();
+        expect(screen.getByText("Using remote Voicetypr")).toBeInTheDocument();
       });
     });
   });

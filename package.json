@@ -14,6 +14,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "node scripts/dev-tauri.cjs",
+    "windows:store:msix": "powershell -ExecutionPolicy Bypass -File .\\scripts\\build-msix-store.ps1",
+    "windows:store:stage": "powershell -ExecutionPolicy Bypass -File .\\scripts\\build-msix-store.ps1 -NoPack",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,json,css,md}\"",
     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "typecheck": "tsc --noEmit",

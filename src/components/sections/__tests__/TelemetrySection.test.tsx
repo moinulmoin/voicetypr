@@ -33,7 +33,7 @@ describe('TelemetrySection', () => {
     });
 
     expect(
-      await screen.findByText('Help improve VoiceTypr with anonymous diagnostics'),
+      await screen.findByText('Help improve Voicetypr with anonymous diagnostics'),
     ).toBeInTheDocument();
 
     const sw = screen.getByRole('switch');
@@ -55,7 +55,7 @@ describe('TelemetrySection', () => {
 
     render(<TelemetrySection />);
 
-    await screen.findByText('Help improve VoiceTypr with anonymous diagnostics');
+    await screen.findByText('Help improve Voicetypr with anonymous diagnostics');
     const sw = await screen.findByRole('switch');
 
     await act(async () => {

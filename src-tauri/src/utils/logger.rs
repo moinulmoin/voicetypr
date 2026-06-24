@@ -1,4 +1,4 @@
-//! Structured logging utilities for VoiceTypr debugging.
+//! Structured logging utilities for Voicetypr debugging.
 //!
 //! This module provides consistent logging patterns across the application
 //! to help diagnose production issues, performance bottlenecks, and silent failures.

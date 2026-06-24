@@ -394,7 +394,7 @@ export function ShortcutsSection() {
             <div className="flex gap-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-foreground/70" />
               <p>
-                VoiceTypr tests global shortcuts and refuses combos already owned by macOS, Windows, or another app.
+                Voicetypr tests global shortcuts and refuses combos already owned by macOS, Windows, or another app.
               </p>
             </div>
             <p className="mt-1 text-xs">

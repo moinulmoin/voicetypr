@@ -120,7 +120,7 @@ mod macos {
         // a shim pointing there would break. Tell the user to install to /Applications first.
         if exe_str.contains("/AppTranslocation/") {
             return Err(
-                "Move VoiceTypr to your Applications folder before installing the command."
+                "Move Voicetypr to your Applications folder before installing the command."
                     .to_string(),
             );
         }
@@ -205,7 +205,7 @@ mod macos {
 
     fn build_shim(exe: &str) -> String {
         format!(
-            "#!/bin/sh\n# VoiceTypr CLI launcher (managed by VoiceTypr; reinstall from Settings). Do not edit.\nexec \"{}\" \"$@\"\n",
+            "#!/bin/sh\n# Voicetypr CLI launcher (managed by Voicetypr; reinstall from Settings). Do not edit.\nexec \"{}\" \"$@\"\n",
             sh_double_quote_escape(exe)
         )
     }

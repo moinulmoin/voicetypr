@@ -237,12 +237,12 @@ export function ModelsSection({
       });
       setDiscoveredServers(discovered);
       if (notifyEmpty && discovered.length === 0) {
-        toast.info("No remote VoiceTypr devices found. You can still add one manually.");
+        toast.info("No remote Voicetypr devices found. You can still add one manually.");
       }
     } catch (error) {
-      log.error("Failed to discover remote VoiceTypr devices:", error);
+      log.error("Failed to discover remote Voicetypr devices:", error);
       if (notifyEmpty) {
-        toast.error("Failed to scan for remote VoiceTypr devices");
+        toast.error("Failed to scan for remote Voicetypr devices");
       }
     } finally {
       await refreshRemoteServers();
@@ -315,9 +315,9 @@ export function ModelsSection({
       try {
         await invoke("set_active_remote_server", { serverId });
         setActiveRemoteServer(serverId);
-        toast.success("Remote VoiceTypr selected");
+        toast.success("Remote Voicetypr selected");
       } catch (error) {
-        const message = getErrorMessage(error, "Failed to select remote VoiceTypr");
+        const message = getErrorMessage(error, "Failed to select remote Voicetypr");
         log.error("Failed to set active remote server:", error);
         toast.error(message);
       }
@@ -329,9 +329,9 @@ export function ModelsSection({
     try {
       await invoke("set_active_remote_server", { serverId: null });
       setActiveRemoteServer(null);
-      toast.success("Remote VoiceTypr deselected");
+      toast.success("Remote Voicetypr deselected");
     } catch (error) {
-      const message = getErrorMessage(error, "Failed to stop routing to remote VoiceTypr");
+      const message = getErrorMessage(error, "Failed to stop routing to remote Voicetypr");
       log.error("Failed to clear active remote server:", error);
       toast.error(message);
     }
@@ -347,10 +347,10 @@ export function ModelsSection({
 
         await invoke("remove_remote_server", { serverId });
         setRemoteServers((prev) => prev.filter((s) => s.id !== serverId));
-        toast.success("Remote VoiceTypr removed");
+        toast.success("Remote Voicetypr removed");
       } catch (error) {
         log.error("Failed to remove remote server:", error);
-        toast.error("Failed to remove remote VoiceTypr");
+        toast.error("Failed to remove remote Voicetypr");
       }
     },
     [activeRemoteServer]
@@ -380,7 +380,7 @@ export function ModelsSection({
   const handleAddDiscoveredServer = useCallback(
     async (server: DiscoveredRemoteServer) => {
       if (server.auth_required) {
-        toast.info("This remote VoiceTypr requires a password. Enter it to finish adding the server.");
+        toast.info("This remote Voicetypr requires a password. Enter it to finish adding the server.");
         setSelectedDiscoveredServer(server);
         setEditingServer(null);
         setAddServerModalOpen(true);
@@ -400,8 +400,8 @@ export function ModelsSection({
         );
         toast.success(`${server.name} added`);
       } catch (error) {
-        log.error("Failed to add discovered remote VoiceTypr:", error);
-        toast.error(error instanceof Error ? error.message : "Failed to add remote VoiceTypr");
+        log.error("Failed to add discovered remote Voicetypr:", error);
+        toast.error(error instanceof Error ? error.message : "Failed to add remote Voicetypr");
       }
     },
     [handleServerAdded],
@@ -428,7 +428,7 @@ export function ModelsSection({
       return serverName;
     }
     if (activeRemoteServer) {
-      return "Selected remote VoiceTypr";
+      return "Selected remote Voicetypr";
     }
     if (!currentModel) return null;
     const entry = models.find(([name]) => name === currentModel);
@@ -662,13 +662,13 @@ export function ModelsSection({
                   <div className="space-y-3 text-sm leading-6 text-muted-foreground">
                     <p><strong className="text-foreground">Local</strong> models run on this machine and keep raw audio local.</p>
                     <p><strong className="text-foreground">Cloud</strong> sources use a connected provider when you choose one.</p>
-                    <p><strong className="text-foreground">Remote VoiceTypr</strong> uses another device on your network when that server is online.</p>
+                    <p><strong className="text-foreground">Remote Voicetypr</strong> uses another device on your network when that server is online.</p>
                   </div>
                 </DialogContent>
               </Dialog>
             </div>
             <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              Choose local models now, cloud transcription when connected, or another VoiceTypr device on your network.
+              Choose local models now, cloud transcription when connected, or another Voicetypr device on your network.
             </p>
           </div>
         </div>
@@ -739,7 +739,7 @@ export function ModelsSection({
                 <FieldContent>
                   <FieldLabel htmlFor="language">Spoken Language</FieldLabel>
                   <FieldDescription>
-                    The language you speak into VoiceTypr. English-only models lock this to English.
+                    The language you speak into Voicetypr. English-only models lock this to English.
                   </FieldDescription>
                 </FieldContent>
                 <LanguageSelection
@@ -798,7 +798,7 @@ export function ModelsSection({
                   </h2>
                   <p className="text-xs text-muted-foreground">
                     Connected providers that can transcribe without a local model. When selected,
-                    VoiceTypr may send Personal Library words, names, and corrections as
+                    Voicetypr may send Personal Library words, names, and corrections as
                     transcription context to improve recognition; snippets are not sent.
                   </p>
                 </div>
@@ -856,10 +856,10 @@ export function ModelsSection({
                 <div>
                   <h2 className="flex items-center gap-2 text-base font-semibold tracking-tight text-foreground">
                     <Server className="size-4" />
-                    Remote VoiceTypr ({remoteServers.length})
+                    Remote Voicetypr ({remoteServers.length})
                   </h2>
                   <p className="text-xs text-muted-foreground">
-                    Use another VoiceTypr device on your network without copying audio to the cloud.
+                    Use another Voicetypr device on your network without copying audio to the cloud.
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -940,9 +940,9 @@ export function ModelsSection({
                     <EmptyMedia variant="icon">
                       <Server className="size-5" />
                     </EmptyMedia>
-                    <EmptyTitle>No remote VoiceTyprs configured</EmptyTitle>
+                    <EmptyTitle>No remote Voicetyprs configured</EmptyTitle>
                     <EmptyDescription>
-                      Connect another VoiceTypr device to use its local model from this machine.
+                      Connect another Voicetypr device to use its local model from this machine.
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>

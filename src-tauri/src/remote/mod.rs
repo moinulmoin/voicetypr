@@ -1,7 +1,7 @@
 //! Remote transcription module
 //!
 //! This module provides functionality for sharing transcription capabilities
-//! between VoiceTypr instances over the network.
+//! between Voicetypr instances over the network.
 
 pub mod client;
 pub mod discovery;

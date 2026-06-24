@@ -351,7 +351,7 @@ mod tests {
             .mount(&server)
             .await;
         let audio = audio_file();
-        let prompt = "Preferred spellings: VoiceTypr, Tauri.";
+        let prompt = "Preferred spellings: Voicetypr, Tauri.";
 
         let text = openai_compatible_transcribe(
             &server.uri(),
@@ -369,7 +369,7 @@ mod tests {
         let request = &server.received_requests().await.unwrap()[0];
         let body = String::from_utf8_lossy(&request.body);
         assert!(body.contains("name=\"prompt\""));
-        assert!(body.contains("Preferred spellings: VoiceTypr, Tauri."));
+        assert!(body.contains("Preferred spellings: Voicetypr, Tauri."));
     }
 
     #[tokio::test]

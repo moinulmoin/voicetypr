@@ -6,13 +6,13 @@ fn main() {
         Ok(true) => return,
         Ok(false) => {}
         Err(e) => {
-            eprintln!("VoiceTypr CLI failed: {}", e);
+            eprintln!("Voicetypr CLI failed: {}", e);
             std::process::exit(1);
         }
     }
 
     if let Err(e) = voicetypr_lib::run() {
-        eprintln!("VoiceTypr failed to start: {}", e);
+        eprintln!("Voicetypr failed to start: {}", e);
         std::process::exit(1);
     }
 }

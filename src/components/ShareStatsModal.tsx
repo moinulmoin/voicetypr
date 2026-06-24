@@ -80,7 +80,7 @@ export function ShareStatsModal({ open, onOpenChange, stats }: ShareStatsModalPr
     ctx.font = "bold 96px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
     ctx.fillStyle = "#ffffff";
     ctx.textAlign = "center";
-    ctx.fillText("My VoiceTypr Stats", canvas.width / 2, 200);
+    ctx.fillText("My Voicetypr Stats", canvas.width / 2, 200);
 
     // Best streak above the grid (if there's a longest streak)
     if (stats.longestStreak > 0) {

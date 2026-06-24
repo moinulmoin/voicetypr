@@ -50,7 +50,7 @@ describe("AddServerModal", () => {
           onServerAdded={mockOnServerAdded}
         />
       );
-      expect(screen.getByText("Add Remote VoiceTypr")).toBeInTheDocument();
+      expect(screen.getByText("Add Remote Voicetypr")).toBeInTheDocument();
     });
 
     it("does not render when open is false", () => {
@@ -61,7 +61,7 @@ describe("AddServerModal", () => {
           onServerAdded={mockOnServerAdded}
         />
       );
-      expect(screen.queryByText("Add Remote VoiceTypr")).not.toBeInTheDocument();
+      expect(screen.queryByText("Add Remote Voicetypr")).not.toBeInTheDocument();
     });
 
     it("shows edit mode title when editServer is provided", () => {
@@ -82,7 +82,7 @@ describe("AddServerModal", () => {
           editServer={editServer}
         />
       );
-      expect(screen.getByText("Edit Remote VoiceTypr")).toBeInTheDocument();
+      expect(screen.getByText("Edit Remote Voicetypr")).toBeInTheDocument();
     });
 
     it("calls onOpenChange when Cancel button is clicked", () => {
@@ -951,7 +951,7 @@ describe("AddServerModal", () => {
 
       await waitFor(() => {
         // Modal should still be open - onOpenChange should not be called with false
-        expect(screen.getByText("Add Remote VoiceTypr")).toBeInTheDocument();
+        expect(screen.getByText("Add Remote Voicetypr")).toBeInTheDocument();
       });
     });
   });

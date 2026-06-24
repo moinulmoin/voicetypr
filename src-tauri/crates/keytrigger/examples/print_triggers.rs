@@ -4,7 +4,7 @@
 //!
 //! macOS: the running process must have Accessibility permission to receive
 //! global key events; otherwise the tap fails to create and no events flow
-//! (the engine logs and stays idle). Inside the VoiceTypr app this permission
+//! (the engine logs and stays idle). Inside the Voicetypr app this permission
 //! is already granted.
 
 use std::time::Duration;

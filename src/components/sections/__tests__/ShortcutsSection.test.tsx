@@ -123,7 +123,7 @@ const actionDefinitions: ShortcutActionDefinition[] = [
   {
     action: "open_dashboard",
     label: "Open Dashboard",
-    description: "Show the VoiceTypr dashboard.",
+    description: "Show the Voicetypr dashboard.",
     section: "App",
     recommended_trigger: "pressed",
     allows_single_key: true,

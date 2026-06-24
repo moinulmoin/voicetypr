@@ -302,7 +302,7 @@ function ReplacementEditor({
           <EmptyHeader className="max-w-none gap-1">
             <EmptyTitle className="text-sm">No replacement rules yet</EmptyTitle>
             <EmptyDescription className="text-xs">
-              Example: <span className="font-mono">voice typer → VoiceTypr</span>
+              Example: <span className="font-mono">voice typer → Voicetypr</span>
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -692,7 +692,7 @@ function CustomWordEditor({
           <EmptyHeader className="max-w-none gap-1">
             <EmptyTitle className="text-sm">No words or names yet</EmptyTitle>
             <EmptyDescription className="text-xs">
-              Example: canonical <span className="font-mono">VoiceTypr</span>, spoken form{" "}
+              Example: canonical <span className="font-mono">Voicetypr</span>, spoken form{" "}
               <span className="font-mono">voice typer</span>
             </EmptyDescription>
           </EmptyHeader>

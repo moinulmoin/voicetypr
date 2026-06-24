@@ -135,7 +135,7 @@ export function AppContainer() {
         await register<string>("parakeet-unavailable", (message) => {
           const description = typeof message === "string" && message.trim().length > 0
             ? message
-            : "Parakeet is unavailable on this Mac. Please reinstall VoiceTypr or remove the quarantine flag.";
+            : "Parakeet is unavailable on this Mac. Please reinstall Voicetypr or remove the quarantine flag.";
           log.error("Parakeet unavailable:", description);
           toast.error("Parakeet Unavailable", {
             description,

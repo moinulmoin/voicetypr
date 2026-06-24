@@ -871,7 +871,7 @@ fn shortcut_action_definitions() -> Vec<ShortcutActionDefinition> {
         ShortcutActionDefinition {
             action: ShortcutAction::OpenDashboard,
             label: "Open dashboard",
-            description: "Focus the VoiceTypr dashboard.",
+            description: "Focus the Voicetypr dashboard.",
             section: "Dashboard",
             recommended_trigger: ShortcutTrigger::Pressed,
             allows_single_key: true,

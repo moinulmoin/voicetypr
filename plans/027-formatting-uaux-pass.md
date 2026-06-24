@@ -112,7 +112,7 @@ See `CHANGELOG.md` `[Unreleased]`.
 - Direction (maintainer-preferred): relabel sources away from the colliding
   "Dictation". The sources span two axes: `desktop_recording` (live mic,
   transcribed on this device) and `remote_server` (transcribed on a remote
-  VoiceTypr) are a device axis, while `audio_file`/`audio_bytes` is an input
+  Voicetypr) are a device axis, while `audio_file`/`audio_bytes` is an input
   axis (uploaded file) — so a pure `device:*` scheme doesn't cleanly cover
   uploads. Proposed: "Local device" / "Remote device" / "File" (device frame,
   with "File" carrying the upload axis); minimal alternative is to rename only

@@ -144,7 +144,7 @@ export function HelpSection() {
   };
 
   const handleEmailSupport = () => {
-    const subject = "VoiceTypr Support Request";
+    const subject = "Voicetypr Support Request";
     const body = `
 ${diagnostics}
 
@@ -375,7 +375,7 @@ Actual behavior:
           {/* System Info Footer */}
           <div className="pt-4">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>VoiceTypr v{appVersion}</span>
+              <span>Voicetypr v{appVersion}</span>
               <span>{platformName}</span>
             </div>
           </div>

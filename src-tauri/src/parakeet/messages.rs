@@ -241,7 +241,7 @@ mod tests {
             local_attention_context: None,
             custom_vocabulary: Some(vec![
                 ParakeetVocabularyTerm {
-                    text: "VoiceTypr".to_string(),
+                    text: "Voicetypr".to_string(),
                     aliases: vec!["voice typer".to_string()],
                 },
                 ParakeetVocabularyTerm {
@@ -253,7 +253,7 @@ mod tests {
 
         let value = serde_json::to_value(command).unwrap();
         assert_eq!(value["type"], "transcribe");
-        assert_eq!(value["custom_vocabulary"][0]["text"], "VoiceTypr");
+        assert_eq!(value["custom_vocabulary"][0]["text"], "Voicetypr");
         assert_eq!(value["custom_vocabulary"][0]["aliases"][0], "voice typer");
         assert!(value["custom_vocabulary"][1].get("aliases").is_none());
     }

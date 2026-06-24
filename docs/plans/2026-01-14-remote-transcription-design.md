@@ -32,7 +32,7 @@ See GitHub Issues: https://github.com/tomchapin/voicetypr/issues
 
 ## Overview
 
-This feature allows VoiceTypr instances to offload transcription to more powerful machines on the network. A high-end desktop with a GPU can serve as a "transcription server" for laptops and less powerful devices.
+This feature allows Voicetypr instances to offload transcription to more powerful machines on the network. A high-end desktop with a GPU can serve as a "transcription server" for laptops and less powerful devices.
 
 ### Problem Statement
 
@@ -55,7 +55,7 @@ This feature allows VoiceTypr instances to offload transcription to more powerfu
 
 ### Two Modes Per Instance
 
-1. **Server Mode** - Share your currently selected model with other VoiceTypr instances
+1. **Server Mode** - Share your currently selected model with other Voicetypr instances
 2. **Client Mode** - Connect to remote servers and use their models for transcription
 
 A single machine can run both modes simultaneously.
@@ -80,7 +80,7 @@ New collapsible card in Settings section (after "Startup"):
 │ Network Sharing                                    [▼]  │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
-│ Share your models with other VoiceTypr instances        │
+│ Share your models with other Voicetypr instances        │
 │ on your network.                                        │
 │                                                         │
 │ Enable Sharing                              [  Toggle  ]│
@@ -111,13 +111,13 @@ New collapsible card in Settings section (after "Startup"):
 ```
 ├── large-v3 (1.5 GB)                          [Download]
 ├── Soniox Cloud                               [Add API Key]
-└── Remote VoiceTypr Instance                  [Connect]
+└── Remote Voicetypr Instance                  [Connect]
 ```
 
 **Clicking [Connect] opens modal:**
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ Connect to Remote VoiceTypr                        [X]  │
+│ Connect to Remote Voicetypr                        [X]  │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
 │ Host             [ 192.168.1.50 ]                       │
@@ -161,7 +161,7 @@ All endpoints prefixed with `/api/v1`. Default port: 47842.
 
 ```
 GET /api/v1/status
-Headers: X-VoiceTypr-Key: <password> (if required)
+Headers: X-Voicetypr-Key: <password> (if required)
 
 Response 200:
 {
@@ -183,7 +183,7 @@ Note: `machine_id` is a unique device identifier used to prevent self-connection
 ```
 POST /api/v1/transcribe
 Headers:
-  X-VoiceTypr-Key: <password> (if required)
+  X-Voicetypr-Key: <password> (if required)
   Content-Type: audio/wav (or any audio/* type)
 Body: <audio file bytes>
 
@@ -298,7 +298,7 @@ The Upload section allows users to upload audio/video files for transcription. W
    - Status display
 
 2. **Models section changes**
-   - Add "Remote VoiceTypr Instance" to "Available to Set Up"
+   - Add "Remote Voicetypr Instance" to "Available to Set Up"
    - Show remote models in "Available to Use" alongside local models
    - Online/offline status indicators
 
@@ -337,7 +337,7 @@ open_firewall_settings() -> Result<(), String>    // Help users fix firewall
 
 ## Future Enhancements (Out of Scope for v1)
 
-1. **mDNS/Bonjour auto-discovery** - Automatically find VoiceTypr instances on local network
+1. **mDNS/Bonjour auto-discovery** - Automatically find Voicetypr instances on local network
 2. ~~**Save recordings toggle**~~ - ✅ IMPLEMENTED (2026-01-16)
 3. ~~**Re-transcribe from history**~~ - ✅ IMPLEMENTED (2026-01-16)
 4. **Multiple models per server** - Load/serve multiple models (requires memory management)

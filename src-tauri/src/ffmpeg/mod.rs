@@ -23,46 +23,20 @@ const FFPROBE_CANDIDATES: &[&str] = &["ffprobe.exe", "ffprobe-x86_64-pc-windows-
 const FFPROBE_CANDIDATES: &[&str] = &["ffprobe", "ffprobe-aarch64-apple-darwin"];
 
 fn resolve_binary(app: &AppHandle, names: &[&str], label: &str) -> Result<PathBuf, String> {
+    let is_store_install = crate::commands::distribution::is_store_install();
+    let search_dirs = collect_search_dirs(
+        app.path().resource_dir().ok(),
+        std::env::current_exe().ok(),
+        std::env::current_dir().ok(),
+        is_store_install,
+    );
     let mut tried = Vec::new();
-    let mut seen_dirs = HashSet::new();
-    let mut search_dirs = Vec::new();
 
-    let mut push_dir = |dir: PathBuf| {
-        if seen_dirs.insert(dir.clone()) {
-            search_dirs.push(dir);
-        }
-    };
-
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        push_dir(resource_dir.clone());
-        push_dir(resource_dir.join("sidecar").join("ffmpeg").join("dist"));
-        // On macOS, externalBin are placed under Contents/MacOS; include that sibling of Resources
-        #[cfg(target_os = "macos")]
-        if let Some(contents_dir) = resource_dir.parent() {
-            let macos_dir = contents_dir.join("MacOS");
-            push_dir(macos_dir);
-        }
-    }
-
-    if let Ok(exe_path) = std::env::current_exe() {
-        let mut dir_opt = exe_path.parent();
-        while let Some(dir) = dir_opt {
-            // Search the executable directory itself (e.g., .../Contents/MacOS)
-            push_dir(dir.to_path_buf());
-            push_dir(dir.join("sidecar").join("ffmpeg").join("dist"));
-            push_dir(
-                dir.join("Resources")
-                    .join("sidecar")
-                    .join("ffmpeg")
-                    .join("dist"),
-            );
-            dir_opt = dir.parent();
-        }
-    }
-
-    if let Ok(cwd) = std::env::current_dir() {
-        push_dir(cwd.join("sidecar").join("ffmpeg").join("dist"));
-        push_dir(cwd.join("..").join("sidecar").join("ffmpeg").join("dist"));
+    if is_store_install {
+        log::debug!(
+            "Skipping development and PATH {} search paths for Microsoft Store install",
+            label
+        );
     }
 
     log::debug!("Searching for {} in directories: {:?}", label, search_dirs);
@@ -77,15 +51,17 @@ fn resolve_binary(app: &AppHandle, names: &[&str], label: &str) -> Result<PathBu
         }
     }
 
-    if let Some(path_env) = std::env::var_os("PATH") {
-        log::debug!("{} not found in sidecar directories, scanning PATH", label);
-        for dir in std::env::split_paths(&path_env) {
-            for name in names {
-                let candidate = dir.join(name);
-                if candidate.exists() {
-                    return Ok(candidate);
+    if !is_store_install {
+        if let Some(path_env) = std::env::var_os("PATH") {
+            log::debug!("{} not found in sidecar directories, scanning PATH", label);
+            for dir in std::env::split_paths(&path_env) {
+                for name in names {
+                    let candidate = dir.join(name);
+                    if candidate.exists() {
+                        return Ok(candidate);
+                    }
+                    tried.push(candidate);
                 }
-                tried.push(candidate);
             }
         }
     }
@@ -96,6 +72,93 @@ fn resolve_binary(app: &AppHandle, names: &[&str], label: &str) -> Result<PathBu
         label,
         searched.join(", ")
     ))
+}
+
+fn collect_search_dirs(
+    resource_dir: Option<PathBuf>,
+    exe_path: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    is_store_install: bool,
+) -> Vec<PathBuf> {
+    let mut seen_dirs = HashSet::new();
+    let mut search_dirs = Vec::new();
+
+    if let Some(resource_dir) = resource_dir {
+        push_search_dir(&mut search_dirs, &mut seen_dirs, resource_dir.clone());
+        push_search_dir(
+            &mut search_dirs,
+            &mut seen_dirs,
+            resource_dir.join("sidecar").join("ffmpeg").join("dist"),
+        );
+        // On macOS, externalBin are placed under Contents/MacOS; include that sibling of Resources.
+        #[cfg(target_os = "macos")]
+        if let Some(contents_dir) = resource_dir.parent() {
+            push_search_dir(&mut search_dirs, &mut seen_dirs, contents_dir.join("MacOS"));
+        }
+    }
+
+    if let Some(exe_dir) = exe_path.and_then(|path| path.parent().map(Path::to_path_buf)) {
+        // Search the executable directory itself, where MSIX-packaged sidecars are staged.
+        push_search_dir(&mut search_dirs, &mut seen_dirs, exe_dir.clone());
+        push_search_dir(
+            &mut search_dirs,
+            &mut seen_dirs,
+            exe_dir.join("sidecar").join("ffmpeg").join("dist"),
+        );
+        push_search_dir(
+            &mut search_dirs,
+            &mut seen_dirs,
+            exe_dir
+                .join("Resources")
+                .join("sidecar")
+                .join("ffmpeg")
+                .join("dist"),
+        );
+
+        if !is_store_install {
+            let mut dir_opt = exe_dir.parent();
+            while let Some(dir) = dir_opt {
+                push_search_dir(&mut search_dirs, &mut seen_dirs, dir.to_path_buf());
+                push_search_dir(
+                    &mut search_dirs,
+                    &mut seen_dirs,
+                    dir.join("sidecar").join("ffmpeg").join("dist"),
+                );
+                push_search_dir(
+                    &mut search_dirs,
+                    &mut seen_dirs,
+                    dir.join("Resources")
+                        .join("sidecar")
+                        .join("ffmpeg")
+                        .join("dist"),
+                );
+                dir_opt = dir.parent();
+            }
+        }
+    }
+
+    if !is_store_install {
+        if let Some(cwd) = cwd {
+            push_search_dir(
+                &mut search_dirs,
+                &mut seen_dirs,
+                cwd.join("sidecar").join("ffmpeg").join("dist"),
+            );
+            push_search_dir(
+                &mut search_dirs,
+                &mut seen_dirs,
+                cwd.join("..").join("sidecar").join("ffmpeg").join("dist"),
+            );
+        }
+    }
+
+    search_dirs
+}
+
+fn push_search_dir(search_dirs: &mut Vec<PathBuf>, seen_dirs: &mut HashSet<PathBuf>, dir: PathBuf) {
+    if seen_dirs.insert(dir.clone()) {
+        search_dirs.push(dir);
+    }
 }
 
 async fn run_ffmpeg_command(
@@ -225,4 +288,43 @@ pub async fn segment(
         out_pattern.to_string_lossy().to_string(),
     ];
     run_ffmpeg_command(app, FFMPEG_CANDIDATES, &args, "ffmpeg").await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_search_dirs;
+    use std::path::PathBuf;
+
+    // Portable fixtures only: these tests compare PathBuf values and never touch the filesystem.
+    fn path(value: &str) -> PathBuf {
+        PathBuf::from(value)
+    }
+
+    #[test]
+    fn store_search_dirs_exclude_development_and_parent_fallbacks() {
+        let dirs = collect_search_dirs(
+            Some(path("/package/Resources")),
+            Some(path("/package/voicetypr.exe")),
+            Some(path("/repo")),
+            true,
+        );
+
+        assert!(dirs.contains(&path("/package/Resources")));
+        assert!(dirs.contains(&path("/package/sidecar/ffmpeg/dist")));
+        assert!(!dirs.contains(&path("/repo/sidecar/ffmpeg/dist")));
+        assert!(!dirs.contains(&path("/sidecar/ffmpeg/dist")));
+    }
+
+    #[test]
+    fn direct_search_dirs_include_development_fallbacks() {
+        let dirs = collect_search_dirs(
+            Some(path("/package/Resources")),
+            Some(path("/package/voicetypr.exe")),
+            Some(path("/repo")),
+            false,
+        );
+
+        assert!(dirs.contains(&path("/repo/sidecar/ffmpeg/dist")));
+        assert!(dirs.contains(&path("/sidecar/ffmpeg/dist")));
+    }
 }

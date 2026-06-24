@@ -74,7 +74,7 @@ mod tests {
 
     /// Get the model directory path for this platform
     fn get_model_dir() -> PathBuf {
-        // Primary: User data directory (where VoiceTypr downloads models)
+        // Primary: User data directory (where Voicetypr downloads models)
         // - macOS: ~/Library/Application Support/com.ideaplexa.voicetypr/models/
         // - Windows: C:\Users\<user>\AppData\Roaming\com.ideaplexa.voicetypr\models\
         if let Some(data_dir) = dirs::data_dir() {
@@ -378,7 +378,7 @@ mod tests {
         // Request with wrong password should fail
         let response = client
             .get(&status_url)
-            .header("X-VoiceTypr-Key", "wrong-password")
+            .header("X-Voicetypr-Key", "wrong-password")
             .send()
             .await
             .expect("Request failed");
@@ -391,7 +391,7 @@ mod tests {
         // Request with correct password should succeed
         let response = client
             .get(&status_url)
-            .header("X-VoiceTypr-Key", "test-password")
+            .header("X-Voicetypr-Key", "test-password")
             .send()
             .await
             .expect("Request failed");

@@ -118,9 +118,9 @@ const SOURCE_OPTIONS: Array<{
   },
   {
     id: "remote",
-    title: "Use another VoiceTypr",
+    title: "Use another Voicetypr",
     eyebrow: "Network source",
-    description: "Connect to a stronger device or workstation running VoiceTypr on your network.",
+    description: "Connect to a stronger device or workstation running Voicetypr on your network.",
     icon: Network,
     bullets: ["Skip local model download", "Use a faster machine", "Great for weak laptops"],
   },
@@ -130,7 +130,7 @@ const isRemoteServerOnline = (server?: SavedConnection | null) =>
   server?.status === "Online";
 
 const sourceLabel = (sourceType: SourceType, confirmed: boolean) =>
-  confirmed ? (sourceType === "local" ? "This device" : "Remote VoiceTypr") : "Choose source";
+  confirmed ? (sourceType === "local" ? "This device" : "Remote Voicetypr") : "Choose source";
 const getSampleSelectionKey = (
   sourceType: SourceType,
   selectedModelName: string | null,
@@ -324,7 +324,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const sourceReady = sourceType === "local" ? localReady : remoteReady;
   const sampleErrorDescription =
     sourceType === "remote" && sampleError && !remoteReady
-      ? "The selected remote VoiceTypr is offline. Make sure sharing is enabled on that device, keep both devices on the same network, then go back and choose an online server."
+      ? "The selected remote Voicetypr is offline. Make sure sharing is enabled on that device, keep both devices on the same network, then go back and choose an online server."
       : sampleError;
   const sampleSelectionKey = getSampleSelectionKey(
     sourceType,
@@ -545,14 +545,14 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const selectRemoteServer = async (serverId: string) => {
     const server = remoteServers.find((candidate) => candidate.id === serverId);
     if (!isRemoteServerOnline(server)) {
-      toast.error("Remote VoiceTypr is not online yet");
+      toast.error("Remote Voicetypr is not online yet");
       return;
     }
 
     await invoke("set_active_remote_server", { serverId });
     setActiveRemoteServerId(serverId);
     confirmSource("remote");
-    toast.success("Remote VoiceTypr selected");
+    toast.success("Remote Voicetypr selected");
   };
 
   const handleRemoteServerAdded = (server: SavedConnection) => {
@@ -571,7 +571,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
     setActiveRemoteServerId(server.id);
     void invoke("set_active_remote_server", { serverId: server.id }).catch((error) => {
       log.error("[OnboardingDesktop] Failed to activate remote server:", error);
-      toast.error("Remote VoiceTypr was added, but could not be selected");
+      toast.error("Remote Voicetypr was added, but could not be selected");
     });
     confirmSource("remote");
     void loadRemoteServers();
@@ -595,7 +595,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
       toast.success(`${server.name} selected`);
     } catch (error) {
       log.error("[OnboardingDesktop] Failed to add discovered remote server:", error);
-      toast.error(error instanceof Error ? error.message : "Failed to add remote VoiceTypr");
+      toast.error(error instanceof Error ? error.message : "Failed to add remote Voicetypr");
     }
   };
 
@@ -801,7 +801,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
       {currentStep !== "success" && (
         <div className="mx-auto flex w-full max-w-5xl items-center gap-4 px-8 py-5">
           <div>
-            <p className="text-sm font-semibold tracking-tight">VoiceTypr Setup</p>
+            <p className="text-sm font-semibold tracking-tight">Voicetypr Setup</p>
             <p className="text-xs text-muted-foreground">{sourceLabel(sourceType, sourceConfirmed)}</p>
           </div>
           <Progress value={progress} className="h-2 flex-1" />
@@ -817,7 +817,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
             <div className="flex flex-col gap-6">
               <div className="flex flex-col gap-4">
                 <h1 className="max-w-3xl text-5xl font-semibold tracking-[-0.045em] text-balance sm:text-6xl">
-                  Welcome to VoiceTypr
+                  Welcome to Voicetypr
                 </h1>
                 <p className="max-w-2xl text-base leading-7 text-muted-foreground">
                   Choose where transcription runs, set your hotkey, then try one real voice typing test before setup finishes.
@@ -841,7 +841,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   Setup completes when this works
                 </CardTitle>
                 <CardDescription>
-                  No fake green check. VoiceTypr is ready only after the first recording succeeds.
+                  No fake green check. Voicetypr is ready only after the first recording succeeds.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-3">
@@ -866,7 +866,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
           <OnboardingPanel
             eyebrow="Step 1"
             title="Where should transcription run?"
-            description="Choose local transcription on this device or remote transcription from another VoiceTypr device."
+            description="Choose local transcription on this device or remote transcription from another Voicetypr device."
             footer={
               <StepFooter
                 onBack={handleBack}
@@ -935,7 +935,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
         {currentStep === "permissions" && (
           <OnboardingPanel
             eyebrow="Step 2"
-            title="Grant the permissions VoiceTypr actually needs"
+            title="Grant the permissions Voicetypr actually needs"
             description="Microphone starts recording. Accessibility lets the global hotkey work while you are in other apps."
             footer={
               <StepFooter
@@ -1016,11 +1016,11 @@ export const OnboardingDesktop = function OnboardingDesktop({
         {currentStep === "readiness" && (
           <OnboardingPanel
             eyebrow="Step 3"
-            title={sourceType === "local" ? "Prepare this device" : "Connect a remote VoiceTypr"}
+            title={sourceType === "local" ? "Prepare this device" : "Connect a remote Voicetypr"}
             description={
               sourceType === "local"
                 ? "Pick a downloaded local model, or download one now. The button unlocks as soon as the model is usable."
-                : "Choose an online VoiceTypr server. Password-protected servers must pass the connection test before onboarding continues."
+                : "Choose an online Voicetypr server. Password-protected servers must pass the connection test before onboarding continues."
             }
             footer={
               <StepFooter
@@ -1062,7 +1062,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                         <LoadingState label="Loading local models" />
                       ) : null}
                       {!isLoading && modelOrder.length === 0 ? (
-                        <EmptyState title="No local models available" description="Remote VoiceTypr is still available if you have another machine ready." />
+                        <EmptyState title="No local models available" description="Remote Voicetypr is still available if you have another machine ready." />
                       ) : null}
                       {hasDownloadedLocalModel && !localReady ? (
                         <Alert>
@@ -1123,7 +1123,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                         <div className="flex flex-col items-center gap-3">
                           <EmptyState
                             title="No remote servers saved"
-                            description="Add a VoiceTypr server, or set up this device with a local model instead."
+                            description="Add a Voicetypr server, or set up this device with a local model instead."
                           />
                           <Button variant="outline" onClick={switchToLocalReadiness}>
                             Set up this device instead
@@ -1237,7 +1237,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
           <OnboardingPanel
             eyebrow="Step 4"
             title="Pick your hotkey and recording mode"
-            description="This is the system-wide shortcut for triggering VoiceTypr. You can change both later in Settings."
+            description="This is the system-wide shortcut for triggering Voicetypr. You can change both later in Settings."
             footer={
               <StepFooter
                 onBack={handleBack}
@@ -1295,7 +1295,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                     <Info className="size-4" />
                     <AlertTitle>Tip</AlertTitle>
                     <AlertDescription>
-                      Use a shortcut you can hit without looking down. VoiceTypr works best when recording feels invisible.
+                      Use a shortcut you can hit without looking down. Voicetypr works best when recording feels invisible.
                     </AlertDescription>
                   </Alert>
                 )}
@@ -1318,7 +1318,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
           <OnboardingPanel
             eyebrow="Final check"
             title="Do your first transcription"
-            description="Say one short sentence. Onboarding only finishes after VoiceTypr returns real text."
+            description="Say one short sentence. Onboarding only finishes after Voicetypr returns real text."
             footer={
               <StepFooter
                 onBack={handleBack}
@@ -1406,7 +1406,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 Ready
               </Badge>
               <h1 className="text-4xl font-semibold tracking-[-0.04em]">
-                VoiceTypr is ready on {sourceLabel(sourceType, true).toLowerCase()}.
+                Voicetypr is ready on {sourceLabel(sourceType, true).toLowerCase()}.
               </h1>
               <p className="text-muted-foreground">
                 {capturedBareModifier
@@ -1420,7 +1420,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
             </div>
             <div className="w-full rounded-lg border border-border/50 bg-card/50 p-3 text-sm text-muted-foreground">
               <p>
-                Power tip: VoiceTypr ships a{" "}
+                Power tip: Voicetypr ships a{" "}
                 <span className="font-mono text-foreground">voicetypr</span> command-line tool so AI
                 agents and scripts can drive transcription. Turn it on in{" "}
                 <span className="font-medium text-foreground">Settings → Advanced</span>. Try{" "}
@@ -1435,7 +1435,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 className="mt-0.5 size-4 shrink-0 accent-primary"
               />
               <span className="text-muted-foreground">
-                Send anonymous error reports to help make VoiceTypr better. Never
+                Send anonymous error reports to help make Voicetypr better. Never
                 your audio, transcripts, or personal data — just crash details.
                 Change this anytime in Settings → Advanced.
               </span>

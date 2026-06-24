@@ -24,7 +24,7 @@ export function UpdateAnnouncementDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />
-            VoiceTypr Updated
+            Voicetypr Updated
           </DialogTitle>
           <DialogDescription>
             Successfully updated to version {version}

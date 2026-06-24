@@ -121,7 +121,7 @@ export function AudioUploadSection() {
   }, []);
 
   const activeSourceLabel = activeRemoteServer
-    ? "Remote VoiceTypr"
+    ? "Remote Voicetypr"
     : isCloudEngine(settings?.current_model_engine ?? 'whisper')
       ? getModelDisplayName(settings?.current_model) || "No source selected"
       : getModelDisplayName(settings?.current_model) || "No source selected";

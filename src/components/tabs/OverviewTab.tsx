@@ -54,13 +54,13 @@ export function OverviewTab() {
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(null);
   const selectedSourceLabel = readiness.remoteSelected
-    ? activeRemoteLabel ?? "Remote VoiceTypr"
+    ? activeRemoteLabel ?? "Remote Voicetypr"
     : getModelDisplayName(settings?.current_model) ?? "No source selected";
   const setupMessage =
     readiness.licenseStatus === "expired" || readiness.licenseStatus === "none"
-      ? "Activate a license to keep recording with VoiceTypr."
+      ? "Activate a license to keep recording with Voicetypr."
       : readiness.hasModels === false || readiness.selectedModelAvailable === false
-        ? "Choose a ready local model, cloud provider, or remote VoiceTypr source before recording."
+        ? "Choose a ready local model, cloud provider, or remote Voicetypr source before recording."
         : isMacOS && readiness.hasMicrophonePermission === false
           ? "Allow microphone access in macOS Settings before recording."
           : "Finish setup before recording will work cleanly.";
@@ -82,12 +82,12 @@ export function OverviewTab() {
 
         const activeServer = servers.find((server) => server.id === activeServerId);
         setActiveRemoteLabel(
-          activeServer?.name || (activeServer ? `${activeServer.host}:${activeServer.port}` : "Remote VoiceTypr"),
+          activeServer?.name || (activeServer ? `${activeServer.host}:${activeServer.port}` : "Remote Voicetypr"),
         );
       } catch (error) {
-        log.error("[OverviewTab] Failed to load active remote VoiceTypr:", error);
+        log.error("[OverviewTab] Failed to load active remote Voicetypr:", error);
         if (!cancelled) {
-          setActiveRemoteLabel("Remote VoiceTypr");
+          setActiveRemoteLabel("Remote Voicetypr");
         }
       }
     };
@@ -329,7 +329,7 @@ export function OverviewTab() {
               />
               <WorkflowStep
                 title="Speak naturally"
-                body="VoiceTypr transcribes first, then applies deterministic cleanup and optional AI formatting."
+                body="Voicetypr transcribes first, then applies deterministic cleanup and optional AI formatting."
                 ready={canRecord}
               />
               <WorkflowStep

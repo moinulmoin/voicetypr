@@ -80,11 +80,11 @@ if (-not $Version) {
     $Version = $packageJson.version
 }
 
-Write-Step "VoiceTypr Windows x86_64 Release v$Version"
+Write-Step "Voicetypr Windows Release v$Version"
 
 $ReleaseTag = "v$Version"
 $OutputDir = "release-windows-$Version"
-$InstallerName = "VoiceTypr_${Version}_x64-setup.exe"
+$InstallerName = "Voicetypr_${Version}_x64-setup.exe"
 
 $WindowsTarget = "x86_64-pc-windows-msvc"
 if (-not (Test-Path $OutputDir)) {

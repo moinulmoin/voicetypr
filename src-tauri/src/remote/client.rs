@@ -1,6 +1,6 @@
 //! Remote transcription client
 //!
-//! HTTP client for connecting to other VoiceTypr instances
+//! HTTP client for connecting to other Voicetypr instances
 //! to use their transcription capabilities.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -20,7 +20,7 @@ pub enum TranscriptionSource {
     Upload,
 }
 
-/// Connection configuration for a remote VoiceTypr server
+/// Connection configuration for a remote Voicetypr server
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RemoteServerConnection {
     /// Hostname or IP address
@@ -377,7 +377,7 @@ pub async fn test_connection(
 
         let mut request = client.get(&url);
         if let Some(pwd) = password.as_ref() {
-            request = request.header("X-VoiceTypr-Key", pwd);
+            request = request.header("X-Voicetypr-Key", pwd);
         }
 
         let response = request
@@ -429,7 +429,7 @@ pub async fn get_model_control(
 
     let mut request = client.get(connection.model_control_url());
     if let Some(password) = connection.password.as_ref() {
-        request = request.header("X-VoiceTypr-Key", password);
+        request = request.header("X-Voicetypr-Key", password);
     }
 
     let response = request
@@ -475,7 +475,7 @@ pub async fn update_model_control(
 
     let mut request = client.patch(connection.model_control_url()).json(&update);
     if let Some(password) = connection.password.as_ref() {
-        request = request.header("X-VoiceTypr-Key", password);
+        request = request.header("X-Voicetypr-Key", password);
     }
 
     let response = request
@@ -525,17 +525,17 @@ pub async fn transcribe_audio(
         .header("Content-Type", "audio/wav");
 
     if let Some(pwd) = connection.password.as_ref() {
-        request_builder = request_builder.header("X-VoiceTypr-Key", pwd);
+        request_builder = request_builder.header("X-Voicetypr-Key", pwd);
     }
     if let Some(spoken_language) = request.spoken_language.as_deref() {
-        request_builder = request_builder.header("X-VoiceTypr-Speech-Language", spoken_language);
+        request_builder = request_builder.header("X-Voicetypr-Speech-Language", spoken_language);
     }
     if let Some(transcription_task) = request.transcription_task.as_deref() {
         request_builder =
-            request_builder.header("X-VoiceTypr-Transcription-Task", transcription_task);
+            request_builder.header("X-Voicetypr-Transcription-Task", transcription_task);
     }
     if let Some(context) = context_header_value(&request) {
-        request_builder = request_builder.header("X-VoiceTypr-Context", context);
+        request_builder = request_builder.header("X-Voicetypr-Context", context);
     }
 
     // Move the audio body in last so the header borrows above stay valid.

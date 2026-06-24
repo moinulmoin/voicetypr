@@ -13,7 +13,7 @@ const MAX_RETRIES: u32 = 3;
 #[allow(dead_code)]
 const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 
-/// Base URL for the VoiceTypr backend API.
+/// Base URL for the Voicetypr backend API.
 /// Debug builds inherit `VOICETYPR_API_URL` from `.env`, else the local backend
 /// on port 4000. Release builds use the production host with NO env override —
 /// these endpoints carry license keys + device hashes, so an env-redirect would

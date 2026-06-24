@@ -47,7 +47,7 @@ for ($i = 1; $i -le $NumRequests; $i++) {
 
         $headers = @{}
         if (-not [string]::IsNullOrWhiteSpace($apiKey)) {
-            $headers["X-VoiceTypr-Key"] = $apiKey
+            $headers["X-Voicetypr-Key"] = $apiKey
         }
 
         $requestStart = Get-Date

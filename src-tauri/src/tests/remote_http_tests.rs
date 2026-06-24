@@ -130,7 +130,7 @@ async fn test_status_endpoint_accepts_correct_password() {
     let response = warp::test::request()
         .method("GET")
         .path("/api/v1/status")
-        .header("X-VoiceTypr-Key", "secret123")
+        .header("X-Voicetypr-Key", "secret123")
         .reply(&routes)
         .await;
 
@@ -146,7 +146,7 @@ async fn test_status_endpoint_rejects_wrong_password() {
     let response = warp::test::request()
         .method("GET")
         .path("/api/v1/status")
-        .header("X-VoiceTypr-Key", "wrongpassword")
+        .header("X-Voicetypr-Key", "wrongpassword")
         .reply(&routes)
         .await;
 
@@ -208,7 +208,7 @@ async fn test_transcribe_endpoint_accepts_correct_password() {
         .method("POST")
         .path("/api/v1/transcribe")
         .header("Content-Type", "audio/wav")
-        .header("X-VoiceTypr-Key", "secret123")
+        .header("X-Voicetypr-Key", "secret123")
         .body(audio_data)
         .reply(&routes)
         .await;
@@ -564,7 +564,7 @@ async fn test_auth_with_empty_password_string() {
     let response = warp::test::request()
         .method("GET")
         .path("/api/v1/status")
-        .header("X-VoiceTypr-Key", "")
+        .header("X-Voicetypr-Key", "")
         .reply(&routes)
         .await;
 
@@ -581,7 +581,7 @@ async fn test_password_is_case_sensitive() {
     let response = warp::test::request()
         .method("GET")
         .path("/api/v1/status")
-        .header("X-VoiceTypr-Key", "secret123")
+        .header("X-Voicetypr-Key", "secret123")
         .reply(&routes)
         .await;
 
@@ -600,7 +600,7 @@ async fn test_transcribe_auth_wrong_password() {
         .method("POST")
         .path("/api/v1/transcribe")
         .header("Content-Type", "audio/wav")
-        .header("X-VoiceTypr-Key", "wrong")
+        .header("X-Voicetypr-Key", "wrong")
         .body(audio_data)
         .reply(&routes)
         .await;

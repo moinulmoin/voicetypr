@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
+import { ask } from '@tauri-apps/plugin-dialog';
+import { check, type Update } from '@tauri-apps/plugin-updater';
+import { toast } from 'sonner';
 
 // Mock Tauri plugins before importing the module under test
 vi.mock('@tauri-apps/plugin-updater', () => ({
@@ -33,10 +37,8 @@ vi.mock('sonner', () => ({
 }));
 
 import { UpdateService } from './updateService';
-import { check } from '@tauri-apps/plugin-updater';
-import { ask } from '@tauri-apps/plugin-dialog';
 import { sendNotification, isPermissionGranted } from '@tauri-apps/plugin-notification';
-import { toast } from 'sonner';
+import type { DistributionInfo } from '@/types/distribution';
 import type { AppSettings } from '@/types';
 
 const JUST_UPDATED_KEY = 'just_updated_version';
@@ -66,12 +68,30 @@ Object.defineProperty(window, 'localStorage', {
   },
 });
 
+function mockDirectDistribution(): void {
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === 'get_distribution_info') {
+      return {
+        channel: 'direct',
+        is_store_install: false,
+        package_family_name: null,
+      };
+    }
+
+    if (command === 'get_current_recording_state') {
+      return { state: 'idle' };
+    }
+
+    return undefined;
+  });
+}
 describe('UpdateService version marker', () => {
   let service: UpdateService;
 
   beforeEach(() => {
     storage.clear();
     vi.clearAllMocks();
+    mockDirectDistribution();
     // Get a fresh instance per test to reset internal state
     // @ts-expect-error accessing private static for test isolation
     UpdateService.instance = undefined;
@@ -126,6 +146,7 @@ describe('UpdateService version marker', () => {
     const result = freshService.getJustUpdatedVersion();
     expect(result).toBe('1.12.1');
   });
+
 });
 
 describe('UpdateService update checks', () => {
@@ -134,6 +155,7 @@ describe('UpdateService update checks', () => {
   beforeEach(() => {
     storage.clear();
     vi.clearAllMocks();
+    mockDirectDistribution();
     // @ts-expect-error accessing private static for test isolation
     UpdateService.instance = undefined;
     service = UpdateService.getInstance();
@@ -154,7 +176,8 @@ describe('UpdateService update checks', () => {
       version: '2.0.0',
       body: 'Release notes',
       downloadAndInstall,
-    } as never);
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Update);
 
     await service.initialize(testSettings({ check_updates_automatically: true }));
 
@@ -165,7 +188,7 @@ describe('UpdateService update checks', () => {
     );
     expect(sendNotification).toHaveBeenCalledWith({
       title: 'Update Available',
-      body: 'VoiceTypr 2.0.0 is ready to install from Settings.',
+      body: 'Voicetypr 2.0.0 is ready to install from Settings.',
     });
   });
 
@@ -183,5 +206,104 @@ describe('UpdateService update checks', () => {
 
     expect(ask).toHaveBeenCalled();
     expect(downloadAndInstall).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates concurrent distribution info requests', async () => {
+    let resolveDistribution!: (info: DistributionInfo) => void;
+    const distributionInfoPromise = new Promise<DistributionInfo>((resolve) => {
+      resolveDistribution = resolve;
+    });
+
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'get_distribution_info') {
+        return distributionInfoPromise;
+      }
+
+      return { state: 'idle' };
+    });
+
+    const settings: AppSettings = {
+      hotkey: 'CommandOrControl+Shift+Space',
+      current_model: 'base.en',
+      speech_language: 'en',
+      theme: 'system',
+      check_updates_automatically: false,
+    };
+    const first = service.initialize(settings);
+    const second = service.initialize(settings);
+
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === 'get_distribution_info')).toHaveLength(1);
+
+    resolveDistribution({
+      channel: 'direct',
+      is_store_install: false,
+      package_family_name: null,
+    });
+
+    await Promise.all([first, second]);
+  });
+
+  it('holds update-check lock while distribution info is pending', async () => {
+    let resolveDistribution!: (info: DistributionInfo) => void;
+    const distributionInfoPromise = new Promise<DistributionInfo>((resolve) => {
+      resolveDistribution = resolve;
+    });
+
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'get_distribution_info') {
+        return distributionInfoPromise;
+      }
+
+      return { state: 'idle' };
+    });
+    vi.mocked(check).mockResolvedValue(null);
+
+    const backgroundCheck = service.checkForUpdatesInBackground();
+    const manualCheck = service.checkForUpdatesManually();
+
+    expect(toast.info).toHaveBeenCalledWith('Update check already in progress');
+    expect(check).not.toHaveBeenCalled();
+
+    resolveDistribution({
+      channel: 'direct',
+      is_store_install: false,
+      package_family_name: null,
+    });
+
+    await Promise.all([backgroundCheck, manualCheck]);
+
+    expect(check).toHaveBeenCalledOnce();
+  });
+
+  it('skips direct updater checks for Microsoft Store installs', async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === 'get_distribution_info') {
+        return {
+          channel: 'store_msix',
+          is_store_install: true,
+          package_family_name: 'Ideaplexa.Voicetypr_12345',
+        };
+      }
+
+      return { state: 'idle' };
+    });
+
+    await service.initialize({
+      hotkey: 'CommandOrControl+Shift+Space',
+      current_model: 'base.en',
+      speech_language: 'en',
+      theme: 'system',
+    });
+
+    expect(check).not.toHaveBeenCalled();
+
+    await service.checkForUpdatesManually();
+
+    expect(check).not.toHaveBeenCalled();
+    expect(toast.info).toHaveBeenCalledWith('Updates are handled by Microsoft Store');
+
+    localStorage.setItem(JUST_UPDATED_KEY, '1.12.5');
+    expect(service.getJustUpdatedVersion()).toBeNull();
+    expect(localStorage.getItem(JUST_UPDATED_KEY)).toBeNull();
   });
 });

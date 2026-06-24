@@ -64,7 +64,7 @@ export const primaryScreens: ScreenDefinition[] = [
     id: "models",
     label: "Transcription",
     icon: Cpu,
-    description: "Local models, cloud transcription, and remote VoiceTypr servers.",
+    description: "Local models, cloud transcription, and remote Voicetypr servers.",
   },
   {
     id: "formatting",

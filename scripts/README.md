@@ -1,4 +1,4 @@
-# VoiceTypr Release Scripts
+# Voicetypr Release Scripts
 
 ## Scripts Overview
 
@@ -6,6 +6,10 @@
 - `release-separate.sh` - macOS release script (creates version, builds both architectures, creates GitHub release)
 - `release-windows.ps1` - Windows release script (builds NSIS installer, updates existing release)
 - `release-windows.bat` - Batch wrapper for the PowerShell script
+
+### Microsoft Store MSIX
+- `build-msix-store.ps1` - Windows Microsoft Store MSIX package builder
+- Store submission playbook: [`MICROSOFT_STORE_LAUNCH.md`](../MICROSOFT_STORE_LAUNCH.md)
 
 ### Supporting Scripts
 - `fix-release-archives.sh` - Fixes macOS tar.gz archives by removing AppleDouble files
@@ -104,7 +108,7 @@ failed to unpack `._voicetypr.app` into `/var/folders/.../T/tauri_updated_app...
 ### Manual Fix (if needed)
 If you need to fix an existing archive:
 ```bash
-COPYFILE_DISABLE=1 tar -czf fixed.tar.gz --exclude='._*' --exclude='.DS_Store' VoiceTypr.app
+COPYFILE_DISABLE=1 tar -czf fixed.tar.gz --exclude='._*' --exclude='.DS_Store' Voicetypr.app
 ```
 
 This ensures the Tauri updater can successfully unpack and install updates on all macOS systems.

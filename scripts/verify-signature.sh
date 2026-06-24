@@ -3,7 +3,7 @@ set -e
 
 # Configuration
 RELEASE_DIR="release-1.0.0"
-TAR_FILE="VoiceTypr_1.0.0_universal.app.tar.gz"
+TAR_FILE="Voicetypr_1.0.0_universal.app.tar.gz"
 PUBLIC_KEY="dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFBRDM5NUI0NkY3Q0MzMUYKUldRZnczeHZ0SlhUR2hwL09YK2lTSHg5T2FrZmxmMlV5QitVR2VxaW9UcERQaWZUYnl1WjErdWEK"
 
 # This is from your tauri.conf.json

@@ -643,7 +643,7 @@ describe('EnhancementsSection', () => {
       replacements: [
         {
           from: 'voice typer',
-          to: 'VoiceTypr',
+          to: 'Voicetypr',
           language: null,
           enabled: true,
         },

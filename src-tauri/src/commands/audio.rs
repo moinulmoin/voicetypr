@@ -1420,11 +1420,11 @@ mod tests {
             audio_path,
             vec![1, 2, 3],
             None,
-            Some("Preferred spellings: VoiceTypr.".to_string()),
+            Some("Preferred spellings: Voicetypr.".to_string()),
         );
         assert_eq!(
             with_context.context.as_deref(),
-            Some("Preferred spellings: VoiceTypr.")
+            Some("Preferred spellings: Voicetypr.")
         );
 
         let (without_context, _) =
@@ -4313,7 +4313,7 @@ pub async fn stop_recording(
                     &app,
                     &audio_path,
                     "No speech recognition models installed",
-                    "Please download at least one speech recognition model from Models to use VoiceTypr.",
+                    "Please download at least one speech recognition model from Models to use Voicetypr.",
                 )
                 .await;
                 }

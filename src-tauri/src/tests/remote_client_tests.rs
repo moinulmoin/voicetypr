@@ -1,7 +1,7 @@
 //! Tests for the remote transcription client module
 //!
 //! These tests verify the HTTP client functionality for connecting to
-//! other VoiceTypr instances for remote transcription.
+//! other Voicetypr instances for remote transcription.
 
 use crate::remote::client::{
     calculate_timeout_ms, timeout_ms_for_wav_file, RemoteServerConnection, TranscriptionRequest,

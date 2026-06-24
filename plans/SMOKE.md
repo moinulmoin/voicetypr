@@ -289,7 +289,7 @@ tests; BE 1101 tests). Residue = live LLM behavior + visual UX.
       polish ON (local engine is fine) → final text keeps Alice, fillers/false
       starts gone, single clean output.
 - [ ] 028-S2 Add a dictionary term with a spoken form (e.g. "voice typer" →
-      "VoiceTypr"); dictate it mis-said with AI on → output shows the canonical
+      "Voicetypr"); dictate it mis-said with AI on → output shows the canonical
       spelling (active "Known terms" correction).
 - [ ] 028-S3 Formatting screen shows two labeled zones — "AI polish (optional)"
       and "Your text rules (always on)"; with AI off the text-rule editors still

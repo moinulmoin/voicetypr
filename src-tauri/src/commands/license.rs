@@ -704,7 +704,7 @@ pub async fn activate_license(
         return Err(ERR_INVALID_LICENSE.to_string());
     }
 
-    // Check for VoiceTypr license format: must start with VT and contain hyphens
+    // Check for Voicetypr license format: must start with VT and contain hyphens
     if !trimmed_key.starts_with("VT") || !trimmed_key.contains('-') {
         return Err(ERR_INVALID_LICENSE.to_string());
     }

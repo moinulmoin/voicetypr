@@ -19,8 +19,8 @@ use super::server::{
 use crate::transcription::TranscriptionResult;
 
 /// Auth header name
-const AUTH_HEADER: &str = "X-VoiceTypr-Key";
-const CONTEXT_HEADER: &str = "X-VoiceTypr-Context";
+const AUTH_HEADER: &str = "X-Voicetypr-Key";
+const CONTEXT_HEADER: &str = "X-Voicetypr-Context";
 
 const MAX_AUDIO_BODY_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
 const MAX_CONTEXT_HEADER_BYTES: usize = 4096;
@@ -149,10 +149,10 @@ fn transcribe_endpoint<T: ServerContext + 'static>(
         .and(warp::header::optional::<String>(AUTH_HEADER))
         .and(warp::header::<String>("content-type"))
         .and(warp::header::optional::<String>(
-            "X-VoiceTypr-Speech-Language",
+            "X-Voicetypr-Speech-Language",
         ))
         .and(warp::header::optional::<String>(
-            "X-VoiceTypr-Transcription-Task",
+            "X-Voicetypr-Transcription-Task",
         ))
         .and(warp::header::optional::<String>(CONTEXT_HEADER))
         // Acquire a permit BEFORE the body is buffered: only the permit holder buffers the

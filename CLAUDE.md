@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project Overview
 
-VoiceTypr is a native desktop app for macOS that provides offline voice transcription using Whisper. It is built with Tauri v2, Rust, React, and TypeScript. V2 also includes remote transcription through local network sharing.
+Voicetypr is a native desktop app for macOS that provides offline voice transcription using Whisper. It is built with Tauri v2, Rust, React, and TypeScript. V2 also includes remote transcription through local network sharing.
 
 ## Development Guidelines
 

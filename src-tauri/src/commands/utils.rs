@@ -30,7 +30,7 @@ pub async fn export_transcriptions(app: AppHandle) -> Result<String, String> {
 
     // Create export data structure
     let export_data = serde_json::json!({
-        "app": "VoiceTypr",
+        "app": "Voicetypr",
         "exportDate": chrono::Utc::now().to_rfc3339(),
         "totalTranscriptions": history.len(),
         "transcriptions": history

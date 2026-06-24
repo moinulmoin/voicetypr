@@ -1,6 +1,6 @@
-# VoiceTypr 2.0.0 — Release Notes (draft)
+# Voicetypr 2.0.0 — Release Notes (draft)
 
-VoiceTypr 2.0 is a ground-up architectural upgrade that ships an **agent & automation interface (CLI + local HTTP API) for driving VoiceTypr programmatically**, cloud transcription, remote LAN sharing, a Rust-native AI formatting engine, a new native hotkey system, rich transcript history, and dramatically improved recording reliability — all while keeping local transcription by default. The release covers 242 commits across the full V1→V2 divergence, touching every major subsystem from the Parakeet/Whisper engine all the way to the onboarding flow.
+Voicetypr 2.0 is a ground-up architectural upgrade that ships an **agent & automation interface (CLI + local HTTP API) for driving Voicetypr programmatically**, cloud transcription, remote LAN sharing, a Rust-native AI formatting engine, a new native hotkey system, rich transcript history, and dramatically improved recording reliability — all while keeping local transcription by default. The release covers 242 commits across the full V1→V2 divergence, touching every major subsystem from the Parakeet/Whisper engine all the way to the onboarding flow.
 
 ---
 
@@ -8,12 +8,12 @@ VoiceTypr 2.0 is a ground-up architectural upgrade that ships an **agent & autom
 
 ### Agent & automation surface
 
-VoiceTypr ships a scriptable CLI plus the Network Sharing HTTP API, so **agents and scripts can drive transcription programmatically**.
+Voicetypr ships a scriptable CLI plus the Network Sharing HTTP API, so **agents and scripts can drive transcription programmatically**.
 
 - **Agent CLI** — `voicetypr status`, `voicetypr models`, `voicetypr transcribe --file <path>`, and `voicetypr record --until-silence`. Human-readable by default; add `--json` to any command for machine-readable output.
 - **Structured JSON output** — local `transcribe --json` emits `{ text, words, metadata, model, engine }`; local `record --json` adds `stop_reason`. `status --json` emits `{ version, settings, availability }`; `models --json` emits the typed model-status response. (With `--server`, the result is the remote writing shape `{ text, output_language, mode, applied_operations, warnings, model, duration_ms }`, plus `stop_reason` for `record`.)
 - **Per-call engine/model override (local path)** — `transcribe`/`record` take `--model <id>` and `--engine <whisper|parakeet|…>` to choose the recognizer per call without changing global settings. (When routing with `--server`, the host's shared model is used instead.)
-- **Route to a running instance** — `transcribe`/`record` accept `--server <host:port>` + optional `--password` to send audio to a running VoiceTypr's Network Sharing server (`/api/v1/transcribe`; default sharing port 47842, but the CLI requires an explicit `host:port`). Without `--server`, the CLI transcribes in-process. Note: the HTTP API exists only while Network Sharing is enabled — it is not an always-on localhost daemon. No MCP server ships in 2.0.0.
+- **Route to a running instance** — `transcribe`/`record` accept `--server <host:port>` + optional `--password` to send audio to a running Voicetypr's Network Sharing server (`/api/v1/transcribe`; default sharing port 47842, but the CLI requires an explicit `host:port`). Without `--server`, the CLI transcribes in-process. Note: the HTTP API exists only while Network Sharing is enabled — it is not an always-on localhost daemon. No MCP server ships in 2.0.0.
 
 ### Cloud transcription
 
@@ -66,7 +66,7 @@ VoiceTypr ships a scriptable CLI plus the Network Sharing HTTP API, so **agents 
 - **Single-key shortcuts on any action** — Settings → Shortcuts allows safe single-key bindings (function keys, numpad keys, navigation keys) on recording, history, formatting, and dashboard actions, with a global cap of 5 single-key shortcuts. Typing keys (letters, numbers) are explicitly rejected with an explanatory message.
 - **Simplified primary recording hotkey editor** — The General Settings hotkey row uses a single Edit → capture → Save/Cancel flow with a "Hold to talk (push-to-talk)" switch for bare modifiers; it directs users to Settings → Shortcuts for additional per-action bindings, removing the earlier duplicate-editor confusion.
 - **Unified shortcut dispatch path** — Legacy combo/single-key shortcuts and native keytrigger events both route through the same dispatch function so recording, cancel, copy last transcription, formatting mode toggle, and dashboard actions behave consistently regardless of which binding triggered them.
-- **Self-injected paste events filtered from the native engine** — After transcription, VoiceTypr's own paste does not re-trigger modifier-hold, double-tap, or chord shortcuts; macOS filters by PID, Windows drops `LLKHF_INJECTED` events.
+- **Self-injected paste events filtered from the native engine** — After transcription, Voicetypr's own paste does not re-trigger modifier-hold, double-tap, or chord shortcuts; macOS filters by PID, Windows drops `LLKHF_INJECTED` events.
 - **Held toggle hotkeys ignore OS auto-repeat** — A toggle hotkey held down produces exactly one stop event; the existing 300 ms throttle also applies, preventing rapid-stop flapping.
 
 ### History & transcripts
@@ -84,13 +84,13 @@ VoiceTypr ships a scriptable CLI plus the Network Sharing HTTP API, so **agents 
 ### Upload & export
 
 - **Save uploaded transcript to .txt or .md** — After uploading a file and transcribing it, a Save button opens a native save dialog with `.txt` and `.md` file filters. The Markdown file includes a `# <filename>` heading. Cancelling the dialog writes nothing.
-- **Upload transcription via remote server** — File upload can route through a remote VoiceTypr instance as the transcription engine, not only local models.
+- **Upload transcription via remote server** — File upload can route through a remote Voicetypr instance as the transcription engine, not only local models.
 
 ### Remote sharing (Network Sharing & Remote Transcription)
 
-- **Network Sharing host** — Any VoiceTypr instance can expose its local transcription engine over the LAN via a built-in HTTP API (`/api/v1/status`, `/api/v1/transcribe`, `/api/v1/control/models`). Status advertises version, machine ID, engine/model, and capability metadata. An optional password protects the sharing endpoint.
+- **Network Sharing host** — Any Voicetypr instance can expose its local transcription engine over the LAN via a built-in HTTP API (`/api/v1/status`, `/api/v1/transcribe`, `/api/v1/control/models`). Status advertises version, machine ID, engine/model, and capability metadata. An optional password protects the sharing endpoint.
 - **Remote server management in Models tab** — The Models tab lists discovered LAN servers (via Scan) and saved remote devices; users can add, select, deselect, remove, and edit remote servers. Selecting a remote server routes all dictation to that machine.
-- **Remote servers in tray menu** — The system tray model selector includes remote VoiceTypr servers alongside local models so switching is possible without opening the main window.
+- **Remote servers in tray menu** — The system tray model selector includes remote Voicetypr servers alongside local models so switching is possible without opening the main window.
 - **Remote model control** — When password-protected sharing is enabled, a remote client can view and switch the host's shared local model; cloud engines are blocked from sharing with a clear message.
 - **Real active-connection count** — Network Sharing tracks distinct peer IPs that have made valid transcription requests in the last 5 minutes and displays that count in the sharing card, replacing the previous always-0 display.
 - **Graceful IP binding with UI status feedback** — The sharing server binds to localhost plus individual IPv4 interface addresses (not 0.0.0.0) and shows each address with its bind status; failed addresses appear dimmed with "could not use this address."
@@ -100,7 +100,7 @@ VoiceTypr ships a scriptable CLI plus the Network Sharing HTTP API, so **agents 
 
 ### Onboarding
 
-- **Onboarding source picker** — Setup begins with a clear choice between "Use this device" (local, offline-capable) and "Remote VoiceTypr" (another machine on the network), with copy explaining the tradeoffs of each.
+- **Onboarding source picker** — Setup begins with a clear choice between "Use this device" (local, offline-capable) and "Remote Voicetypr" (another machine on the network), with copy explaining the tradeoffs of each.
 - **Explicit permission step in onboarding** — A dedicated step asks users to grant Microphone and Accessibility permissions, with clear explanations of why each is needed (recording vs system-wide hotkeys) and recheck buttons.
 - **Onboarding model/readiness flow with GPU toggle** — Local setup shows model cards with download, cancel, and delete; Windows shows a "Use GPU acceleration" toggle. Remote setup lists discovered and saved servers with "Use this server" and "Add server" actions.
 - **Onboarding hotkey mode picker** — The hotkey step accepts a combo shortcut, a safe single key, or a bare modifier. A "Hold to talk (push-to-talk)" switch determines whether a modifier means hold-to-record or tap-to-toggle; the selection is saved as the appropriate global or native binding.
@@ -115,7 +115,7 @@ VoiceTypr ships a scriptable CLI plus the Network Sharing HTTP API, so **agents 
 - **Silence-timeout never loses speech** — After 60 seconds of silence following prior speech, the recording stops and transcribes with "Ended after long silence." After 60 seconds of silence with no speech detected at all, the recording is discarded with "No audio captured."
 - **RecorderWatchdog auto-recovery** — A background 250 ms watcher detects when the audio recorder worker has exited while the app still shows "Recording" state, and drives the normal stop flow once. The watcher re-arms for the next session.
 - **Never-lose-speech on recorder device errors** — If a device error occurs after the WAV was successfully written, audio continues into transcription; only unfinalized failures show "Recording error." Dropped-chunk integrity failures show "Recording was interrupted."
-- **Pause media during recording (default off)** — An opt-in General setting pauses media players at recording start and resumes them only if VoiceTypr was the one that paused them. Fresh configurations default this to off.
+- **Pause media during recording (default off)** — An opt-in General setting pauses media players at recording start and resumes them only if Voicetypr was the one that paused them. Fresh configurations default this to off.
 - **Shared desktop transcription executor** — Local Whisper, local Parakeet, and cloud recordings all enter a single executor that provides cancel-anywhere, decode watchdog, silence handling, device-disconnect recovery, and first-word preservation. Previously each engine had separate cancel/timeout paths.
 - **Quiet-speech gain boost without amplifying noise** — Audio normalization now lifts genuinely soft speech up to ~32× (previously capped at 10×) so quiet dictation transcribes reliably — but only when the clip is modulated like real speech (a per-clip dynamic-range check). Steady noise (fans/HVAC) and pure tones stay at the conservative cap, so they are never amplified into spurious words.
 
@@ -191,7 +191,7 @@ VoiceTypr ships a scriptable CLI plus the Network Sharing HTTP API, so **agents 
 
 ### Privacy
 
-- **Clipboard previous content restored after paste** — When "Keep transcription in clipboard" is off, the previous clipboard content is restored 500 ms after paste — but only if the transcript is still there; rapid back-to-back dictations carry the original clipboard forward. If another app writes to the clipboard during the 500 ms window, VoiceTypr does not overwrite it.
+- **Clipboard previous content restored after paste** — When "Keep transcription in clipboard" is off, the previous clipboard content is restored 500 ms after paste — but only if the transcript is still there; rapid back-to-back dictations carry the original clipboard forward. If another app writes to the clipboard during the 500 ms window, Voicetypr does not overwrite it.
 - **Pre-AI raw transcript stored locally only** — The original (pre-formatting) transcript saved alongside formatted history entries never leaves the device and is not included in any log or report.
 - **Clipboard insertion serialized** — A global insertion guard prevents duplicate paste and stale-restore races between back-to-back recordings.
 - **Whisper context sanitized before transcription** — Compiled Whisper prompt context is sanitized to remove characters that could corrupt the decode context.
@@ -216,7 +216,7 @@ VoiceTypr ships a scriptable CLI plus the Network Sharing HTTP API, so **agents 
 - **Frontend test suite expansion** — New component tests for `RemoteServerCard`, `AddServerModal`, `NetworkSharingCard`, `ShortcutsSection`, `RecentRecordings`, `GeneralSettings.acceleration`, `OnboardingDesktop`, `useModelAvailability`, `useTranscriptionHistory`, `logger`, and `updateService`.
 - **CI/build hardening** — Single Windows installer with bundled runtimes; fast-fail on missing Windows bundle inputs; pnpm without action-setup; upgraded GitHub Actions runtimes; Xcode 16 pinned; Windows test-runner manifest embedding for `TaskDialogIndirect`; CI `run-tests.ps1` script; local CI scripts (`ci-local-macos.sh`, `ci-local-windows.ps1`); quality gate check script.
 - **`pnpm-workspace.yaml` override location** — `hono` pnpm v11 supply-chain override moved to `pnpm-workspace.yaml` to eliminate a package-manager warning during install.
-- **`pnpm tauri:dev` orphan guard** — `scripts/dev-tauri.cjs` reaps stale debug VoiceTypr/parakeet processes (macOS/Linux) before launching the dev config, preventing single-instance ghost conflicts.
+- **`pnpm tauri:dev` orphan guard** — `scripts/dev-tauri.cjs` reaps stale debug Voicetypr/parakeet processes (macOS/Linux) before launching the dev config, preventing single-instance ghost conflicts.
 - **State machine formalized** — Recording state transitions (`Idle → Starting → Recording → Stopping → Transcribing → Idle` and `Error → Idle`) are encoded explicitly in `state_machine.rs`.
 - **Groq, OpenRouter, xAI, DeepSeek, Cohere dropped from AI-polish catalog** — Per-product decision; only OpenAI, Anthropic, Gemini, and Custom remain as production AI-formatting providers.
 - **Agent/multi-agent coordination infrastructure** — Multi-agent development protocol (beads → GitHub Issues migration, worktree isolation, `.agent-counter`, AGENTS.md updates, CLAUDE.md coordination docs). Internal tooling only.
@@ -319,7 +319,7 @@ VoiceTypr ships a scriptable CLI plus the Network Sharing HTTP API, so **agents 
 | 057bc6d | refactor(ai): remove Pi formatting sidecar — Rust-native polish is the only runtime | C |
 | 8308082 | docs(plans): mark 016 in progress — steps 1-6 done, step 7 gated on manual smoke | C |
 | 66344b8 | feat(ai): rust-native polish cutover — validation, executor, migration, fallback | A |
-| 3986b45 | feat(ai): VoiceTypr AI provider contract + Rust runtime spike (plan 016 steps 1-2) | C |
+| 3986b45 | feat(ai): Voicetypr AI provider contract + Rust runtime spike (plan 016 steps 1-2) | C |
 | 0ccd733 | docs(plans): split AI polish into 016 rust cutover, 017 catalog breadth, 018 provider graduation | C |
 | c9c57a1 | fix: harden AI polish pipeline | B |
 | b1a66bf | fix: cut start latency, bound transcription waits, never drop speech | B |
@@ -373,7 +373,7 @@ VoiceTypr ships a scriptable CLI plus the Network Sharing HTTP API, so **agents 
 | bc583c4 | ci: install pnpm without action-setup | C |
 | bd98734 | ci: upgrade GitHub action runtimes | C |
 | c4901a3 | ci: remove Claude review and fix strict clippy | C |
-| ad23e99 | feat: implement VoiceTypr V2 foundations | A |
+| ad23e99 | feat: implement Voicetypr V2 foundations | A |
 | c2dbe00 | docs: remove superseded v2 planning notes | C |
 | 3565a65 | feat: integrate network sharing into v2 roadmap | C |
 | 07cc1a0 | fix(remote): close merge blockers for remote transcription | B |
@@ -492,7 +492,7 @@ VoiceTypr ships a scriptable CLI plus the Network Sharing HTTP API, so **agents 
 - `840ada3 fix(transcription): short, actionable overlay error messages` — classified A because actionable error messages are a distinct user-facing capability (part of plan 026).
 - `3565a65 feat: integrate network sharing into v2 roadmap` — classified C; despite the `feat` prefix it is a docs/planning commit with no code change.
 - `fac6977 feat(transcription): shared contract Stage 1 — DTOs + delegating executor` — classified C; this is an architectural foundation commit (internal DTOs) with no user-visible behavior change on its own.
-- `3986b45 feat(ai): VoiceTypr AI provider contract + Rust runtime spike` — classified C; it's a spike/architecture commit, with user-visible behavior delivered by the subsequent cutover commit (`66344b8`).
+- `3986b45 feat(ai): Voicetypr AI provider contract + Rust runtime spike` — classified C; it's a spike/architecture commit, with user-visible behavior delivered by the subsequent cutover commit (`66344b8`).
 - `a0b3521 feat: add V2 formatting sidecar foundation` — classified C; the sidecar was later removed in `057bc6d` and never shipped to users.
 - `09f4754 feat: upgrade fluidaudio sidecar` — classified B (dependency update with runtime reliability improvement for Parakeet users rather than a new capability).
 

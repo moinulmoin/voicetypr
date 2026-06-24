@@ -110,7 +110,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
           >
             <div className="flex min-w-0 items-center gap-2.5">
               <img src="/AppIcon.png" alt="" className="size-6 rounded-md" />
-              <span className="truncate text-sm font-semibold tracking-tight">VoiceTypr</span>
+              <span className="truncate text-sm font-semibold tracking-tight">Voicetypr</span>
             </div>
             {!isLoading && status ? (
               <span

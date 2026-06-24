@@ -1,7 +1,7 @@
 //! LAN discovery for remote transcription servers.
 //!
 //! This is deliberately small and dependency-free: clients broadcast a UDP
-//! discovery request on the local network, and running VoiceTypr servers reply
+//! discovery request on the local network, and running Voicetypr servers reply
 //! with the HTTP host/port clients should add manually or automatically.
 
 use std::collections::HashMap;

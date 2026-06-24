@@ -52,7 +52,7 @@ Source-verified constraints that shape the work:
 - [ ] Error mapping verified against real responses: 401/403, 404 model,
       429 (+ `Retry-After`), 5xx, network — each lands in the right
       `AiProviderError` category with correct user copy.
-- [ ] Timeout/cancel verified under the VoiceTypr budget (no hangs on slow
+- [ ] Timeout/cancel verified under the Voicetypr budget (no hangs on slow
       gateway responses).
 - [ ] Retry classification verified (429/5xx once within budget; never on
       auth/model errors).
@@ -78,5 +78,5 @@ Source-verified constraints that shape the work:
    entitlement opacity) cannot meet the acceptance list — leave it
    `experimental` with a documented reason; do not weaken the acceptance bar
    to graduate it.
-2. Any change leaks provider-specific types/behavior across the VoiceTypr
+2. Any change leaks provider-specific types/behavior across the Voicetypr
    contract boundary — stop and redesign within the adapter.

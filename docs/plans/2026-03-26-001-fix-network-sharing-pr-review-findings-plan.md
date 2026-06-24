@@ -471,7 +471,7 @@ These are the highest-impact fixes. Each targets a different file/module with no
    ```powershell
    $headers = @{ "Content-Type" = "multipart/form-data" }
    if (-not [string]::IsNullOrWhiteSpace($ApiKey)) {
-       $headers["X-VoiceTypr-Key"] = $ApiKey
+       $headers["X-Voicetypr-Key"] = $ApiKey
    }
    ```
 

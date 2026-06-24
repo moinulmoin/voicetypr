@@ -33,6 +33,13 @@ const SIDECAR_CANDIDATES: &[&str] = &[
 #[cfg(not(target_os = "windows"))]
 const SIDECAR_CANDIDATES: &[&str] = &["whisper-vulkan-sidecar"];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GpuDiagnostic {
+    code: &'static str,
+    action: &'static str,
+    message: &'static str,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct AccelerationRuntimeStatus {
     pub mode: String,
@@ -40,6 +47,8 @@ pub struct AccelerationRuntimeStatus {
     pub gpu_available: Option<bool>,
     pub message: String,
     pub last_error: Option<String>,
+    pub diagnostic_code: String,
+    pub recommended_action: String,
 }
 
 impl Default for AccelerationRuntimeStatus {
@@ -50,6 +59,8 @@ impl Default for AccelerationRuntimeStatus {
             gpu_available: None,
             message: "GPU acceleration has not been tested yet.".to_string(),
             last_error: None,
+            diagnostic_code: "not_tested".to_string(),
+            recommended_action: "none".to_string(),
         }
     }
 }
@@ -161,6 +172,7 @@ struct GpuSidecarProcess {
 impl GpuSidecarProcess {
     async fn spawn(app: &AppHandle) -> Result<Self, String> {
         let path = resolve_sidecar_binary(app)?;
+        ensure_vulkan_loader_available()?;
         log::info!("Spawning Whisper Vulkan sidecar: {}", path.display());
 
         let mut command = Command::new(&path);
@@ -314,6 +326,8 @@ impl GpuSidecarClient {
             gpu_available: None,
             message: message.into(),
             last_error: None,
+            diagnostic_code: "cpu_selected".to_string(),
+            recommended_action: "none".to_string(),
         };
     }
 
@@ -379,6 +393,8 @@ impl GpuSidecarClient {
                         "GPU acceleration is available (model loaded in {load_time_ms}ms)."
                     ),
                     last_error: None,
+                    diagnostic_code: "ready".to_string(),
+                    recommended_action: "none".to_string(),
                 };
                 Ok(())
             }
@@ -451,6 +467,8 @@ impl GpuSidecarClient {
                         "Last transcription used GPU acceleration ({processing_duration_ms}ms)."
                     ),
                     last_error: None,
+                    diagnostic_code: "ready".to_string(),
+                    recommended_action: "none".to_string(),
                 };
                 Ok(WhisperTranscriptionOutput {
                     raw_text: text,
@@ -553,12 +571,15 @@ impl GpuSidecarClient {
     }
 
     async fn record_gpu_error(&self, mode: &str, error: &str) {
+        let diagnostic = classify_gpu_error(error);
         *self.status.write().await = AccelerationRuntimeStatus {
             mode: mode.to_string(),
             effective_backend: "cpu".to_string(),
             gpu_available: Some(false),
-            message: "GPU acceleration is unavailable; VoiceTypr is using CPU mode.".to_string(),
+            message: diagnostic.message.to_string(),
             last_error: Some(error.to_string()),
+            diagnostic_code: diagnostic.code.to_string(),
+            recommended_action: diagnostic.action.to_string(),
         };
     }
 
@@ -611,6 +632,126 @@ pub(crate) fn should_attempt_vulkan_warm_on_preload(
         return false;
     }
     true
+}
+
+fn classify_gpu_error(error: &str) -> GpuDiagnostic {
+    let normalized = error.to_ascii_lowercase();
+    let mentions_vulkan = normalized.contains("vulkan")
+        || normalized.contains("vkcreateinstance")
+        || normalized.contains("context_failed")
+        || normalized.contains("probe_failed");
+
+    if normalized.contains("select or download")
+        || normalized.contains("download a local whisper model")
+        || normalized.contains("model path contains invalid")
+    {
+        return GpuDiagnostic {
+            code: "model_missing",
+            action: "download_model",
+            message: "Select or download a local Whisper model before testing GPU acceleration.",
+        };
+    }
+
+    if normalized.contains("vulkan loader missing")
+        || (normalized.contains("vulkan-1.dll") && normalized.contains("missing"))
+    {
+        return GpuDiagnostic {
+            code: "vulkan_loader_missing",
+            action: "update_graphics_driver",
+            message: "Vulkan is not installed. Install or update your NVIDIA, AMD, or Intel graphics driver, then try GPU acceleration again.",
+        };
+    }
+
+    if normalized.contains("whisper vulkan sidecar not found")
+        || normalized.contains("sidecar was not started")
+        || normalized.contains("stdin was not captured")
+        || normalized.contains("stdout was not captured")
+    {
+        return GpuDiagnostic {
+            code: "sidecar_missing",
+            action: "report_bug",
+            message: "The bundled Vulkan helper is missing or broken. Reinstall Voicetypr, then report a bug if this continues.",
+        };
+    }
+
+    if normalized.contains("failed to parse")
+        || normalized.contains("response id mismatch")
+        || normalized.contains("unexpected vulkan")
+        || normalized.contains("failed to encode")
+    {
+        return GpuDiagnostic {
+            code: "sidecar_protocol_error",
+            action: "report_bug",
+            message: "The Vulkan helper returned an unexpected response. Voicetypr is using CPU mode; please report this bug.",
+        };
+    }
+
+    if normalized.contains("timed out") {
+        return GpuDiagnostic {
+            code: "sidecar_timeout",
+            action: "use_cpu",
+            message: "The Vulkan helper did not respond in time. Voicetypr is using CPU mode.",
+        };
+    }
+
+    if normalized.contains("no vulkan device")
+        || normalized.contains("no suitable vulkan device")
+        || (mentions_vulkan && normalized.contains("device init"))
+    {
+        return GpuDiagnostic {
+            code: "vulkan_device_missing",
+            action: "update_graphics_driver",
+            message: "No compatible Vulkan GPU was found. Install or update your NVIDIA, AMD, or Intel graphics driver, then try GPU acceleration again.",
+        };
+    }
+
+    if normalized.contains("vkcreateinstance")
+        || normalized.contains("context_failed")
+        || normalized.contains("probe_failed")
+        || (mentions_vulkan
+            && (normalized.contains("loader")
+                || normalized.contains("vulkan-1")
+                || normalized.contains("backend init")
+                || normalized.contains("failed to spawn")
+                || normalized.contains("failed to read")
+                || normalized.contains("failed to write")
+                || normalized.contains("failed to flush")
+                || normalized.contains("exited before responding")))
+    {
+        return GpuDiagnostic {
+            code: "driver_or_runtime_failed",
+            action: "update_graphics_driver",
+            message: "Vulkan GPU acceleration failed to start. Install or update your NVIDIA, AMD, or Intel graphics driver. Voicetypr is using CPU mode.",
+        };
+    }
+
+    GpuDiagnostic {
+        code: "gpu_failed",
+        action: "use_cpu",
+        message: "GPU acceleration failed. Voicetypr is using CPU mode. Retry GPU after updating your graphics driver, or report this with logs if it continues.",
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_vulkan_loader_available() -> Result<(), String> {
+    use windows::core::w;
+    use windows::Win32::Foundation::FreeLibrary;
+    use windows::Win32::System::LibraryLoader::LoadLibraryW;
+
+    let module = unsafe { LoadLibraryW(w!("vulkan-1.dll")) };
+    let Ok(module) = module else {
+        return Err("Vulkan loader missing: install or update your NVIDIA, AMD, or Intel graphics driver so vulkan-1.dll is available.".to_string());
+    };
+
+    unsafe {
+        let _ = FreeLibrary(module);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_vulkan_loader_available() -> Result<(), String> {
+    Ok(())
 }
 
 fn transcription_timeout(audio_path: &Path) -> Duration {
@@ -723,11 +864,11 @@ fn dev_sidecar_cwd() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        seconds_to_duration_ms, should_attempt_vulkan_warm_on_preload, sidecar_search_dirs,
-        sidecar_segments_to_transcription_segments, transcription_timeout_for_duration,
-        GpuSidecarClient, SidecarRequest, SidecarResponse, SidecarSegment, CONTROL_REQUEST_TIMEOUT,
-        DEFAULT_TRANSCRIPTION_TIMEOUT, MAX_TRANSCRIPTION_TIMEOUT_SECS,
-        MIN_TRANSCRIPTION_TIMEOUT_SECS,
+        classify_gpu_error, seconds_to_duration_ms, should_attempt_vulkan_warm_on_preload,
+        sidecar_search_dirs, sidecar_segments_to_transcription_segments,
+        transcription_timeout_for_duration, GpuSidecarClient, SidecarRequest, SidecarResponse,
+        SidecarSegment, CONTROL_REQUEST_TIMEOUT, DEFAULT_TRANSCRIPTION_TIMEOUT,
+        MAX_TRANSCRIPTION_TIMEOUT_SECS, MIN_TRANSCRIPTION_TIMEOUT_SECS,
     };
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -771,16 +912,16 @@ mod tests {
     #[test]
     fn sidecar_search_dirs_do_not_traverse_parent_directories() {
         let dirs = sidecar_search_dirs(
-            Some(PathBuf::from("/opt/VoiceTypr/resources")),
-            Some(PathBuf::from("/opt/VoiceTypr/voicetypr.exe")),
+            Some(PathBuf::from("/opt/Voicetypr/resources")),
+            Some(PathBuf::from("/opt/Voicetypr/voicetypr.exe")),
             None,
         );
 
-        assert!(dirs.contains(&PathBuf::from("/opt/VoiceTypr/resources")));
+        assert!(dirs.contains(&PathBuf::from("/opt/Voicetypr/resources")));
         assert!(dirs.contains(&PathBuf::from(
-            "/opt/VoiceTypr/resources/sidecar/whisper-vulkan/dist"
+            "/opt/Voicetypr/resources/sidecar/whisper-vulkan/dist"
         )));
-        assert!(dirs.contains(&PathBuf::from("/opt/VoiceTypr")));
+        assert!(dirs.contains(&PathBuf::from("/opt/Voicetypr")));
         assert!(!dirs.contains(&PathBuf::from("/opt")));
         assert!(!dirs.contains(&PathBuf::from("/")));
     }
@@ -825,6 +966,50 @@ mod tests {
         assert!(should_attempt_vulkan_warm_on_preload("auto", None));
         assert!(should_attempt_vulkan_warm_on_preload("auto", Some(true)));
         assert!(!should_attempt_vulkan_warm_on_preload("auto", Some(false)));
+    }
+
+    #[test]
+    fn gpu_error_classifier_reports_missing_vulkan_loader() {
+        let diagnostic = classify_gpu_error(
+            "Vulkan loader missing: install or update your NVIDIA, AMD, or Intel graphics driver so vulkan-1.dll is available.",
+        );
+
+        assert_eq!(diagnostic.code, "vulkan_loader_missing");
+        assert_eq!(diagnostic.action, "update_graphics_driver");
+        assert!(diagnostic.message.contains("NVIDIA, AMD, or Intel"));
+    }
+
+    #[test]
+    fn gpu_error_classifier_separates_packaging_from_protocol_errors() {
+        let missing_sidecar =
+            classify_gpu_error("Whisper Vulkan sidecar not found. Searched: C:\\app\\missing.exe");
+        assert_eq!(missing_sidecar.code, "sidecar_missing");
+        assert_eq!(missing_sidecar.action, "report_bug");
+
+        let protocol = classify_gpu_error(
+            "failed to parse Vulkan sidecar response: expected value; response_bytes=4",
+        );
+        assert_eq!(protocol.code, "sidecar_protocol_error");
+        assert_eq!(protocol.action, "report_bug");
+    }
+
+    #[test]
+    fn gpu_error_classifier_maps_runtime_failures_to_driver_guidance() {
+        let no_device = classify_gpu_error("probe_failed: no Vulkan device available");
+        assert_eq!(no_device.code, "vulkan_device_missing");
+        assert_eq!(no_device.action, "update_graphics_driver");
+
+        let init_failed = classify_gpu_error("context_failed: vkCreateInstance returned -9");
+        assert_eq!(init_failed.code, "driver_or_runtime_failed");
+        assert_eq!(init_failed.action, "update_graphics_driver");
+
+        let timeout = classify_gpu_error("Vulkan sidecar request timed out");
+
+        let unknown_io = classify_gpu_error("failed to read model header");
+        assert_eq!(unknown_io.code, "gpu_failed");
+        assert_eq!(unknown_io.action, "use_cpu");
+        assert_eq!(timeout.code, "sidecar_timeout");
+        assert_eq!(timeout.action, "use_cpu");
     }
 
     #[test]

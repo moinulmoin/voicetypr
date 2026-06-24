@@ -31,7 +31,7 @@ use crate::whisper::gpu_sidecar::GpuSidecarClient;
 use crate::whisper::manager::WhisperManager;
 
 #[derive(Parser, Debug)]
-#[command(name = "voicetypr", version, about = "VoiceTypr CLI")]
+#[command(name = "voicetypr", version, about = "Voicetypr CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Option<CliCommand>,
@@ -43,7 +43,7 @@ enum CliCommand {
     Status(StatusArgs),
     /// List speech models and whether each one is downloaded.
     Models(OutputArgs),
-    /// Transcribe an audio file locally, or via a remote VoiceTypr server with --server.
+    /// Transcribe an audio file locally, or via a remote Voicetypr server with --server.
     Transcribe(TranscribeArgs),
     /// Record from the microphone until silence, then transcribe the result.
     Record(RecordArgs),
@@ -87,7 +87,7 @@ struct TranscribeArgs {
     /// Engine override ("whisper" or "parakeet"); defaults to the selected model's engine.
     #[arg(long)]
     engine: Option<String>,
-    /// Transcribe via a remote VoiceTypr server given as host:port (e.g. 192.168.1.10:47842) instead of locally.
+    /// Transcribe via a remote Voicetypr server given as host:port (e.g. 192.168.1.10:47842) instead of locally.
     #[arg(long)]
     server: Option<String>,
     /// Remote server password. Prefer --password-stdin or VOICETYPR_REMOTE_PASSWORD for automation.
@@ -112,7 +112,7 @@ struct RecordArgs {
     /// Engine override ("whisper" or "parakeet"); defaults to the selected model's engine.
     #[arg(long)]
     engine: Option<String>,
-    /// Transcribe via a remote VoiceTypr server given as host:port (e.g. 192.168.1.10:47842) instead of locally.
+    /// Transcribe via a remote Voicetypr server given as host:port (e.g. 192.168.1.10:47842) instead of locally.
     #[arg(long)]
     server: Option<String>,
     /// Remote server password. Prefer --password-stdin or VOICETYPR_REMOTE_PASSWORD for automation.
@@ -392,7 +392,7 @@ async fn run_transcribe(
             .or_else(|| {
                 (!settings.current_model.is_empty()).then_some(settings.current_model.clone())
             })
-            .ok_or_else(|| "No model specified and no model is selected in the app. Pass --model <name> (run `voicetypr models` to list installed models) or choose a default model in VoiceTypr settings.".to_string())?;
+            .ok_or_else(|| "No model specified and no model is selected in the app. Pass --model <name> (run `voicetypr models` to list installed models) or choose a default model in Voicetypr settings.".to_string())?;
         let engine = args.engine.clone().or_else(|| {
             (!settings.current_model_engine.is_empty())
                 .then_some(settings.current_model_engine.clone())
@@ -456,7 +456,7 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
             .or_else(|| {
                 (!settings.current_model.is_empty()).then_some(settings.current_model.clone())
             })
-            .ok_or_else(|| "No model specified and no model is selected in the app. Pass --model <name> (run `voicetypr models` to list installed models) or choose a default model in VoiceTypr settings.".to_string())?;
+            .ok_or_else(|| "No model specified and no model is selected in the app. Pass --model <name> (run `voicetypr models` to list installed models) or choose a default model in Voicetypr settings.".to_string())?;
         let engine = args.engine.clone().or_else(|| {
             (!settings.current_model_engine.is_empty())
                 .then_some(settings.current_model_engine.clone())

@@ -537,7 +537,7 @@ describe('AppContainer', () => {
       render(<AppContainer />);
 
       await waitFor(() => {
-        expect(screen.getByText('VoiceTypr Updated')).toBeInTheDocument();
+        expect(screen.getByText('Voicetypr Updated')).toBeInTheDocument();
       });
       expect(screen.getByText(/Successfully updated to version 1\.13\.0/)).toBeInTheDocument();
     });
@@ -549,7 +549,7 @@ describe('AppContainer', () => {
       await waitFor(() => {
         expect(screen.getByTestId('sidebar')).toBeInTheDocument();
       });
-      expect(screen.queryByText('VoiceTypr Updated')).not.toBeInTheDocument();
+      expect(screen.queryByText('Voicetypr Updated')).not.toBeInTheDocument();
     });
 
     it('dismisses update dialog when close button is clicked', async () => {
@@ -557,14 +557,14 @@ describe('AppContainer', () => {
       render(<AppContainer />);
 
       await waitFor(() => {
-        expect(screen.getByText('VoiceTypr Updated')).toBeInTheDocument();
+        expect(screen.getByText('Voicetypr Updated')).toBeInTheDocument();
       });
 
       const dismissBtn = screen.getByRole('button', { name: /^dismiss$/i });
       fireEvent.click(dismissBtn);
 
       await waitFor(() => {
-        expect(screen.queryByText('VoiceTypr Updated')).not.toBeInTheDocument();
+        expect(screen.queryByText('Voicetypr Updated')).not.toBeInTheDocument();
       });
     });
   });

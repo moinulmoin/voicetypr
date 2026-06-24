@@ -223,7 +223,7 @@ describe('report submission payloads', () => {
 
     await expect(submitManualReport(baseReport)).resolves.toEqual({
       success: false,
-      message: 'Could not connect to VoiceTypr Support. Please use Copy Report instead.',
+      message: 'Could not connect to Voicetypr Support. Please use Copy Report instead.',
     });
   });
 
@@ -257,7 +257,7 @@ describe('report submission payloads', () => {
 
     await expect(submitManualReport(baseReport)).resolves.toEqual({
       success: false,
-      message: 'Could not connect to VoiceTypr Support. Please use Copy Report instead.',
+      message: 'Could not connect to Voicetypr Support. Please use Copy Report instead.',
     });
   });
 });

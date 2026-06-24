@@ -50,7 +50,7 @@ export function TelemetrySection() {
       });
       setStatus((prev) => (prev ? { ...prev, enabled: res.enabled } : prev));
       if (res.restart_required) {
-        toast.info("Restart VoiceTypr to start sending diagnostics.");
+        toast.info("Restart Voicetypr to start sending diagnostics.");
       } else {
         toast.success("Diagnostics turned off.");
       }
@@ -70,11 +70,11 @@ export function TelemetrySection() {
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <p className="text-sm font-medium">
-              Help improve VoiceTypr with anonymous diagnostics
+              Help improve Voicetypr with anonymous diagnostics
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Optional and off by default. When on, VoiceTypr sends anonymous
-              crash and error reports to VoiceTypr-owned diagnostics. It never
+              Optional and off by default. When on, Voicetypr sends anonymous
+              crash and error reports to Voicetypr-owned diagnostics. It never
               sends your audio, transcripts, prompts, API keys, file paths, the
               names of apps you dictate into, or memory dumps. Turning this on
               takes effect after a restart; turning it off stops reporting

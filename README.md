@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="src-tauri/icons/icon.png" alt="VoiceTypr Logo" width="128" height="128">
+  <img src="src-tauri/icons/icon.png" alt="Voicetypr Logo" width="128" height="128">
 
-  # VoiceTypr
+  # Voicetypr
 
   **Open Source AI Powered voice to text dictation tool, alternative to superwhisper, whispr flow**
 
@@ -14,9 +14,9 @@
   [Download](https://github.com/moinulmoin/voicetypr/releases/latest) • [Features](#features) • [Installation](#installation) • [Usage](#usage)
 </div>
 
-## 🎯 What is VoiceTypr?
+## 🎯 What is Voicetypr?
 
-VoiceTypr is an open source AI voice-to-text dictation tool, alternative to Wispr Flow and SuperWhisper. Available for macOS and Windows. Pay once, use forever.
+Voicetypr is an open source AI voice-to-text dictation tool, alternative to Wispr Flow and SuperWhisper. Available for macOS and Windows. Pay once, use forever.
 
 ## ✨ Features
 
@@ -71,21 +71,21 @@ VoiceTypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 ### Quick Install
 
 #### macOS
-1. Download the latest [VoiceTypr.dmg](https://github.com/moinulmoin/voicetypr/releases/latest)
-2. Open the DMG and drag VoiceTypr to Applications
-3. Launch VoiceTypr from Applications
+1. Download the latest [Voicetypr.dmg](https://github.com/moinulmoin/voicetypr/releases/latest)
+2. Open the DMG and drag Voicetypr to Applications
+3. Launch Voicetypr from Applications
 4. Follow the onboarding to download your preferred AI model
 
-> **Note**: VoiceTypr is fully signed and notarized by Apple, so you can run it without security warnings.
+> **Note**: Voicetypr is fully signed and notarized by Apple, so you can run it without security warnings.
 
 #### Windows
-1. Download the latest [VoiceTypr installer](https://github.com/moinulmoin/voicetypr/releases/latest)
+1. Download the latest [Voicetypr installer](https://github.com/moinulmoin/voicetypr/releases/latest)
 2. Run the installer
-3. Launch VoiceTypr from Start Menu
+3. Launch Voicetypr from Start Menu
 4. Follow the onboarding to download your preferred AI model
 
 > **GPU Acceleration (5-10x faster)**
-> - VoiceTypr automatically uses your GPU if available
+> - Voicetypr automatically uses your GPU if available
 > - For best performance, ensure your graphics drivers are up to date:
 >   - [NVIDIA Drivers](https://www.nvidia.com/drivers)
 >   - [AMD Drivers](https://www.amd.com/support)
@@ -96,7 +96,7 @@ VoiceTypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 
 ### Getting Started
 
-1. **Launch VoiceTypr** - Find it in your Applications folder (macOS) or Start Menu (Windows)
+1. **Launch Voicetypr** - Find it in your Applications folder (macOS) or Start Menu (Windows)
 2. **Grant Permissions** - Allow microphone access (and accessibility on macOS)
 3. **Download a Model** - Choose from tiny to large models based on your needs
 4. **Start Transcribing** - Press your hotkey anywhere to record
@@ -104,7 +104,7 @@ VoiceTypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 ### Tips & Tricks
 
 - 🎯 **Quick Cancel**: Double Press `Esc` while recording to cancel
-- 📝 **Long Recordings**: VoiceTypr handles extended recordings seamlessly but shorter recordings are recommended to do.
+- 📝 **Long Recordings**: Voicetypr handles extended recordings seamlessly but shorter recordings are recommended to do.
 - 🌍 **Multiple Languages**: Just speak - Whisper auto-detects the language
 - ⚡ **Instant Insert**: Text appears right where your cursor is
 
@@ -130,16 +130,16 @@ voicetypr/
 
 ### Windows GPU Acceleration
 
-VoiceTypr automatically detects and uses your GPU for faster transcription. If you're experiencing slower performance:
+Voicetypr automatically detects and uses your GPU for faster transcription. If you're experiencing slower performance:
 
 **Update your graphics drivers** - This is the most common fix:
    - [NVIDIA Drivers](https://www.nvidia.com/drivers)
    - [AMD Drivers](https://www.amd.com/support)
    - [Intel Drivers](https://www.intel.com/content/www/us/en/support/products/80939/graphics.html)
 
-> **Note**: VoiceTypr always works - it automatically falls back to CPU if GPU acceleration is unavailable
+> **Note**: Voicetypr always works - it automatically falls back to CPU if GPU acceleration is unavailable
 
 ## 📄 License
 
-VoiceTypr is licensed under the [GNU Affero General Public License v3.0](LICENSE.md).
+Voicetypr is licensed under the [GNU Affero General Public License v3.0](LICENSE.md).
 </div>

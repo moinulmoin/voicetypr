@@ -51,7 +51,7 @@ Architecture:
 Enhancements UI / settings / CLI later
         |
         v
-VoiceTypr AI provider contract
+Voicetypr AI provider contract
   - AiProvider / AiModel
   - AiPolishRequest / AiPolishResult
   - AiProviderError
@@ -69,9 +69,9 @@ types.
 
 | Finding | Consequence |
 |---|---|
-| genai 0.6 `AuthResolver`/`AuthData::Key` resolves the API key per call from a `'static` closure — no env vars. | Key lookup from VoiceTypr's secure store works. Closure must capture an `Arc` key-store handle, not borrowed UI state. |
+| genai 0.6 `AuthResolver`/`AuthData::Key` resolves the API key per call from a `'static` closure — no env vars. | Key lookup from Voicetypr's secure store works. Closure must capture an `Arc` key-store handle, not borrowed UI state. |
 | genai has **no per-call timeout**; `WebConfig::with_timeout` is reqwest client-level only. | Wrap every polish call in `tokio::time::timeout` + cancellation token. Mandatory. |
-| genai errors are **not semantically typed**: provider HTTP failures surface as `webc::Error::ResponseFailedStatus { status, body, headers }` / `Reqwest(reqwest::Error)` nested in `genai::Error`. | VoiceTypr owns an error mapper: 401/403 → `InvalidApiKey`, 429 → `RateLimited`, 5xx → `ServiceUnavailable`, reqwest timeout/connect → `Timeout`/`Network`. Never show raw SDK errors. |
+| genai errors are **not semantically typed**: provider HTTP failures surface as `webc::Error::ResponseFailedStatus { status, body, headers }` / `Reqwest(reqwest::Error)` nested in `genai::Error`. | Voicetypr owns an error mapper: 401/403 → `InvalidApiKey`, 429 → `RateLimited`, 5xx → `ServiceUnavailable`, reqwest timeout/connect → `Timeout`/`Network`. Never show raw SDK errors. |
 | `AdapterKind::Custom` does **not exist in genai 0.6 stable** (only 0.7-beta, env-var driven). | Custom OpenAI-compatible uses the direct reqwest adapter. Do not adopt the beta. |
 | genai emits `reasoning_effort` only for the **native OpenAI adapter**; Anthropic/Gemini have native mappings; OpenAI-compatible gateways silently drop it. | Runtime maps reasoning effort for OpenAI/Anthropic/Gemini native adapters only, omitting it elsewhere. **No reasoning UI in this plan** (see Step 6). |
 | genai 0.5→0.6 was a large breaking release; single dominant maintainer. | Pin **exactly** `genai = "=0.6.0"`. The contract is the swap seam. |
@@ -86,8 +86,8 @@ types.
    transcript plus a polish-failed notice. Never drop text, never paste an
    empty or partial provider response, never pretend polish succeeded.
 3. **No unbounded provider calls**: one total budget per request, cancellation,
-   bounded retry — all owned by VoiceTypr.
-4. **No dependency lock-in**: UI/settings/history store only VoiceTypr contract
+   bounded retry — all owned by Voicetypr.
+4. **No dependency lock-in**: UI/settings/history store only Voicetypr contract
    fields.
 5. **Non-streaming only**: partial output is never pasted; discarded on
    cancel/failure.
@@ -254,7 +254,7 @@ backend source behind the same DTOs).
 
 ## Runtime policy
 
-- One `reqwest::Client` built by VoiceTypr, injected via
+- One `reqwest::Client` built by Voicetypr, injected via
   `ClientBuilder::with_reqwest` — same TLS/proxy stack on both runtime paths.
 - Total budget enforced by `tokio::time::timeout` around the whole polish
   future; cancellation token aborts the wait.
@@ -291,7 +291,7 @@ dev-dependency only if nothing exists).
 2. Prove with mocked HTTP, for OpenAI/Anthropic/Gemini (genai) and Custom
    (direct reqwest):
    - API key from an `Arc`-captured resolver, no env vars;
-   - VoiceTypr-owned total timeout + cancel (verify the request aborts);
+   - Voicetypr-owned total timeout + cancel (verify the request aborts);
    - error mapping to `AiProviderError` from 401/403/429/5xx/network/timeout;
    - reasoning effort emitted for the three native adapters, omitted for
      custom.
@@ -456,7 +456,7 @@ ALL must hold:
 
 - [ ] Contract types exactly as specified; no SDK type crosses boundaries.
 - [ ] `genai = "=0.6.0"`; custom on direct reqwest; spike evidence recorded.
-- [ ] VoiceTypr-owned timeout/cancel/retry/error mapping covered by the mocked
+- [ ] Voicetypr-owned timeout/cancel/retry/error mapping covered by the mocked
       failure matrix.
 - [ ] `validate_ai_api_key` replaced in place (pure validation); save order
       validate → keyring → cache → settings for all four providers.
@@ -475,7 +475,7 @@ ALL must hold:
 ## STOP conditions
 
 1. Any of the four launch providers cannot pass the Step 1 mocked matrix with
-   VoiceTypr-owned auth/timeout/errors. (Groq/xAI/OpenRouter never stop this
+   Voicetypr-owned auth/timeout/errors. (Groq/xAI/OpenRouter never stop this
    plan.)
 2. `genai =0.6.0` introduces a Windows or macOS build/TLS problem not explained
    by local environment.

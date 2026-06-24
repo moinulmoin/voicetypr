@@ -2,7 +2,7 @@
 'use strict';
 // Cross-platform launcher for the dev-config `tauri dev`.
 //
-// Before launching it reaps any orphaned VoiceTypr dev processes left behind by
+// Before launching it reaps any orphaned Voicetypr dev processes left behind by
 // an interrupted previous session: a stale single-instance ghost otherwise makes
 // the new launch defer to the invisible orphan and exit 143.
 //

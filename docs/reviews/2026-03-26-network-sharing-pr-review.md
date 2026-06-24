@@ -101,7 +101,7 @@ Should be fixed before merge.
 
 ### Scripts
 
-- **Parallel request script missing auth**: Never sends `X-VoiceTypr-Key` header. Fails against password-protected servers. (`test-parallel-requests.ps1:49-53`)
+- **Parallel request script missing auth**: Never sends `X-Voicetypr-Key` header. Fails against password-protected servers. (`test-parallel-requests.ps1:49-53`)
 
 ---
 
