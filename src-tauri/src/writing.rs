@@ -1711,18 +1711,45 @@ fn collect_final_guard_candidates(
             continue;
         };
 
+        // Primary: re-apply at the exact recorded offset. This holds when AI
+        // formatting left the term in place, or when AI never ran (text ==
+        // library text). After a free-form AI rewrite, byte positions shift, so
+        // the exact match silently fails and the reverted term is left
+        // unrestored. Fallback: accept the nearest boundary-valid, non-protected
+        // occurrence. Any such occurrence must be a reverted library term,
+        // because the library already consumed every boundary-valid source form
+        // into target_text — none survive into the text unless the AI
+        // reintroduced one. The fallback is gated on `target_start` being a
+        // plausible in-text position; in production offsets are always measured
+        // in a related string, so this only rejects synthetic, out-of-range
+        // provenance.
+        let mut exact: Option<(usize, usize)> = None;
+        let mut shifted: Option<(usize, usize)> = None;
         for mat in regex.find_iter(text) {
-            if mat.start() == application.target_start
-                && candidate_has_boundaries(text, mat.start(), mat.end())
-                && !span_in_protected_token(text, mat.start(), mat.end())
+            if !candidate_has_boundaries(text, mat.start(), mat.end())
+                || span_in_protected_token(text, mat.start(), mat.end())
             {
-                candidates.push(FinalGuardCandidate {
-                    start: mat.start(),
-                    end: mat.end(),
-                    replacement: application.target_text.clone(),
-                    detail: format!("{} → {}", application.source_form, application.target_text),
-                });
+                continue;
             }
+            if mat.start() == application.target_start {
+                exact = Some((mat.start(), mat.end()));
+            } else if application.target_start < text.len()
+                && shifted.is_none_or(|(start, _)| {
+                    mat.start().abs_diff(application.target_start)
+                        < start.abs_diff(application.target_start)
+                })
+            {
+                shifted = Some((mat.start(), mat.end()));
+            }
+        }
+
+        if let Some((start, end)) = exact.or(shifted) {
+            candidates.push(FinalGuardCandidate {
+                start,
+                end,
+                replacement: application.target_text.clone(),
+                detail: format!("{} → {}", application.source_form, application.target_text),
+            });
         }
     }
     candidates.sort_by(|left, right| {
@@ -3033,6 +3060,48 @@ mod tests {
             apply_final_restoration_guard("please react", &provenance, false, false);
         assert_eq!(shifted, "please react");
         assert!(shifted_ops.is_empty());
+    }
+
+    #[test]
+    fn test_final_guard_restores_after_position_shift() {
+        // Simulates AI formatting that prepended "well, " and reverted the
+        // library casing, shifting the term off its recorded offset
+        // (target_start == 0). The guard must still restore it rather than
+        // silently no-op'ing.
+        let provenance = vec![LibraryRuleApplication {
+            source_form: "voice typer".to_string(),
+            target_text: "Voicetypr".to_string(),
+            source_kind: LibraryRuleSourceKind::ExplicitReplacement,
+            language_scope: Some("en".to_string()),
+            start: 0,
+            end: 11,
+            target_start: 0,
+            target_end: 9,
+        }];
+
+        let (guarded, ops) =
+            apply_final_restoration_guard("well, voice typer", &provenance, false, false);
+        assert_eq!(guarded, "well, Voicetypr");
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].kind, WritingOperationKind::FinalGuard);
+
+        // An out-of-range recorded offset (beyond the text) is left untouched:
+        // the fallback only fires for plausible in-text positions, so synthetic
+        // or inconsistent provenance never over-substitutes.
+        let out_of_range = vec![LibraryRuleApplication {
+            source_form: "voice typer".to_string(),
+            target_text: "Voicetypr".to_string(),
+            source_kind: LibraryRuleSourceKind::ExplicitReplacement,
+            language_scope: Some("en".to_string()),
+            start: 0,
+            end: 11,
+            target_start: 50,
+            target_end: 59,
+        }];
+        let (untouched, untouched_ops) =
+            apply_final_restoration_guard("well, voice typer", &out_of_range, false, false);
+        assert_eq!(untouched, "well, voice typer");
+        assert!(untouched_ops.is_empty());
     }
 
     #[test]

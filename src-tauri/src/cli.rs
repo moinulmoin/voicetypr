@@ -426,10 +426,9 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
     let settings = get_settings(app.clone()).await?;
     let recordings_dir = app.path().app_data_dir()?.join("recordings");
     std::fs::create_dir_all(&recordings_dir)?;
-    let output_path = recordings_dir.join(format!(
-        "cli-recording-{}.wav",
-        chrono::Utc::now().format("%Y%m%d%H%M%S")
-    ));
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S%3f");
+    let uuid_part = uuid::Uuid::new_v4().to_string()[..8].to_string();
+    let output_path = recordings_dir.join(format!("cli-recording-{}_{}.wav", timestamp, uuid_part));
     let mut recording_guard = TempRecording {
         path: output_path.clone(),
         delete_on_drop: false,
