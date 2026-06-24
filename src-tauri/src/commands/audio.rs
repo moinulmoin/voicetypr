@@ -83,6 +83,17 @@ fn stop_should_reset_to_idle(current: RecordingState) -> bool {
         RecordingState::Stopping | RecordingState::Transcribing
     )
 }
+/// Whether a transcription task is currently running (spawned and not yet
+/// finished). Used to distinguish a genuinely stuck `Stopping` state (no work
+/// will ever advance it) from a `Stopping` state that is merely waiting for a
+/// just-spawned transcription task to flip to `Transcribing`.
+fn transcription_task_in_flight(app_state: &AppState) -> bool {
+    app_state
+        .transcription_task
+        .lock()
+        .map(|guard| guard.as_ref().map(|h| !h.is_finished()).unwrap_or(false))
+        .unwrap_or(false)
+}
 
 fn take_and_remove_current_recording_path(app_state: &AppState, reason: &str) {
     let audio_path = match app_state.current_recording_path.lock() {
@@ -3984,6 +3995,19 @@ pub async fn stop_recording(
             // Don't error - just return empty result; only reset if this stop owns the flow.
             drop(recorder); // Drop the lock before updating state
             if stop_should_reset_to_idle(entry_state) {
+                update_recording_state(&app, RecordingState::Idle, None);
+            } else if entry_state == RecordingState::Stopping
+                && !transcription_task_in_flight(&app_state)
+            {
+                // A prior stop left us stuck in Stopping with no in-flight
+                // transcription to advance the state (e.g. it errored before
+                // spawning the transcription task). Recover to Idle so the
+                // hotkey/UI is not frozen until restart. Only safe when no
+                // transcription task is running; otherwise the legit task will
+                // flip Stopping -> Transcribing on its own.
+                log::warn!(
+                    "stop_recording: recovering from stuck Stopping state (no transcription in flight)"
+                );
                 update_recording_state(&app, RecordingState::Idle, None);
             } else {
                 log::debug!(

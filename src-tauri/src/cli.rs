@@ -430,8 +430,9 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
         "cli-recording-{}.wav",
         chrono::Utc::now().format("%Y%m%d%H%M%S")
     ));
-    let _recording_guard = TempRecording {
+    let mut recording_guard = TempRecording {
         path: output_path.clone(),
+        delete_on_drop: false,
     };
 
     let mut recorder = AudioRecorder::new();
@@ -476,6 +477,7 @@ async fn run_record(app: &tauri::AppHandle, args: RecordArgs) -> Result<(), Box<
     } else {
         println!("{}", payload["text"].as_str().unwrap_or_default());
     }
+    recording_guard.delete_on_drop = true;
     Ok(())
 }
 
@@ -505,18 +507,31 @@ impl Drop for RemoteNormalizedAudio {
 
 struct TempRecording {
     path: PathBuf,
+    /// Only remove the captured WAV after a successful transcription. On the
+    /// error path the recording is preserved so a long capture is not lost to a
+    /// transient model/network failure and can be retried.
+    delete_on_drop: bool,
 }
 
 impl Drop for TempRecording {
     fn drop(&mut self) {
-        if let Err(error) = std::fs::remove_file(&self.path) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                log::warn!(
-                    "Failed to remove CLI temp recording {:?}: {}",
-                    self.path,
-                    error
-                );
+        if self.delete_on_drop {
+            if let Err(error) = std::fs::remove_file(&self.path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    log::warn!(
+                        "Failed to remove CLI temp recording {:?}: {}",
+                        self.path,
+                        error
+                    );
+                }
             }
+        } else if std::fs::metadata(&self.path).is_ok() {
+            // Error path: keep the capture so the user can retry transcription
+            // instead of losing a long recording to a transient failure.
+            eprintln!(
+                "Recording preserved for retry (CLI exited with an error): {}",
+                self.path.display()
+            );
         }
     }
 }
@@ -528,9 +543,14 @@ async fn normalize_audio_for_remote(
     let recordings_dir = app.path().app_data_dir()?.join("recordings");
     std::fs::create_dir_all(&recordings_dir)?;
 
+    // Millisecond timestamps alone collide for simultaneous CLI invocations;
+    // add a uuid suffix (matches the recordings naming convention in
+    // commands/audio.rs) for guaranteed-unique temp paths.
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S%3f");
+    let uuid_part = uuid::Uuid::new_v4().to_string()[..8].to_string();
     let output_path = recordings_dir.join(format!(
-        "cli-remote-normalized-{}.wav",
-        chrono::Utc::now().format("%Y%m%d%H%M%S%3f")
+        "cli-remote-normalized-{}_{}.wav",
+        timestamp, uuid_part
     ));
     crate::ffmpeg::normalize_streaming(app, file, &output_path)
         .await

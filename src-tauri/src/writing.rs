@@ -267,7 +267,15 @@ pub fn sanitize_writing_settings(settings: WritingSettings) -> WritingSettings {
             .into_iter()
             .filter_map(|rule| {
                 let from = rule.from.trim();
-                let to = rule.to.trim();
+                let to_trimmed = rule.to.trim();
+                // Trim surrounding whitespace from the replacement target, but when
+                // it is intentionally whitespace-only (e.g. de-hyphenation "-" ->
+                // " ") preserve it verbatim instead of dropping the rule.
+                let to = if to_trimmed.is_empty() {
+                    rule.to.as_str()
+                } else {
+                    to_trimmed
+                };
                 if from.is_empty() || to.is_empty() {
                     return None;
                 }
@@ -1938,10 +1946,18 @@ pub async fn process_transcription(
         &mut applied_operations,
     );
 
-    let needs_output_language_transform = transcript_language
-        .as_deref()
-        .map(|language| language != output_language)
-        .unwrap_or(false);
+    // When the transcript language is known, a transform is needed iff it differs
+    // from the configured output language. When it is unknown (engine omitted it,
+    // remote STT, pre-detection models) we cannot confirm the transcript already
+    // matches the target, so honor "fail truthfully": treat a transform as needed
+    // when the user configured an explicit output language (triggering the
+    // OutputLanguageRequiresAi guard or an AI run). In "same as transcript" mode
+    // the user has not requested a language change, so an unknown source language
+    // is left untouched (pass-through) rather than forcing a spurious error.
+    let needs_output_language_transform = match transcript_language.as_deref() {
+        Some(language) => language != output_language,
+        None => profile.final_text_language != FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT,
+    };
 
     let can_run_ai_formatting = ai_enabled && profile.mode != WritingMode::PersonalDictation;
 

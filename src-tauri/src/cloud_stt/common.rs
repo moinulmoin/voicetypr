@@ -65,11 +65,18 @@ pub(crate) fn is_transient(err: &SttError) -> bool {
 }
 
 pub(super) fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
-        .connect_timeout(std::time::Duration::from_secs(15))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .connect_timeout(std::time::Duration::from_secs(15));
+    // Cloud STT sends an API key (Authorization header) and the raw audio in
+    // the request body, so the client must never speak plaintext HTTP. Force
+    // HTTPS so a misconfigured — or future user-supplied — base URL cannot
+    // leak them. reqwest's https_only has no loopback carve-out, and loopback
+    // HTTP is used only by the in-tree wiremock tests, so the guard is compiled
+    // out under cfg(test) to keep those tests green.
+    #[cfg(not(test))]
+    let builder = builder.https_only(true);
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
 }
 
 pub(super) async fn with_retry<T, F, Fut>(mut op: F) -> Result<T, SttError>

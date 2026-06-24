@@ -71,11 +71,12 @@ impl AiExecutor {
 
             match result {
                 Ok(output_text) => {
-                    if output_text.trim().is_empty() {
+                    let cleaned = sanitize_ai_output(&output_text, request.input_text.len());
+                    if cleaned.trim().is_empty() {
                         return Err(AiProviderError::BadResponse);
                     }
                     return Ok(AiPolishResult {
-                        output_text,
+                        output_text: cleaned,
                         provider_id: request.provider_id,
                         model_id: request.model_id,
                         duration_ms: start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
@@ -137,5 +138,60 @@ fn should_retry(error: &AiProviderError) -> bool {
         AiProviderError::RateLimited
             | AiProviderError::ServiceUnavailable
             | AiProviderError::Network
+    )
+}
+
+/// Sanitize a model's cleanup response before it is returned for auto-typing.
+///
+/// Drops control characters except `\n` and `\t` (carriage returns collapse to
+/// `\n`) and the bidirectional-formatting controls (Unicode `Cf`) used in
+/// Trojan-Source-style injection, then enforces a length ceiling relative to
+/// the input so a runaway model cannot dump unbounded text at the cursor.
+fn sanitize_ai_output(output: &str, input_byte_len: usize) -> String {
+    // 4x covers normal cleanup/translation; the floor keeps short inputs (whose
+    // cleaned form can be several times larger) from being clipped.
+    const MIN_OUTPUT_CAP: usize = 4096;
+    let cap = input_byte_len.saturating_mul(4).max(MIN_OUTPUT_CAP);
+
+    let mut sanitized = String::with_capacity(output.len().min(cap));
+    let mut chars = output.chars().peekable();
+    let mut truncated = false;
+    while let Some(ch) = chars.next() {
+        if sanitized.len() + ch.len_utf8() > cap {
+            truncated = true;
+            break;
+        }
+        if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            sanitized.push('\n');
+        } else if ch == '\n' || ch == '\t' {
+            sanitized.push(ch);
+        } else if ch.is_control() || is_bidi_override(ch) {
+            // Drop Cc control and Cf bidi-format characters.
+        } else {
+            sanitized.push(ch);
+        }
+    }
+    if truncated {
+        log::warn!(
+            "AI cleanup output exceeded the {cap}-byte length ceiling; truncated before insertion"
+        );
+    }
+    sanitized
+}
+
+/// Bidirectional-formatting controls (Unicode category `Cf`) with no legitimate
+/// place in auto-typed prose: the Trojan-Source override set. Zero-width
+/// joiners/non-joiners are intentionally excluded — they are load-bearing in
+/// some scripts and emoji sequences, so stripping them would corrupt text.
+fn is_bidi_override(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{061C}'                          // ARABIC LETTER MARK
+            | '\u{200E}' | '\u{200F}'       // LTR / RTL MARK
+            | '\u{202A}'..='\u{202E}'       // LRE / RLE / PDF / LRO / RLO
+            | '\u{2066}'..='\u{2069}'       // LRI / RLI / FSI / PDI
     )
 }

@@ -279,6 +279,11 @@ pub async fn start_sharing(
     // Persist the sharing enabled state so it auto-starts on next launch
     let save_result = {
         let mut settings = remote_settings.lock().await;
+        // Snapshot prior values so the optimistic mutation below can be rolled
+        // back symmetrically if persistence fails (matching the keychain rollback).
+        let prev_enabled = settings.server_config.enabled;
+        let prev_port = settings.server_config.port;
+        let prev_password = settings.server_config.password.clone();
         settings.server_config.enabled = true;
         settings.server_config.port = port;
         settings.server_config.password = password.clone();
@@ -288,6 +293,12 @@ pub async fn start_sharing(
                 "🌐 [SHARING] Saved sharing state: enabled=true, port={}",
                 port
             );
+        } else {
+            // Restore the prior in-memory state; otherwise later guards/queries
+            // would see sharing as enabled despite the failed save and server stop.
+            settings.server_config.enabled = prev_enabled;
+            settings.server_config.port = prev_port;
+            settings.server_config.password = prev_password;
         }
         save_result
     };
@@ -1456,6 +1467,29 @@ pub async fn transcribe_remote(
         connection.host,
         connection.port
     );
+
+    // Security: constrain audio_path to the app's recordings directory so a
+    // compromised renderer cannot read and exfiltrate arbitrary files
+    // (e.g. ~/.ssh/id_rsa) via the remote transcription upload.
+    let recordings_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data directory: {}", e))?
+        .join("recordings");
+    let canonical_audio = std::fs::canonicalize(&audio_path)
+        .map_err(|e| format!("Failed to resolve audio file path: {}", e))?;
+    let canonical_dir = std::fs::canonicalize(&recordings_dir)
+        .map_err(|e| format!("Failed to resolve recordings directory: {}", e))?;
+    if !canonical_audio.starts_with(&canonical_dir) {
+        return Err(format!(
+            "Audio path is outside the recordings directory: {}",
+            audio_path
+        ));
+    }
+    let audio_path = canonical_audio
+        .to_str()
+        .ok_or_else(|| "Audio file path is not valid UTF-8".to_string())?
+        .to_string();
 
     // Read the audio file
     let audio_data =
