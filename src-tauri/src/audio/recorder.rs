@@ -391,73 +391,80 @@ impl AudioRecorder {
                 let callback_drained_clone = callback_drained.clone();
 
                 move |f32_samples: &[f32], i16_samples: &[i16]| {
-                    // Drain barrier: if stop was requested, handle final write then exit
-                    if stop_requested_clone.load(Ordering::SeqCst) {
-                        // Only write on the first callback after stop; skip all subsequent ones
-                        if !callback_drained_clone.load(Ordering::SeqCst) {
-                            if let Ok(mut chunk) = recycle_rx.try_recv() {
-                                chunk.clear();
-                                chunk.extend_from_slice(i16_samples);
-                                match writer_tx_clone.try_send(WriterMsg::Chunk(chunk)) {
-                                    Ok(()) => {}
-                                    Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
-                                        dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
-                                        chunk.clear();
-                                        // try_send: never blocks or allocates
-                                        // on the RT thread. By conservation
-                                        // (RECYCLE_CHANNEL_CAPACITY) the channel
-                                        // always has room; on the impossible
-                                        // full case the chunk is simply dropped.
-                                        let _ = recycle_tx_for_drop.try_send(chunk);
+                    // A panic in this real-time path would unwind into CPAL's
+                    // `extern "C"` WASAPI callback (CPAL wraps it in no catch_unwind)
+                    // and ABORT the whole process. Catch it and drop this buffer
+                    // instead of crashing — covers both the recording and the
+                    // stop/drain-window callbacks (the silent Windows stop crash).
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        // Drain barrier: if stop was requested, handle final write then exit
+                        if stop_requested_clone.load(Ordering::SeqCst) {
+                            // Only write on the first callback after stop; skip all subsequent ones
+                            if !callback_drained_clone.load(Ordering::SeqCst) {
+                                if let Ok(mut chunk) = recycle_rx.try_recv() {
+                                    chunk.clear();
+                                    chunk.extend_from_slice(i16_samples);
+                                    match writer_tx_clone.try_send(WriterMsg::Chunk(chunk)) {
+                                        Ok(()) => {}
+                                        Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
+                                            dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
+                                            chunk.clear();
+                                            // try_send: never blocks or allocates
+                                            // on the RT thread. By conservation
+                                            // (RECYCLE_CHANNEL_CAPACITY) the channel
+                                            // always has room; on the impossible
+                                            // full case the chunk is simply dropped.
+                                            let _ = recycle_tx_for_drop.try_send(chunk);
+                                        }
+                                        Err(TrySendError::Full(WriterMsg::Finalize)) => {}
+                                        Err(TrySendError::Disconnected(_)) => {}
                                     }
-                                    Err(TrySendError::Full(WriterMsg::Finalize)) => {}
-                                    Err(TrySendError::Disconnected(_)) => {}
                                 }
+                                callback_drained_clone.store(true, Ordering::SeqCst);
                             }
-                            callback_drained_clone.store(true, Ordering::SeqCst);
+                            return;
                         }
-                        return;
-                    }
-                    // Calculate RMS for both level meter and silence detection
-                    let sum: f32 = f32_samples.iter().map(|x| x * x).sum();
-                    let rms = (sum / f32_samples.len() as f32).sqrt();
+                        // Calculate RMS for both level meter and silence detection
+                        let sum: f32 = f32_samples.iter().map(|x| x * x).sum();
+                        let rms = (sum / f32_samples.len() as f32).sqrt();
 
-                    // Process with level meter
-                    if let Ok(mut meter) = level_meter_clone.try_lock() {
-                        let _ = meter.process_samples(f32_samples);
-                    }
-
-                    // Emit sparse silence detector events over a bounded side channel.
-                    if let Ok(mut detector) = silence_detector_clone.try_lock() {
-                        if let Some(event) = detector.update(rms) {
-                            let _ = silence_event_tx_clone.try_send(event);
+                        // Process with level meter
+                        if let Ok(mut meter) = level_meter_clone.try_lock() {
+                            let _ = meter.process_samples(f32_samples);
                         }
-                    }
 
-                    let Ok(mut chunk) = recycle_rx.try_recv() else {
-                        // Pool exhausted (all buffers in flight under extreme
-                        // backpressure): drop this chunk rather than allocate on
-                        // the RT thread (consistent with the queue-full drop path).
-                        dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
-                        return;
-                    };
-                    chunk.clear();
-                    chunk.extend_from_slice(i16_samples);
+                        // Emit sparse silence detector events over a bounded side channel.
+                        if let Ok(mut detector) = silence_detector_clone.try_lock() {
+                            if let Some(event) = detector.update(rms) {
+                                let _ = silence_event_tx_clone.try_send(event);
+                            }
+                        }
 
-                    match writer_tx_clone.try_send(WriterMsg::Chunk(chunk)) {
-                        Ok(()) => {}
-                        Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
+                        let Ok(mut chunk) = recycle_rx.try_recv() else {
+                            // Pool exhausted (all buffers in flight under extreme
+                            // backpressure): drop this chunk rather than allocate on
+                            // the RT thread (consistent with the queue-full drop path).
                             dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
-                            chunk.clear();
-                            // try_send: never blocks or allocates on the RT
-                            // thread. By conservation (RECYCLE_CHANNEL_CAPACITY)
-                            // the channel always has room; on the impossible
-                            // full case the chunk is simply dropped.
-                            let _ = recycle_tx_for_drop.try_send(chunk);
+                            return;
+                        };
+                        chunk.clear();
+                        chunk.extend_from_slice(i16_samples);
+
+                        match writer_tx_clone.try_send(WriterMsg::Chunk(chunk)) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
+                                dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
+                                chunk.clear();
+                                // try_send: never blocks or allocates on the RT
+                                // thread. By conservation (RECYCLE_CHANNEL_CAPACITY)
+                                // the channel always has room; on the impossible
+                                // full case the chunk is simply dropped.
+                                let _ = recycle_tx_for_drop.try_send(chunk);
+                            }
+                            Err(TrySendError::Full(WriterMsg::Finalize)) => {}
+                            Err(TrySendError::Disconnected(_)) => {}
                         }
-                        Err(TrySendError::Full(WriterMsg::Finalize)) => {}
-                        Err(TrySendError::Disconnected(_)) => {}
-                    }
+                    }));
                 }
             };
 
@@ -870,7 +877,10 @@ mod tests {
             sane_max_frames(MAX_REASONABLE_CALLBACK_FRAMES as u32),
             Some(MAX_REASONABLE_CALLBACK_FRAMES)
         );
-        assert_eq!(sane_max_frames(MAX_REASONABLE_CALLBACK_FRAMES as u32 + 1), None);
+        assert_eq!(
+            sane_max_frames(MAX_REASONABLE_CALLBACK_FRAMES as u32 + 1),
+            None
+        );
 
         // Fallback path stays tiny: a rejected/unknown max yields a bounded
         // per-chunk capacity (no giant preallocation).
