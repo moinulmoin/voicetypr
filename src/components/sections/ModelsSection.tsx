@@ -155,18 +155,9 @@ export function ModelsSection({
   const cloudCount = readyCloudModels.length + setupCloudModels.length;
   const remoteCount = remoteServers.length;
   const allCount = localCount + cloudCount + remoteCount;
-  const hasRemoteSegment = remoteCount > 0;
-
   const showLocal = sourceFilter === "all" || sourceFilter === "local";
   const showCloud = sourceFilter === "all" || sourceFilter === "cloud";
   const showRemote = sourceFilter === "all" || sourceFilter === "remote";
-
-  // If the selected segment is Remote but no remote servers exist anymore, fall back to All.
-  useEffect(() => {
-    if (sourceFilter === "remote" && !hasRemoteSegment) {
-      setSourceFilter("all");
-    }
-  }, [sourceFilter, hasRemoteSegment]);
 
   // No header summary line — section titles include counts
 
@@ -593,8 +584,8 @@ export function ModelsSection({
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h3 className={cn("truncate text-sm font-semibold tracking-tight", isActive && "text-primary")}>
-                  {getModelDisplayName(name, { [name]: model }) || provider?.displayName || name}
+                <h3 className={cn("truncate text-sm font-semibold tracking-tight", isActive && "text-sage")}>
+                  {provider?.displayName || provider?.providerName || getModelDisplayName(name, { [name]: model }) || name}
                 </h3>
                 {isActive && (
                   <Badge className="gap-1">
@@ -604,7 +595,7 @@ export function ModelsSection({
                 )}
               </div>
               <p className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                <span>{provider?.providerName ?? "Cloud transcription"}</span>
+                <span>{getModelDisplayName(name, { [name]: model }) || "Cloud model"}</span>
                 <span>Speed <span className="font-medium text-foreground">{model.speed_score ?? "—"}</span></span>
                 <span>Accuracy <span className="font-medium text-foreground">{model.accuracy_score ?? "—"}</span></span>
               </p>
@@ -643,30 +634,32 @@ export function ModelsSection({
     <>
       <SettingsPage>
       <SettingsHeader
-        title="Transcription"
-        description="Choose where your speech is transcribed — local models, cloud providers, and remote Voicetypr servers."
-        actions={
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button type="button" variant="ghost" size="icon-sm" aria-label="Transcription sources guide" className="size-7 rounded-full text-muted-foreground">
-                <HelpCircle className="h-4 w-4" />
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Transcription sources guide</DialogTitle>
-                <DialogDescription>
-                  Pick where speech recognition runs before recording or uploading files.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-                <p><strong className="text-foreground">Local</strong> models run on this machine and keep raw audio local.</p>
-                <p><strong className="text-foreground">Cloud</strong> sources use a connected provider when you choose one.</p>
-                <p><strong className="text-foreground">Remote Voicetypr</strong> uses another device on your network when that server is online.</p>
-              </div>
-            </DialogContent>
-          </Dialog>
+        title={
+          <span className="inline-flex items-center gap-2">
+            Transcription
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button type="button" variant="ghost" size="icon-sm" aria-label="Transcription sources guide" className="size-7 rounded-full text-muted-foreground">
+                  <HelpCircle className="h-4 w-4" />
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Transcription sources guide</DialogTitle>
+                  <DialogDescription>
+                    Pick where speech recognition runs before recording or uploading files.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                  <p><strong className="text-foreground">Local</strong> models run on this machine and keep raw audio local.</p>
+                  <p><strong className="text-foreground">Cloud</strong> sources use a connected provider when you choose one.</p>
+                  <p><strong className="text-foreground">Remote Voicetypr</strong> uses another device on your network when that server is online.</p>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </span>
         }
+        description="Choose where your speech is transcribed — local models, cloud providers, and remote Voicetypr servers."
       />
 
       <SettingsCard icon={Globe} title="Spoken language">
@@ -709,13 +702,12 @@ export function ModelsSection({
             if (value) setSourceFilter(value as typeof sourceFilter);
           }}
           aria-label="Filter transcription sources"
+          className="[&_[data-state=on]]:!bg-sage-bg [&_[data-state=on]]:!text-sage [&_[data-state=on]]:!border-sage/50 [&_[data-state=on]]:font-medium"
         >
           <ToggleGroupItem value="all">All ({allCount})</ToggleGroupItem>
           <ToggleGroupItem value="local">Local ({localCount})</ToggleGroupItem>
           <ToggleGroupItem value="cloud">Cloud ({cloudCount})</ToggleGroupItem>
-          {hasRemoteSegment && (
-            <ToggleGroupItem value="remote">Remote ({remoteCount})</ToggleGroupItem>
-          )}
+          <ToggleGroupItem value="remote">Remote ({remoteCount})</ToggleGroupItem>
         </ToggleGroup>
       </div>
 
