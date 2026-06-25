@@ -53,10 +53,11 @@ impl ReadySignal {
 
 /// The set of key/modifier combinations the engine currently CONSUMES
 /// (swallows) at the OS level, shared lock-free with the event source via an
-/// [`ArcSwap`]. Derived from the active [`Trigger::ComboExact`] and
-/// [`Trigger::SingleKey`] bindings so consume membership always mirrors the
-/// matcher's binding set. The pure [`ConsumeSet::consumes`] predicate runs on
-/// the hot OS-callback path with no lock.
+/// [`ArcSwap`]. It is derived from the active [`Trigger::ComboExact`] and
+/// [`Trigger::SingleKey`] bindings, but binding swaps intentionally bias it to
+/// a subset of the matcher's bindings so a race passes through instead of
+/// consuming without a matching trigger. The pure [`ConsumeSet::consumes`]
+/// predicate runs on the hot OS-callback path with no lock.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConsumeSet {
     /// `(mods, key)` combos consumed on an exact-modifier key-down.
@@ -80,6 +81,28 @@ impl ConsumeSet {
         Self { combos, singles }
     }
 
+    /// Keep only specs that are consumed by both sets.
+    ///
+    /// Used during binding swaps to shrink the live OS-level consume set before
+    /// the dispatcher installs the new matcher: removed specs stop being
+    /// swallowed immediately, while newly-added specs remain pass-through until
+    /// the matcher is ready to fire them.
+    pub fn intersect(&self, other: &Self) -> Self {
+        let combos = self
+            .combos
+            .iter()
+            .copied()
+            .filter(|combo| other.combos.contains(combo))
+            .collect();
+        let singles = self
+            .singles
+            .iter()
+            .copied()
+            .filter(|key| other.singles.contains(key))
+            .collect();
+        Self { combos, singles }
+    }
+
     /// Pure consume predicate (no I/O): consume iff an exact `(mods, key)` combo
     /// matches, or a single key matches with zero modifiers held. Superset
     /// modifiers, modifier-qualified single keys, and everything else pass
@@ -96,10 +119,12 @@ impl ConsumeSet {
 pub trait KeyEventSource: Send + Sync {
     /// Run the event loop until [`KeyEventSource::request_stop`]; send events on
     /// `tx` and call `ready.ok()` (or `ready.err(..)`) when the loop is live or
-    /// has failed to start. `consume` is the lock-free consume set mirroring the
-    /// matcher's binding set: the source consumes (swallows) any OS event whose
-    /// `(key, mods)` the predicate accepts, so combo/single-key triggers never
-    /// reach the focused application; everything else passes through untouched.
+    /// has failed to start. `consume` is the lock-free consume set derived from
+    /// the matcher's binding set: the source consumes (swallows) any OS event
+    /// whose `(key, mods)` the predicate accepts, so combo/single-key triggers
+    /// do not reach the focused application; everything else passes through
+    /// untouched. During swaps this may be a conservative subset so removed
+    /// bindings pass through instead of being swallowed without a match.
     fn run(&self, tx: Sender<Msg>, ready: ReadySignal, consume: Arc<ArcSwap<ConsumeSet>>);
     /// Ask the running loop to terminate (from another thread).
     fn request_stop(&self);
@@ -183,9 +208,19 @@ impl TriggerEngine {
 
     /// Set (or replace) the active bindings. Safe to call before `start` (stored
     /// and applied on start) or while running (applied in-order with events).
+    ///
+    /// The OS callback decides pass-through/consume synchronously from
+    /// `self.consume`, while the matcher sees the queued raw event later on the
+    /// dispatcher. Before queuing a live swap, shrink consume to
+    /// `current ∩ next`: removed bindings become pass-through immediately, and
+    /// additions are not consumed until the dispatcher has installed the matcher.
     pub fn set_bindings(&self, bindings: Vec<(TriggerId, Trigger)>) {
         *self.pending.lock() = bindings.clone();
         if let Some(inner) = self.inner.lock().as_ref() {
+            let next_consume = ConsumeSet::from_bindings(&bindings);
+            let current_consume = self.consume.load();
+            self.consume
+                .store(Arc::new(current_consume.intersect(&next_consume)));
             let _ = inner.tx.send(Msg::Control(Control::SetBindings(bindings)));
         }
     }
@@ -222,14 +257,18 @@ impl TriggerEngine {
                 let mut emit = |te: TriggerEvent| {
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| on_event(te)));
                 };
-                consume_for_dispatch.store(Arc::new(ConsumeSet::from_bindings(&initial)));
+                let initial_consume = ConsumeSet::from_bindings(&initial);
                 matcher.set_bindings(initial, &mut emit);
+                consume_for_dispatch.store(Arc::new(initial_consume));
                 while let Ok(msg) = rx.recv() {
                     match msg {
                         Msg::Raw(ev) => matcher.handle(ev, Instant::now(), &mut emit),
                         Msg::Control(Control::SetBindings(b)) => {
-                            consume_for_dispatch.store(Arc::new(ConsumeSet::from_bindings(&b)));
+                            let next_consume = ConsumeSet::from_bindings(&b);
                             matcher.set_bindings(b, &mut emit);
+                            // Matcher first, consume second: additions become
+                            // swallowable only after they can fire.
+                            consume_for_dispatch.store(Arc::new(next_consume));
                         }
                         Msg::Control(Control::ReEnable) => matcher.reset(&mut emit),
                         Msg::Control(Control::Stop) => {
@@ -381,6 +420,53 @@ mod tests {
         KeySpec::Named(NamedKey::J)
     }
 
+    #[test]
+    fn consume_set_intersect_keeps_only_shared_specs() {
+        let meta_j = ModSet::empty().with(Modifier::Meta);
+        let current = ConsumeSet::from_bindings(&[
+            (
+                "survives".into(),
+                Trigger::ComboExact {
+                    mods: meta_j,
+                    key: j(),
+                },
+            ),
+            (
+                "removed".into(),
+                Trigger::SingleKey {
+                    key: KeySpec::Named(NamedKey::Escape),
+                },
+            ),
+        ]);
+        let next = ConsumeSet::from_bindings(&[
+            (
+                "survives-renamed".into(),
+                Trigger::ComboExact {
+                    mods: meta_j,
+                    key: j(),
+                },
+            ),
+            (
+                "added".into(),
+                Trigger::SingleKey {
+                    key: KeySpec::Named(NamedKey::K),
+                },
+            ),
+        ]);
+
+        let intersect = current.intersect(&next);
+
+        assert_eq!(
+            intersect,
+            ConsumeSet {
+                combos: vec![(meta_j, j())],
+                singles: vec![],
+            }
+        );
+        assert!(intersect.consumes(j(), meta_j));
+        assert!(!intersect.consumes(KeySpec::Named(NamedKey::Escape), ModSet::empty()));
+        assert!(!intersect.consumes(KeySpec::Named(NamedKey::K), ModSet::empty()));
+    }
     #[test]
     fn consume_set_exact_combo_consumes() {
         let set = ConsumeSet::from_bindings(&[(
