@@ -73,12 +73,9 @@ export function TelemetrySection() {
               Help improve Voicetypr with anonymous diagnostics
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              On by default — you can opt out anytime. When on, Voicetypr sends
-              anonymous crash and error reports to Voicetypr-owned diagnostics.
-              It never sends your audio, transcripts, prompts, API keys, file
-              paths, the names of apps you dictate into, or memory dumps.
-              Turning it off stops reporting immediately; turning it back on
-              takes effect after a restart.
+              On by default — turn it off anytime. Sends only anonymous crash
+              reports to help us fix bugs, never your audio, transcripts, or
+              personal data.
             </p>
           </div>
 
