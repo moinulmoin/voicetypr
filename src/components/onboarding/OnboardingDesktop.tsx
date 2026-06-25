@@ -14,6 +14,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
@@ -44,6 +45,7 @@ import {
   Laptop,
   Mic,
   Network,
+  Rocket,
   Server,
   ShieldCheck,
   Sparkles,
@@ -59,10 +61,14 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("onboarding");
 
+// TODO(onboarding): set real values before release
+const UPGRADE_URL = "https://voicetypr.com/pricing"; // [Upgrade to Pro] opens this externally
+const CONTACT_WEBHOOK_URL = ""; // Discord webhook; empty string = skip the POST entirely
+
 interface OnboardingDesktopProps {
   onCompletionStart?: () => void;
   onCompletionError?: () => void;
-  onComplete: () => void;
+  onComplete: (target?: "license") => void;
   modelManagement: ReturnType<typeof useModelManagement>;
 }
 
@@ -73,7 +79,8 @@ type Step =
   | "readiness"
   | "hotkey"
   | "first_transcription"
-  | "success";
+  | "success"
+  | "upgrade";
 
 type SourceType = "local" | "remote";
 type PermissionStatus = "checking" | "granted" | "denied" | "error";
@@ -216,7 +223,10 @@ export const OnboardingDesktop = function OnboardingDesktop({
   } = modelManagement;
 
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
-  const [telemetryOptIn, setTelemetryOptIn] = useState(false);
+  // Anonymous error tracking is opt-out: checkbox defaults to checked on the success screen.
+  const [telemetryOptIn, setTelemetryOptIn] = useState(true);
+  const [contactName, setContactName] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
   const [sourceType, setSourceType] = useState<SourceType>("local");
   const [sourceConfirmed, setSourceConfirmed] = useState(false);
   const sourceConfirmedRef = useRef(false);
@@ -281,6 +291,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
             "hotkey",
             "first_transcription",
             "success",
+            "upgrade",
           ] satisfies Step[]
         : [
             "welcome",
@@ -289,6 +300,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
             "hotkey",
             "first_transcription",
             "success",
+            "upgrade",
           ] satisfies Step[],
     [],
   );
@@ -690,18 +702,18 @@ export const OnboardingDesktop = function OnboardingDesktop({
     await updateSettings({ transcription_acceleration: checked ? 'auto' : 'cpu' });
   };
 
-  const completeOnboarding = async () => {
+  const completeOnboarding = async (target?: "license") => {
     setIsSavingCompletion(true);
     onCompletionStart?.();
     try {
       await updateSettings({ onboarding_completed: true });
-      // Persist the diagnostics choice from the success step (unchecked by default; opt-in).
+      // Persist the diagnostics choice from the success step (checked by default; opt-out).
       try {
         await invoke("set_telemetry_consent", { enabled: telemetryOptIn });
       } catch (telemetryError) {
         log.error("Failed to persist telemetry consent:", telemetryError);
       }
-      onComplete();
+      onComplete(target);
     } catch (error) {
       onCompletionError?.();
       log.error("Failed to complete onboarding:", error);
@@ -709,6 +721,27 @@ export const OnboardingDesktop = function OnboardingDesktop({
     } finally {
       setIsSavingCompletion(false);
     }
+  };
+
+  // Success screen "Continue": optionally POST contact details (silent-fail), then advance to upgrade.
+  const submitContactAndContinue = async () => {
+    const name = contactName.trim();
+    const email = contactEmail.trim();
+    if (CONTACT_WEBHOOK_URL && (name || email)) {
+      try {
+        await fetch(CONTACT_WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content: `New VoiceTypr user — name: ${name || "(none)"}, email: ${email || "(none)"}`,
+          }),
+        });
+      } catch (contactError) {
+        // Silent-fail: contact capture must never block onboarding.
+        log.error("Failed to submit onboarding contact:", contactError);
+      }
+    }
+    setCurrentStep("upgrade");
   };
 
   const handleNext = async () => {
@@ -793,7 +826,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
   return (
     <div className="min-h-screen overflow-hidden bg-[radial-gradient(110%_80%_at_50%_-10%,var(--sage-bg),transparent_55%),linear-gradient(180deg,var(--background),var(--background))] text-foreground">
-      {currentStep !== "success" && (
+      {currentStep !== "success" && currentStep !== "upgrade" && (
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-8 py-6">
           <div>
             <p className="text-sm font-semibold tracking-tight">Voicetypr Setup</p>
@@ -1396,13 +1429,11 @@ export const OnboardingDesktop = function OnboardingDesktop({
               <ShieldCheck className="size-8" />
             </div>
             <div className="flex flex-col gap-3">
-              <Badge variant="secondary" className="mx-auto rounded-md bg-sage-bg uppercase tracking-[0.16em] text-sage">
-                Ready
-              </Badge>
               <h1 className="text-4xl font-semibold tracking-[-0.04em]">
-                Voicetypr is ready on {sourceLabel(sourceType, true).toLowerCase()}.
+                That&rsquo;s your first transcription 🎉
               </h1>
               <p className="text-muted-foreground">
+                You&rsquo;re all set — Voicetypr is ready to use.{" "}
                 {capturedBareModifier
                   ? holdToTalk
                     ? <>Hold {formatBareModifierLabel(capturedBareModifier)} anywhere to start recording — release to stop.</>
@@ -1412,15 +1443,40 @@ export const OnboardingDesktop = function OnboardingDesktop({
                     : <>Press {formatHotkey(hotkey)} anywhere to start recording.</>}
               </p>
             </div>
-            <div className="w-full rounded-2xl border border-border bg-card p-4 text-sm text-muted-foreground shadow-sm">
-              <p>
-                Power tip: Voicetypr ships a{" "}
-                <span className="font-mono text-foreground">voicetypr</span> command-line tool so AI
-                agents and scripts can drive transcription. Turn it on in{" "}
-                <span className="font-medium text-foreground">Settings → Advanced</span>. Try{" "}
-                <span className="font-mono text-foreground">voicetypr --help</span>.
+
+            <div className="flex w-full flex-col gap-3 rounded-2xl border border-border bg-card p-4 text-left shadow-sm">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="onboarding-contact-name" className="text-sm font-medium">
+                    Name
+                  </label>
+                  <Input
+                    id="onboarding-contact-name"
+                    value={contactName}
+                    onChange={(event) => setContactName(event.target.value)}
+                    placeholder="Your name"
+                    autoComplete="name"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="onboarding-contact-email" className="text-sm font-medium">
+                    Email
+                  </label>
+                  <Input
+                    id="onboarding-contact-email"
+                    type="email"
+                    value={contactEmail}
+                    onChange={(event) => setContactEmail(event.target.value)}
+                    placeholder="you@example.com"
+                    autoComplete="email"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Optional — so we can reach you if something breaks. We&rsquo;ll never share it.
               </p>
             </div>
+
             <label className="flex w-full items-start gap-3 rounded-2xl border border-border bg-card p-4 text-left text-sm shadow-sm">
               <input
                 type="checkbox"
@@ -1434,10 +1490,56 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 Change this anytime in Settings → Advanced.
               </span>
             </label>
-            <Button size="lg" onClick={() => void completeOnboarding()} disabled={isSavingCompletion}>
-              {isSavingCompletion ? <Spinner /> : null}
-              Go to dashboard
+
+            <Button size="lg" onClick={() => void submitContactAndContinue()}>
+              Continue
+              <ChevronRight />
             </Button>
+          </section>
+        )}
+
+        {currentStep === "upgrade" && (
+          <section className="mx-auto flex w-full max-w-xl flex-col items-center gap-6 text-center">
+            <div className="flex size-16 items-center justify-center rounded-3xl bg-sage text-sage-foreground shadow-sm">
+              <Rocket className="size-8" />
+            </div>
+            <div className="flex flex-col gap-3">
+              <h1 className="text-4xl font-semibold tracking-[-0.04em]">
+                Make Voicetypr yours
+              </h1>
+              <p className="text-muted-foreground">
+                Unlock Pro to keep it forever.
+              </p>
+            </div>
+
+            <div className="flex w-full flex-col gap-3">
+              <Button
+                size="lg"
+                className="w-full"
+                onClick={() => void open(UPGRADE_URL)}
+              >
+                <Sparkles className="size-4" />
+                Upgrade to Pro
+              </Button>
+              <Button
+                variant="outline"
+                size="lg"
+                className="w-full"
+                onClick={() => void completeOnboarding("license")}
+                disabled={isSavingCompletion}
+              >
+                {isSavingCompletion ? <Spinner /> : null}
+                I already have a license
+              </Button>
+              <Button
+                variant="ghost"
+                className="w-full text-muted-foreground"
+                onClick={() => void completeOnboarding()}
+                disabled={isSavingCompletion}
+              >
+                Maybe later
+              </Button>
+            </div>
           </section>
         )}
       </main>

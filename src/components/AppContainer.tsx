@@ -295,9 +295,13 @@ export function AppContainer() {
       <AppErrorBoundary>
         <OnboardingDesktop
           onCompletionError={clearOnboardingCompletionMarker}
-          onComplete={() => {
+          onComplete={(target) => {
             markOnboardingCompletionPersisted();
             setForceShowOnboarding(false);
+            // Land on the License tab when the user says they already have a license.
+            if (target === "license") {
+              setActiveSection("license");
+            }
             refreshSettings();
             void modelAvailability.checkModels();
           }}

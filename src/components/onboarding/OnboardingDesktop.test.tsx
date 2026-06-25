@@ -214,10 +214,41 @@ describe("OnboardingDesktop", () => {
     expect(screen.getByText("Hello from Voicetypr onboarding.")).toBeInTheDocument();
 
     await user.click(reviewButton);
-    await user.click(screen.getByRole("button", { name: /go to dashboard/i }));
+    // Success screen (Screen A): advance to the upgrade screen.
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    // Upgrade screen (Screen B): completion happens via "Maybe later".
+    await user.click(screen.getByRole("button", { name: /maybe later/i }));
 
     expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
     expect(onCompleteMock).toHaveBeenCalledTimes(1);
+    expect(onCompleteMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("routes to the License tab when the user already has a license", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    const reviewButton = await screen.findByRole("button", { name: /review result/i });
+    emit("transcription-added", {
+      text: "Hello again.",
+      model: "base.en",
+      timestamp: "2026-05-18T00:00:00Z",
+    });
+    await waitFor(() => expect(reviewButton).toBeEnabled());
+
+    await user.click(reviewButton);
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /already have a license/i }));
+
+    expect(updateSettingsMock).toHaveBeenCalledWith({ onboarding_completed: true });
+    expect(onCompleteMock).toHaveBeenCalledWith("license");
   });
 
   it("clears a completed sample when the selected local model changes", async () => {
@@ -650,7 +681,7 @@ describe("OnboardingDesktop", () => {
     );
   });
 
-  it("opts out of telemetry by default and persists consent=false on completion", async () => {
+  it("defaults telemetry to ON and persists consent=true on completion", async () => {
     const user = userEvent.setup();
     renderOnboarding();
 
@@ -671,18 +702,19 @@ describe("OnboardingDesktop", () => {
     await waitFor(() => expect(reviewButton).toBeEnabled());
     await user.click(reviewButton);
 
-    // Telemetry is opt-in, default-OFF: the checkbox is unchecked on first run.
+    // Anonymous error tracking is opt-out: the checkbox is checked by default.
     const telemetryCheckbox = screen.getByRole("checkbox", { name: /send anonymous error reports/i });
-    expect(telemetryCheckbox).not.toBeChecked();
+    expect(telemetryCheckbox).toBeChecked();
 
-    // Accepting the final screen without opting in must NOT enable diagnostics.
-    await user.click(screen.getByRole("button", { name: /go to dashboard/i }));
+    // Accepting the default and finishing must enable diagnostics.
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /maybe later/i }));
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: false }),
+      expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: true }),
     );
   });
 
-  it("persists telemetry opt-in only when the success-step checkbox is checked", async () => {
+  it("persists telemetry consent=false when the success-step checkbox is unchecked", async () => {
     const user = userEvent.setup();
     renderOnboarding();
 
@@ -702,10 +734,12 @@ describe("OnboardingDesktop", () => {
     await waitFor(() => expect(reviewButton).toBeEnabled());
     await user.click(reviewButton);
 
+    // Uncheck the default-on consent box before finishing.
     await user.click(screen.getByRole("checkbox", { name: /send anonymous error reports/i }));
-    await user.click(screen.getByRole("button", { name: /go to dashboard/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /maybe later/i }));
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: true }),
+      expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: false }),
     );
   });
 });
