@@ -24,7 +24,7 @@
 
 ## Why this matters
 
-The V2 roadmap's stated core (`docs/plans/2026-05-12-v2-roadmap.md:25,51-65`)
+The V2 roadmap's stated core
 is **one shared transcription contract** — one canonical request/response
 model, one execution path, a stable error taxonomy — consumed by desktop
 recording, file upload, the network-sharing server, and the CLI. Today only
