@@ -1,4 +1,4 @@
-## [Unreleased]
+## [2.0.0](https://github.com/moinulmoin/voicetypr/compare/v1.13.0...v2.0.0) (2026-06-25)
 
 ### Features
 
