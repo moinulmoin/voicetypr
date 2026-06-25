@@ -2,6 +2,9 @@ import { useEffect } from "react";
 import { toast } from "sonner";
 import { GeneralSettings } from "../sections/GeneralSettings";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("settings-tab");
 
 interface ErrorEventPayload {
   title?: string;
@@ -24,7 +27,7 @@ export function SettingsTab() {
       try {
         // Listen for hotkey registration failures
         registerEvent<ErrorEventPayload>("hotkey-registration-failed", (data) => {
-          console.error("Hotkey registration failed:", data);
+          log.error("Hotkey registration failed:", data);
           
           toast.error('Hotkey Registration Failed', {
             description: data.suggestion || 'The hotkey is in use by another application',
@@ -34,7 +37,7 @@ export function SettingsTab() {
 
         // Listen for no speech detected events with settings action
         registerEvent<ErrorEventPayload>("no-speech-detected", (data) => {
-          console.warn("No speech detected:", data);
+          log.warn("No speech detected:", data);
           
           // Determine toast type based on severity
           const toastFn = data.severity === 'error' ? toast.error : toast.warning;
@@ -45,7 +48,7 @@ export function SettingsTab() {
           });
         });
       } catch (error) {
-        console.error("Failed to initialize settings tab:", error);
+        log.error("Failed to initialize settings tab:", error);
       }
     };
 

@@ -1,15 +1,14 @@
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::Duration;
 
-use log::{info, warn};
+use log::{trace, warn};
 use reqwest::Client;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use super::error::ParakeetError;
-use super::messages::{ParakeetCommand, ParakeetResponse};
+use super::messages::{ParakeetCommand, ParakeetResponse, ParakeetVocabularyTerm};
 use super::models::{get_available_models, ParakeetModelDefinition, AVAILABLE_MODELS};
 use super::sidecar::ParakeetClient;
 
@@ -27,6 +26,35 @@ pub struct ParakeetModelStatus {
     pub engine: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ParakeetTranscriptionOptions {
+    pub language: Option<String>,
+    pub translate: bool,
+    pub custom_vocabulary: Vec<ParakeetVocabularyTerm>,
+    pub cancel_flag: Option<Arc<AtomicBool>>,
+}
+
+impl ParakeetTranscriptionOptions {
+    pub fn new(
+        language: Option<String>,
+        translate: bool,
+        cancel_flag: Option<Arc<AtomicBool>>,
+    ) -> Self {
+        Self {
+            language,
+            translate,
+            custom_vocabulary: Vec::new(),
+            cancel_flag,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ParakeetVocabularyStatus {
+    pub supported: bool,
+    pub ready: bool,
+}
+
 pub struct ParakeetManager {
     client: ParakeetClient,
     root_dir: PathBuf,
@@ -36,13 +64,19 @@ pub struct ParakeetManager {
 
 const PARAKEET_UNAVAILABLE_EVENT: &str = "parakeet-unavailable";
 
-impl ParakeetManager {
-    async fn wait_for_cancel(cancel_flag: Arc<AtomicBool>) {
-        while !cancel_flag.load(Ordering::Relaxed) {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
+fn fluid_audio_model_dir(home: &Path, definition: &ParakeetModelDefinition) -> PathBuf {
+    home.join("Library/Application Support/FluidAudio/Models")
+        .join(definition.id)
+}
 
+fn model_files_complete(model_dir: &Path, definition: &ParakeetModelDefinition) -> bool {
+    definition.files.iter().all(|file| {
+        let path = model_dir.join(file.filename);
+        path.exists()
+    })
+}
+
+impl ParakeetManager {
     pub fn new(root_dir: PathBuf) -> Self {
         Self {
             client: ParakeetClient::new("parakeet-sidecar"),
@@ -66,7 +100,7 @@ impl ParakeetManager {
     ///
     /// # Platform Behavior
     /// - **macOS (Apple Silicon)**: Returns all Parakeet models
-    /// - **macOS (Intel)**: Returns only models compatible with x86_64 (excludes V2)
+    /// - **macOS (Intel)**: Returns an empty list (Parakeet requires Apple Silicon)
     /// - **Windows/Linux**: Returns empty vector (compile-time exclusion)
     pub fn list_models(&self) -> Vec<ParakeetModelStatus> {
         // Parakeet Swift/FluidAudio integration is macOS-only
@@ -109,38 +143,23 @@ impl ParakeetManager {
     }
 
     /// Check if a Parakeet model is available.
-    /// FluidAudio stores models in ~/Library/Application Support/FluidAudio/Models/
+    /// FluidAudio stores models in ~/Library/Application Support/FluidAudio/Models/<repo-folder>/.
     pub fn is_model_downloaded(&self, definition: &ParakeetModelDefinition) -> bool {
-        if let Some(home) = dirs::home_dir() {
-            // FluidAudio's actual model storage path
-            // IMPORTANT: "Application Support" has a SPACE (macOS standard path)
-            let fluid_audio_models_path = home
-                .join("Library/Application Support/FluidAudio/Models")
-                .join(format!("{}-coreml", definition.id));
+        let Some(home) = dirs::home_dir() else {
+            return false;
+        };
 
-            if fluid_audio_models_path.exists() {
-                // Check if directory contains model files
-                if let Ok(entries) = std::fs::read_dir(&fluid_audio_models_path) {
-                    if entries.count() > 0 {
-                        info!("Found FluidAudio model at: {:?}", fluid_audio_models_path);
-                        return true;
-                    }
-                }
-            }
+        let fluid_audio_model_path = fluid_audio_model_dir(&home, definition);
+        let complete = model_files_complete(&fluid_audio_model_path, definition);
+
+        if complete {
+            trace!(
+                "Found complete FluidAudio model at: {:?}",
+                fluid_audio_model_path
+            );
         }
 
-        // Fallback: check if old MLX model directory exists (for backward compatibility)
-        let model_dir = self.model_dir(definition.id);
-        if model_dir.exists()
-            && model_dir
-                .read_dir()
-                .map(|mut d| d.next().is_some())
-                .unwrap_or(false)
-        {
-            return true;
-        }
-
-        false
+        complete
     }
 
     pub async fn download_model(
@@ -148,7 +167,7 @@ impl ParakeetManager {
         app: &AppHandle,
         model_name: &str,
         cancel_flag: Option<Arc<AtomicBool>>,
-        progress_callback: impl Fn(u64, u64) + Send + 'static,
+        mut progress_callback: impl FnMut(u64, u64, Option<String>) + Send + 'static,
     ) -> Result<(), String> {
         let Some(definition) = self.get_model_definition(model_name) else {
             return Err(format!("Unknown Parakeet model: {model_name}"));
@@ -172,35 +191,39 @@ impl ParakeetManager {
             eager_unload: Some(false),
         };
 
-        if let Some(flag) = cancel_flag.as_ref() {
-            if flag.load(Ordering::Relaxed) {
-                return Err("Download cancelled by user".to_string());
-            }
-        }
-
-        // Send to sidecar and let it handle the download. FluidAudio does not
-        // expose per-download cancellation, so cancellation terminates the
-        // sidecar request instead of letting a cancelled download later emit
-        // success.
-        let response = if let Some(flag) = cancel_flag {
-            tokio::select! {
-                response = self.send_command(app, &command) => response,
-                () = Self::wait_for_cancel(flag) => {
-                    self.shutdown().await;
-                    return Err("Download cancelled by user".to_string());
-                }
-            }
-        } else {
-            self.send_command(app, &command).await
-        };
-
-        match response {
+        // Send to sidecar and let it handle the download
+        let estimated_size = definition.estimated_size;
+        let mut last_downloaded = 0;
+        match self
+            .send_command_with_progress_and_cancel(
+                app,
+                &command,
+                cancel_flag.clone(),
+                |progress, phase| {
+                    let progress = progress.clamp(0.0, 1.0) as f64;
+                    let downloaded = (estimated_size as f64 * progress).round() as u64;
+                    last_downloaded = downloaded;
+                    progress_callback(downloaded, estimated_size, phase.map(str::to_string));
+                },
+            )
+            .await
+        {
             Ok(ParakeetResponse::Status {
                 loaded_model: Some(id),
                 ..
             }) if id == definition.id => {
+                if cancel_flag
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+                {
+                    let _ = self.delete_model(app, model_name).await;
+                    return Err("Cancelled by user".to_string());
+                }
+
                 // Download/load completed for the requested version
-                progress_callback(definition.estimated_size, definition.estimated_size);
+                if last_downloaded < estimated_size {
+                    progress_callback(estimated_size, estimated_size, Some("complete".to_string()));
+                }
                 Ok(())
             }
             Ok(ParakeetResponse::Status {
@@ -265,6 +288,15 @@ impl ParakeetManager {
     }
 
     pub async fn load_model(&self, app: &AppHandle, model_name: &str) -> Result<(), ParakeetError> {
+        self.load_model_with_cancel(app, model_name, None).await
+    }
+
+    pub async fn load_model_with_cancel(
+        &self,
+        app: &AppHandle,
+        model_name: &str,
+        cancel_flag: Option<Arc<AtomicBool>>,
+    ) -> Result<(), ParakeetError> {
         let Some(definition) = self.get_model_definition(model_name) else {
             return Err(ParakeetError::SpawnError(format!(
                 "Unknown Parakeet model: {model_name}"
@@ -286,7 +318,10 @@ impl ParakeetManager {
             eager_unload: Some(false),
         };
 
-        match self.send_command(app, &command).await? {
+        match self
+            .send_command_with_progress_and_cancel(app, &command, cancel_flag, |_, _| {})
+            .await?
+        {
             ParakeetResponse::Ok { .. } => Ok(()),
             ParakeetResponse::Status {
                 loaded_model,
@@ -325,24 +360,84 @@ impl ParakeetManager {
         }
     }
 
+    pub fn vocabulary_status_from_response(
+        response: &ParakeetResponse,
+    ) -> Option<ParakeetVocabularyStatus> {
+        match response {
+            ParakeetResponse::Status {
+                custom_vocabulary_supported,
+                custom_vocabulary_ready,
+                ..
+            } => Some(ParakeetVocabularyStatus {
+                supported: *custom_vocabulary_supported,
+                ready: *custom_vocabulary_ready,
+            }),
+            _ => None,
+        }
+    }
+
+    pub async fn status(&self, app: &AppHandle) -> Result<ParakeetResponse, ParakeetError> {
+        self.send_command(app, &ParakeetCommand::Status {}).await
+    }
+
+    pub async fn download_ctc_models(
+        &self,
+        app: &AppHandle,
+    ) -> Result<ParakeetResponse, ParakeetError> {
+        self.send_command(app, &ParakeetCommand::DownloadCtcModels {})
+            .await
+    }
+
     pub async fn transcribe(
+        &self,
+        app: &AppHandle,
+        model_name: &str,
+        audio_path: PathBuf,
+        language: Option<String>,
+        translate: bool,
+        cancel_flag: Option<Arc<AtomicBool>>,
+    ) -> Result<ParakeetResponse, ParakeetError> {
+        self.transcribe_with_custom_vocabulary(
+            app,
+            model_name,
+            audio_path,
+            ParakeetTranscriptionOptions::new(language, translate, cancel_flag),
+        )
+        .await
+    }
+
+    pub async fn transcribe_with_custom_vocabulary(
         &self,
         app: &AppHandle,
         _model_name: &str,
         audio_path: PathBuf,
-        language: Option<String>,
-        translate: bool,
+        options: ParakeetTranscriptionOptions,
     ) -> Result<ParakeetResponse, ParakeetError> {
         let command = ParakeetCommand::Transcribe {
             audio_path: audio_path.to_string_lossy().to_string(),
-            language,
-            translate_to_english: translate,
+            language: options.language,
+            translate_to_english: options.translate,
             prompt: None,
             use_word_timestamps: Some(true),
             chunk_duration: None,
             overlap_duration: None,
             attention: None,
             local_attention_context: None,
+            custom_vocabulary: (!options.custom_vocabulary.is_empty())
+                .then_some(options.custom_vocabulary),
+        };
+
+        self.send_command_with_progress_and_cancel(app, &command, options.cancel_flag, |_, _| {})
+            .await
+    }
+
+    pub async fn diarize(
+        &self,
+        app: &AppHandle,
+        audio_path: PathBuf,
+    ) -> Result<ParakeetResponse, ParakeetError> {
+        let command = ParakeetCommand::Diarize {
+            audio_path: audio_path.to_string_lossy().to_string(),
         };
 
         self.send_command(app, &command).await
@@ -393,5 +488,81 @@ impl ParakeetManager {
             }
             Err(err) => Err(err),
         }
+    }
+
+    async fn send_command_with_progress_and_cancel<F>(
+        &self,
+        app: &AppHandle,
+        command: &ParakeetCommand,
+        cancel_flag: Option<Arc<AtomicBool>>,
+        progress_callback: F,
+    ) -> Result<ParakeetResponse, ParakeetError>
+    where
+        F: FnMut(f32, Option<&str>),
+    {
+        match self
+            .client
+            .send_with_progress_and_cancel(app, command, cancel_flag, progress_callback)
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(ParakeetError::SpawnError(details)) => {
+                let message = Self::friendly_spawn_message(&details);
+                Self::emit_unavailable(app, &message);
+                Err(ParakeetError::Unavailable(message))
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fluid_audio_model_dir, model_files_complete};
+    use crate::parakeet::models::AVAILABLE_MODELS;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn fluid_audio_model_dir_matches_fluidaudio_cache_shape() {
+        let temp = TempDir::new().expect("temp dir");
+        let definition = &AVAILABLE_MODELS[0];
+
+        assert_eq!(
+            fluid_audio_model_dir(temp.path(), definition),
+            temp.path()
+                .join("Library/Application Support/FluidAudio/Models")
+                .join(definition.id)
+        );
+    }
+
+    #[test]
+    fn model_files_complete_rejects_partial_cache() {
+        let temp = TempDir::new().expect("temp dir");
+        let definition = &AVAILABLE_MODELS[0];
+        let model_dir = temp.path().join(definition.id);
+        fs::create_dir_all(&model_dir).expect("model dir");
+        fs::create_dir_all(model_dir.join(definition.files[0].filename)).expect("one model file");
+
+        assert!(!model_files_complete(&model_dir, definition));
+    }
+
+    #[test]
+    fn model_files_complete_accepts_required_files() {
+        let temp = TempDir::new().expect("temp dir");
+        let definition = &AVAILABLE_MODELS[0];
+        let model_dir = temp.path().join(definition.id);
+        fs::create_dir_all(&model_dir).expect("model dir");
+
+        for file in definition.files {
+            let path = model_dir.join(file.filename);
+            if file.filename.ends_with(".mlmodelc") {
+                fs::create_dir_all(path).expect("model package");
+            } else {
+                fs::write(path, b"{}").expect("model asset");
+            }
+        }
+
+        assert!(model_files_complete(&model_dir, definition));
     }
 }

@@ -16,8 +16,6 @@ pub struct SystemSpecs {
 
 #[tauri::command]
 pub fn get_system_specs() -> SystemSpecs {
-    // new_all() seeds a baseline; the explicit refreshes below keep memory and CPU
-    // data current (per sysinfo's guidance) before we read brand/cores/total.
     let mut sys = System::new_all();
     sys.refresh_memory();
     sys.refresh_cpu_all();
@@ -74,8 +72,6 @@ fn detect_gpus() -> Vec<String> {
             };
             index += 1;
             if let Ok(desc) = adapter.GetDesc1() {
-                // Skip software / basic-render adapters (e.g. "Microsoft Basic Render Driver")
-                // so bug-report specs list only real hardware GPUs.
                 if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32) != 0 {
                     continue;
                 }
@@ -93,4 +89,30 @@ fn detect_gpus() -> Vec<String> {
 #[cfg(not(target_os = "windows"))]
 fn detect_gpus() -> Vec<String> {
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_system_specs;
+
+    #[test]
+    fn get_system_specs_is_infallible_and_populated() {
+        // PORT-S1: spec collection never fails; it always returns a fully
+        // populated struct so a bug report is never blocked.
+        let specs = get_system_specs();
+        assert!(!specs.os_name.is_empty());
+        assert!(!specs.os_version.is_empty());
+        assert!(!specs.kernel_version.is_empty());
+        assert!(!specs.arch.is_empty());
+        assert!(!specs.cpu_brand.is_empty());
+        assert!(specs.cpu_cores >= 1);
+        assert!(specs.total_memory_mb > 0);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn gpu_detection_is_empty_off_windows() {
+        // GPU adapter enumeration is Windows-only (DXGI); other platforms report none.
+        assert!(get_system_specs().gpus.is_empty());
+    }
 }

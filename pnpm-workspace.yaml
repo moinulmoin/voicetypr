@@ -1,9 +1,16 @@
 packages:
   - '.'
 
+allowBuilds:
+  esbuild: true
+  msw: true
+
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
   - edgedriver
   - esbuild
   - geckodriver
   - sharp
+
+overrides:
+  hono: 4.12.21

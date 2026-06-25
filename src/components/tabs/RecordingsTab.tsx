@@ -1,71 +1,24 @@
-import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useState } from "react";
-import { RecentRecordings } from "../sections/RecentRecordings";
 import { useSettings } from "@/contexts/SettingsContext";
-import { useEventCoordinator } from "@/hooks/useEventCoordinator";
-import { TranscriptionHistory } from "@/types";
+import { useActiveTrigger } from "@/hooks/useActiveTrigger";
+import { useTranscriptionHistory } from "@/hooks/useTranscriptionHistory";
+import { RecentRecordings } from "../sections/RecentRecordings";
 
 export function RecordingsTab() {
-  const { registerEvent } = useEventCoordinator("main");
-  const [history, setHistory] = useState<TranscriptionHistory[]>([]);
   const { settings } = useSettings();
-
-  // Load history function
-  const loadHistory = useCallback(async () => {
-    try {
-      const storedHistory = await invoke<any[]>("get_transcription_history", {
-        limit: 50
-      });
-      const formattedHistory: TranscriptionHistory[] = storedHistory.map((item) => ({
-        id: item.timestamp || Date.now().toString(),
-        text: item.text,
-        timestamp: new Date(item.timestamp),
-        model: item.model
-      }));
-      setHistory(formattedHistory);
-    } catch (error) {
-      console.error("Failed to load transcription history:", error);
-    }
-  }, []);
-
-  // Initialize recordings tab
-  useEffect(() => {
-    const init = async () => {
-      try {
-        // Load initial transcription history
-        await loadHistory();
-
-        // Listen for new transcriptions (append-only for efficiency)
-        registerEvent<{text: string; model: string; timestamp: string}>("transcription-added", (data) => {
-          console.log("[RecordingsTab] New transcription added:", data.timestamp);
-          const newItem: TranscriptionHistory = {
-            id: data.timestamp,
-            text: data.text,
-            timestamp: new Date(data.timestamp),
-            model: data.model
-          };
-          // Prepend new item to history (newest first)
-          setHistory(prev => [newItem, ...prev]);
-        });
-        
-        // Listen for history-updated for delete/clear operations
-        registerEvent("history-updated", async () => {
-          console.log("[RecordingsTab] Full reload (delete/clear operation)");
-          await loadHistory();
-        });
-      } catch (error) {
-        console.error("Failed to initialize recordings tab:", error);
-      }
-    };
-
-    init();
-  }, [registerEvent, loadHistory]);
+  // Load the full history (generous cap covering any realistic local store); the
+  // list itself is paginated client-side in RecentRecordings so rendering stays fast.
+  const { history, refreshHistory } = useTranscriptionHistory({ limit: 10000 });
+  // Resolve the ACTIVE primary trigger instead of assuming a combo hotkey. A
+  // bare-modifier primary intentionally leaves `settings.hotkey` empty (the real
+  // trigger lives in ShortcutSettings), so `kbdLabel` falls back to the modifier
+  // key token — never the stale "Cmd+Shift+Space" default.
+  const { kbdLabel } = useActiveTrigger(settings?.hotkey);
 
   return (
     <RecentRecordings
       history={history}
-      hotkey={settings?.hotkey || "Cmd+Shift+Space"}
-      onHistoryUpdate={loadHistory}
+      hotkey={kbdLabel}
+      onHistoryUpdate={refreshHistory}
     />
   );
 }

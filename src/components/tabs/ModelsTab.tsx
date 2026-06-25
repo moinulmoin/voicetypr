@@ -4,6 +4,9 @@ import { ModelsSection } from "../sections/ModelsSection";
 import { useSettings } from "@/contexts/SettingsContext";
 import { useModelManagementContext } from "@/contexts/ModelManagementContext";
 import { AppSettings } from "@/types";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("models-tab");
 
 export function ModelsTab() {
   const { settings, updateSettings } = useSettings();
@@ -11,15 +14,18 @@ export function ModelsTab() {
   // Use the model management context
   const {
     downloadProgress,
-    downloadErrors,
+    downloadPhases,
     verifyingModels,
+    downloadErrors,
+    isLoading,
     downloadModel,
     cancelDownload,
     deleteModel,
+    repairModel,
     loadModels,
-    sortedModels,
-    isLoading,
+    sortedModels
   } = useModelManagementContext();
+
 
   // Save settings
   const saveSettings = useCallback(
@@ -27,7 +33,7 @@ export function ModelsTab() {
       try {
         await updateSettings(updates);
       } catch (error) {
-        console.error("Failed to save settings:", error);
+        log.error("Failed to save settings:", error);
       }
     },
     [updateSettings]
@@ -36,18 +42,20 @@ export function ModelsTab() {
   // Handle deleting a model with settings update
   const handleDeleteModel = useCallback(
     async (modelName: string) => {
+      // delete_model failures are surfaced to the user by the hook; swallow the
+      // rethrow here so ModelCard's fire-and-forget onDelete(name) does not
+      // become an unhandled rejection. Selection stays unchanged on failure.
+      let deleted = false;
       try {
-        const deleted = await deleteModel(modelName);
-        if (!deleted) {
-          return;
-        }
+        deleted = await deleteModel(modelName);
+      } catch (error) {
+        log.error("Model deletion failed:", error);
+        return;
+      }
 
-        // If deleted model was the current one, clear selection in settings
-        if (settings?.current_model === modelName) {
-          await saveSettings({ current_model: "", current_model_engine: 'whisper' });
-        }
-      } catch {
-        // deleteModel shows a toast and rethrows; keep current selection on failure
+      // If deleted model was the current one, clear selection in settings
+      if (deleted && settings?.current_model === modelName) {
+        await saveSettings({ current_model: "", current_model_engine: 'whisper' });
       }
     },
     [deleteModel, settings, saveSettings]
@@ -58,30 +66,43 @@ export function ModelsTab() {
     <ModelsSection
       models={sortedModels}
       downloadProgress={downloadProgress}
-      downloadErrors={downloadErrors}
+      downloadPhases={downloadPhases}
       verifyingModels={verifyingModels}
+      downloadErrors={downloadErrors}
+      isLoading={isLoading}
       currentModel={settings?.current_model}
       onDownload={downloadModel}
       onDelete={handleDeleteModel}
       onCancelDownload={cancelDownload}
+      onRepair={repairModel}
       onSelect={async (modelName) => {
         if (!settings) return;
         const engine = sortedModels.find(([name]) => name === modelName)?.[1]?.engine ?? 'whisper';
+        const previousSpeechLanguage = settings.speech_language;
+        const parakeetSupportedLanguages = new Set([
+          'bg', 'cs', 'da', 'de', 'el', 'en', 'es', 'et', 'fi', 'fr', 'hr', 'hu',
+          'it', 'lt', 'lv', 'mt', 'nl', 'pl', 'pt', 'ro', 'ru', 'sk', 'sl', 'sv', 'uk',
+        ]);
+        const requiresSpeechLanguageReset =
+          (engine === 'whisper' && /\.en$/i.test(modelName) && previousSpeechLanguage !== 'en') ||
+          (engine === 'parakeet' &&
+            ((modelName.includes('-v2') && previousSpeechLanguage !== 'en') ||
+              (!modelName.includes('-v2') &&
+                !parakeetSupportedLanguages.has(previousSpeechLanguage))));
 
         await saveSettings({
           current_model: modelName,
           current_model_engine: engine,
-          language: 'en',
+          ...(requiresSpeechLanguageReset ? { speech_language: 'en' } : {}),
         });
 
-        if (settings.language !== 'en') {
+        if (requiresSpeechLanguageReset) {
           toast.info('Spoken language reset to English for the new model.');
         }
       }}
       refreshModels={async () => {
         await loadModels();
       }}
-      isLoading={isLoading}
     />
   );
 }

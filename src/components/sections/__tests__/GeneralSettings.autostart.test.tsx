@@ -1,5 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeneralSettings } from '../GeneralSettings';
 
@@ -13,20 +12,9 @@ const baseSettings = {
   pill_indicator_mode: 'when_recording',
   pill_indicator_position: 'bottom-center',
   pill_indicator_offset: 10,
-  transcription_acceleration: 'auto',
 };
 
 let mockSettings = { ...baseSettings };
-const accelerationStatus = {
-  mode: 'auto',
-  effective_backend: 'unknown',
-  gpu_available: null,
-  message: 'GPU acceleration has not been tested yet.',
-  diagnostic_code: 'not_tested',
-  recommended_action: 'none',
-  last_error: null,
-};
-
 
 vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
@@ -63,7 +51,7 @@ vi.mock('@/components/HotkeyInput', () => ({
 }));
 
 vi.mock('@/components/ui/scroll-area', () => ({
-  ScrollArea: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ScrollArea: ({ children }: { children: any }) => <div>{children}</div>,
 }));
 
 vi.mock('@/components/ui/switch', () => ({
@@ -91,8 +79,8 @@ vi.mock('@/components/ui/switch', () => ({
 }));
 
 vi.mock('@/components/ui/toggle-group', () => ({
-  ToggleGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  ToggleGroupItem: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ToggleGroup: ({ children }: { children: any }) => <div>{children}</div>,
+  ToggleGroupItem: ({ children }: { children: any }) => <div>{children}</div>,
 }));
 
 vi.mock('@/components/ui/select', () => ({
@@ -101,7 +89,7 @@ vi.mock('@/components/ui/select', () => ({
     value,
     onValueChange,
   }: {
-    children: ReactNode;
+    children: any;
     value?: string;
     onValueChange?: (v: string) => void;
   }) => (
@@ -113,15 +101,15 @@ vi.mock('@/components/ui/select', () => ({
       {children}
     </div>
   ),
-  SelectTrigger: ({ children }: { children: ReactNode }) => (
+  SelectTrigger: ({ children }: { children: any }) => (
     <div data-testid="select-trigger">{children}</div>
   ),
-  SelectContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  SelectContent: ({ children }: { children: any }) => <div>{children}</div>,
   SelectItem: ({
     children,
     value,
   }: {
-    children: ReactNode;
+    children: any;
     value: string;
   }) => <div data-testid={`select-item-${value}`}>{children}</div>,
   SelectValue: () => <div data-testid="select-value" />,
@@ -131,12 +119,15 @@ vi.mock('@/components/MicrophoneSelection', () => ({
   MicrophoneSelection: () => <div data-testid="microphone-selection" />,
 }));
 
+vi.mock('../NetworkSharingCard', () => ({
+  NetworkSharingCard: () => <div data-testid="network-sharing-card" />,
+}));
+
 vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
     warning: vi.fn(),
-    info: vi.fn(),
   },
 }));
 
@@ -144,25 +135,12 @@ describe('GeneralSettings autostart via backend commands', () => {
   beforeEach(() => {
     mockSettings = { ...baseSettings };
     vi.clearAllMocks();
-    mockInvoke.mockImplementation((command: string, args?: { enabled?: boolean }) => {
-      if (command === 'get_autostart_status') return Promise.resolve(false);
-      if (command === 'set_autostart') return Promise.resolve(args?.enabled ?? false);
-      if (command === 'get_transcription_acceleration_status') {
-        return Promise.resolve(accelerationStatus);
-      }
-      if (command === 'test_transcription_acceleration') {
-        return Promise.resolve({
-          ...accelerationStatus,
-          diagnostic_code: 'ready',
-          recommended_action: 'none',
-          gpu_available: true,
-        });
-      }
-      return Promise.resolve(false);
-    });
+    // Default: backend reports autostart disabled
+    mockInvoke.mockResolvedValue(false);
   });
 
   it('calls get_autostart_status on mount and renders switch off', async () => {
+    mockInvoke.mockResolvedValue(false);
 
     render(<GeneralSettings />);
 
@@ -175,13 +153,7 @@ describe('GeneralSettings autostart via backend commands', () => {
   });
 
   it('renders switch on when backend reports autostart enabled', async () => {
-    mockInvoke.mockImplementation((command: string) => {
-      if (command === 'get_autostart_status') return Promise.resolve(true);
-      if (command === 'get_transcription_acceleration_status') {
-        return Promise.resolve(accelerationStatus);
-      }
-      return Promise.resolve(false);
-    });
+    mockInvoke.mockResolvedValue(true);
 
     render(<GeneralSettings />);
 
@@ -192,6 +164,15 @@ describe('GeneralSettings autostart via backend commands', () => {
   });
 
   it('calls set_autostart when toggled and updates UI from response', async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'get_autostart_status') {
+        return Promise.resolve(false);
+      }
+      if (command === 'set_autostart') {
+        return Promise.resolve(true);
+      }
+      return Promise.resolve(false);
+    });
 
     render(<GeneralSettings />);
 
@@ -200,7 +181,9 @@ describe('GeneralSettings autostart via backend commands', () => {
     });
 
     const autostartSwitch = screen.getByRole('switch', { name: /autostart/i });
-    fireEvent.click(autostartSwitch);
+    await act(async () => {
+      fireEvent.click(autostartSwitch);
+    });
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('set_autostart', {
@@ -223,10 +206,12 @@ describe('GeneralSettings autostart via backend commands', () => {
 
   it('shows correct UI when backend returns different state than requested', async () => {
     mockInvoke.mockImplementation((command: string) => {
-      if (command === 'get_autostart_status') return Promise.resolve(false);
-      if (command === 'set_autostart') return Promise.resolve(false);
-      if (command === 'get_transcription_acceleration_status') {
-        return Promise.resolve(accelerationStatus);
+      if (command === 'get_autostart_status') {
+        return Promise.resolve(false);
+      }
+      if (command === 'set_autostart') {
+        // User requests enable, but backend returns false (OS failure)
+        return Promise.resolve(false);
       }
       return Promise.resolve(false);
     });
@@ -238,7 +223,9 @@ describe('GeneralSettings autostart via backend commands', () => {
     });
 
     const autostartSwitch = screen.getByRole('switch', { name: /autostart/i });
-    fireEvent.click(autostartSwitch);
+    await act(async () => {
+      fireEvent.click(autostartSwitch);
+    });
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith('set_autostart', {
@@ -272,146 +259,5 @@ describe('GeneralSettings autostart via backend commands', () => {
     expect(autostartPlugin.enable).not.toHaveBeenCalled();
     expect(autostartPlugin.disable).not.toHaveBeenCalled();
     expect(autostartPlugin.isEnabled).not.toHaveBeenCalled();
-  });
-
-  it('renders actionable GPU driver diagnostics and uses backend failure toast message', async () => {
-    const { toast } = await import('sonner');
-    const driverFailureStatus = {
-      ...accelerationStatus,
-      effective_backend: 'cpu',
-      gpu_available: false,
-      message: 'Vulkan runtime failed to initialize.',
-      diagnostic_code: 'driver_or_runtime_failed',
-      recommended_action: 'update_graphics_driver',
-      last_error: 'The Vulkan loader could not create a device.',
-    };
-
-    mockInvoke.mockImplementation((command: string, args?: { enabled?: boolean }) => {
-      if (command === 'get_autostart_status') return Promise.resolve(false);
-      if (command === 'set_autostart') return Promise.resolve(args?.enabled ?? false);
-      if (command === 'get_transcription_acceleration_status') {
-        return Promise.resolve(driverFailureStatus);
-      }
-      if (command === 'test_transcription_acceleration') {
-        return Promise.resolve(driverFailureStatus);
-      }
-      return Promise.resolve(false);
-    });
-
-    render(<GeneralSettings />);
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(/Vulkan-capable NVIDIA, AMD, or Intel graphics driver/),
-      ).toBeInTheDocument();
-    });
-    expect(
-      screen.getByText(/Voicetypr will keep using CPU transcription safely/),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /check status/i }));
-
-    await waitFor(() => {
-      expect(toast.warning).toHaveBeenCalledWith(
-        'Vulkan runtime failed to initialize.',
-        {
-          description: 'Update or install your graphics driver, then retry Test GPU.',
-        },
-      );
-    });
-  });
-
-
-  it('shows timeout-specific GPU guidance', async () => {
-    const timeoutStatus = {
-      ...accelerationStatus,
-      effective_backend: 'cpu',
-      gpu_available: false,
-      message: 'The Vulkan helper did not respond in time.',
-      diagnostic_code: 'sidecar_timeout',
-      recommended_action: 'use_cpu',
-      last_error: 'Vulkan sidecar request timed out',
-    };
-
-    mockInvoke.mockImplementation((command: string, args?: { enabled?: boolean }) => {
-      if (command === 'get_autostart_status') return Promise.resolve(false);
-      if (command === 'set_autostart') return Promise.resolve(args?.enabled ?? false);
-      if (command === 'get_transcription_acceleration_status') {
-        return Promise.resolve(timeoutStatus);
-      }
-      return Promise.resolve(false);
-    });
-
-    render(<GeneralSettings />);
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(/retry Test GPU after updating your graphics driver/),
-      ).toBeInTheDocument();
-    });
-  });
-
-  it('shows Metal acceleration without CPU fallback guidance on macOS status', async () => {
-    mockInvoke.mockImplementation((command: string, args?: { enabled?: boolean }) => {
-      if (command === 'get_autostart_status') return Promise.resolve(false);
-      if (command === 'set_autostart') return Promise.resolve(args?.enabled ?? false);
-      if (command === 'get_transcription_acceleration_status') {
-        return Promise.resolve({
-          ...accelerationStatus,
-          effective_backend: 'metal',
-          message: 'This acceleration setting applies to Windows Vulkan builds.',
-          diagnostic_code: 'unsupported_platform',
-        });
-      }
-      return Promise.resolve(false);
-    });
-
-    render(<GeneralSettings />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Using Metal acceleration')).toBeInTheDocument();
-    });
-    expect(screen.getByText('Metal acceleration is active on this Mac.')).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Voicetypr will keep using CPU transcription safely/),
-    ).not.toBeInTheDocument();
-  });
-
-  it('checks acceleration status through backend command without showing a false GPU warning', async () => {
-    const { toast } = await import('sonner');
-    mockInvoke.mockImplementation((command: string, args?: { enabled?: boolean }) => {
-      if (command === 'get_autostart_status') return Promise.resolve(false);
-      if (command === 'set_autostart') return Promise.resolve(args?.enabled ?? false);
-      if (command === 'get_transcription_acceleration_status') {
-        return Promise.resolve(accelerationStatus);
-      }
-      if (command === 'test_transcription_acceleration') {
-        return Promise.resolve({
-          ...accelerationStatus,
-          effective_backend: 'metal',
-          message: 'GPU controls only apply to Windows Vulkan builds.',
-          gpu_available: null,
-        });
-      }
-      return Promise.resolve(false);
-    });
-
-    render(<GeneralSettings />);
-
-    await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith(
-        'get_transcription_acceleration_status',
-      );
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /check status/i }));
-
-    await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith('test_transcription_acceleration');
-    });
-    expect(toast.info).toHaveBeenCalledWith('GPU controls only apply to Windows Vulkan builds.');
-    expect(toast.warning).not.toHaveBeenCalledWith(
-      'GPU acceleration is unavailable; CPU mode will be used',
-    );
   });
 });

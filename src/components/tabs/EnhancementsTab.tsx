@@ -2,6 +2,9 @@ import { useEffect } from "react";
 import { toast } from "sonner";
 import { EnhancementsSection } from "../sections/EnhancementsSection";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("enhancements-tab");
 
 export function EnhancementsTab() {
   const { registerEvent } = useEventCoordinator("main");
@@ -11,24 +14,24 @@ export function EnhancementsTab() {
     const init = async () => {
       try {
         // Listen for AI enhancement errors
-        registerEvent("ai-enhancement-auth-error", (event) => {
-          console.error("AI authentication error:", event.payload);
-          toast.error(event.payload as string, {
+        registerEvent("ai-enhancement-auth-error", (payload) => {
+          log.error("AI authentication error:", payload);
+          toast.error(payload as string, {
             description: "Please update your API key in the Formatting section",
           });
         });
 
-        registerEvent("ai-enhancement-error", (event) => {
-          console.warn("AI formatting error:", event.payload);
-          toast.warning(event.payload as string);
+        registerEvent("ai-enhancement-error", (payload) => {
+          log.warn("AI formatting error:", payload);
+          toast.warning(payload as string);
         });
       } catch (error) {
-        console.error("Failed to initialize enhancements tab:", error);
+        log.error("Failed to initialize enhancements tab:", error);
       }
     };
 
     init();
   }, [registerEvent]);
 
-  return <EnhancementsSection />;
+  return <EnhancementsSection view="ai" />;
 }

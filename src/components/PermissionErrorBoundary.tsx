@@ -1,6 +1,9 @@
 import { Component, ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { AlertCircle } from 'lucide-react';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('permission-error-boundary');
 
 interface Props {
   children: ReactNode;
@@ -23,7 +26,7 @@ export class PermissionErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('Permission component error:', error, errorInfo);
+    log.error('Permission component error:', error, errorInfo);
   }
 
   handleReset = () => {

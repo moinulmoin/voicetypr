@@ -5,10 +5,13 @@ import { sendNotification, isPermissionGranted, requestPermission } from '@tauri
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import type { AppSettings } from '@/types';
+import { createLogger } from "@/lib/logger";
 import {
   isStoreDistribution,
   type DistributionInfo,
 } from '@/types/distribution';
+
+const log = createLogger("update");
 
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const LAST_UPDATE_CHECK_KEY = 'last_update_check';
@@ -21,7 +24,6 @@ export class UpdateService {
   private isSessionActive = false;
   private pendingRelaunch = false;
   private pendingUpdateVersion: string | null = null;
-  private installUpdatesAutomatically = false;
   private distributionInfo: DistributionInfo | null = null;
   private distributionInfoPromise: Promise<DistributionInfo> | null = null;
 
@@ -55,12 +57,12 @@ export class UpdateService {
       const currentState = await invoke<{ state: string }>('get_current_recording_state');
       const isActive = currentState.state !== 'idle' && currentState.state !== 'error';
       if (isActive) {
-        console.log('Backend still in active session, deferring relaunch');
+        log.debug('Backend still in active session, deferring relaunch');
         this.pendingRelaunch = true;
         return;
       }
     } catch (error) {
-      console.error('Failed to check recording state, proceeding with relaunch:', error);
+      log.error('Failed to check recording state, proceeding with relaunch:', error);
     }
 
     // Store the version we're updating to so the next launch can show it
@@ -73,7 +75,7 @@ export class UpdateService {
     } catch (error) {
       // Rollback: remove marker since relaunch failed
       localStorage.removeItem(JUST_UPDATED_KEY);
-      console.error('Relaunch failed:', error);
+      log.error('Relaunch failed:', error);
       toast.error('Update installed. Please restart the app manually.', { 
         duration: 10000 
       });
@@ -138,24 +140,23 @@ export class UpdateService {
   /**
    * Initialize the update service
    * - Checks for updates on startup if enabled
-   * - Never downloads or installs an update until the user confirms
+   * - Sets up daily update checks
    */
   async initialize(settings: AppSettings): Promise<void> {
     if (await this.usesStoreUpdates()) {
       return;
     }
+    // Check if automatic update checks are enabled (default to true if not set)
     const autoUpdateEnabled = settings.check_updates_automatically ?? true;
-    this.installUpdatesAutomatically = settings.install_updates_automatically ?? false;
-
+    
     if (!autoUpdateEnabled) {
-      console.log('Automatic updates are disabled');
+      log.debug('Automatic update checks are disabled');
       return;
     }
 
-    // Check on startup
+    // Check on startup and then daily. Background checks notify; they do not install.
     await this.checkForUpdatesInBackground();
 
-    // Set up daily checks
     this.setupDailyUpdateCheck();
   }
 
@@ -182,7 +183,7 @@ export class UpdateService {
       }
       return permitted;
     } catch (error) {
-      console.error('Failed to request notification permission:', error);
+      log.error('Failed to request notification permission:', error);
       return false;
     }
   }
@@ -201,18 +202,18 @@ export class UpdateService {
         sendNotification({ title, body });
       }
     } catch (error) {
-      console.error('Failed to send system notification:', error);
+      log.error('Failed to send system notification:', error);
     }
   }
 
   /**
    * Check for updates in the background.
-   * If an update is available, ask the user before downloading or installing.
+   * Background checks notify the user; they never download or install automatically.
    * Runs on startup and daily when automatic update checks are enabled.
    */
   async checkForUpdatesInBackground(): Promise<void> {
     if (this.checkInProgress) {
-      console.log('Update check already in progress');
+      log.debug('Update check already in progress');
       return;
     }
 
@@ -221,29 +222,28 @@ export class UpdateService {
       if (await this.usesStoreUpdates()) {
         return;
       }
-
       // Check if we should skip based on last check time
       const lastCheck = localStorage.getItem(LAST_UPDATE_CHECK_KEY);
       if (lastCheck) {
         const lastCheckTime = parseInt(lastCheck, 10);
         const now = Date.now();
         if (now - lastCheckTime < UPDATE_CHECK_INTERVAL) {
-          console.log('Skipping update check - too soon since last check');
+          log.debug('Skipping update check - too soon since last check');
           return;
         }
       }
 
-      console.log('Checking for updates in background...');
+      log.debug('Checking for updates in background...');
       const update = await check();
       
       // Update last check time
       localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
       
       if (update?.available) {
-        await this.handleBackgroundUpdateAvailable(update);
+        await this.handleUpdateAvailable(update, true);
       }
     } catch (error) {
-      console.error('Background update check failed:', error);
+      log.error('Background update check failed:', error);
       // Don't show error toast for background checks
     } finally {
       this.checkInProgress = false;
@@ -274,12 +274,12 @@ export class UpdateService {
       localStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
       
       if (update?.available) {
-        await this.showUpdateDialog(update);
+        await this.handleUpdateAvailable(update, false);
       } else {
         toast.success("You're on the latest version!");
       }
     } catch (error) {
-      console.error('Update check failed:', error);
+      log.error('Update check failed:', error);
       toast.error('Failed to check for updates');
     } finally {
       this.checkInProgress = false;
@@ -287,72 +287,19 @@ export class UpdateService {
   }
 
   /**
-   * Handle updates found by automatic/background checks.
+   * Handle when an update is available
    */
-  private async handleBackgroundUpdateAvailable(update: Update): Promise<void> {
-    if (this.installUpdatesAutomatically) {
-      await this.autoInstallUpdate(update);
+  private async handleUpdateAvailable(update: Update, isBackgroundCheck: boolean): Promise<void> {
+    if (isBackgroundCheck) {
+      toast.info(`Update ${update.version} is available. Open Settings to install it.`);
+      await this.sendSystemNotification(
+        'Update Available',
+        `Voicetypr ${update.version} is ready to install from Settings.`
+      );
       return;
     }
 
     await this.showUpdateDialog(update);
-  }
-
-  /**
-   * Auto-install update with progress feedback after the user opted in.
-   */
-  private async autoInstallUpdate(update: Update, retryCount = 0): Promise<void> {
-    const MAX_RETRIES = 3;
-    const RETRY_DELAY = 30000; // 30 seconds
-
-    // Defer auto-update if user is in active session (recording/transcribing)
-    if (this.isSessionActive) {
-      if (retryCount < MAX_RETRIES) {
-        console.log(`Deferring auto-update - session active (retry ${retryCount + 1}/${MAX_RETRIES} in 30s)`);
-        setTimeout(() => this.autoInstallUpdate(update, retryCount + 1), RETRY_DELAY);
-        return;
-      }
-      console.log('Skipping auto-update - session still active after max retries');
-      return;
-    }
-
-    const toastId = 'update-progress';
-
-    try {
-      await update.downloadAndInstall((event) => {
-        if (event.event === 'Started') {
-          toast.info(`Downloading update ${update.version}...`, {
-            id: toastId,
-            duration: Infinity,
-          });
-        } else if (event.event === 'Finished') {
-          toast.success('Update ready, restarting...', {
-            id: toastId,
-            duration: Infinity,
-          });
-        }
-      });
-    } catch (error) {
-      console.error('Auto-update failed:', error);
-      toast.error('Update failed. You can try again from Settings > About.', {
-        id: toastId,
-        duration: 5000,
-      });
-      return;
-    }
-
-    // Re-check session state before relaunch (user may have started recording during download)
-    if (this.isSessionActive) {
-      console.log('Update downloaded but session active - will relaunch when recording ends');
-      this.pendingRelaunch = true;
-      this.pendingUpdateVersion = update.version;
-      toast.dismiss(toastId);
-      await this.sendSystemNotification('Update Ready', 'Voicetypr will restart when recording ends');
-      return;
-    }
-
-    this.pendingUpdateVersion = update.version;
-    await this.performRelaunch();
   }
 
   /**
@@ -381,7 +328,7 @@ export class UpdateService {
         this.pendingUpdateVersion = update.version;
         await this.performRelaunch();
       } catch (error) {
-        console.error('Update installation failed:', error);
+        log.error('Update installation failed:', error);
         toast.error('Failed to install update');
       }
     }
@@ -401,7 +348,7 @@ export class UpdateService {
       this.checkForUpdatesInBackground();
     }, UPDATE_CHECK_INTERVAL);
 
-    console.log('Daily update check scheduled');
+    log.debug('Daily update check scheduled');
   }
 
   /**

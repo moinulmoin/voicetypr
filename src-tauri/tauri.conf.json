@@ -13,9 +13,11 @@
       {
         "title": "Voicetypr",
         "label": "main",
-        "width": 800,
-        "height": 600,
-        "resizable": false,
+        "width": 1100,
+        "height": 950,
+        "minWidth": 1040,
+        "minHeight": 880,
+        "resizable": true,
         "center": true,
         "visible": false,
         "skipTaskbar": true,
@@ -32,18 +34,14 @@
         "img-src": "'self' asset: data:",
         "font-src": "'self'",
         "connect-src": "'self' ipc: https://voicetypr.com https://api.voicetypr.com https://github.com asset:",
-        "media-src": "'self'"
+        "media-src": "'self' asset:"
       }
     }
   },
   "bundle": {
     "publisher": "Ideaplexa LLC",
     "active": true,
-    "targets": [
-      "nsis",
-      "app",
-      "dmg"
-    ],
+    "targets": ["nsis", "app", "dmg"],
     "externalBin": [
       "../sidecar/ffmpeg/dist/ffmpeg",
       "../sidecar/ffmpeg/dist/ffprobe"
@@ -56,7 +54,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "13.0",
+      "minimumSystemVersion": "14.0",
       "entitlements": "./entitlements.plist",
       "hardenedRuntime": true,
       "signingIdentity": "-"

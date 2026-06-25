@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("permissions");
 
 interface PermissionState {
   microphone: boolean;
@@ -35,7 +38,7 @@ export function usePermissionCheck() {
         isChecking: false,
       });
     } catch (error) {
-      console.error('Failed to check permissions:', error);
+      log.error('Failed to check permissions:', error);
       setPermissions(prev => ({ ...prev, isChecking: false }));
     }
   }, []);

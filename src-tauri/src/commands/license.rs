@@ -141,6 +141,12 @@ fn should_delete_invalid_license(error_msg: &str) -> bool {
 /// Check the current license status
 /// This checks license first (if stored), then falls back to trial
 /// Forces fresh check on app start, then uses cache during session
+async fn seed_runtime_license_cache(app: &AppHandle, status: &LicenseStatus) {
+    let app_state = app.state::<AppState>();
+    let mut perf_cache = app_state.license_cache.write().await;
+    *perf_cache = Some(CachedLicense::new(status.clone()));
+}
+
 #[tauri::command]
 pub async fn check_license_status(app: AppHandle) -> Result<LicenseStatus, String> {
     log::info!("Checking license status");
@@ -657,13 +663,15 @@ pub async fn restore_license(app: AppHandle) -> Result<LicenseStatus, String> {
                     log::info!("Reset recording state to Idle during license restore");
                 }
 
-                Ok(LicenseStatus {
+                let status = LicenseStatus {
                     status: LicenseState::Licensed,
                     trial_days_left: None,
                     license_type: Some("pro".to_string()),
                     license_key: Some(license_key),
                     expires_at: None,
-                })
+                };
+                seed_runtime_license_cache(&app, &status).await;
+                Ok(status)
             } else {
                 // License is not valid for this device, try to activate it
                 log::info!("License not valid for this device, attempting activation");
@@ -779,13 +787,15 @@ async fn activate_license_internal(
                     log::info!("Reset recording state to Idle after successful activation");
                 }
 
-                Ok(LicenseStatus {
+                let status = LicenseStatus {
                     status: LicenseState::Licensed,
                     trial_days_left: None,
                     license_type: Some("pro".to_string()),
                     license_key: Some(license_key),
                     expires_at: None,
-                })
+                };
+                seed_runtime_license_cache(&app, &status).await;
+                Ok(status)
             } else {
                 // Return the actual error message from the API
                 let error_msg = response
@@ -923,7 +933,9 @@ pub async fn open_purchase_page() -> Result<(), String> {
 }
 
 pub async fn check_license_status_internal(app: &AppHandle) -> Result<LicenseStatus, String> {
-    check_license_status(app.clone()).await
+    let status = check_license_status(app.clone()).await?;
+    seed_runtime_license_cache(app, &status).await;
+    Ok(status)
 }
 
 /// Invalidate cached license status when license state changes

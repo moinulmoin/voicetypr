@@ -29,7 +29,7 @@ mod tests {
     fn test_nonexistent_file_error() {
         // ACTUALLY USEFUL: Ensures proper error for missing files
         let temp_dir = TempDir::new().unwrap();
-        let fake_path = temp_dir.path().join("/this/does/not/exist.mp3");
+        let fake_path = temp_dir.path().join("this/does/not/exist.mp3");
 
         let result = convert_to_wav(&fake_path, temp_dir.path());
         assert!(result.is_err());

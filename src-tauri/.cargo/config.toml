@@ -1,0 +1,15 @@
+# Compile ALL native code (including whisper-rs-sys / whisper.cpp's Metal
+# backend) for the app's minimum macOS version, not the build SDK version.
+#
+# The Parakeet Swift sidecar requires Swift 6 -> Xcode 16+, whose macOS 15.2 SDK
+# otherwise makes whisper.cpp hard-link macOS 15 Metal symbols (e.g.
+# MTLResidencySetDescriptor), which crash at load on macOS 14
+# (`dyld: Symbol not found`). Pinning the deployment target makes clang
+# weak-import newer-than-14 symbols (whisper.cpp guards their use with
+# @available), so a macOS-15-SDK build still runs on macOS 14.
+#
+# build.rs's `cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET` only affects the
+# voicetypr crate's own compilation, NOT dependency build scripts (cc), so it
+# must be set as a real build environment variable here. Ignored on non-macOS.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"

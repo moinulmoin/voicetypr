@@ -7,7 +7,7 @@
 
   [![GitHub release](https://img.shields.io/github/v/release/moinulmoin/voicetypr)](https://github.com/moinulmoin/voicetypr/releases)
   [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE.md)
-  [![macOS](https://img.shields.io/badge/macOS-13.0+-black)](https://www.apple.com/macos)
+  [![macOS](https://img.shields.io/badge/macOS-14.0+-black)](https://www.apple.com/macos)
   [![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6)](https://www.microsoft.com/windows)
   [![Downloads](https://img.shields.io/github/downloads/moinulmoin/voicetypr/total)](https://github.com/moinulmoin/voicetypr/releases)
 
@@ -26,7 +26,7 @@ Voicetypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 - Works in any app - cursor, claude code, chatgpt, slack, etc
 
 ### 🤖 **Powered by local AI**
-- 100% offline transcription - your voice never leaves your device
+- Local transcription by default — your raw audio stays on your machine
 - Multiple model sizes for accuracy vs speed tradeoffs
 - Support for 99+ languages out of the box
 - Hardware acceleration (Metal on macOS)
@@ -37,8 +37,8 @@ Voicetypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 - Minimal resource usage with maximum efficiency
 
 ### 🔒 **Privacy First**
-- Complete offline operation - no cloud, no tracking (only trial check)
-- Your recordings stay on your device
+- Transcription runs locally by default; cloud speech-to-text only when you select a cloud provider. Telemetry is opt-in and off by default; only a license/trial check phones home
+- Recordings stay on your device with local transcription; if you choose a cloud provider, that audio is sent to it for transcription
 - Open source for full transparency
 
 ### 🤖 **AI Enhancement** (NEW)
@@ -58,7 +58,7 @@ Voicetypr is an open source AI voice-to-text dictation tool, alternative to Wisp
 ### Requirements
 
 #### macOS
-- macOS 13.0 (Ventura) or later
+- macOS 14.0 (Sonoma) or later
 - 3-4 GB free disk space (for AI models)
 - Microphone access permission
 - Accessibility access permission

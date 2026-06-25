@@ -1,8 +1,10 @@
+use std::path::Path;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 fn main() {
     // Set the deployment target to match our minimum system version
-    println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.0");
+    println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=14.0");
 
     // Build Swift Parakeet sidecar on macOS
     #[cfg(target_os = "macos")]
@@ -26,11 +28,12 @@ fn main() {
             match output {
                 Ok(output) => {
                     if !output.status.success() {
-                        println!(
-                            "cargo:warning=Swift sidecar build failed: {}",
+                        panic!(
+                            "Swift sidecar build failed ({}).\n--- swift build stdout ---\n{}\n--- swift build stderr ---\n{}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stdout),
                             String::from_utf8_lossy(&output.stderr)
                         );
-                        println!("cargo:warning=Continuing build without Parakeet sidecar...");
                     } else {
                         println!("cargo:warning=Swift sidecar built successfully");
 
@@ -54,8 +57,7 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                    println!("cargo:warning=Failed to run Swift build script: {}", e);
-                    println!("cargo:warning=Continuing build without Parakeet sidecar...");
+                    panic!("Failed to run Swift build script: {}", e);
                 }
             }
         } else {
@@ -104,6 +106,21 @@ fn main() {
             );
         }
     }
+
+    if std::env::var("VOICETYPR_REQUIRE_VULKAN_SIDECAR").as_deref() == Ok("1") {
+        let sidecar_dir = Path::new("../sidecar/whisper-vulkan/dist");
+        let sidecar_exe = sidecar_dir.join("whisper-vulkan-sidecar-x86_64-pc-windows-msvc.exe");
+        if !sidecar_exe.exists() {
+            panic!(
+                "Whisper Vulkan sidecar not found: {}",
+                sidecar_exe.display()
+            );
+        }
+    }
+
+    println!("cargo:rerun-if-changed=../package.json");
+    println!("cargo:rerun-if-changed=../pnpm-lock.yaml");
+    println!("cargo:rerun-if-changed=../pnpm-workspace.yaml");
 
     tauri_build::build()
 }

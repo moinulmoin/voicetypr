@@ -11,32 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Mock app handle for testing
-struct MockAppHandle {
-    poisoned_mutex: Arc<Mutex<Option<String>>>,
-}
-
-impl MockAppHandle {
-    fn new() -> Self {
-        Self {
-            poisoned_mutex: Arc::new(Mutex::new(Some("test".to_string()))),
-        }
-    }
-
-    /// Simulate mutex poisoning
-    fn poison_mutex(&self) {
-        let mutex_clone = Arc::clone(&self.poisoned_mutex);
-        std::thread::spawn(move || {
-            let _guard = mutex_clone.lock().unwrap();
-            panic!("Intentional panic to poison mutex");
-        })
-        .join()
-        .ok(); // Ignore panic in spawned thread
-    }
-}
-
 #[cfg(test)]
-mod panic_prevention_tests {
+mod panic_prevention_scenarios {
     use super::*;
 
     #[test]
@@ -157,7 +133,7 @@ mod panic_prevention_tests {
         // Wrap in AssertUnwindSafe since cache fields aren't being tested for panic safety
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Try various invalid transitions
-            let results = vec![
+            let results = [
                 app_state.transition_recording_state(RecordingState::Recording),
                 app_state.transition_recording_state(RecordingState::Stopping),
                 app_state.transition_recording_state(RecordingState::Transcribing),
@@ -189,7 +165,7 @@ mod panic_prevention_tests {
         // Wrap in AssertUnwindSafe since cache fields aren't being tested for panic safety
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Try to emit to non-existent windows
-            let results = vec![
+            let results = [
                 app_state.emit_to_window("nonexistent", "test-event", "test-payload"),
                 app_state.emit_to_window("invalid", "another-event", "another-payload"),
             ];
@@ -219,7 +195,7 @@ mod panic_prevention_tests {
 
         let result = std::panic::catch_unwind(|| {
             // Create large context data
-            let large_context = log_context! {
+            let _large_context = log_context! {
                 "operation" => "stress_test",
                 "data_size" => "large",
                 "iteration" => "1000",
@@ -317,19 +293,19 @@ mod panic_prevention_tests {
 
         let result = std::panic::catch_unwind(|| {
             // Test with various data types
-            let context1 = log_context! {
+            let _context1 = log_context! {
                 "string" => "test",
                 "number" => "123",
                 "boolean" => "true"
             };
 
-            let context2 = log_context! {
+            let _context2 = log_context! {
                 "empty" => "",
                 "unicode" => "🚀 测试 🎉",
                 "special_chars" => "!@#$%^&*()_+-=[]{}|;':\",./<>?"
             };
 
-            let context3 = log_context! {
+            let _context3 = log_context! {
                 "newlines" => "line1\nline2\nline3",
                 "tabs" => "col1\tcol2\tcol3"
             };
@@ -360,7 +336,7 @@ mod panic_prevention_tests {
             }));
 
             // Test that normal operation continues
-            let test_data = vec![1, 2, 3, 4, 5];
+            let test_data = [1, 2, 3, 4, 5];
             let sum: i32 = test_data.iter().sum();
 
             assert_eq!(sum, 15);

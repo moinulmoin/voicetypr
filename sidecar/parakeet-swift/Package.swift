@@ -1,4 +1,4 @@
-// swift-tools-version: 5.10
+// swift-tools-version: 6.0
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -6,10 +6,10 @@ import PackageDescription
 let package = Package(
     name: "ParakeetSidecar",
     platforms: [
-        .macOS(.v13)  // FluidAudio requires macOS 13.0+
+        .macOS(.v14)  // FluidAudio 0.14+ diarization/offline APIs require macOS 14+
     ],
     dependencies: [
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.6.1")
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.15.2")
     ],
     targets: [
         .executableTarget(

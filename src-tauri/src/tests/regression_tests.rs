@@ -67,31 +67,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // This test requires clipboard access which may not work in CI
-    fn test_clipboard_restoration_no_panic() {
-        // Test that clipboard operations don't panic
-        // The actual implementation is private, so we test the concept
-        use arboard::Clipboard;
-
-        // Create clipboard instance
-        if let Ok(mut clipboard) = Clipboard::new() {
-            // Save current content
-            let original = clipboard.get_text().ok();
-
-            // Set new content
-            let _ = clipboard.set_text("Test");
-
-            // Restore original
-            if let Some(orig) = original {
-                let _ = clipboard.set_text(&orig);
-            }
-        }
-
-        // If clipboard isn't available, test still passes
-        // The important thing is no panic
-    }
-
-    #[test]
     fn test_file_cleanup_logs_errors() {
         use std::fs;
         use std::path::Path;
@@ -100,7 +75,7 @@ mod tests {
         let non_existent = Path::new("/tmp/does_not_exist_12345.wav");
 
         // This should not panic, just log a warning
-        if let Err(e) = fs::remove_file(&non_existent) {
+        if let Err(e) = fs::remove_file(non_existent) {
             // In real code, this would log
             assert!(e.kind() == std::io::ErrorKind::NotFound);
         }

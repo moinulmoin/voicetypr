@@ -6,6 +6,7 @@ import { ReportBugDialog } from './ReportBugDialog';
 import { gatherManualReportData, buildReportBody, submitManualReport } from '@/utils/crashReport';
 import { toast } from 'sonner';
 
+
 vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
@@ -16,6 +17,16 @@ vi.mock('sonner', () => ({
 vi.mock('@/contexts/SettingsContext', () => ({
   useSettings: () => ({
     settings: { current_model: 'base.en' },
+  }),
+}));
+
+vi.mock('@/contexts/ModelManagementContext', () => ({
+  useModelManagementContext: () => ({
+    models: {
+      'base.en': {
+        display_name: 'Base English',
+      },
+    },
   }),
 }));
 
@@ -126,16 +137,6 @@ describe('ReportBugDialog', () => {
     expect(screen.getByText(/anonymous device ID/i)).toBeInTheDocument();
   });
 
-  it('keeps the report form scrollable inside the viewport', () => {
-    render(<ReportBugDialog isOpen onClose={vi.fn()} initialMessage={'Line\n'.repeat(80)} />);
-
-    expect(screen.getByRole('dialog')).toHaveClass('max-h-[90dvh]');
-    expect(screen.getByRole('dialog')).toHaveClass('overflow-y-auto');
-    expect(screen.getByLabelText(/message/i)).toHaveClass('field-sizing-fixed');
-    expect(screen.getByLabelText(/message/i)).toHaveClass('max-h-48');
-    expect(screen.getByLabelText(/message/i)).toHaveClass('overflow-y-auto');
-  });
-
   it('submits a report directly to support', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
@@ -154,8 +155,7 @@ describe('ReportBugDialog', () => {
       'Moin',
       'moin@example.com',
       'The app broke',
-      'base.en',
-      undefined
+      'Base English'
     );
     expect(submitManualReport).toHaveBeenCalledWith(expect.objectContaining({
       message: 'The app broke',
@@ -189,6 +189,8 @@ describe('ReportBugDialog', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+
+
   it('shows an error and keeps the dialog open when submit fails', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
@@ -207,6 +209,7 @@ describe('ReportBugDialog', () => {
     expect(screen.getByText(/copy the prepared report/i)).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
+
 
   it('still submits when the latest log is unavailable', async () => {
     const user = userEvent.setup();
@@ -238,44 +241,14 @@ describe('ReportBugDialog', () => {
       logStatusNote: 'No log file found.',
     }));
   });
-  it('prefills the message when initialMessage is provided', () => {
-    const { rerender } = render(
-      <ReportBugDialog isOpen initialMessage="Hotkey issue details" onClose={vi.fn()} />
-    );
 
-    expect(screen.getByLabelText(/message/i)).toHaveValue('Hotkey issue details');
+  it('caps the report textarea height so a long message cannot push the dialog off-screen', () => {
+    render(<ReportBugDialog isOpen onClose={vi.fn()} />);
 
-    rerender(<ReportBugDialog isOpen={false} onClose={vi.fn()} />);
-    rerender(
-      <ReportBugDialog isOpen initialMessage="Updated hotkey issue" onClose={vi.fn()} />
-    );
-
-    expect(screen.getByLabelText(/message/i)).toHaveValue('Updated hotkey issue');
+    const message = screen.getByLabelText(/message/i);
+    // field-sizing-content grows with content; a bounded max-height + scroll
+    // keeps long (up to 5000-char) descriptions inside the viewport.
+    expect(message).toHaveClass('max-h-[40vh]');
+    expect(message).toHaveClass('overflow-y-auto');
   });
-
-  it('passes diagnostic context when gathering report data', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <ReportBugDialog
-        isOpen
-        diagnosticContext={'Configured Hotkey: Cmd+Shift+Space'}
-        onClose={vi.fn()}
-      />
-    );
-
-    await user.type(screen.getByLabelText(/message/i), 'Hotkey stopped working');
-    await user.click(screen.getByRole('button', { name: /submit/i }));
-
-    await waitFor(() => {
-      expect(gatherManualReportData).toHaveBeenCalledWith(
-        undefined,
-        undefined,
-        'Hotkey stopped working',
-        'base.en',
-        'Configured Hotkey: Cmd+Shift+Space'
-      );
-    });
-  });
-
 });

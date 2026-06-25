@@ -1,6 +1,10 @@
 import { getVersion } from '@tauri-apps/api/app';
 import { platform, version as osVersion, arch } from '@tauri-apps/plugin-os';
 import { invoke } from '@tauri-apps/api/core';
+import { getModelDisplayName } from '@/lib/model-display';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("crash-report");
 
 export interface SystemSpecs {
   osName: string;
@@ -54,7 +58,7 @@ export async function gatherCrashReportData(
     osVer = osVersion();
     architecture = arch();
   } catch (e) {
-    console.error('Failed to get OS info:', e);
+    log.error('Failed to get OS info:', e);
   }
 
   return {
@@ -82,7 +86,6 @@ export interface ManualReportData {
   name?: string;
   email?: string;
   message: string;
-  diagnosticContext?: string;
   appVersion: string;
   platform: string;
   osVersion: string;
@@ -117,8 +120,7 @@ export async function gatherManualReportData(
   name: string | undefined,
   email: string | undefined,
   message: string,
-  currentModel?: string | null,
-  diagnosticContext?: string
+  currentModel?: string | null
 ): Promise<ManualReportData> {
   const [appVer, deviceId, logAttachment, systemSpecs] = await Promise.all([
     getVersion().catch(() => 'Unknown'),
@@ -136,16 +138,13 @@ export async function gatherManualReportData(
     osVer = osVersion();
     architecture = arch();
   } catch (e) {
-    console.error('Failed to get OS info:', e);
+    log.error('Failed to get OS info:', e);
   }
-
-  const trimmedDiagnosticContext = diagnosticContext?.trim();
 
   return {
     name,
     email,
     message,
-    diagnosticContext: trimmedDiagnosticContext || undefined,
     appVersion: appVer,
     platform: os,
     osVersion: osVer,
@@ -178,15 +177,6 @@ export function buildReportBody(data: ManualReportData): string {
   parts.push(data.message);
   parts.push('');
 
-  if (data.diagnosticContext) {
-    parts.push('## Additional Diagnostics');
-    parts.push('');
-    parts.push('```');
-    parts.push(data.diagnosticContext);
-    parts.push('```');
-    parts.push('');
-  }
-
   parts.push('## Environment');
   parts.push('');
   parts.push('| Property | Value |');
@@ -195,24 +185,24 @@ export function buildReportBody(data: ManualReportData): string {
   parts.push(`| Platform | ${data.platform} |`);
   parts.push(`| OS Version | ${data.osVersion} |`);
   parts.push(`| Architecture | ${data.architecture} |`);
-  parts.push(`| Current Model | ${data.currentModel || 'None'} |`);
+  parts.push(`| Current Model | ${getModelDisplayName(data.currentModel) || 'None'} |`);
   parts.push(`| Device ID | ${data.deviceId} |`);
   parts.push(`| Timestamp | ${data.timestamp} |`);
   parts.push('');
-
   if (data.systemSpecs) {
-    const s = data.systemSpecs;
+    const specs = data.systemSpecs;
     parts.push('## System');
     parts.push('');
     parts.push('| Property | Value |');
     parts.push('|----------|-------|');
-    parts.push(`| OS | ${s.osName} ${s.osVersion} |`);
-    parts.push(`| Kernel | ${s.kernelVersion} |`);
-    parts.push(`| CPU | ${s.cpuBrand} (${s.cpuCores} cores) |`);
-    parts.push(`| Memory | ${Math.round(s.totalMemoryMb / 1024)} GB |`);
-    parts.push(`| GPU | ${s.gpus.length ? s.gpus.join(', ') : 'Unknown'} |`);
+    parts.push(`| OS | ${specs.osName} ${specs.osVersion} |`);
+    parts.push(`| Kernel | ${specs.kernelVersion} |`);
+    parts.push(`| CPU | ${specs.cpuBrand} (${specs.cpuCores} cores) |`);
+    parts.push(`| Memory | ${Math.round(specs.totalMemoryMb / 1024)} GB |`);
+    parts.push(`| GPU | ${specs.gpus.length ? specs.gpus.join(', ') : 'Unknown'} |`);
     parts.push('');
   }
+
 
   // Latest log section
   if (data.logContent) {
@@ -290,20 +280,12 @@ export interface ReportSubmitResult {
   message: string;
 }
 
-function buildManualReportMessage(data: ManualReportData): string {
-  if (!data.diagnosticContext) {
-    return data.message;
-  }
-
-  return `${data.message}\n\n## Additional Diagnostics\n\n\`\`\`\n${data.diagnosticContext}\n\`\`\``;
-}
-
 export function buildManualReportPayload(data: ManualReportData): BugReportPayload {
   return {
     kind: 'manual',
     name: data.name,
     email: data.email,
-    message: buildManualReportMessage(data),
+    message: data.message,
     environment: buildEnvironmentPayload(data),
     latestLog: buildLatestLogPayload(data),
   };
@@ -361,7 +343,7 @@ async function submitBugReport(payload: BugReportPayload): Promise<ReportSubmitR
       message: responseBody?.message || 'Report submitted.',
     };
   } catch (error) {
-    console.error('Failed to submit bug report:', error);
+    log.error('Failed to submit bug report:', error);
     return {
       success: false,
       message: 'Could not connect to Voicetypr Support. Please use Copy Report instead.',
@@ -370,7 +352,7 @@ async function submitBugReport(payload: BugReportPayload): Promise<ReportSubmitR
 }
 
 function buildEnvironmentPayload(data: ManualReportData | CrashReportData): ReportEnvironmentPayload {
-  return {
+  const environment: ReportEnvironmentPayload = {
     appVersion: data.appVersion,
     platform: data.platform,
     osVersion: data.osVersion,
@@ -378,8 +360,13 @@ function buildEnvironmentPayload(data: ManualReportData | CrashReportData): Repo
     currentModel: data.currentModel,
     deviceId: data.deviceId,
     timestamp: data.timestamp,
-    systemSpecs: data.systemSpecs,
   };
+
+  if (data.systemSpecs) {
+    environment.systemSpecs = data.systemSpecs;
+  }
+
+  return environment;
 }
 
 function buildLatestLogPayload(data: ManualReportData | CrashReportData): LatestLogPayload {

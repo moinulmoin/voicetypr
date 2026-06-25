@@ -16,6 +16,10 @@ import {
   gatherCrashReportData,
   submitCrashReport,
 } from '@/utils/crashReport';
+import { getModelDisplayName } from '@/lib/model-display';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('crash-report');
 
 interface CrashReportDialogProps {
   error: Error;
@@ -73,7 +77,7 @@ export function CrashReportDialog({
       `App Version: ${data.appVersion}`,
       `Platform: ${data.platform} ${data.osVersion}`,
       `Architecture: ${data.architecture}`,
-      `Model: ${data.currentModel || 'None'}`,
+      `Model: ${getModelDisplayName(data.currentModel) || 'None'}`,
       `Timestamp: ${data.timestamp}`,
     ];
 
@@ -106,7 +110,7 @@ export function CrashReportDialog({
       })
       .catch((err) => {
         if (actionId === actionIdRef.current) {
-          console.error(err);
+          log.error(err);
         }
       })
       .finally(() => {
@@ -159,7 +163,7 @@ export function CrashReportDialog({
         copiedTimerRef.current = null;
       }, 2000);
     } catch (err) {
-      console.error('Failed to copy:', err);
+      log.error('Failed to copy:', err);
       toast.error('Failed to copy details');
     }
   };
@@ -230,7 +234,7 @@ export function CrashReportDialog({
                 </div>
                 <div className="flex justify-between p-2 rounded bg-muted/50">
                   <span className="text-muted-foreground">Model</span>
-                  <span className="font-medium">{crashData.currentModel || 'None'}</span>
+                  <span className="font-medium">{getModelDisplayName(crashData.currentModel) || 'None'}</span>
                 </div>
               </div>
             </div>

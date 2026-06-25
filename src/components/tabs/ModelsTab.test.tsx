@@ -1,11 +1,20 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ModelsTab } from './ModelsTab';
-
-
-const mockUpdateSettings = vi.fn();
 const mockDeleteModel = vi.fn();
+const mockUpdateSettings = vi.fn();
+let capturedOnDelete: (name: string) => Promise<void> = () => Promise.resolve();
 
+
+// Mock sonner
+vi.mock('sonner', () => ({
+  toast: {
+    info: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    success: vi.fn()
+  }
+}));
 
 // Mock contexts
 vi.mock('@/contexts/SettingsContext', () => ({
@@ -55,8 +64,10 @@ vi.mock('@/contexts/ModelManagementContext', () => ({
   useModelManagementContext: () => ({
     models: mockModels,
     downloadProgress: {},
-    downloadErrors: {},
     verifyingModels: new Set(),
+    downloadPhases: {},
+    downloadErrors: { 'small.en': 'Network error' },
+    isLoading: true,
     sortedModels: Object.entries(mockModels),
     downloadModel: vi.fn(),
     deleteModel: mockDeleteModel,
@@ -69,23 +80,35 @@ vi.mock('@/contexts/ModelManagementContext', () => ({
   })
 }));
 
+vi.mock('@/hooks/useEventCoordinator', () => ({
+  useEventCoordinator: () => ({
+    registerEvent: vi.fn((event: string, callback: any) => {
+      (window as any).__testEventCallbacks = (window as any).__testEventCallbacks || {};
+      (window as any).__testEventCallbacks[event] = callback;
+      return vi.fn();
+    })
+  })
+}));
 
 // Mock ModelsSection component
 vi.mock('@/components/sections/ModelsSection', () => ({
-  ModelsSection: ({ models, currentModel, onDelete }: any) => (
-    <div data-testid="models-section">
-      <div>Current Model: {currentModel}</div>
-      <div>Models Count: {models.length}</div>
-      <button onClick={() => onDelete(currentModel)}>Delete Current</button>
-    </div>
-  )
+  ModelsSection: ({ models, currentModel, downloadErrors, isLoading, onDelete }: any) => {
+    capturedOnDelete = onDelete;
+    return (
+      <div data-testid="models-section">
+        <div>Current Model: {currentModel}</div>
+        <div>Models Count: {models.length}</div>
+        <div>Small Error: {downloadErrors['small.en']}</div>
+        <div>Loading: {String(isLoading)}</div>
+      </div>
+    );
+  }
 }));
 
 describe('ModelsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDeleteModel.mockResolvedValue(true);
-    mockUpdateSettings.mockResolvedValue(undefined);
+    (window as any).__testEventCallbacks = {};
   });
 
   it('displays current model and available models', () => {
@@ -94,28 +117,25 @@ describe('ModelsTab', () => {
     expect(screen.getByText('Models Count: 2')).toBeInTheDocument();
   });
 
-  it('keeps current model when delete confirmation is cancelled', async () => {
-    mockDeleteModel.mockResolvedValue(false);
+  it('passes hook-owned errors and loading state to ModelsSection', () => {
+    render(<ModelsTab />);
+
+    expect(screen.getByText('Small Error: Network error')).toBeInTheDocument();
+    expect(screen.getByText('Loading: true')).toBeInTheDocument();
+  });
+
+  it('swallows a deleteModel rejection without clearing the model selection', async () => {
+    mockDeleteModel.mockRejectedValueOnce(new Error('delete failed'));
 
     render(<ModelsTab />);
-    fireEvent.click(screen.getByRole('button', { name: /delete current/i }));
+    // mock ModelsSection mounted and captured the handler
+    expect(screen.getByTestId('models-section')).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(mockDeleteModel).toHaveBeenCalledWith('base.en');
-    });
+    // ModelCard calls onDelete(name) fire-and-forget; a failing delete_model
+    // must not escape as an unhandled rejection, and selection stays unchanged.
+    await expect(capturedOnDelete('base.en')).resolves.toBeUndefined();
+
+    expect(mockDeleteModel).toHaveBeenCalledWith('base.en');
     expect(mockUpdateSettings).not.toHaveBeenCalled();
   });
-
-  it('clears current model only after successful deletion', async () => {
-    render(<ModelsTab />);
-    fireEvent.click(screen.getByRole('button', { name: /delete current/i }));
-
-    await waitFor(() => {
-      expect(mockUpdateSettings).toHaveBeenCalledWith({
-        current_model: '',
-        current_model_engine: 'whisper'
-      });
-    });
-  });
-
 });

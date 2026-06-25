@@ -68,21 +68,12 @@ describe('buildReportBody', () => {
     expect(body).toContain('| App Version | 1.12.2 |');
     expect(body).toContain('| Device ID | device-123 |');
     expect(body).toContain('| Platform | macos |');
+    expect(body).toContain('| Current Model | Base (English) |');
     expect(body).toContain('_The log was truncated. Only the most recent entries are included._');
     expect(body).toContain('_Source: voicetypr-2026-04-27.log_');
     expect(body).toContain('INFO redacted log line');
   });
 
-  it('includes additional diagnostics when diagnostic context is provided', () => {
-    const body = buildReportBody({
-      ...baseReport,
-      diagnosticContext: 'Configured Hotkey: Cmd+Shift+Space\nRegistration Status: registered',
-    });
-
-    expect(body).toContain('## Additional Diagnostics');
-    expect(body).toContain('Configured Hotkey: Cmd+Shift+Space');
-    expect(body).toContain('Registration Status: registered');
-  });
 
   it('labels latest log status notes without log content', () => {
     const body = buildReportBody({
@@ -95,7 +86,54 @@ describe('buildReportBody', () => {
     expect(body).toContain('## Latest App Log');
     expect(body).toContain('> No log file found.');
   });
+
+  it('renders the System section when systemSpecs are present', () => {
+    const body = buildReportBody({
+      ...baseReport,
+      systemSpecs: {
+        osName: 'macOS',
+        osVersion: '15.0',
+        kernelVersion: '24.0.0',
+        arch: 'aarch64',
+        cpuBrand: 'Apple M4 Pro',
+        cpuCores: 12,
+        totalMemoryMb: 24576,
+        gpus: ['Apple M4 Pro'],
+      },
+    });
+
+    expect(body).toContain('## System');
+    expect(body).toContain('| OS | macOS 15.0 |');
+    expect(body).toContain('| Kernel | 24.0.0 |');
+    expect(body).toContain('| CPU | Apple M4 Pro (12 cores) |');
+    expect(body).toContain('| Memory | 24 GB |');
+    expect(body).toContain('| GPU | Apple M4 Pro |');
+  });
+
+  it('omits the System section when systemSpecs are absent (collection failed)', () => {
+    const body = buildReportBody(baseReport);
+    expect(body).not.toContain('## System');
+  });
+
+  it('labels GPU as Unknown when no adapters were detected', () => {
+    const body = buildReportBody({
+      ...baseReport,
+      systemSpecs: {
+        osName: 'Windows',
+        osVersion: '11',
+        kernelVersion: '10.0.22631',
+        arch: 'x86_64',
+        cpuBrand: 'Intel',
+        cpuCores: 8,
+        totalMemoryMb: 16384,
+        gpus: [],
+      },
+    });
+
+    expect(body).toContain('| GPU | Unknown |');
+  });
 });
+
 
 describe('report submission payloads', () => {
   it('builds the manual report endpoint payload', () => {
@@ -118,23 +156,6 @@ describe('report submission payloads', () => {
         statusNote: '',
       },
     });
-  });
-
-  it('preserves diagnostics in the manual message for the current support endpoint', () => {
-    const payload = buildManualReportPayload({
-      ...baseReport,
-      diagnosticContext: 'Configured Hotkey: Cmd+Shift+Space',
-    });
-
-    expect(payload).toMatchObject({
-      kind: 'manual',
-      message: expect.stringContaining('The app failed after recording.'),
-    });
-    expect(payload).not.toHaveProperty('additionalDiagnostics');
-    if (payload.kind === 'manual') {
-      expect(payload.message).toContain('## Additional Diagnostics');
-      expect(payload.message).toContain('Configured Hotkey: Cmd+Shift+Space');
-    }
   });
 
   it('builds the crash report endpoint payload', () => {

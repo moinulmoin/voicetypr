@@ -7,95 +7,100 @@ export type PillToastVariant = "info" | "warning";
 
 export interface PillToastPayload {
   id: number;
-  action: PillToastAction;
   message: string;
   duration_ms: number;
-  variant: PillToastVariant;
-  persistent: boolean;
+  action?: PillToastAction;
+  variant?: PillToastVariant;
+  persistent?: boolean;
+  suggestion?: string;
 }
 
-export interface VisibleToast {
+type ToastSeverity = "info" | "success" | "error" | "warning";
+
+interface ActiveToast {
   id: number;
   message: string;
-  variant: PillToastVariant;
+  severity: ToastSeverity;
+  suggestion?: string;
 }
 
-type IncomingToastPayload = Partial<PillToastPayload> & {
-  id: number;
-  message?: string;
-  duration_ms?: number;
-};
+function inferSeverity(message: string): ToastSeverity {
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes("error") ||
+    normalized.includes("fail") ||
+    normalized.includes("unable") ||
+    normalized.includes("couldn't")
+  ) {
+    return "error";
+  }
+  if (
+    normalized.includes("complete") ||
+    normalized.includes("copied") ||
+    normalized.includes("ready") ||
+    normalized.includes("saved")
+  ) {
+    return "success";
+  }
+  return "info";
+}
+
+function severityForPayload({ message, variant }: PillToastPayload): ToastSeverity {
+  if (variant === "warning") return "warning";
+  if (variant === "info") return "info";
+  return inferSeverity(message);
+}
 
 export function FeedbackToast() {
-  const [visibleToast, setVisibleToast] = useState<VisibleToast | null>(null);
+  const [toast, setToast] = useState<ActiveToast | null>(null);
+  const latestIdRef = useRef(Number.NEGATIVE_INFINITY);
   const timerRef = useRef<number | null>(null);
-  const latestIdRef = useRef<number>(0);
 
-  const clearScheduledHide = useCallback(() => {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
+  const clearTimer = useCallback(() => {
+    if (!timerRef.current) return;
+    clearTimeout(timerRef.current);
+    timerRef.current = null;
   }, []);
 
   const applyPayload = useCallback(
-    (raw: IncomingToastPayload) => {
-      const payload: PillToastPayload = {
-        id: raw.id,
-        action: raw.action ?? "show",
-        message: raw.message ?? "",
-        duration_ms: raw.duration_ms ?? 0,
-        variant: raw.variant ?? "info",
-        persistent: raw.persistent ?? false,
-      };
+    (payload: PillToastPayload) => {
+      const action = payload.action ?? "show";
 
-      if (payload.action === "clear") {
-        if (payload.id !== latestIdRef.current) {
-          return;
-        }
-        clearScheduledHide();
-        setVisibleToast(null);
+      if (action === "clear") {
+        if (payload.id !== latestIdRef.current) return;
+        clearTimer();
+        setToast(null);
         return;
       }
 
-      if (payload.id < latestIdRef.current) {
-        return;
-      }
+      if (payload.id < latestIdRef.current) return;
 
       latestIdRef.current = payload.id;
-      clearScheduledHide();
-
-      if (!payload.message) {
-        setVisibleToast(null);
-        return;
-      }
-
-      setVisibleToast({
+      clearTimer();
+      setToast({
         id: payload.id,
         message: payload.message,
-        variant: payload.variant,
+        severity: severityForPayload(payload),
+        suggestion: payload.suggestion,
       });
 
-      if (!payload.persistent && payload.duration_ms > 0) {
-        const toastId = payload.id;
-        timerRef.current = window.setTimeout(() => {
-          if (latestIdRef.current === toastId) {
-            setVisibleToast(null);
-          }
-          timerRef.current = null;
-        }, payload.duration_ms);
-      }
+      if (payload.persistent === true) return;
+
+      timerRef.current = window.setTimeout(() => {
+        if (latestIdRef.current !== payload.id) return;
+        setToast(null);
+        timerRef.current = null;
+      }, payload.duration_ms);
     },
-    [clearScheduledHide],
+    [clearTimer]
   );
 
   useEffect(() => {
     let isMounted = true;
     let unlistenFn: (() => void) | undefined;
 
-    listen<IncomingToastPayload>("toast", (evt) => {
-      if (!isMounted) return;
-      applyPayload(evt.payload);
+    void listen<PillToastPayload>("toast", (evt) => {
+      if (isMounted) applyPayload(evt.payload);
     }).then((unlisten) => {
       if (!isMounted) {
         unlisten();
@@ -106,47 +111,48 @@ export function FeedbackToast() {
 
     return () => {
       isMounted = false;
-      if (unlistenFn) unlistenFn();
-      clearScheduledHide();
+      unlistenFn?.();
+      clearTimer();
     };
-  }, [applyPayload, clearScheduledHide]);
+  }, [applyPayload, clearTimer]);
 
-  if (!visibleToast) {
+  if (!toast) {
     return null;
   }
 
-  const isWarning = visibleToast.variant === "warning";
+  const isAlert = toast.severity === "warning" || toast.severity === "error";
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center pointer-events-none">
+    <div className="pointer-events-none fixed inset-0 flex items-center justify-center">
       <div
         role="status"
         aria-live="polite"
-        className={
-          isWarning
-            ? "text-sm px-4 py-2 rounded-lg shadow-lg ring-1 flex items-start gap-2 min-w-[200px] max-w-[400px] bg-amber-950 text-amber-50 ring-amber-400/40"
-            : "bg-black text-white text-sm px-4 py-2 rounded-lg shadow-lg ring-1 ring-white/30 flex items-start gap-2 min-w-[200px] max-w-[400px]"
-        }
+        className={`flex min-w-[200px] max-w-[400px] items-start gap-2 rounded-lg px-4 py-2 text-sm shadow-lg ring-1 ${
+          isAlert ? "bg-amber-950 text-amber-50 ring-amber-400/40" : "bg-black text-white ring-white/30"
+        }`}
       >
-        {isWarning ? (
-          <TriangleAlert
-            className="h-4 w-4 text-amber-300 flex-shrink-0 mt-0.5"
-            aria-hidden
-          />
+        {isAlert ? (
+          <TriangleAlert className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-300" aria-hidden />
         ) : (
-          <Info
-            className="h-4 w-4 text-white/80 flex-shrink-0 mt-0.5"
-            aria-hidden
-          />
+          <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-white/80" aria-hidden />
         )}
-        <span
-          className={
-            isWarning ? "text-amber-400/50 flex-shrink-0" : "text-white/30 flex-shrink-0"
-          }
-        >
+        <span aria-hidden className={`flex-shrink-0 ${isAlert ? "text-amber-400/50" : "text-white/30"}`}>
           |
         </span>
-        <span className="break-words whitespace-pre-wrap">{visibleToast.message}</span>
+        <div className="flex min-w-0 flex-col">
+          <span className="overflow-hidden break-words whitespace-pre-wrap [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
+            {toast.message}
+          </span>
+          {toast.suggestion && (
+            <span
+              className={`mt-0.5 overflow-hidden break-words text-xs [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] ${
+                isAlert ? "text-amber-200/70" : "text-white/60"
+              }`}
+            >
+              {toast.suggestion}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-shell';
 import { toast } from 'sonner';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("permissions");
 
 export type PermissionStatus = 'checking' | 'granted' | 'denied';
 
@@ -64,13 +67,13 @@ export function usePermissions(options?: {
       try {
         mic = await invoke<boolean>('check_microphone_permission');
       } catch (err) {
-        console.error('Failed to check microphone permission:', err);
+        log.error('Failed to check microphone permission:', err);
       }
 
       try {
         accessibility = await invoke<boolean>('check_accessibility_permission');
       } catch (err) {
-        console.error('Failed to check accessibility permission:', err);
+        log.error('Failed to check accessibility permission:', err);
       }
 
       setPermissions({
@@ -91,7 +94,7 @@ export function usePermissions(options?: {
     } catch (err) {
       const error = err instanceof Error ? err : new Error('Failed to check permissions');
       setError(error);
-      console.error('Failed to check permissions:', error);
+      log.error('Failed to check permissions:', error);
       
       if (showToasts) {
         toast.error('Failed to check permissions. Please try again.');
@@ -156,7 +159,7 @@ export function usePermissions(options?: {
     } catch (err) {
       const error = err instanceof Error ? err : new Error(`Failed to request ${type} permission`);
       setError(error);
-      console.error(`Failed to request ${type} permission:`, error);
+      log.error(`Failed to request ${type} permission:`, error);
       
       if (showToasts) {
         toast.error(`Failed to request ${type} permission`);

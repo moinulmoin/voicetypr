@@ -1,0 +1,327 @@
+//! Engine orchestration: a backend [`KeyEventSource`] thread feeds normalized
+//! events over a channel to a dispatcher thread that owns the [`Matcher`] and
+//! invokes the caller's `on_event`. No lock is ever taken on the OS-callback
+//! path — backends only send on the channel.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use parking_lot::Mutex;
+
+use crate::backend::platform_source;
+use crate::matcher::Matcher;
+use crate::types::{EngineError, RawKeyEvent, Trigger, TriggerEvent, TriggerId};
+
+/// Messages flowing to the dispatcher thread. Raw events and control messages
+/// share one channel so they are processed in order.
+pub enum Msg {
+    Raw(RawKeyEvent),
+    Control(Control),
+}
+
+/// Out-of-band control for the dispatcher.
+pub enum Control {
+    /// Event stream had a gap (tap re-enabled / session transition): reset the
+    /// matcher, synthesizing `Released` for any active trigger.
+    ReEnable,
+    /// Swap the binding set.
+    SetBindings(Vec<(TriggerId, Trigger)>),
+    /// Reset the matcher and stop the dispatcher loop.
+    Stop,
+}
+
+/// One-shot readiness signal a backend fires once its loop is live (so `start`
+/// does not race the OS hook/tap installation).
+pub struct ReadySignal {
+    tx: Sender<Result<(), String>>,
+}
+
+impl ReadySignal {
+    /// Signal that the backend loop is live and receiving events.
+    pub fn ok(self) {
+        let _ = self.tx.send(Ok(()));
+    }
+    /// Signal that the backend failed to start; surfaced as `EngineError`.
+    pub fn err(self, msg: impl Into<String>) {
+        let _ = self.tx.send(Err(msg.into()));
+    }
+}
+
+/// A source of raw key events (an OS backend, or a test mock).
+pub trait KeyEventSource: Send + Sync {
+    /// Run the event loop until [`KeyEventSource::request_stop`]; send events on
+    /// `tx` and call `ready.ok()` (or `ready.err(..)`) when the loop is live or
+    /// has failed to start.
+    fn run(&self, tx: Sender<Msg>, ready: ReadySignal);
+    /// Ask the running loop to terminate (from another thread).
+    fn request_stop(&self);
+}
+
+/// A scripted source for tests: emits a fixed sequence of messages, then parks
+/// until stopped.
+pub struct MockSource {
+    script: Mutex<Option<Vec<(Msg, Duration)>>>,
+    stop: AtomicBool,
+}
+
+impl MockSource {
+    pub fn new(script: Vec<(Msg, Duration)>) -> Self {
+        Self {
+            script: Mutex::new(Some(script)),
+            stop: AtomicBool::new(false),
+        }
+    }
+}
+
+impl KeyEventSource for MockSource {
+    fn run(&self, tx: Sender<Msg>, ready: ReadySignal) {
+        ready.ok();
+        let script = self.script.lock().take().unwrap_or_default();
+        for (msg, delay) in script {
+            if self.stop.load(Ordering::Relaxed) {
+                return;
+            }
+            if !delay.is_zero() {
+                std::thread::sleep(delay);
+            }
+            if tx.send(msg).is_err() {
+                return;
+            }
+        }
+        while !self.stop.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn request_stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+struct Inner {
+    tx: Sender<Msg>,
+    source: Arc<dyn KeyEventSource>,
+    dispatcher: JoinHandle<()>,
+    source_thread: JoinHandle<()>,
+}
+
+/// The trigger engine. One instance per process.
+pub struct TriggerEngine {
+    inner: Mutex<Option<Inner>>,
+    pending: Mutex<Vec<(TriggerId, Trigger)>>,
+    running: AtomicBool,
+}
+
+impl Default for TriggerEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TriggerEngine {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(None),
+            pending: Mutex::new(Vec::new()),
+            running: AtomicBool::new(false),
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::Relaxed)
+    }
+
+    /// Set (or replace) the active bindings. Safe to call before `start` (stored
+    /// and applied on start) or while running (applied in-order with events).
+    pub fn set_bindings(&self, bindings: Vec<(TriggerId, Trigger)>) {
+        *self.pending.lock() = bindings.clone();
+        if let Some(inner) = self.inner.lock().as_ref() {
+            let _ = inner.tx.send(Msg::Control(Control::SetBindings(bindings)));
+        }
+    }
+
+    /// Start with the platform backend.
+    pub fn start(
+        &self,
+        on_event: impl Fn(TriggerEvent) + Send + 'static,
+    ) -> Result<(), EngineError> {
+        self.start_with_source(Arc::from(platform_source()), on_event)
+    }
+
+    /// Start with an explicit source (used by the platform `start` and by tests).
+    pub fn start_with_source(
+        &self,
+        source: Arc<dyn KeyEventSource>,
+        on_event: impl Fn(TriggerEvent) + Send + 'static,
+    ) -> Result<(), EngineError> {
+        let mut guard = self.inner.lock();
+        if guard.is_some() {
+            return Err(EngineError::AlreadyRunning);
+        }
+
+        let (tx, rx) = mpsc::channel::<Msg>();
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+        let initial = self.pending.lock().clone();
+
+        let dispatcher = std::thread::Builder::new()
+            .name("keytrigger-dispatch".into())
+            .spawn(move || {
+                let mut matcher = Matcher::new();
+                let mut emit = |te: TriggerEvent| {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| on_event(te)));
+                };
+                matcher.set_bindings(initial, &mut emit);
+                while let Ok(msg) = rx.recv() {
+                    match msg {
+                        Msg::Raw(ev) => matcher.handle(ev, Instant::now(), &mut emit),
+                        Msg::Control(Control::SetBindings(b)) => matcher.set_bindings(b, &mut emit),
+                        Msg::Control(Control::ReEnable) => matcher.reset(&mut emit),
+                        Msg::Control(Control::Stop) => {
+                            matcher.reset(&mut emit);
+                            break;
+                        }
+                    }
+                }
+            })
+            .map_err(|e| EngineError::Backend(format!("spawn dispatcher: {e}")))?;
+
+        let src_for_thread = Arc::clone(&source);
+        let tx_for_source = tx.clone();
+        let ready = ReadySignal { tx: ready_tx };
+        let source_thread = match std::thread::Builder::new()
+            .name("keytrigger-source".into())
+            .spawn(move || {
+                src_for_thread.run(tx_for_source, ready);
+            }) {
+            Ok(h) => h,
+            Err(e) => {
+                // Unwind the dispatcher we already spawned.
+                let _ = tx.send(Msg::Control(Control::Stop));
+                let _ = dispatcher.join();
+                return Err(EngineError::Backend(format!("spawn source: {e}")));
+            }
+        };
+
+        // Bounded wait for the backend to come up (Windows queue handshake / tap
+        // creation). A timeout, disconnect, or explicit failure aborts start and
+        // tears down the threads we already spawned.
+        match ready_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                let _ = tx.send(Msg::Control(Control::Stop));
+                let _ = dispatcher.join();
+                source.request_stop();
+                let _ = source_thread.join();
+                return Err(EngineError::Backend(e));
+            }
+            Err(_) => {
+                let _ = tx.send(Msg::Control(Control::Stop));
+                let _ = dispatcher.join();
+                source.request_stop();
+                let _ = source_thread.join();
+                return Err(EngineError::Backend(
+                    "backend did not become ready".to_string(),
+                ));
+            }
+        }
+
+        *guard = Some(Inner {
+            tx,
+            source,
+            dispatcher,
+            source_thread,
+        });
+        self.running.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Stop the engine: reset the matcher (synth-release), stop the backend, and
+    /// join both threads. Idempotent.
+    pub fn stop(&self) {
+        let inner = self.inner.lock().take();
+        if let Some(inner) = inner {
+            let _ = inner.tx.send(Msg::Control(Control::Stop));
+            inner.source.request_stop();
+            let _ = inner.dispatcher.join();
+            let _ = inner.source_thread.join();
+        }
+        self.running.store(false, Ordering::Relaxed);
+    }
+}
+
+impl Drop for TriggerEngine {
+    fn drop(&mut self) {
+        if self.running.load(Ordering::Relaxed) {
+            self.stop();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{KeyPhase, KeySpec, Modifier, NamedKey, Side};
+
+    fn raw(key: NamedKey, side: Option<Side>, down: bool) -> Msg {
+        Msg::Raw(RawKeyEvent {
+            key: KeySpec::Named(key),
+            side,
+            down,
+            is_repeat: false,
+        })
+    }
+
+    #[test]
+    fn engine_mock_hold_end_to_end() {
+        let engine = TriggerEngine::new();
+        engine.set_bindings(vec![(
+            "hold".into(),
+            Trigger::ModifierHold {
+                modifier: Modifier::Alt,
+                side: Side::Right,
+            },
+        )]);
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+
+        let script = vec![
+            (
+                raw(NamedKey::AltRight, Some(Side::Right), true),
+                Duration::from_millis(0),
+            ),
+            (
+                raw(NamedKey::AltRight, Some(Side::Right), false),
+                Duration::from_millis(10),
+            ),
+        ];
+        let source: Arc<dyn KeyEventSource> = Arc::new(MockSource::new(script));
+
+        engine
+            .start_with_source(source, move |te| sink.lock().push(te))
+            .expect("start");
+
+        // Allow the scripted events to flow through the dispatcher.
+        std::thread::sleep(Duration::from_millis(150));
+        engine.stop();
+
+        let got = events.lock().clone();
+        assert_eq!(
+            got,
+            vec![
+                TriggerEvent {
+                    id: "hold".into(),
+                    phase: KeyPhase::Pressed,
+                },
+                TriggerEvent {
+                    id: "hold".into(),
+                    phase: KeyPhase::Released,
+                },
+            ]
+        );
+        assert!(!engine.is_running());
+    }
+}

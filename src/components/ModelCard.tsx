@@ -1,13 +1,21 @@
-import { AlertCircle, CheckCircle, Download, HardDrive, Loader2, Star, X, Zap, Trash2 } from 'lucide-react';
+import { AlertCircle, CheckCircle, Download, HardDrive, Star, Trash2, X, Zap } from 'lucide-react';
 import { ModelInfo, isLocalModel } from '../types';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Progress } from './ui/progress';
+import { Spinner } from './ui/spinner';
+import { cn } from '@/lib/utils';
+import { getModelDisplayName } from '@/lib/model-display';
+import { createLogger } from "@/lib/logger"
+
+const log = createLogger("model-card")
 
 interface ModelCardProps {
   name: string;
   model: ModelInfo;
   downloadProgress?: number;
+  downloadPhase?: string;
   isVerifying?: boolean;
   downloadError?: string;
   isSelected?: boolean;
@@ -15,6 +23,7 @@ interface ModelCardProps {
   onSelect: (name: string) => void;
   onDelete?: (name: string) => void;
   onCancelDownload?: (name: string) => void;
+  onRepair?: (name: string) => void;
   showSelectButton?: boolean;
 }
 
@@ -22,6 +31,7 @@ export const ModelCard = function ModelCard({
   name,
   model,
   downloadProgress,
+  downloadPhase,
   downloadError,
   isVerifying = false,
   isSelected = false,
@@ -29,11 +39,12 @@ export const ModelCard = function ModelCard({
   onSelect,
   onDelete,
   onCancelDownload,
+  onRepair,
   showSelectButton = true
 }: ModelCardProps) {
 
   if (!isLocalModel(model)) {
-    console.warn(`[ModelCard] Skipping non-local model card for ${model.name}`);
+    log.debug(`[ModelCard] Skipping non-local model card for ${model.name}`);
     return null;
   }
 
@@ -44,48 +55,81 @@ export const ModelCard = function ModelCard({
       : `${Math.round(sizeInMB)} MB`;
   };
 
-  // Model is usable only when it is ready for transcription.
+  // Model is usable if fully downloaded and no setup/repair is required.
   const isUsable = model.downloaded && !model.requires_setup;
+  const showDownloadError = Boolean(downloadError) && !isUsable && downloadProgress === undefined && !isVerifying;
+  const downloadLabel = downloadPhase
+    ? downloadPhase.charAt(0).toUpperCase() + downloadPhase.slice(1)
+    : "Downloading";
 
   return (
     <Card
-      className={`px-4 py-3 transition-all hover:shadow-sm ${
-        isUsable ? 'cursor-pointer hover:border-border' : ''
-      } ${
-        isSelected ? 'bg-primary/5 border-border/50' : 'border-border/50'
-      }`}
+      className={cn(
+        "group rounded-xl border border-border bg-card p-4 transition-colors",
+        isUsable && showSelectButton ? "cursor-pointer" : "",
+        isSelected
+          ? "border-sage/50 bg-sage-bg/40"
+          : "hover:border-sage/40 hover:bg-muted/30"
+      )}
       onClick={() => isUsable && showSelectButton && onSelect(name)}
     >
-      <div className="flex items-center justify-between gap-3">
-        {/* Model Name */}
-        <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
-          <h3 className="font-medium text-sm">{model.display_name || name}</h3>
-          {model.recommended && (
-            <Star className="w-3.5 h-3.5 fill-yellow-500 text-yellow-500" aria-label="Recommended model" />
-          )}
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3
+              className={cn(
+                "truncate text-sm font-semibold tracking-tight",
+                isSelected && "text-sage"
+              )}
+            >
+              {getModelDisplayName(name, { [name]: model })}
+            </h3>
+            {model.recommended && (
+              <Badge variant="secondary" className="gap-1 bg-sage-bg text-sage">
+                <Star className="size-3 fill-current" aria-label="Recommended model" />
+                Recommended
+              </Badge>
+            )}
+            {isSelected && (
+              <Badge className="gap-1 bg-sage text-sage-foreground">
+                <CheckCircle className="size-3" />
+                Active
+              </Badge>
+            )}
+          </div>
+
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              <Zap className="size-3.5 text-sage" />
+              Speed <span className="font-medium text-foreground">{model.speed_score}</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <CheckCircle className="size-3.5 text-sage" />
+              Accuracy <span className="font-medium text-foreground">{model.accuracy_score}</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <HardDrive className="size-3.5 text-sage" />
+              <span className="font-mono text-foreground">{formatSize()}</span>
+            </span>
+          </div>
         </div>
 
-        {/* Centered Stats */}
-        <div className="flex items-center justify-center gap-6 flex-1">
-          <div className="flex items-center gap-1.5">
-            <Zap className="w-3.5 h-3.5 text-green-500/70" />
-            <span className="text-sm font-medium">{model.speed_score}</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <CheckCircle className="w-3.5 h-3.5 text-blue-500/70" />
-            <span className="text-sm font-medium">{model.accuracy_score}</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <HardDrive className="w-3.5 h-3.5 text-purple-500/70" />
-            <span className="text-sm font-medium">{formatSize()}</span>
-          </div>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {isUsable ? (
-            // Model is downloaded - show delete option
+        <div className="flex shrink-0 items-center gap-1.5">
+          {model.downloaded ? (
             <>
+              {onRepair && (
+                <Button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRepair(name);
+                  }}
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground"
+                >
+                  Repair
+                </Button>
+              )}
               {onDelete && (
                 <Button
                   onClick={(e) => {
@@ -96,29 +140,37 @@ export const ModelCard = function ModelCard({
                   size="sm"
                   className="text-muted-foreground hover:text-destructive"
                 >
-                  <Trash2 className="w-3.5 h-3.5 mr-1" />
+                  <Trash2 className="size-3.5" />
                   Remove
                 </Button>
               )}
             </>
           ) : isVerifying ? (
-            <div className="flex items-center gap-2 px-2 py-1 rounded bg-yellow-500/10">
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-yellow-600" />
-              <span className="text-xs font-medium text-yellow-600">Verifying</span>
-            </div>
+            <Badge variant="outline" className="gap-1.5 bg-muted/60 text-muted-foreground">
+              <Spinner className="size-3.5" />
+              Verifying
+            </Badge>
           ) : downloadProgress !== undefined ? (
             <>
-              {/* For Parakeet models, show indeterminate progress (FluidAudio doesn't report progress) */}
               {model.engine === 'parakeet' && downloadProgress === 0 ? (
-                <div className="flex items-center gap-2 px-2 py-1 rounded bg-blue-500/10">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
-                  <span className="text-xs font-medium text-blue-600">Downloading...</span>
-                </div>
+                <Badge variant="outline" className="gap-1.5 bg-sage-bg text-sage">
+                  <Spinner className="size-3.5" />
+                  {downloadLabel}
+                </Badge>
               ) : (
-                <>
-                  <Progress value={downloadProgress} className="w-20 h-1.5" />
-                  <span className="text-xs font-medium text-blue-600 w-10 text-right">{Math.round(downloadProgress)}%</span>
-                </>
+                <div className="flex items-center gap-2.5">
+                  <div className="min-w-0">
+                    <Progress value={downloadProgress} className="h-1.5 w-24" />
+                    {downloadPhase && (
+                      <p className="mt-1 max-w-24 truncate text-[10px] text-muted-foreground">
+                        {downloadLabel}
+                      </p>
+                    )}
+                  </div>
+                  <span className="w-10 text-right text-xs font-medium text-sage">
+                    {Math.round(downloadProgress)}%
+                  </span>
+                </div>
               )}
               {onCancelDownload && (
                 <Button
@@ -128,9 +180,10 @@ export const ModelCard = function ModelCard({
                   }}
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8"
+                  className="size-8"
+                  aria-label={`Cancel ${getModelDisplayName(name, { [name]: model })} download`}
                 >
-                  <X className="w-4 h-4" />
+                  <X className="size-4" />
                 </Button>
               )}
             </>
@@ -140,21 +193,21 @@ export const ModelCard = function ModelCard({
                 e.stopPropagation();
                 onDownload(name);
               }}
-              variant="outline"
+              variant="default"
               size="sm"
             >
-              <Download className="w-4 h-4 mr-1" />
+              <Download className="size-4" />
               Download
             </Button>
           )}
         </div>
       </div>
-      {downloadError && !isUsable && downloadProgress === undefined && !isVerifying && (
-        <div className="mt-2 flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert">
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-          <span className="whitespace-pre-line">{downloadError}</span>
+      {showDownloadError ? (
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+          <p className="min-w-0">{downloadError}</p>
         </div>
-      )}
+      ) : null}
     </Card>
   );
 };

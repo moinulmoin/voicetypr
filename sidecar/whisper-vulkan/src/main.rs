@@ -5,11 +5,11 @@ use std::time::Instant;
 use rubato::{audioadapter_buffers::direct::InterleavedSlice, Fft, FixedSync, Resampler};
 use serde::{Deserialize, Serialize};
 use whisper_rs::{
-    convert_integer_to_float_audio, convert_stereo_to_mono_audio, FullParams, SamplingStrategy,
-    WhisperContext, WhisperContextParameters,
+    convert_integer_to_float_audio, convert_stereo_to_mono_audio, get_lang_str, FullParams,
+    SamplingStrategy, WhisperContext, WhisperContextParameters,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Request {
     Health {
@@ -25,10 +25,18 @@ enum Request {
         audio_path: String,
         language: Option<String>,
         translate: bool,
+        initial_prompt: Option<String>,
     },
     Shutdown {
         id: u64,
     },
+}
+
+#[derive(Debug, Serialize)]
+struct Segment {
+    start: f64,
+    end: f64,
+    text: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,7 +58,10 @@ enum Response<'a> {
         ok: bool,
         backend: &'a str,
         text: String,
-        inference_time_ms: u64,
+        transcript_language: Option<String>,
+        segments: Vec<Segment>,
+        audio_duration_ms: u64,
+        processing_duration_ms: u64,
     },
     Shutdown {
         id: u64,
@@ -68,6 +79,13 @@ enum Response<'a> {
 struct CachedContext {
     model_path: String,
     context: WhisperContext,
+}
+
+struct TranscriptionOutput {
+    text: String,
+    transcript_language: Option<String>,
+    segments: Vec<Segment>,
+    audio_duration_ms: u64,
 }
 
 fn main() {
@@ -150,6 +168,7 @@ fn handle_request<'a>(request: Request, cache: &'a mut Option<CachedContext>) ->
             audio_path,
             language,
             translate,
+            initial_prompt,
         } => {
             let started = Instant::now();
             match ensure_context(cache, &model_path) {
@@ -164,13 +183,17 @@ fn handle_request<'a>(request: Request, cache: &'a mut Option<CachedContext>) ->
                     Path::new(&audio_path),
                     language.as_deref(),
                     translate,
+                    initial_prompt.as_deref(),
                 ) {
-                    Ok(text) => Response::Transcription {
+                    Ok(output) => Response::Transcription {
                         id,
                         ok: true,
                         backend: "vulkan",
-                        text,
-                        inference_time_ms: elapsed_millis_u64(started),
+                        text: output.text,
+                        transcript_language: output.transcript_language,
+                        segments: output.segments,
+                        audio_duration_ms: output.audio_duration_ms,
+                        processing_duration_ms: elapsed_millis_u64(started),
                     },
                     Err(message) => Response::Error {
                         id,
@@ -214,13 +237,44 @@ fn ensure_context<'a>(
         .ok_or_else(|| "Vulkan context cache was not initialized".to_string())
 }
 
+fn sanitize_initial_prompt(initial_prompt: Option<&str>) -> String {
+    let mut prompt = initial_prompt.unwrap_or("").to_string();
+    prompt.retain(|ch| ch != '\0');
+    prompt
+}
+
+fn segment_timestamp_seconds(timestamp_centiseconds: i64) -> f64 {
+    timestamp_centiseconds as f64 / 100.0
+}
+
+fn resolve_transcript_language(
+    language: Option<&str>,
+    translate: bool,
+    state: &whisper_rs::WhisperState,
+    threads: usize,
+) -> Option<String> {
+    if translate {
+        return Some("en".to_string());
+    }
+
+    match language {
+        Some(lang) if lang != "auto" => Some(lang.to_string()),
+        _ => state
+            .lang_detect(0, threads)
+            .ok()
+            .and_then(|(lang_id, _)| get_lang_str(lang_id).map(str::to_string)),
+    }
+}
+
 fn transcribe_with_context(
     context: &WhisperContext,
     audio_path: &Path,
     language: Option<&str>,
     translate: bool,
-) -> Result<String, String> {
+    initial_prompt: Option<&str>,
+) -> Result<TranscriptionOutput, String> {
     let audio = load_audio_16khz_mono(audio_path)?;
+    let audio_duration_ms = ((audio.len() as f32 / 16_000.0) * 1_000.0) as u64;
     let duration_seconds = audio.len() as f32 / 16_000.0;
     if duration_seconds < 0.5 {
         return Err("Recording too short".to_string());
@@ -228,7 +282,7 @@ fn transcribe_with_context(
 
     let mut params = FullParams::new(SamplingStrategy::BeamSearch {
         beam_size: 5,
-        patience: -1.0, // whisper.cpp sentinel: use the default beam-search patience.
+        patience: -1.0,
     });
 
     let final_language = match language {
@@ -241,8 +295,9 @@ fn transcribe_with_context(
     let hw = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    params.set_n_threads(std::cmp::max(1, hw.saturating_sub(1)) as i32);
-    params.set_no_context(false); // Match the main transcriber; each request creates a fresh WhisperState.
+    let threads = std::cmp::max(1, hw.saturating_sub(1));
+    params.set_n_threads(threads as i32);
+    params.set_no_context(false);
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
@@ -252,7 +307,10 @@ fn transcribe_with_context(
     params.set_no_speech_thold(0.6);
     params.set_entropy_thold(2.4);
     params.set_logprob_thold(-1.0);
-    params.set_initial_prompt("");
+
+    let prompt = sanitize_initial_prompt(initial_prompt);
+    params.set_initial_prompt(&prompt);
+
     params.set_temperature(0.2);
     params.set_temperature_inc(0.2);
     params.set_max_initial_ts(1.0);
@@ -266,13 +324,28 @@ fn transcribe_with_context(
         .full(params, &audio)
         .map_err(|err| format!("Whisper inference failed: {err}"))?;
 
+    let transcript_language =
+        resolve_transcript_language(language, translate, &state, threads);
+
     let mut text = String::new();
+    let mut segments = Vec::new();
     for segment in state.as_iter() {
-        text.push_str(&segment.to_string());
+        let segment_text = segment.to_string();
+        text.push_str(&segment_text);
         text.push(' ');
+        segments.push(Segment {
+            start: segment_timestamp_seconds(segment.start_timestamp()),
+            end: segment_timestamp_seconds(segment.end_timestamp()),
+            text: segment_text,
+        });
     }
 
-    Ok(text.trim().to_string())
+    Ok(TranscriptionOutput {
+        text: text.trim().to_string(),
+        transcript_language,
+        segments,
+        audio_duration_ms,
+    })
 }
 
 fn load_audio_16khz_mono(audio_path: &Path) -> Result<Vec<f32>, String> {
@@ -359,7 +432,7 @@ fn elapsed_millis_u64(started: Instant) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::Response;
+    use super::{sanitize_initial_prompt, Request, Response, Segment};
 
     #[test]
     fn timing_responses_serialize_as_json_numbers() {
@@ -380,13 +453,61 @@ mod tests {
             ok: true,
             backend: "vulkan",
             text: "hello".to_string(),
-            inference_time_ms: 456,
+            transcript_language: Some("en".to_string()),
+            segments: vec![Segment {
+                start: 0.0,
+                end: 1.2,
+                text: "hello".to_string(),
+            }],
+            audio_duration_ms: 1200,
+            processing_duration_ms: 456,
         })
         .expect("transcription response should serialize");
         assert_eq!(
             transcription,
-            r#"{"type":"transcription","id":8,"ok":true,"backend":"vulkan","text":"hello","inference_time_ms":456}"#
+            r#"{"type":"transcription","id":8,"ok":true,"backend":"vulkan","text":"hello","transcript_language":"en","segments":[{"start":0.0,"end":1.2,"text":"hello"}],"audio_duration_ms":1200,"processing_duration_ms":456}"#
         );
+    }
+
+    #[test]
+    fn transcribe_request_roundtrips_initial_prompt() {
+        let original = Request::Transcribe {
+            id: 9,
+            model_path: "/models/whisper.bin".to_string(),
+            audio_path: "/tmp/audio.wav".to_string(),
+            language: Some("en".to_string()),
+            translate: false,
+            initial_prompt: Some("Voicetypr".to_string()),
+        };
+
+        let json = serde_json::to_string(&original).expect("request should serialize");
+        let roundtripped: Request =
+            serde_json::from_str(&json).expect("request should deserialize");
+
+        match roundtripped {
+            Request::Transcribe {
+                id,
+                model_path,
+                audio_path,
+                language,
+                translate,
+                initial_prompt,
+            } => {
+                assert_eq!(id, 9);
+                assert_eq!(model_path, "/models/whisper.bin");
+                assert_eq!(audio_path, "/tmp/audio.wav");
+                assert_eq!(language.as_deref(), Some("en"));
+                assert!(!translate);
+                assert_eq!(initial_prompt.as_deref(), Some("Voicetypr"));
+            }
+            _ => panic!("expected transcribe request"),
+        }
+    }
+
+    #[test]
+    fn sanitize_initial_prompt_strips_nul_bytes() {
+        assert_eq!(sanitize_initial_prompt(Some("hello\0world")), "helloworld");
+        assert_eq!(sanitize_initial_prompt(None), "");
     }
 }
 

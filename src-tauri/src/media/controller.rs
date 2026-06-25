@@ -302,14 +302,23 @@ impl MediaPauseController {
         &self,
         session: &windows::Media::Control::GlobalSystemMediaTransportControlsSession,
     ) -> bool {
-        let source_app_id = session.SourceAppUserModelId().ok().map(|id| id.to_string());
+        // We can only resume a session we can re-identify later by its app id. If the id is
+        // unreadable, pausing it would risk stranding it (or resuming the wrong player) at stop,
+        // so skip it rather than break the resume-only-what-we-paused contract.
+        let source_app_id = match session.SourceAppUserModelId().ok().map(|id| id.to_string()) {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                log::debug!("Skipping media pause for a session with no readable app id");
+                return false;
+            }
+        };
         match session.TryPauseAsync() {
             Ok(op) => match op.join() {
                 Ok(true) => {
                     log::info!("Media paused successfully via GSMTC");
                     self.was_playing_before_recording
                         .store(true, Ordering::SeqCst);
-                    *self.paused_session_source_app_user_model_id.lock() = source_app_id;
+                    *self.paused_session_source_app_user_model_id.lock() = Some(source_app_id);
                     true
                 }
                 Ok(false) => {
@@ -375,7 +384,7 @@ impl MediaPauseController {
         let mut current_session = manager.GetCurrentSession().ok();
         let current_id = current_session
             .as_ref()
-            .and_then(|s| s.SourceAppUserModelId().ok().map(|id| id.to_string()));
+            .and_then(|session| session.SourceAppUserModelId().ok().map(|id| id.to_string()));
 
         let mut all: Vec<(String, GlobalSystemMediaTransportControlsSession)> = Vec::new();
         if let Ok(sessions) = manager.GetSessions() {
@@ -386,9 +395,9 @@ impl MediaPauseController {
                         Err(_) => continue,
                     };
 
-                    // Keep the session even if its app id is unreadable (id is only
-                    // used for dedup/ordering; resume bookkeeping is re-read on pause),
-                    // so a playing-but-id-less session is still attempted.
+                    // Keep the session even if its app id is unreadable (id is only used for
+                    // dedup/ordering; resume bookkeeping is re-read on pause), so a playing but
+                    // id-less session is still attempted.
                     let id = session
                         .SourceAppUserModelId()
                         .ok()
@@ -572,13 +581,10 @@ impl MediaPauseController {
                 }
             }
         } else {
-            match manager.GetCurrentSession() {
-                Ok(session) => session,
-                Err(_) => {
-                    log::warn!("No active media session found for resume");
-                    return false;
-                }
-            }
+            // We only resume the exact session we paused. With no stored id we must not guess —
+            // resuming GetCurrentSession could play a player the user intentionally left paused.
+            log::info!("No paused media session id recorded; skipping resume");
+            return false;
         };
 
         // If it is already playing, don't send play.

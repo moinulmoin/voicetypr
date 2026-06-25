@@ -1,6 +1,9 @@
 import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AIProviderModel } from "@/types/providers";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("providers");
 
 interface UseProviderModelsReturn {
   models: AIProviderModel[];
@@ -42,7 +45,7 @@ export function useProviderModels(providerId: string): UseProviderModelsReturn {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(errorMessage);
-      console.error(`Failed to fetch models for ${providerId}:`, err);
+      log.error(`Failed to fetch models for ${providerId}:`, err);
     } finally {
       setLoading(false);
     }
@@ -93,7 +96,7 @@ export function useAllProviderModels() {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       setErrorMap(prev => ({ ...prev, [providerId]: errorMessage }));
-      console.error(`Failed to fetch models for ${providerId}:`, err);
+      log.error(`Failed to fetch models for ${providerId}:`, err);
     } finally {
       setLoadingMap(prev => ({ ...prev, [providerId]: false }));
     }

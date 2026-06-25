@@ -1,7 +1,7 @@
 #![cfg_attr(not(target_os = "windows"), allow(dead_code, unused_imports))]
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -10,12 +10,16 @@ use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
+use super::transcriber::WhisperTranscriptionOutput;
+use crate::transcription::TranscriptionSegment;
+
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt as _;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const SIDECAR_ABORT_ERROR: &str = "Vulkan sidecar request aborted";
 const DEFAULT_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(180);
 const MIN_TRANSCRIPTION_TIMEOUT_SECS: u64 = 180;
 const MAX_TRANSCRIPTION_TIMEOUT_SECS: u64 = 30 * 60;
@@ -74,6 +78,7 @@ enum SidecarRequest<'a> {
         audio_path: &'a str,
         language: Option<&'a str>,
         translate: bool,
+        initial_prompt: Option<&'a str>,
     },
 }
 
@@ -91,6 +96,14 @@ impl SidecarRequest<'_> {
         }
     }
 }
+
+#[derive(Debug, Deserialize)]
+struct SidecarSegment {
+    start: f64,
+    end: f64,
+    text: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SidecarResponse {
@@ -110,7 +123,10 @@ enum SidecarResponse {
         ok: bool,
         backend: String,
         text: String,
-        inference_time_ms: u64,
+        transcript_language: Option<String>,
+        segments: Vec<SidecarSegment>,
+        audio_duration_ms: u64,
+        processing_duration_ms: u64,
     },
     Shutdown {
         id: u64,
@@ -249,10 +265,21 @@ impl Drop for GpuSidecarProcess {
     }
 }
 
+pub struct GpuTranscribeRequest<'a> {
+    pub model_path: &'a Path,
+    pub audio_path: &'a Path,
+    pub language: Option<&'a str>,
+    pub translate: bool,
+    pub initial_prompt: Option<&'a str>,
+    pub mode: &'a str,
+}
+
 pub struct GpuSidecarClient {
     next_id: AtomicU64,
     process: AsyncMutex<Option<GpuSidecarProcess>>,
     status: AsyncRwLock<AccelerationRuntimeStatus>,
+    abort_requested: AtomicBool,
+    abort_notify: tokio::sync::Notify,
 }
 
 impl Default for GpuSidecarClient {
@@ -267,6 +294,8 @@ impl GpuSidecarClient {
             next_id: AtomicU64::new(1),
             process: AsyncMutex::new(None),
             status: AsyncRwLock::new(AccelerationRuntimeStatus::default()),
+            abort_requested: AtomicBool::new(false),
+            abort_notify: tokio::sync::Notify::new(),
         }
     }
 
@@ -275,12 +304,19 @@ impl GpuSidecarClient {
     }
 
     pub async fn abort_active_process(&self) {
-        let mut guard = self.process.lock().await;
-        if let Some(process) = guard.as_mut() {
-            log::info!("Aborting active Whisper Vulkan sidecar process");
-            process.kill_and_wait().await;
+        self.abort_requested.store(true, Ordering::SeqCst);
+        self.abort_notify.notify_waiters();
+
+        if let Ok(mut guard) =
+            tokio::time::timeout(Duration::from_millis(250), self.process.lock()).await
+        {
+            if let Some(process) = guard.as_mut() {
+                log::info!("Aborting active Whisper Vulkan sidecar process");
+                process.kill_and_wait().await;
+            }
+            guard.take();
+            self.abort_requested.store(false, Ordering::SeqCst);
         }
-        guard.take();
     }
 
     pub async fn set_cpu_status(&self, mode: &str, message: impl Into<String>) {
@@ -382,19 +418,22 @@ impl GpuSidecarClient {
     pub async fn transcribe(
         &self,
         app: &AppHandle,
-        model_path: &Path,
-        audio_path: &Path,
-        language: Option<&str>,
-        translate: bool,
-        mode: &str,
-    ) -> Result<String, String> {
-        let model_path = model_path
-            .to_str()
-            .ok_or_else(|| format!("Model path contains invalid UTF-8: {:?}", model_path))?;
-        let audio_path = audio_path
-            .to_str()
-            .ok_or_else(|| format!("Audio path contains invalid UTF-8: {:?}", audio_path))?;
+        request: GpuTranscribeRequest<'_>,
+    ) -> Result<WhisperTranscriptionOutput, String> {
+        let model_path = request.model_path.to_str().ok_or_else(|| {
+            format!(
+                "Model path contains invalid UTF-8: {:?}",
+                request.model_path
+            )
+        })?;
+        let audio_path = request.audio_path.to_str().ok_or_else(|| {
+            format!(
+                "Audio path contains invalid UTF-8: {:?}",
+                request.audio_path
+            )
+        })?;
         let id = self.next_request_id();
+        let mode = request.mode;
 
         match self
             .send(
@@ -403,8 +442,9 @@ impl GpuSidecarClient {
                     id,
                     model_path,
                     audio_path,
-                    language,
-                    translate,
+                    language: request.language,
+                    translate: request.translate,
+                    initial_prompt: request.initial_prompt,
                 },
             )
             .await
@@ -413,7 +453,10 @@ impl GpuSidecarClient {
                 ok: true,
                 backend,
                 text,
-                inference_time_ms,
+                transcript_language,
+                segments,
+                audio_duration_ms,
+                processing_duration_ms,
                 ..
             }) => {
                 *self.status.write().await = AccelerationRuntimeStatus {
@@ -421,13 +464,19 @@ impl GpuSidecarClient {
                     effective_backend: backend,
                     gpu_available: Some(true),
                     message: format!(
-                        "Last transcription used GPU acceleration ({inference_time_ms}ms)."
+                        "Last transcription used GPU acceleration ({processing_duration_ms}ms)."
                     ),
                     last_error: None,
                     diagnostic_code: "ready".to_string(),
                     recommended_action: "none".to_string(),
                 };
-                Ok(text)
+                Ok(WhisperTranscriptionOutput {
+                    raw_text: text,
+                    transcript_language,
+                    segments: sidecar_segments_to_transcription_segments(segments),
+                    audio_duration_ms,
+                    processing_duration_ms,
+                })
             }
             Ok(SidecarResponse::Error { code, message, .. }) => {
                 let error = format!("{code}: {message}");
@@ -442,7 +491,11 @@ impl GpuSidecarClient {
                 Err(error)
             }
             Err(error) => {
-                self.record_gpu_error(mode, &error).await;
+                // An intentional abort (user cancel / watchdog) is not a GPU fault —
+                // recording it would wrongly mark GPU unavailable for later recordings.
+                if error != SIDECAR_ABORT_ERROR {
+                    self.record_gpu_error(mode, &error).await;
+                }
                 Err(error)
             }
         }
@@ -454,22 +507,47 @@ impl GpuSidecarClient {
         request: &SidecarRequest<'_>,
     ) -> Result<SidecarResponse, String> {
         let mut guard = self.process.lock().await;
+        self.abort_requested.store(false, Ordering::SeqCst);
         if guard.is_none() {
             guard.replace(GpuSidecarProcess::spawn(app).await?);
         }
 
         let result = match guard.as_mut() {
-            Some(process) => process.request(request).await,
+            Some(process) => {
+                let abort_notified = self.abort_notify.notified();
+                tokio::pin!(abort_notified);
+                if self.abort_requested.load(Ordering::SeqCst) {
+                    Err(SIDECAR_ABORT_ERROR.to_string())
+                } else {
+                    tokio::select! {
+                        biased;
+                        _ = &mut abort_notified => Err(SIDECAR_ABORT_ERROR.to_string()),
+                        res = process.request(request) => res,
+                    }
+                }
+            }
             None => Err("Vulkan sidecar was not started".to_string()),
         };
 
         let response = match result {
-            Ok(response) => response,
+            Ok(response) => {
+                if self.abort_requested.swap(false, Ordering::SeqCst) {
+                    if let Some(process) = guard.as_mut() {
+                        process.kill_and_wait().await;
+                    }
+                    guard.take();
+                    return Err(SIDECAR_ABORT_ERROR.to_string());
+                }
+                response
+            }
             Err(error) => {
                 if let Some(process) = guard.as_mut() {
                     process.kill_and_wait().await;
                 }
                 guard.take();
+                if error == SIDECAR_ABORT_ERROR {
+                    self.abort_requested.store(false, Ordering::SeqCst);
+                }
                 return Err(error);
             }
         };
@@ -507,6 +585,38 @@ impl GpuSidecarClient {
 
     fn next_request_id(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    fn abort_pending(&self) -> bool {
+        self.abort_requested.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    fn abort_notified_for_test(&self) -> impl std::future::Future<Output = ()> + '_ {
+        self.abort_notify.notified()
+    }
+}
+
+fn sidecar_segments_to_transcription_segments(
+    segments: Vec<SidecarSegment>,
+) -> Vec<TranscriptionSegment> {
+    segments
+        .into_iter()
+        .map(|segment| TranscriptionSegment {
+            text: segment.text,
+            start_ms: seconds_to_duration_ms(segment.start),
+            end_ms: seconds_to_duration_ms(segment.end),
+            speaker_id: None,
+        })
+        .collect()
+}
+
+fn seconds_to_duration_ms(seconds: f64) -> Option<u64> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        None
+    } else {
+        Some((seconds * 1000.0) as u64)
     }
 }
 
@@ -754,12 +864,50 @@ fn dev_sidecar_cwd() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_gpu_error, should_attempt_vulkan_warm_on_preload, sidecar_search_dirs,
-        transcription_timeout_for_duration, SidecarRequest, SidecarResponse,
-        CONTROL_REQUEST_TIMEOUT, DEFAULT_TRANSCRIPTION_TIMEOUT, MAX_TRANSCRIPTION_TIMEOUT_SECS,
-        MIN_TRANSCRIPTION_TIMEOUT_SECS,
+        classify_gpu_error, seconds_to_duration_ms, should_attempt_vulkan_warm_on_preload,
+        sidecar_search_dirs, sidecar_segments_to_transcription_segments,
+        transcription_timeout_for_duration, GpuSidecarClient, SidecarRequest, SidecarResponse,
+        SidecarSegment, CONTROL_REQUEST_TIMEOUT, DEFAULT_TRANSCRIPTION_TIMEOUT,
+        MAX_TRANSCRIPTION_TIMEOUT_SECS, MIN_TRANSCRIPTION_TIMEOUT_SECS,
     };
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn abort_sets_flag_and_is_consumed() {
+        let client = GpuSidecarClient::new();
+
+        tokio::time::timeout(Duration::from_secs(1), client.abort_active_process())
+            .await
+            .expect("idle abort should not wait for the full timeout");
+
+        assert!(!client.abort_pending());
+    }
+
+    #[tokio::test]
+    async fn notify_wakes_waiter() {
+        let client = Arc::new(GpuSidecarClient::new());
+        let waiter_client = Arc::clone(&client);
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let waiter = tokio::spawn(async move {
+            let notified = waiter_client.abort_notified_for_test();
+            ready_tx
+                .send(())
+                .expect("waiter readiness signal should send");
+            notified.await;
+        });
+
+        ready_rx
+            .await
+            .expect("waiter readiness signal should be received");
+        client.abort_active_process().await;
+
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("abort notify should wake waiter")
+            .expect("waiter task should complete");
+    }
 
     #[test]
     fn sidecar_search_dirs_do_not_traverse_parent_directories() {
@@ -790,6 +938,7 @@ mod tests {
             audio_path: "missing-audio.wav",
             language: None,
             translate: false,
+            initial_prompt: None,
         };
 
         assert_eq!(probe.response_timeout(), CONTROL_REQUEST_TIMEOUT);
@@ -879,16 +1028,39 @@ mod tests {
         ));
 
         let transcription = serde_json::from_str::<SidecarResponse>(
-            r#"{"type":"transcription","id":8,"ok":true,"backend":"vulkan","text":"hello","inference_time_ms":456}"#,
+            r#"{"type":"transcription","id":8,"ok":true,"backend":"vulkan","text":"hello","transcript_language":"en","segments":[{"start":0.0,"end":1.5,"text":"hello"}],"audio_duration_ms":1500,"processing_duration_ms":456}"#,
         )
         .expect("transcription response should parse");
         assert!(matches!(
             transcription,
             SidecarResponse::Transcription {
                 id: 8,
-                inference_time_ms: 456,
+                processing_duration_ms: 456,
+                audio_duration_ms: 1500,
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn sidecar_segments_map_to_transcription_segments_without_speaker_id() {
+        let segments = sidecar_segments_to_transcription_segments(vec![SidecarSegment {
+            start: 0.5,
+            end: 2.25,
+            text: "hello".to_string(),
+        }]);
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "hello");
+        assert_eq!(segments[0].start_ms, Some(500));
+        assert_eq!(segments[0].end_ms, Some(2250));
+        assert_eq!(segments[0].speaker_id, None);
+    }
+
+    #[test]
+    fn seconds_to_duration_ms_rejects_invalid_values() {
+        assert_eq!(seconds_to_duration_ms(-1.0), None);
+        assert_eq!(seconds_to_duration_ms(f64::NAN), None);
+        assert_eq!(seconds_to_duration_ms(0.0), Some(0));
     }
 }

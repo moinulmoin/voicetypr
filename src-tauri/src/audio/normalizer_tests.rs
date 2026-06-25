@@ -1,4 +1,4 @@
-use super::normalizer::normalize_to_whisper_wav;
+use super::normalizer::{normalize_to_whisper_wav, peak_normalization_gain};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use std::f32::consts::PI;
 use std::fs;
@@ -40,6 +40,173 @@ fn write_sine_wav(
         }
     }
     writer.finalize().expect("finalize wav");
+}
+
+fn write_noise_wav(path: &Path, sample_rate: u32, secs: f32, amp: f32) {
+    let spec = WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
+    };
+    let mut writer = WavWriter::create(path, spec).expect("create wav");
+    let total_frames = (secs * sample_rate as f32) as usize;
+    let mut state = 0x1234_5678u32;
+
+    for _ in 0..total_frames {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let unit = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+        let sample = (unit * amp).clamp(-1.0, 1.0);
+        writer
+            .write_sample((sample * 32767.0) as i16)
+            .expect("write sample");
+    }
+
+    writer.finalize().expect("finalize wav");
+}
+
+/// Mono tone bursts separated by true silence — a syllabic envelope so the
+/// modulation gate sees a wide loud-vs-quiet swing (like real quiet speech),
+/// unlike a continuous tone or steady noise.
+fn write_gapped_tone_wav(
+    path: &Path,
+    sample_rate: u32,
+    secs: f32,
+    amp: f32,
+    freq: f32,
+    on_ms: u32,
+    off_ms: u32,
+) {
+    let spec = WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
+    };
+    let mut writer = WavWriter::create(path, spec).expect("create wav");
+    let total_frames = (secs * sample_rate as f32) as usize;
+    let on_frames = (on_ms * sample_rate / 1000) as usize;
+    let off_frames = (off_ms * sample_rate / 1000) as usize;
+    let cycle = (on_frames + off_frames).max(1);
+
+    for n in 0..total_frames {
+        let sample = if (n % cycle) < on_frames {
+            let t = n as f32 / sample_rate as f32;
+            (amp * (2.0 * PI * freq * t).sin()).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        writer
+            .write_sample((sample * 32767.0) as i16)
+            .expect("write sample");
+    }
+    writer.finalize().expect("finalize wav");
+}
+
+fn read_peak(path: &Path) -> f32 {
+    let samples: Vec<i16> = hound::WavReader::open(path)
+        .expect("open wav")
+        .samples::<i16>()
+        .map(|s| s.unwrap())
+        .collect();
+    samples
+        .iter()
+        .map(|&sample| i32::from(sample).abs())
+        .max()
+        .unwrap_or(0) as f32
+        / i16::MAX as f32
+}
+
+#[test]
+fn speech_gated_gain_boosts_soft_gapped_speech_beyond_previous_cap() {
+    let input = temp_file("soft_speech_in.wav");
+    let out_dir = temp_file("soft_speech_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    // Soft, syllabic (gapped) tone ~ real quiet speech: voiced bursts + silent gaps.
+    write_gapped_tone_wav(&input, 16_000, 1.2, 0.03, 220.0, 200, 120);
+
+    let out_path = normalize_to_whisper_wav(&input, &out_dir).expect("normalize");
+    let peak = read_peak(&out_path);
+
+    assert!(
+        peak > 0.65 && peak <= 0.85,
+        "soft gapped speech should reach the target peak instead of the previous ~0.30 cap; got {peak}"
+    );
+
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn speech_gated_gain_keeps_steady_moderate_noise_capped() {
+    let input = temp_file("steady_noise_in.wav");
+    let out_dir = temp_file("steady_noise_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    // Moderate steady ambient (~fan/HVAC): RMS above the voice floor but a flat
+    // envelope. Must stay at the historical 10x cap, not the 32x quiet-speech cap.
+    write_noise_wav(&input, 16_000, 0.6, 0.012);
+
+    let out_path = normalize_to_whisper_wav(&input, &out_dir).expect("normalize");
+    let peak = read_peak(&out_path);
+
+    assert!(
+        peak <= 0.13,
+        "steady moderate noise must stay near the 10x cap (~0.12), not be speech-boosted; got {peak}"
+    );
+
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn speech_gated_gain_keeps_steady_tone_capped() {
+    let input = temp_file("steady_tone_in.wav");
+    let out_dir = temp_file("steady_tone_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    // A continuous tone has voiced energy but a flat envelope -> not speech-like.
+    write_sine_wav(&input, 16_000, 1, 0.5, 0.03, 220.0, &[]);
+
+    let out_path = normalize_to_whisper_wav(&input, &out_dir).expect("normalize");
+    let peak = read_peak(&out_path);
+
+    assert!(
+        peak <= 0.33,
+        "a steady tone must stay near the 10x cap (~0.30), not be speech-boosted; got {peak}"
+    );
+
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn speech_gated_gain_keeps_near_silent_noise_at_previous_cap() {
+    let input = temp_file("near_silent_noise_in.wav");
+    let out_dir = temp_file("near_silent_noise_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    write_noise_wav(&input, 16_000, 0.5, 0.0004);
+
+    let out_path = normalize_to_whisper_wav(&input, &out_dir).expect("normalize");
+    let peak = read_peak(&out_path);
+
+    assert!(
+        peak <= 0.006,
+        "near-silent noise should stay near the historical 10x cap, not be speech-boosted; got {peak}"
+    );
+
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn speech_gated_gain_leaves_normal_loud_peak_limited_clips_unchanged() {
+    assert_eq!(peak_normalization_gain(0.5, false), 1.6);
+    assert_eq!(peak_normalization_gain(0.5, true), 1.6);
+    assert_eq!(peak_normalization_gain(0.08, false), 10.0);
+    assert_eq!(peak_normalization_gain(0.08, true), 10.0);
 }
 
 #[test]
@@ -137,6 +304,73 @@ fn normalize_downmix_ignores_silent_channel() {
     assert!(!samples.is_empty());
     let max = samples.iter().map(|s| s.abs() as i32).max().unwrap();
     assert!(max > 0, "output should not be silent");
+
+    // Cleanup
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn normalize_resamples_44100_to_16k_preserves_duration() {
+    let input = temp_file("resample_44100_in.wav");
+    let out_dir = temp_file("resample_44100_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    // 1 second of 1 kHz sine at 44.1 kHz, mono
+    write_sine_wav(&input, 44_100, 1, 1.0, 0.5, 1000.0, &[]);
+
+    let out_path = normalize_to_whisper_wav(&input, &out_dir).expect("normalize 44.1kHz");
+
+    let reader = hound::WavReader::open(&out_path).expect("open normalized");
+    let spec = reader.spec();
+    // Executor skip criteria: 16000 Hz / mono / 16-bit / Int
+    assert_eq!(spec.sample_rate, 16_000);
+    assert_eq!(spec.channels, 1);
+    assert_eq!(spec.bits_per_sample, 16);
+    assert_eq!(spec.sample_format, SampleFormat::Int);
+
+    // Duration should be roughly preserved (1.0 s input → ~1.0 s output, ±0.05 s tolerance)
+    let frames = reader.duration();
+    let duration = frames as f32 / spec.sample_rate as f32;
+    assert!(
+        (duration - 1.0).abs() < 0.05,
+        "duration {}s not ~1.0s after 44.1kHz→16kHz resample",
+        duration
+    );
+
+    // Cleanup
+    let _ = fs::remove_file(&input);
+    let _ = fs::remove_file(&out_path);
+    let _ = fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn normalize_very_short_non_empty_wav_outputs_valid_16k_mono_s16() {
+    let input = temp_file("very_short_in.wav");
+    let out_dir = temp_file("very_short_out_dir");
+    let _ = fs::create_dir_all(&out_dir);
+    // 0.1 s (well below the 0.5 s duration gate) — the normalizer must still succeed;
+    // the duration gate that rejects short clips operates AFTER normalization, not inside it.
+    write_sine_wav(&input, 16_000, 1, 0.1, 0.6, 440.0, &[]);
+
+    let out_path = normalize_to_whisper_wav(&input, &out_dir)
+        .expect("normalizer must succeed even on very short input");
+
+    let reader = hound::WavReader::open(&out_path).expect("open normalized");
+    let spec = reader.spec();
+    // Must satisfy all executor skip criteria regardless of duration
+    assert_eq!(spec.sample_rate, 16_000);
+    assert_eq!(spec.channels, 1);
+    assert_eq!(spec.bits_per_sample, 16);
+    assert_eq!(spec.sample_format, SampleFormat::Int);
+
+    // Must contain non-empty audio
+    let samples: Vec<i16> = hound::WavReader::open(&out_path)
+        .expect("re-open normalized")
+        .samples::<i16>()
+        .map(|s| s.unwrap())
+        .collect();
+    assert!(!samples.is_empty(), "output must be non-empty");
 
     // Cleanup
     let _ = fs::remove_file(&input);

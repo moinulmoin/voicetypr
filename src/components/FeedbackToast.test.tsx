@@ -1,7 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FeedbackToast } from "./FeedbackToast";
 import { emitMockEvent } from "@/test/setup";
+import { FeedbackToast } from "./FeedbackToast";
 
 describe("FeedbackToast", () => {
   beforeEach(() => {
@@ -15,31 +15,23 @@ describe("FeedbackToast", () => {
     vi.useRealTimers();
   });
 
-  it("shows transient info toast and auto-clears after duration", () => {
+  it("keeps legacy message-based severity inference", () => {
     render(<FeedbackToast />);
 
     act(() => {
       emitMockEvent("toast", {
         id: 1,
-        action: "show",
-        message: "Saved",
-        duration_ms: 1500,
-        variant: "info",
-        persistent: false,
+        message: "Upload failed",
+        duration_ms: 2000,
       });
     });
 
-    expect(screen.getByRole("status")).toHaveTextContent("Saved");
-    expect(screen.getByRole("status")).toHaveClass("bg-black");
-
-    act(() => {
-      vi.advanceTimersByTime(1500);
-    });
-
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Upload failed");
+    expect(status).toHaveClass("bg-amber-950");
   });
 
-  it("shows persistent warning and does not auto-clear", () => {
+  it("does not auto-clear a persistent warning toast", () => {
     render(<FeedbackToast />);
 
     act(() => {
@@ -47,7 +39,7 @@ describe("FeedbackToast", () => {
         id: 2,
         action: "show",
         message: "Long silence detected",
-        duration_ms: 1500,
+        duration_ms: 1000,
         variant: "warning",
         persistent: true,
       });
@@ -62,21 +54,21 @@ describe("FeedbackToast", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Long silence detected");
   });
 
-  it("clear payload hides current toast", () => {
+  it("clears the current toast when clear id matches", () => {
     render(<FeedbackToast />);
 
     act(() => {
       emitMockEvent("toast", {
         id: 3,
         action: "show",
-        message: "Mic check",
-        duration_ms: 0,
+        message: "No audio detected",
+        duration_ms: 1000,
         variant: "warning",
         persistent: true,
       });
     });
 
-    expect(screen.getByRole("status")).toHaveTextContent("Mic check");
+    expect(screen.getByRole("status")).toHaveTextContent("No audio detected");
 
     act(() => {
       emitMockEvent("toast", {
@@ -84,91 +76,93 @@ describe("FeedbackToast", () => {
         action: "clear",
         message: "",
         duration_ms: 0,
-        variant: "info",
-        persistent: false,
       });
     });
 
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("stale transient timer does not clear newer persistent warning", () => {
-    render(<FeedbackToast />);
-
-    act(() => {
-      emitMockEvent("toast", {
-        id: 10,
-        action: "show",
-        message: "Brief info",
-        duration_ms: 2000,
-        variant: "info",
-        persistent: false,
-      });
-    });
-
-    expect(screen.getByRole("status")).toHaveTextContent("Brief info");
-
-    act(() => {
-      emitMockEvent("toast", {
-        id: 11,
-        action: "show",
-        message: "No audio detected",
-        duration_ms: 2000,
-        variant: "warning",
-        persistent: true,
-      });
-    });
-
-    expect(screen.getByRole("status")).toHaveTextContent("No audio detected");
-
-    act(() => {
-      vi.advanceTimersByTime(2000);
-    });
-
-    expect(screen.getByRole("status")).toHaveTextContent("No audio detected");
-  });
-
-  it("warning variant renders TriangleAlert and warning styles", () => {
+  it("does not let a stale clear hide a newer toast", () => {
     render(<FeedbackToast />);
 
     act(() => {
       emitMockEvent("toast", {
         id: 4,
         action: "show",
-        message: "Check microphone",
+        message: "Long silence detected",
+        duration_ms: 1000,
+        variant: "warning",
+        persistent: true,
+      });
+      emitMockEvent("toast", {
+        id: 5,
+        action: "show",
+        message: "Copied transcript",
+        duration_ms: 5000,
+      });
+      emitMockEvent("toast", {
+        id: 4,
+        action: "clear",
+        message: "",
         duration_ms: 0,
+      });
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent("Copied transcript");
+    expect(screen.getByRole("status")).toHaveClass("bg-black");
+  });
+
+  it("renders the warning treatment for warning variant payloads", () => {
+    render(<FeedbackToast />);
+
+    act(() => {
+      emitMockEvent("toast", {
+        id: 6,
+        action: "show",
+        message: "Check your microphone",
+        duration_ms: 1000,
         variant: "warning",
         persistent: true,
       });
     });
 
     const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Check your microphone");
     expect(status).toHaveClass("bg-amber-950");
-    expect(status).toHaveTextContent("Check microphone");
-
-    const alertIcon = status.querySelector("svg.text-amber-300");
-    expect(alertIcon).toBeInTheDocument();
   });
 
-  it("defaults missing payload fields for legacy info toasts", () => {
+  it("renders suggestion as a second line when present", () => {
     render(<FeedbackToast />);
 
     act(() => {
       emitMockEvent("toast", {
-        id: 5,
-        message: "Legacy toast",
-        duration_ms: 1000,
+        id: 7,
+        message: "Microphone access denied",
+        duration_ms: 5000,
+        suggestion: "Open System Settings > Privacy & Security > Microphone to grant access.",
       });
     });
 
     const status = screen.getByRole("status");
-    expect(status).toHaveTextContent("Legacy toast");
-    expect(status).toHaveClass("bg-black");
+    expect(status).toHaveTextContent("Microphone access denied");
+    expect(status).toHaveTextContent("Open System Settings > Privacy & Security > Microphone to grant access.");
+  });
+
+  it("renders only the message when suggestion is absent", () => {
+    render(<FeedbackToast />);
 
     act(() => {
-      vi.advanceTimersByTime(1000);
+      emitMockEvent("toast", {
+        id: 8,
+        message: "Recording failed",
+        duration_ms: 3000,
+      });
     });
 
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Recording failed");
+    // No suggestion line: only the separator span and the message span render.
+    const spans = status.querySelectorAll("span");
+    expect(spans).toHaveLength(2);
   });
 });

@@ -162,6 +162,101 @@ pub fn validate_key_combination(shortcut: &str) -> Result<(), String> {
     validate_key_combination_with_rules(shortcut, &KeyValidationRules::standard())
 }
 
+/// Validate a shortcut for contexts that explicitly allow safe single-key hotkeys.
+///
+/// Single keys are restricted to non-typing keys so a global shortcut cannot
+/// capture normal text input everywhere. Multi-key shortcuts keep the standard
+/// global-hotkey rules.
+pub fn validate_key_combination_allowing_safe_single_key(shortcut: &str) -> Result<(), String> {
+    if is_single_key_shortcut(shortcut) {
+        validate_key_combination_with_rules(
+            shortcut,
+            &KeyValidationRules {
+                min_keys: 1,
+                max_keys: 5,
+                require_modifier: false,
+                require_modifier_for_multi_key: true,
+            },
+        )?;
+
+        if !is_typing_safe_single_key(shortcut) {
+            return Err(single_key_safety_error());
+        }
+
+        return Ok(());
+    }
+
+    reject_single_modifier_only(shortcut)?;
+    validate_key_combination(shortcut)
+}
+
+fn reject_single_modifier_only(shortcut: &str) -> Result<(), String> {
+    let mut parts = shortcut.split('+');
+    let Some(first) = parts.next() else {
+        return Err("Shortcut is required".to_string());
+    };
+    if parts.next().is_none() && is_modifier(first) {
+        return Err("Single modifier-only shortcuts are not allowed".to_string());
+    }
+    Ok(())
+}
+
+pub fn is_single_key_shortcut(shortcut: &str) -> bool {
+    let mut parts = shortcut.split('+');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    !first.is_empty() && parts.next().is_none() && !is_modifier(first)
+}
+
+/// Allowlist of keys safe to bind as single-key global shortcuts.
+/// Only keys that don't appear in normal typing are permitted.
+/// Default-deny: any key not listed here returns false.
+pub fn is_typing_safe_single_key(shortcut: &str) -> bool {
+    // Function keys F1-F24
+    if let Some(rest) = shortcut.strip_prefix('F') {
+        if rest.len() <= 2 {
+            if let Ok(num) = rest.parse::<u8>() {
+                if (1..=24).contains(&num) {
+                    return true;
+                }
+            }
+        }
+    }
+    // Numpad keys (Numpad0-Numpad9, NumpadAdd, etc.)
+    if shortcut.starts_with("Numpad") {
+        return true;
+    }
+    // Navigation cluster (non-typing)
+    matches!(
+        shortcut,
+        "Home" | "End" | "PageUp" | "PageDown" | "Insert" | "Up" | "Down" | "Left" | "Right"
+    )
+}
+
+fn single_key_safety_error() -> String {
+    "Single-key shortcuts must be a function key (F1-F24), a numpad key, \
+     or a navigation key (arrows/Home/End/Page Up/Page Down/Insert) \
+     -- typing keys like letters would be captured everywhere."
+        .to_string()
+}
+
+fn is_modifier(key: &str) -> bool {
+    matches!(
+        key,
+        "CommandOrControl"
+            | "Shift"
+            | "Alt"
+            | "Control"
+            | "Command"
+            | "Cmd"
+            | "Ctrl"
+            | "Option"
+            | "Meta"
+            | "Super" // Super will be normalized to CommandOrControl
+    )
+}
+
 /// Validate that a key combination is allowed with custom rules
 pub fn validate_key_combination_with_rules(
     shortcut: &str,
@@ -182,25 +277,7 @@ pub fn validate_key_combination_with_rules(
         ));
     }
 
-    // Check modifier requirements
-    let is_modifier = |key: &str| -> bool {
-        matches!(
-            key,
-            "CommandOrControl"
-                | "Shift"
-                | "Alt"
-                | "Control"
-                | "Command"
-                | "Cmd"
-                | "Ctrl"
-                | "Option"
-                | "Meta"
-                | "Super" // Super will be normalized to CommandOrControl
-        )
-    };
-
     let has_modifier = parts.iter().any(|&key| is_modifier(key));
-
     if rules.require_modifier && !has_modifier {
         return Err("At least one modifier key is required".to_string());
     }
@@ -319,7 +396,13 @@ mod tests {
     fn test_validate_key_combination() {
         assert!(validate_key_combination("CommandOrControl+A").is_ok());
         assert!(validate_key_combination("Shift+Alt+F1").is_ok());
-        assert!(validate_key_combination("A").is_err()); // Single key not allowed
+        assert!(validate_key_combination("A").is_err()); // Single key not allowed by default
+        assert!(validate_key_combination_allowing_safe_single_key("F1").is_ok());
+        assert!(validate_key_combination_allowing_safe_single_key("Home").is_ok());
+        assert!(validate_key_combination_allowing_safe_single_key("Up").is_ok());
+        assert!(validate_key_combination_allowing_safe_single_key("NumpadAdd").is_ok());
+        assert!(validate_key_combination_allowing_safe_single_key("A").is_err());
+        assert!(validate_key_combination_allowing_safe_single_key("CommandOrControl").is_err());
         assert!(validate_key_combination("A+B").is_err()); // Multi-key without modifier not allowed
         assert!(validate_key_combination("A+CommandOrControl").is_err()); // Must start with modifier
         assert!(validate_key_combination("Space+Shift").is_err()); // Must start with modifier

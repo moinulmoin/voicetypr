@@ -1,6 +1,10 @@
 use crate::commands::audio::{
     start_recording, stop_recording, RecorderState, PTT_START_ABORTED_AFTER_RELEASE,
 };
+use crate::commands::shortcuts::{
+    self, hold_shortcut_transition, pressed_shortcut_should_run, CustomHoldTransition,
+    RegisteredShortcutBinding, ShortcutAction, ShortcutTrigger,
+};
 use crate::recording::escape_handler::handle_escape_key_press;
 use crate::{get_recording_state, update_recording_state, AppState, RecordingMode, RecordingState};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,6 +30,11 @@ pub fn handle_global_shortcut(
         log::warn!("Global shortcut triggered before AppState initialized");
         return;
     };
+
+    if let Some(binding) = shortcuts::matching_custom_binding(&app_state, shortcut) {
+        dispatch_custom_shortcut(app, &app_state, binding, event_state);
+        return;
+    }
 
     let recording_mode = {
         if let Ok(mode_guard) = app_state.recording_mode.lock() {
@@ -63,39 +72,51 @@ pub fn handle_global_shortcut(
         should_handle_recording_shortcut(recording_mode, is_recording_shortcut, is_ptt_shortcut);
 
     if should_handle {
-        let event_state_label = match event_state {
-            ShortcutState::Pressed => "pressed",
-            ShortcutState::Released => "released",
-        };
-        let event_kind = if is_ptt_shortcut && !is_recording_shortcut {
-            "ptt"
-        } else {
-            "recording"
-        };
-        app_state.record_handled_hotkey_event(event_kind, event_state_label);
-
         let current_state = get_recording_state(app);
-        handle_recording_shortcut(app, &app_state, recording_mode, current_state, event_state);
+        match recording_mode {
+            RecordingMode::Toggle => {
+                handle_toggle_mode(app, &app_state, current_state, event_state);
+            }
+            RecordingMode::PushToTalk => {
+                let source_id = if is_ptt_shortcut {
+                    "__builtin_ptt_shortcut"
+                } else {
+                    "__builtin_recording_shortcut"
+                };
+                handle_hold_to_record_source(app, &app_state, source_id, event_state);
+            }
+        }
     } else if !is_recording_shortcut && !is_ptt_shortcut {
         handle_non_recording_shortcut(app, shortcut, event_state);
     }
 }
 
-/// Handle recording-related shortcuts (toggle or PTT)
-fn handle_recording_shortcut(
+fn handle_hold_to_record_source(
     app: &tauri::AppHandle,
     app_state: &AppState,
-    recording_mode: RecordingMode,
-    current_state: RecordingState,
+    source_id: &str,
     event_state: ShortcutState,
 ) {
-    match recording_mode {
-        RecordingMode::Toggle => {
-            handle_toggle_mode(app, app_state, current_state, event_state);
+    let transition = match app_state.active_custom_hold_bindings.lock() {
+        Ok(mut active_bindings) => {
+            hold_shortcut_transition(&mut active_bindings, source_id, event_state)
         }
-        RecordingMode::PushToTalk => {
-            handle_ptt_mode(app, app_state, current_state, event_state);
+        Err(error) => {
+            log::error!("Failed to lock active hold bindings: {}", error);
+            CustomHoldTransition::Noop
         }
+    };
+
+    match transition {
+        CustomHoldTransition::Start => {
+            let current_state = get_recording_state(app);
+            handle_ptt_mode(app, app_state, current_state, ShortcutState::Pressed);
+        }
+        CustomHoldTransition::Stop => {
+            let current_state = get_recording_state(app);
+            handle_ptt_mode(app, app_state, current_state, ShortcutState::Released);
+        }
+        CustomHoldTransition::Noop => {}
     }
 }
 
@@ -106,7 +127,7 @@ fn should_handle_recording_shortcut(
 ) -> bool {
     match recording_mode {
         // Toggle mode needs both Pressed and Released events so repeated
-        // Windows key-repeat Pressed events can be tied to a single physical hold.
+        // Windows key-repeat Pressed events map to one physical hold.
         RecordingMode::Toggle => is_recording_shortcut,
         RecordingMode::PushToTalk => is_recording_shortcut || is_ptt_shortcut,
     }
@@ -201,10 +222,6 @@ fn claim_toggle_press(toggle_key_held: &AtomicBool) -> bool {
     !toggle_key_held.swap(true, Ordering::SeqCst)
 }
 
-fn claim_ptt_press(ptt_key_held: &AtomicBool) -> bool {
-    !ptt_key_held.swap(true, Ordering::SeqCst)
-}
-
 /// Handle push-to-talk mode recording (hold to record, release to stop)
 fn handle_ptt_mode(
     app: &tauri::AppHandle,
@@ -215,11 +232,7 @@ fn handle_ptt_mode(
     match event_state {
         ShortcutState::Pressed => {
             log::info!("PTT: Key pressed");
-
-            if !claim_ptt_press(&app_state.ptt_key_held) {
-                log::debug!("PTT: Ignoring duplicate key press");
-                return;
-            }
+            app_state.ptt_key_held.store(true, Ordering::Relaxed);
 
             if matches!(current_state, RecordingState::Idle | RecordingState::Error) {
                 log::info!("PTT: Starting recording");
@@ -282,6 +295,183 @@ fn handle_ptt_mode(
     }
 }
 
+fn should_dispatch_custom_pressed_binding(
+    active_bindings: &mut std::collections::HashSet<String>,
+    binding_id: &str,
+    action: ShortcutAction,
+    event_state: ShortcutState,
+) -> bool {
+    let should_run = pressed_shortcut_should_run(active_bindings, binding_id, event_state);
+    should_run
+        || (action == ShortcutAction::ToggleRecording && event_state == ShortcutState::Released)
+}
+
+fn dispatch_custom_shortcut(
+    app: &tauri::AppHandle,
+    app_state: &AppState,
+    binding: RegisteredShortcutBinding,
+    event_state: ShortcutState,
+) {
+    dispatch_action(
+        app,
+        app_state,
+        &binding.id,
+        binding.action,
+        binding.trigger,
+        event_state,
+    );
+}
+
+/// Dispatch a shortcut action by (id, action, trigger). Shared by the legacy
+/// `global_shortcut` path and the native trigger engine so both run identical
+/// pressed/hold gating and action handling.
+pub(crate) fn dispatch_action(
+    app: &tauri::AppHandle,
+    app_state: &AppState,
+    id: &str,
+    action: ShortcutAction,
+    trigger: ShortcutTrigger,
+    event_state: ShortcutState,
+) {
+    if trigger == ShortcutTrigger::Pressed {
+        let should_dispatch = match app_state.active_custom_pressed_bindings.lock() {
+            Ok(mut active_bindings) => should_dispatch_custom_pressed_binding(
+                &mut active_bindings,
+                id,
+                action,
+                event_state,
+            ),
+            Err(error) => {
+                log::error!("Failed to lock active custom pressed bindings: {}", error);
+                false
+            }
+        };
+
+        if !should_dispatch {
+            return;
+        }
+    } else if action != ShortcutAction::HoldToRecord {
+        return;
+    }
+
+    match action {
+        ShortcutAction::ToggleRecording => {
+            let current_state = get_recording_state(app);
+            handle_toggle_mode(app, app_state, current_state, event_state);
+        }
+        ShortcutAction::HoldToRecord => {
+            if trigger != ShortcutTrigger::Hold {
+                return;
+            }
+            handle_hold_to_record_source(app, app_state, id, event_state);
+        }
+        ShortcutAction::CancelRecording => {
+            if event_state == ShortcutState::Pressed {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = crate::commands::audio::cancel_recording(app_handle).await {
+                        log::error!("Shortcut cancel_recording failed: {}", error);
+                    }
+                });
+            }
+        }
+        ShortcutAction::CopyLastTranscription => {
+            if event_state == ShortcutState::Pressed {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    match shortcuts::latest_copyable_transcription_text(&app_handle).await {
+                        Ok(Some(text)) => {
+                            if let Err(error) =
+                                crate::commands::text::copy_text_to_clipboard(text).await
+                            {
+                                log::error!("Shortcut copy_last_transcription failed: {}", error);
+                            }
+                        }
+                        Ok(None) => log::debug!(
+                            "Shortcut copy_last_transcription found no copyable history item"
+                        ),
+                        Err(error) => {
+                            log::error!("Shortcut copy_last_transcription failed: {}", error)
+                        }
+                    }
+                });
+            }
+        }
+        ShortcutAction::PasteLastTranscription => {
+            if event_state == ShortcutState::Pressed {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    match shortcuts::latest_copyable_transcription_text(&app_handle).await {
+                        Ok(Some(text)) => {
+                            if let Err(error) =
+                                crate::commands::text::insert_text(app_handle.clone(), text).await
+                            {
+                                log::error!("Shortcut paste_last_transcription failed: {}", error);
+                            }
+                        }
+                        Ok(None) => log::debug!(
+                            "Shortcut paste_last_transcription found no copyable history item"
+                        ),
+                        Err(error) => {
+                            log::error!("Shortcut paste_last_transcription failed: {}", error)
+                        }
+                    }
+                });
+            }
+        }
+        ShortcutAction::CycleFormattingMode => {
+            if event_state == ShortcutState::Pressed {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = shortcuts::cycle_formatting_preset(app_handle).await {
+                        log::error!("Shortcut cycle_formatting_mode failed: {}", error);
+                    }
+                });
+            }
+        }
+        ShortcutAction::ToggleAiFormatting => {
+            if event_state == ShortcutState::Pressed {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = shortcuts::toggle_ai_formatting(app_handle).await {
+                        log::error!("Shortcut toggle_ai_formatting failed: {e}");
+                    }
+                });
+            }
+        }
+        ShortcutAction::SetPersonalDictation
+        | ShortcutAction::SetCleanDictation
+        | ShortcutAction::SetWriting
+        | ShortcutAction::SetNotes
+        | ShortcutAction::SetMessage
+        | ShortcutAction::SetCode => {
+            if event_state == ShortcutState::Pressed {
+                if let Some(preset) = shortcuts::action_preset(action) {
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) =
+                            shortcuts::set_formatting_preset(app_handle, preset).await
+                        {
+                            log::error!("Shortcut set formatting mode failed: {}", error);
+                        }
+                    });
+                }
+            }
+        }
+        ShortcutAction::OpenDashboard => {
+            if event_state == ShortcutState::Pressed {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = crate::commands::window::focus_main_window(app_handle).await
+                    {
+                        log::error!("Shortcut open_dashboard failed: {}", error);
+                    }
+                });
+            }
+        }
+    }
+}
+
 /// Handle non-recording shortcuts (e.g., ESC key)
 fn handle_non_recording_shortcut(
     app: &tauri::AppHandle,
@@ -318,9 +508,16 @@ fn handle_non_recording_shortcut(
 
 #[cfg(test)]
 mod tests {
-    use super::{claim_ptt_press, claim_toggle_press, should_handle_recording_shortcut};
-    use crate::RecordingMode;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use super::{
+        claim_toggle_press, should_dispatch_custom_pressed_binding,
+        should_handle_recording_shortcut,
+    };
+    use crate::{commands::shortcuts::ShortcutAction, RecordingMode};
+    use std::{
+        collections::HashSet,
+        sync::atomic::{AtomicBool, Ordering},
+    };
+    use tauri_plugin_global_shortcut::ShortcutState;
 
     #[test]
     fn toggle_shortcut_events_are_handled_for_press_and_release() {
@@ -348,13 +545,40 @@ mod tests {
     }
 
     #[test]
-    fn claim_ptt_press_allows_only_first_press_until_release() {
+    fn custom_toggle_release_clears_held_state_for_next_press() {
+        let mut active_bindings = HashSet::new();
         let held = AtomicBool::new(false);
+        let binding_id = "custom-toggle";
 
-        assert!(claim_ptt_press(&held));
-        assert!(!claim_ptt_press(&held));
+        assert!(should_dispatch_custom_pressed_binding(
+            &mut active_bindings,
+            binding_id,
+            ShortcutAction::ToggleRecording,
+            ShortcutState::Pressed,
+        ));
+        assert!(claim_toggle_press(&held));
 
+        assert!(!should_dispatch_custom_pressed_binding(
+            &mut active_bindings,
+            binding_id,
+            ShortcutAction::ToggleRecording,
+            ShortcutState::Pressed,
+        ));
+
+        assert!(should_dispatch_custom_pressed_binding(
+            &mut active_bindings,
+            binding_id,
+            ShortcutAction::ToggleRecording,
+            ShortcutState::Released,
+        ));
         held.store(false, Ordering::SeqCst);
-        assert!(claim_ptt_press(&held));
+
+        assert!(should_dispatch_custom_pressed_binding(
+            &mut active_bindings,
+            binding_id,
+            ShortcutAction::ToggleRecording,
+            ShortcutState::Pressed,
+        ));
+        assert!(claim_toggle_press(&held));
     }
 }

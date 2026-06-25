@@ -13,15 +13,15 @@ This Swift sidecar replaces the previous 123MB Python/MLX implementation with a 
 
 ## Requirements
 
-- macOS 13.0+ (Ventura or later)
-- Swift 5.10+
-- Xcode Command Line Tools
+- macOS 14.0+ (Sonoma or later)
+- Swift 6.0+
+- Xcode 16 Command Line Tools
 
 ## Building
 
 ### Automated Build (via Tauri)
 
-The sidecar is automatically built when running `pnpm tauri dev` or `pnpm tauri build` thanks to the integration in `src-tauri/build.rs`.
+The sidecar is automatically built when running `pnpm tauri:dev` or `pnpm tauri build` thanks to the integration in `src-tauri/build.rs`.
 
 ### Manual Build
 

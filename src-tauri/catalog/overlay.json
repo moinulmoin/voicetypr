@@ -1,0 +1,41 @@
+{
+  "anthropic": {
+    "adapter": "Anthropic",
+    "auth": "api_key",
+    "label": "Anthropic",
+    "namespace": null,
+    "recommended": [
+      "claude-haiku-4-5",
+      "claude-sonnet-4-5"
+    ],
+    "runtime": "genai_adapter",
+    "snapshot_id": "anthropic",
+    "status": "production"
+  },
+  "gemini": {
+    "adapter": "Gemini",
+    "auth": "api_key",
+    "label": "Google Gemini",
+    "namespace": null,
+    "recommended": [
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite"
+    ],
+    "runtime": "genai_adapter",
+    "snapshot_id": "google",
+    "status": "production"
+  },
+  "openai": {
+    "adapter": "OpenAI",
+    "auth": "api_key",
+    "label": "OpenAI",
+    "namespace": null,
+    "recommended": [
+      "gpt-5-mini",
+      "gpt-5-nano"
+    ],
+    "runtime": "genai_adapter",
+    "snapshot_id": "openai",
+    "status": "production"
+  }
+}

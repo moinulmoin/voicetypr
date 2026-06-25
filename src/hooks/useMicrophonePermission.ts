@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("permissions");
 
 interface MicrophonePermissionOptions {
   // When false, skip the automatic check on mount and rely on explicit calls.
@@ -19,7 +22,7 @@ export function useMicrophonePermission(options?: MicrophonePermissionOptions) {
       setHasPermission(result);
       return result;
     } catch (error) {
-      console.error('Failed to check microphone permission:', error);
+      log.error('Failed to check microphone permission:', error);
       setHasPermission(false);
       return false;
     } finally {
@@ -33,7 +36,7 @@ export function useMicrophonePermission(options?: MicrophonePermissionOptions) {
       setHasPermission(result);
       return result;
     } catch (error) {
-      console.error('Failed to request microphone permission:', error);
+      log.error('Failed to request microphone permission:', error);
       return false;
     }
   }, []);
@@ -47,12 +50,12 @@ export function useMicrophonePermission(options?: MicrophonePermissionOptions) {
   // Listen for permission changes
   useEffect(() => {
     const unlistenGranted = listen('microphone-granted', () => {
-      console.log('[useMicrophonePermission] Permission granted event received');
+      log.info('[useMicrophonePermission] Permission granted event received');
       setHasPermission(true);
     });
 
     const unlistenDenied = listen('microphone-denied', () => {
-      console.log('[useMicrophonePermission] Permission denied event received');
+      log.info('[useMicrophonePermission] Permission denied event received');
       setHasPermission(false);
     });
 

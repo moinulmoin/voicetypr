@@ -4,7 +4,7 @@ Use this for every Microsoft Store submission/update. Keep direct GitHub install
 
 ## Recurring certification findings (check ALL every submission)
 
-VoiceTypr has been rejected for a different policy each round, so address all of these proactively:
+Voicetypr has been rejected for a different policy each round, so address all of these proactively:
 
 - **11.16 Live Generative AI Content** — AI text-cleanup uses OpenAI/Anthropic/Gemini. Partner Center -> Properties -> Product declarations -> check "This product incorporates generative AI features...". No code.
 - **10.2.4.1 Software Dependencies** — `vcomp140.dll` (VC++ OpenMP runtime, from whisper-rs `openmp`). Fixed by app-local bundling in `build-msix-store.ps1` (see "Bundled runtime" below). Also name it in the listing opening (see "Listing opening" below).

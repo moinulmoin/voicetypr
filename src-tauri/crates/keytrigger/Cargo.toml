@@ -1,0 +1,23 @@
+[package]
+name = "keytrigger"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Cross-platform global key-trigger engine: modifier-only holds, double-taps, chords, single keys. Observation-only."
+
+[dependencies]
+log = "0.4"
+parking_lot = "0.12"
+thiserror = "1.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.24"
+core-foundation = "0.10"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Threading",
+] }

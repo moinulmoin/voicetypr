@@ -1,10 +1,23 @@
 use crate::audio::device_watcher::try_start_device_watcher_if_ready;
-use crate::commands::key_normalizer::{normalize_shortcut_keys, validate_key_combination};
+use crate::commands::key_normalizer::{
+    normalize_shortcut_keys, validate_key_combination_allowing_safe_single_key,
+};
+use crate::commands::remote::{resolve_shareable_model_config, save_remote_settings};
+use crate::commands::shortcuts;
+use crate::menu::should_include_remote_connection_in_tray;
+use crate::parakeet::models::AVAILABLE_MODELS;
 use crate::parakeet::ParakeetManager;
+use crate::remote::lifecycle::RemoteServerManager;
+use crate::remote::settings::{ConnectionStatus, RemoteSettings};
 use crate::whisper::languages::{validate_language, SUPPORTED_LANGUAGES};
 use crate::whisper::manager::WhisperManager;
-use crate::{AppState, RecordingState};
-use chrono::Utc;
+use crate::AppState;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tauri::async_runtime::Mutex as AsyncMutex;
+
+/// Generation counter for tray menu updates to prevent race conditions.
+/// Each update increments this and checks if it's still current before applying.
+static TRAY_MENU_GENERATION: AtomicU64 = AtomicU64::new(0);
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
@@ -15,22 +28,25 @@ use tauri_plugin_store::StoreExt;
 pub const MIN_INDICATOR_OFFSET: u32 = 10;
 pub const MAX_INDICATOR_OFFSET: u32 = 50;
 pub const DEFAULT_INDICATOR_OFFSET: u32 = 10;
-pub const DEFAULT_TRANSCRIPTION_ACCELERATION: &str = "auto";
+
+pub const TRANSCRIPTION_TASK_TRANSCRIBE: &str = "transcribe";
+pub const TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH: &str = "translate_to_english";
+pub const FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT: &str = "same_as_transcript";
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub hotkey: String,
     pub current_model: String,
     pub current_model_engine: String,
-    pub language: String,
-    pub translate_to_english: bool,
+    pub speech_language: String,
+    pub transcription_task: String,
+    pub final_text_language: String,
     pub theme: String,
     pub transcription_cleanup_days: Option<u32>,
     pub pill_position: Option<(f64, f64)>,
     pub launch_at_startup: bool,
     pub onboarding_completed: bool,
     pub check_updates_automatically: bool,
-    pub install_updates_automatically: bool,
     pub selected_microphone: Option<String>,
     // Push-to-talk support
     pub recording_mode: String, // "toggle" or "push_to_talk"
@@ -42,16 +58,23 @@ pub struct Settings {
     pub play_sound_on_recording_end: bool,
     // Pill indicator visibility mode: "never", "always", or "when_recording"
     pub pill_indicator_mode: String,
-    // Pill indicator screen position: "top", "center", or "bottom"
+    // Pill indicator screen position
     pub pill_indicator_position: String,
-    // Pill indicator offset from screen edge in pixels (10-100)
+    // Pill indicator offset from screen edge in pixels (10-50)
     pub pill_indicator_offset: u32,
     // Pause system media during recording
     pub pause_media_during_recording: bool,
-    // Local Whisper acceleration mode: "auto", "cpu", or "gpu"
-    pub transcription_acceleration: String,
     // Automatically paste transcription text into the active window
     pub auto_paste_transcription: bool,
+    // Network sharing settings
+    pub sharing_port: Option<u16>,
+    pub sharing_password: Option<String>,
+    // Recording persistence settings
+    pub save_recordings: bool,
+    pub recording_retention_days: Option<u32>, // None = keep forever
+    // Transcription hardware acceleration: "auto" | "gpu" | "cpu"
+    #[serde(default = "default_transcription_acceleration")]
+    pub transcription_acceleration: String,
 }
 
 impl Default for Settings {
@@ -60,16 +83,16 @@ impl Default for Settings {
             hotkey: "CommandOrControl+Shift+Space".to_string(),
             current_model: "".to_string(), // Empty means auto-select
             current_model_engine: "whisper".to_string(),
-            language: "en".to_string(),
-            translate_to_english: false, // Default to transcribe mode
+            speech_language: "en".to_string(),
+            transcription_task: TRANSCRIPTION_TASK_TRANSCRIBE.to_string(),
+            final_text_language: FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string(),
             theme: "system".to_string(),
             transcription_cleanup_days: None, // None means keep forever
             pill_position: None,              // No saved position initially
             launch_at_startup: false,         // Default to not launching at startup
             onboarding_completed: false,      // Default to not completed
-            check_updates_automatically: true, // Default to automatic updates enabled
-            install_updates_automatically: false, // Never install updates without explicit opt-in
-            selected_microphone: None,        // Default to system default microphone
+            check_updates_automatically: true, // Default to automatic update checks; installs still require confirmation
+            selected_microphone: None,         // Default to system default microphone
             recording_mode: "toggle".to_string(), // Default to toggle mode for backward compatibility
             use_different_ptt_key: false,         // Default to using same key
             ptt_hotkey: Some("Alt+Space".to_string()), // Default PTT key
@@ -80,8 +103,62 @@ impl Default for Settings {
             pill_indicator_position: "bottom-center".to_string(), // Default to bottom center of screen
             pill_indicator_offset: DEFAULT_INDICATOR_OFFSET,
             pause_media_during_recording: false, // Default to off; user opts in
-            transcription_acceleration: DEFAULT_TRANSCRIPTION_ACCELERATION.to_string(),
-            auto_paste_transcription: true, // Default to auto-pasting transcription
+            auto_paste_transcription: true,      // Default to auto-pasting transcription
+            sharing_port: Some(47842),           // Default network sharing port
+            sharing_password: None,              // No password by default
+            save_recordings: false,              // Default to not saving recordings
+            recording_retention_days: Some(30),  // Default cleanup period when saving is enabled
+            transcription_acceleration: "auto".to_string(),
+        }
+    }
+}
+
+fn default_transcription_acceleration() -> String {
+    "auto".to_string()
+}
+
+pub fn normalize_stored_transcription_acceleration(value: Option<&str>) -> String {
+    match value {
+        Some("gpu") => "gpu".to_string(),
+        Some("cpu") => "cpu".to_string(),
+        _ => "auto".to_string(),
+    }
+}
+
+pub fn transcription_task_from_legacy(translate_to_english: bool) -> String {
+    if translate_to_english {
+        TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH.to_string()
+    } else {
+        TRANSCRIPTION_TASK_TRANSCRIBE.to_string()
+    }
+}
+
+pub fn normalize_transcription_task(
+    task: Option<&str>,
+    legacy_translate_to_english: bool,
+) -> String {
+    match task {
+        Some(TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH) => {
+            TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH.to_string()
+        }
+        Some(TRANSCRIPTION_TASK_TRANSCRIBE) => TRANSCRIPTION_TASK_TRANSCRIBE.to_string(),
+        _ => transcription_task_from_legacy(legacy_translate_to_english),
+    }
+}
+
+pub fn task_uses_translate_to_english(task: &str) -> bool {
+    task == TRANSCRIPTION_TASK_TRANSLATE_TO_ENGLISH
+}
+
+pub fn normalize_final_text_language(value: Option<&str>, transcription_task: &str) -> String {
+    if task_uses_translate_to_english(transcription_task) {
+        "en".to_string()
+    } else {
+        match value {
+            Some(FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT) | None => {
+                FINAL_TEXT_LANGUAGE_SAME_AS_TRANSCRIPT.to_string()
+            }
+            Some(value) => validate_language(Some(value)).to_string(),
         }
     }
 }
@@ -149,20 +226,142 @@ pub(crate) fn resolve_pill_indicator_mode(
     default_mode
 }
 
-pub(crate) fn normalize_transcription_acceleration(value: Option<&str>) -> String {
-    match value {
-        Some("cpu") => "cpu".to_string(),
-        Some("gpu") => "gpu".to_string(),
-        _ => DEFAULT_TRANSCRIPTION_ACCELERATION.to_string(),
+fn recording_retention_days_from_legacy_count(count: u64) -> Option<u32> {
+    match count {
+        0 | 250 => None,
+        25 => Some(7),
+        50 => Some(30),
+        100 => Some(90),
+        _ => None,
+    }
+}
+
+pub(crate) fn recording_retention_days_from_store(
+    store: &tauri_plugin_store::Store<tauri::Wry>,
+) -> Option<u32> {
+    if let Some(value) = store.get("recording_retention_days") {
+        if value.is_null() {
+            return None;
+        }
+        return value.as_u64().map(|n| n as u32).or(Some(30));
+    }
+
+    // Migrate old count-based retention to the new day-based policy conservatively.
+    match store
+        .get("recording_retention_count")
+        .and_then(|value| value.as_u64())
+    {
+        Some(count) => recording_retention_days_from_legacy_count(count),
+        None => {
+            if store
+                .get("recording_retention_count")
+                .map(|value| value.is_null())
+                .unwrap_or(false)
+            {
+                None
+            } else {
+                Some(30)
+            }
+        }
+    }
+}
+
+pub(crate) fn recording_retention_days_to_value(days: Option<u32>) -> serde_json::Value {
+    match days {
+        Some(days) => json!(days),
+        None => serde_json::Value::Null,
+    }
+}
+
+pub fn model_requires_english_speech(engine: &str, model_name: &str) -> bool {
+    match engine {
+        "whisper" => model_name.ends_with(".en"),
+        "parakeet" => model_name.contains("-v2"),
+        _ => false,
+    }
+}
+
+pub fn normalize_speech_language_for_model(
+    engine: &str,
+    model_name: &str,
+    speech_language: &str,
+) -> String {
+    let validated = validate_language(Some(speech_language));
+    match engine {
+        "whisper" if model_requires_english_speech(engine, model_name) => "en".to_string(),
+        "parakeet" => {
+            if let Some(definition) = AVAILABLE_MODELS.iter().find(|m| m.id == model_name) {
+                if definition.languages.contains(&validated) {
+                    validated.to_string()
+                } else {
+                    definition
+                        .languages
+                        .first()
+                        .copied()
+                        .unwrap_or("en")
+                        .to_string()
+                }
+            } else if model_requires_english_speech(engine, model_name) {
+                "en".to_string()
+            } else {
+                validated.to_string()
+            }
+        }
+        "soniox" => {
+            const SONIOX_SUPPORTED_LANGUAGES: &[&str] = &[
+                "en", "es", "fr", "de", "it", "pt", "nl", "ru", "zh", "ja", "ko", "ar", "hi", "tr",
+                "pl", "sv", "no", "da", "fi", "el", "cs", "ro", "hu", "sk", "uk", "he", "id", "vi",
+                "th", "ms", "tl", "fa", "ur", "bn", "ta", "te", "gu", "pa", "bg", "hr", "sr", "sl",
+                "lv", "lt", "et", "is", "ca", "gl",
+            ];
+            if SONIOX_SUPPORTED_LANGUAGES.contains(&validated) {
+                validated.to_string()
+            } else {
+                "en".to_string()
+            }
+        }
+        "cohere" => {
+            const COHERE_SUPPORTED_LANGUAGES: &[&str] = &[
+                "en", "de", "fr", "it", "es", "pt", "el", "nl", "pl", "vi", "zh", "ar", "ja", "ko",
+            ];
+            if COHERE_SUPPORTED_LANGUAGES.contains(&validated) {
+                validated.to_string()
+            } else {
+                "en".to_string()
+            }
+        }
+        "openai" | "groq" | "deepgram" => validated.to_string(),
+        _ => validated.to_string(),
     }
 }
 
 #[tauri::command]
 pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
     let store = app.store("settings").map_err(|e| e.to_string())?;
-    let stored_transcription_acceleration = store
-        .get("transcription_acceleration")
-        .and_then(|v| v.as_str().map(str::to_owned));
+    let legacy_speech_language = store
+        .get("language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| Settings::default().speech_language.clone());
+    let legacy_translate_to_english = store
+        .get("translate_to_english")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let speech_language = store
+        .get("speech_language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or(legacy_speech_language);
+    let stored_transcription_task = store
+        .get("transcription_task")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let transcription_task = normalize_transcription_task(
+        stored_transcription_task.as_deref(),
+        legacy_translate_to_english,
+    );
+    let stored_final_text_language = store
+        .get("final_text_language")
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    let final_text_language =
+        normalize_final_text_language(stored_final_text_language.as_deref(), &transcription_task);
 
     let settings = Settings {
         hotkey: store
@@ -177,14 +376,9 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("current_model_engine")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| Settings::default().current_model_engine.clone()),
-        language: store
-            .get("language")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| Settings::default().language),
-        translate_to_english: store
-            .get("translate_to_english")
-            .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| Settings::default().translate_to_english),
+        speech_language,
+        transcription_task,
+        final_text_language,
         theme: store
             .get("theme")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -217,10 +411,6 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("check_updates_automatically")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().check_updates_automatically),
-        install_updates_automatically: store
-            .get("install_updates_automatically")
-            .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| Settings::default().install_updates_automatically),
         selected_microphone: store
             .get("selected_microphone")
             .and_then(|v| v.as_str().map(|s| s.to_string())),
@@ -268,16 +458,78 @@ pub async fn get_settings(app: AppHandle) -> Result<Settings, String> {
             .get("pause_media_during_recording")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().pause_media_during_recording),
-        transcription_acceleration: normalize_transcription_acceleration(
-            stored_transcription_acceleration.as_deref(),
-        ),
         auto_paste_transcription: store
             .get("auto_paste_transcription")
             .and_then(|v| v.as_bool())
             .unwrap_or_else(|| Settings::default().auto_paste_transcription),
+        sharing_port: store
+            .get("sharing_port")
+            .and_then(|v| v.as_u64().map(|n| n as u16))
+            .or(Settings::default().sharing_port),
+        sharing_password: None,
+        save_recordings: store
+            .get("save_recordings")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| Settings::default().save_recordings),
+        recording_retention_days: recording_retention_days_from_store(&store),
+        transcription_acceleration: normalize_stored_transcription_acceleration(
+            store
+                .get("transcription_acceleration")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .as_deref(),
+        ),
     };
+    let normalized_speech_language = normalize_speech_language_for_model(
+        &settings.current_model_engine,
+        &settings.current_model,
+        &settings.speech_language,
+    );
+    let mut settings = settings;
+    settings.speech_language = normalized_speech_language;
 
     Ok(settings)
+}
+
+async fn sync_running_sharing_server_to_model(
+    app: &AppHandle,
+    model_name: &str,
+    engine: &str,
+) -> Result<(), String> {
+    let server_manager = app.state::<AsyncMutex<RemoteServerManager>>();
+    let mut server = server_manager.lock().await;
+    if !server.is_running() {
+        return Ok(());
+    }
+
+    match resolve_shareable_model_config(app, model_name, engine).await {
+        Ok((model_path, resolved_engine)) => {
+            server.update_model(model_path, model_name.to_string(), resolved_engine);
+            Ok(())
+        }
+        Err(err) => {
+            log::warn!(
+                "Stopping sharing because the selected model is no longer shareable: {}",
+                err
+            );
+            server.stop().await;
+            drop(server);
+
+            let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+            let mut remote_settings = remote_state.lock().await;
+            remote_settings.server_config.enabled = false;
+            save_remote_settings(app, &remote_settings)?;
+
+            let _ = app.emit(
+                "sharing-status-changed",
+                json!({
+                    "enabled": false,
+                    "port": null,
+                    "model_name": null
+                }),
+            );
+            Ok(())
+        }
+    }
 }
 
 #[tauri::command]
@@ -310,23 +562,89 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         .and_then(|v| v.as_u64())
         .map(|v| v as u32)
         .unwrap_or_else(|| Settings::default().pill_indicator_offset);
-    let old_transcription_acceleration = normalize_transcription_acceleration(
+    let old_transcription_acceleration = normalize_stored_transcription_acceleration(
         store
             .get("transcription_acceleration")
             .and_then(|v| v.as_str().map(str::to_owned))
             .as_deref(),
     );
     let normalized_transcription_acceleration =
-        normalize_transcription_acceleration(Some(&settings.transcription_acceleration));
+        normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
 
+    if settings.recording_mode == "push_to_talk" && settings.use_different_ptt_key {
+        if let Some(ptt_hotkey) = settings.ptt_hotkey.as_deref() {
+            let normalized_ptt = normalize_shortcut_keys(ptt_hotkey);
+            if let Ok(ptt_shortcut) = normalized_ptt.parse::<Shortcut>() {
+                let app_state = app.state::<crate::AppState>();
+                if let Some(conflict) =
+                    shortcuts::registered_custom_shortcut_conflict(&app_state, &ptt_shortcut)
+                {
+                    return Err(format!(
+                        "Push-to-talk hotkey duplicates enabled custom shortcut '{}'",
+                        conflict.id
+                    ));
+                }
+            }
+        }
+    }
+    let app_state = app.state::<crate::AppState>();
+    let recording_mode = match settings.recording_mode.as_str() {
+        "push_to_talk" => crate::RecordingMode::PushToTalk,
+        _ => crate::RecordingMode::Toggle,
+    };
+    let old_ptt_shortcut = app_state.ptt_shortcut.lock().ok().and_then(|guard| *guard);
+    let mut active_ptt_shortcut: Option<Shortcut> = None;
+    let mut newly_registered_ptt: Option<Shortcut> = None;
+    let mut old_ptt_to_unregister_after_save: Option<Shortcut> = None;
+
+    if recording_mode == crate::RecordingMode::PushToTalk && settings.use_different_ptt_key {
+        if let Some(ptt_hotkey) = settings.ptt_hotkey.clone() {
+            let normalized_ptt =
+                crate::commands::key_normalizer::normalize_shortcut_keys(&ptt_hotkey);
+            let ptt_shortcut: Shortcut = normalized_ptt
+                .parse()
+                .map_err(|e| format!("Invalid push-to-talk hotkey '{}': {}", ptt_hotkey, e))?;
+
+            if old_ptt_shortcut != Some(ptt_shortcut) {
+                app.global_shortcut().register(ptt_shortcut).map_err(|e| {
+                    log::error!("Failed to register PTT shortcut: {}", e);
+                    format!("Failed to register push-to-talk hotkey: {}", e)
+                })?;
+                newly_registered_ptt = Some(ptt_shortcut);
+                old_ptt_to_unregister_after_save = old_ptt_shortcut;
+            }
+
+            active_ptt_shortcut = Some(ptt_shortcut);
+        }
+    } else {
+        old_ptt_to_unregister_after_save = old_ptt_shortcut;
+    }
     store.set("hotkey", json!(settings.hotkey));
     store.set("current_model", json!(settings.current_model));
     store.set("current_model_engine", json!(settings.current_model_engine));
 
-    // Validate language before saving
-    let validated_language = validate_language(Some(&settings.language));
-    store.set("language", json!(validated_language));
-    store.set("translate_to_english", json!(settings.translate_to_english));
+    let validated_speech_language = normalize_speech_language_for_model(
+        &settings.current_model_engine,
+        &settings.current_model,
+        &settings.speech_language,
+    );
+    let normalized_transcription_task =
+        normalize_transcription_task(Some(&settings.transcription_task), false);
+    let normalized_final_text_language = normalize_final_text_language(
+        Some(&settings.final_text_language),
+        &normalized_transcription_task,
+    );
+    store.set("speech_language", json!(validated_speech_language));
+    store.set("transcription_task", json!(normalized_transcription_task));
+    store.set("final_text_language", json!(normalized_final_text_language));
+    // Keep legacy keys in sync during migration.
+    store.set("language", json!(validated_speech_language));
+    store.set(
+        "translate_to_english",
+        json!(task_uses_translate_to_english(
+            &normalized_transcription_task
+        )),
+    );
 
     store.set("theme", json!(settings.theme));
     store.set(
@@ -338,10 +656,6 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     store.set(
         "check_updates_automatically",
         json!(settings.check_updates_automatically),
-    );
-    store.set(
-        "install_updates_automatically",
-        json!(settings.install_updates_automatically),
     );
     store.set("selected_microphone", json!(settings.selected_microphone));
 
@@ -382,12 +696,38 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         json!(settings.pause_media_during_recording),
     );
     store.set(
+        "auto_paste_transcription",
+        json!(settings.auto_paste_transcription),
+    );
+    store.set(
         "transcription_acceleration",
         json!(&normalized_transcription_acceleration),
     );
+
+    // Network sharing settings
+    if let Some(port) = settings.sharing_port {
+        store.set("sharing_port", json!(port));
+    }
+    store.delete("sharing_password");
+
+    if let Some(remote_state) = app.try_state::<AsyncMutex<RemoteSettings>>() {
+        let mut remote_settings = remote_state.lock().await;
+        if let Some(port) = settings.sharing_port {
+            remote_settings.server_config.port = port;
+        }
+        if let Err(error) = save_remote_settings(&app, &remote_settings) {
+            if let Some(new_ptt) = newly_registered_ptt {
+                let _ = app.global_shortcut().unregister(new_ptt);
+            }
+            return Err(error);
+        }
+    }
+
+    // Recording persistence settings
+    store.set("save_recordings", json!(settings.save_recordings));
     store.set(
-        "auto_paste_transcription",
-        json!(settings.auto_paste_transcription),
+        "recording_retention_days",
+        recording_retention_days_to_value(settings.recording_retention_days),
     );
 
     // Save pill position if provided
@@ -395,14 +735,20 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         store.set("pill_position", json!([x, y]));
     }
 
-    store.save().map_err(|e| e.to_string())?;
+    if let Err(error) = store.save() {
+        if let Some(new_ptt) = newly_registered_ptt {
+            let _ = app.global_shortcut().unregister(new_ptt);
+        }
+        return Err(error.to_string());
+    }
 
-    // Update recording mode in AppState
-    let app_state = app.state::<crate::AppState>();
-    let recording_mode = match settings.recording_mode.as_str() {
-        "push_to_talk" => crate::RecordingMode::PushToTalk,
-        _ => crate::RecordingMode::Toggle,
-    };
+    if let Some(old_ptt) = old_ptt_to_unregister_after_save {
+        let _ = app.global_shortcut().unregister(old_ptt);
+    }
+
+    if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
+        *ptt_guard = active_ptt_shortcut;
+    }
 
     if let Ok(mut mode_guard) = app_state.recording_mode.lock() {
         *mode_guard = recording_mode;
@@ -417,54 +763,13 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         );
     }
 
-    // Handle PTT shortcut registration if needed
-    if recording_mode == crate::RecordingMode::PushToTalk && settings.use_different_ptt_key {
-        if let Some(ptt_hotkey) = settings.ptt_hotkey.clone() {
-            let normalized_ptt =
-                crate::commands::key_normalizer::normalize_shortcut_keys(&ptt_hotkey);
-
-            if let Ok(ptt_shortcut) =
-                normalized_ptt.parse::<tauri_plugin_global_shortcut::Shortcut>()
-            {
-                let shortcuts = app.global_shortcut();
-
-                // Unregister old PTT shortcut if exists
-                if let Ok(ptt_guard) = app_state.ptt_shortcut.lock() {
-                    if let Some(old_ptt) = *ptt_guard {
-                        let _ = shortcuts.unregister(old_ptt);
-                    }
-                }
-
-                // Register new PTT shortcut
-                match shortcuts.register(ptt_shortcut) {
-                    Ok(_) => {
-                        if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
-                            *ptt_guard = Some(ptt_shortcut);
-                        }
-                        log::info!("PTT shortcut updated to: {}", ptt_hotkey);
-                    }
-                    Err(e) => {
-                        log::error!("Failed to register PTT shortcut: {}", e);
-                    }
-                }
-            }
-        }
-    } else {
-        // Clear PTT shortcut if not using different key
-        if let Ok(mut ptt_guard) = app_state.ptt_shortcut.lock() {
-            if let Some(old_ptt) = *ptt_guard {
-                let _ = app.global_shortcut().unregister(old_ptt);
-            }
-            *ptt_guard = None;
-        }
-    }
-
     // Invalidate recording config cache when settings change
     crate::commands::audio::invalidate_recording_config_cache(&app).await;
 
     // Preload new model and update tray menu if model changed
     let is_parakeet_engine = settings.current_model_engine == "parakeet";
-    let is_cloud_engine = settings.current_model_engine == "soniox";
+    let is_cloud_engine =
+        crate::cloud_stt::CloudProvider::from_id(&settings.current_model_engine).is_some();
 
     if !settings.current_model.is_empty() && old_model != settings.current_model {
         use crate::commands::model::preload_model;
@@ -476,7 +781,18 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
             settings.current_model
         );
 
-        if !(is_parakeet_engine || is_cloud_engine) {
+        if is_parakeet_engine {
+            // Warm the selected Parakeet model in the background.
+            let app_clone = app.clone();
+            let model_name = settings.current_model.clone();
+            tokio::spawn(async move {
+                let parakeet_manager = app_clone.state::<ParakeetManager>();
+                match parakeet_manager.load_model(&app_clone, &model_name).await {
+                    Ok(_) => log::info!("Successfully preloaded new model: {}", model_name),
+                    Err(e) => log::warn!("Failed to preload new model: {}", e),
+                }
+            });
+        } else if !is_cloud_engine {
             // Preload the new Whisper model
             let app_clone = app.clone();
             let model_name = settings.current_model.clone();
@@ -499,6 +815,25 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         if let Err(e) = update_tray_menu(app.clone()).await {
             log::warn!("Failed to update tray menu after model change: {}", e);
             // Don't fail the whole operation if tray update fails
+        }
+
+        // Update the sharing server's model if it's running
+        sync_running_sharing_server_to_model(
+            &app,
+            &settings.current_model,
+            &settings.current_model_engine,
+        )
+        .await?;
+
+        // Emit model-changed event so frontend can refresh remote server status
+        if let Err(e) = app.emit(
+            "model-changed",
+            json!({
+                "model": settings.current_model,
+                "engine": settings.current_model_engine
+            }),
+        ) {
+            log::warn!("Failed to emit model-changed event: {}", e);
         }
     }
 
@@ -614,27 +949,86 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
 
 #[tauri::command]
 pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(), String> {
-    log::info!("Updating global shortcut to: {}", shortcut);
+    log::info!(
+        "Updating global shortcut to: {}",
+        if shortcut.is_empty() {
+            "<clear>"
+        } else {
+            &shortcut
+        }
+    );
 
-    // Validate shortcut format
-    if shortcut.is_empty() || shortcut.len() > 100 {
-        log::error!("Invalid shortcut format: empty or too long");
+    // Empty string = clear / unregister the primary (and PTT) recording shortcut.
+    // Used when the user switches to a bare-modifier hold binding that does not
+    // need a global shortcut registration at all.
+    if shortcut.is_empty() {
+        let shortcuts = app.global_shortcut();
+        let app_state = app.state::<AppState>();
+
+        // Persist empty hotkey FIRST so that if save fails, runtime state is untouched.
+        let store = match app.store("settings") {
+            Ok(store) => store,
+            Err(e) => {
+                log::error!("Failed to get settings store: {}", e);
+                return Err("Failed to access settings store".to_string());
+            }
+        };
+        store.set("hotkey", json!(""));
+        if let Err(e) = store.save() {
+            log::error!("Failed to save settings after clearing hotkey: {}", e);
+            return Err(format!("Failed to save settings: {}", e));
+        }
+
+        // Save succeeded — now unregister and clear runtime state.
+
+        // Unregister and clear the primary recording shortcut.
+        if let Ok(mut guard) = app_state.recording_shortcut.lock() {
+            if let Some(old) = *guard {
+                if shortcuts.is_registered(old) {
+                    if let Err(e) = shortcuts.unregister(old) {
+                        log::warn!("Failed to unregister primary recording shortcut: {}", e);
+                    }
+                }
+            }
+            *guard = None;
+        }
+
+        // Also clear the PTT shortcut so no stale global shortcut remains.
+        if let Ok(mut guard) = app_state.ptt_shortcut.lock() {
+            if let Some(old) = *guard {
+                if shortcuts.is_registered(old) {
+                    if let Err(e) = shortcuts.unregister(old) {
+                        log::warn!("Failed to unregister PTT shortcut: {}", e);
+                    }
+                }
+            }
+            *guard = None;
+        }
+
+        log::info!("Primary recording shortcut cleared successfully");
+        return Ok(());
+    }
+
+    // Validate non-empty shortcut format
+    if shortcut.len() > 100 {
+        log::error!("Invalid shortcut format: too long");
         return Err("Invalid shortcut format".to_string());
     }
 
-    // Validate key combination
-    if let Err(e) = validate_key_combination(&shortcut) {
-        log::error!("Invalid key combination '{}': {}", shortcut, e);
-        return Err(format!("Invalid key combination: {}", e));
-    }
-
-    // Normalize the shortcut keys
+    // Normalize before validation so frontend aliases like "Cmd" and "ArrowUp"
+    // are checked against the same names Tauri will parse.
     let normalized_shortcut = normalize_shortcut_keys(&shortcut);
     log::debug!(
         "Normalized shortcut: {} -> {}",
         shortcut,
         normalized_shortcut
     );
+
+    // Validate key combination
+    if let Err(e) = validate_key_combination_allowing_safe_single_key(&normalized_shortcut) {
+        log::error!("Invalid key combination '{}': {}", shortcut, e);
+        return Err(format!("Invalid key combination: {}", e));
+    }
 
     // Validate that shortcut can be parsed
     let new_shortcut: Shortcut = normalized_shortcut.parse().map_err(|e| {
@@ -650,49 +1044,66 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
     let shortcuts = app.global_shortcut();
     let app_state = app.state::<AppState>();
 
-    // Unregister only the current recording shortcut (not ESC or others)
-    log::debug!("Unregistering current recording shortcut if exists");
+    if let Some(conflict) =
+        shortcuts::registered_custom_shortcut_conflict(&app_state, &new_shortcut)
+    {
+        return Err(format!(
+            "Primary recording hotkey duplicates enabled custom shortcut '{}'",
+            conflict.id
+        ));
+    }
+
     let old_shortcut = app_state
         .recording_shortcut
         .lock()
         .ok()
         .and_then(|guard| *guard);
-
-    if let Some(old) = old_shortcut {
-        log::debug!("Unregistering old shortcut: {:?}", old);
-        if let Err(e) = shortcuts.unregister(old) {
-            log::warn!(
-                "Failed to unregister old shortcut: {}. Continuing anyway.",
-                e
-            );
-            // Don't fail - the old shortcut might already be unregistered
-        }
-    }
-
-    // Register new shortcut immediately
-    log::debug!("Registering new shortcut: {}", normalized_shortcut);
-
-    app_state.record_primary_registration_attempt();
-
-    // Attempt registration - according to docs, ANY error means hotkey won't work
-    let registration_result = shortcuts.register(new_shortcut);
-
-    match registration_result {
-        Ok(_) => {
-            app_state.record_primary_registration_success();
-            log::info!("Successfully registered hotkey: {}", normalized_shortcut);
-            // Hotkey registered successfully, no conflicts
-        }
+    let shortcut_changed = old_shortcut != Some(new_shortcut);
+    let shortcut_registered = shortcuts.is_registered(new_shortcut);
+    let needs_registration = shortcut_changed || !shortcut_registered;
+    // Save to settings (original version for display).
+    let store = match app.store("settings") {
+        Ok(store) => store,
         Err(e) => {
+            log::error!("Failed to get settings store: {}", e);
+            return Err("Failed to access settings store".to_string());
+        }
+    };
+    let previous_hotkey_value = store.get("hotkey");
+
+    let restore_store_value = || {
+        if let Some(previous_hotkey_value) = previous_hotkey_value.clone() {
+            store.set("hotkey", previous_hotkey_value);
+        } else {
+            store.delete("hotkey");
+        }
+    };
+
+    let unregister_new_shortcut = || {
+        if needs_registration {
+            if let Err(e) = shortcuts.unregister(new_shortcut) {
+                log::debug!(
+                    "Failed to unregister new recording shortcut while rolling back: {}",
+                    e
+                );
+            }
+        }
+    };
+
+    if needs_registration {
+        // Register the candidate before touching the currently-working shortcut.
+        // If registration fails, the old shortcut remains active.
+        log::debug!("Registering new shortcut: {}", normalized_shortcut);
+
+        if let Err(e) = shortcuts.register(new_shortcut) {
             let error_msg = e.to_string();
             let error_lower = error_msg.to_lowercase();
 
             // According to tauri-plugin-global-shortcut docs:
-            // If register() returns an error, the shortcut is NOT functional
-            // Registration is atomic - it either succeeds completely or fails
+            // If register() returns an error, the shortcut is NOT functional.
+            // Registration is atomic - it either succeeds completely or fails.
             log::error!("Failed to register hotkey '{}': {}", normalized_shortcut, e);
 
-            // Provide helpful error message based on error type
             let detailed_error = if error_lower.contains("already registered")
                 || error_lower.contains("conflict")
                 || error_lower.contains("in use")
@@ -704,136 +1115,77 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
                 format!("Failed to register hotkey: {}", e)
             };
 
-            if let Some(old) = old_shortcut {
-                match shortcuts.register(old) {
-                    Ok(_) => {
-                        app_state.record_primary_registration_restored_after_failure(
-                            detailed_error.clone(),
-                        );
-                        log::info!("Restored previous hotkey after failed update");
-                    }
-                    Err(restore_err) => {
-                        log::error!(
-                            "Failed to restore previous hotkey after update failure: {}",
-                            restore_err
-                        );
-                        app_state.record_primary_registration_failure(format!(
-                            "Failed to register new hotkey: {}; failed to restore previous hotkey: {}",
-                            error_msg, restore_err
-                        ));
-                    }
-                }
-            } else {
-                app_state.record_primary_registration_failure(error_msg);
-            }
-
             return Err(detailed_error);
         }
+
+        log::info!(
+            "Successfully registered candidate hotkey: {}",
+            normalized_shortcut
+        );
+    } else {
+        log::debug!("Recording shortcut unchanged and already registered; skipping global shortcut re-registration");
     }
 
-    // Update the recording shortcut in managed state after successful registration.
-    match app_state.recording_shortcut.lock() {
-        Ok(mut shortcut_guard) => {
-            *shortcut_guard = Some(new_shortcut);
-            log::debug!("Updated recording shortcut state");
-        }
-        Err(e) => {
-            log::error!("Failed to acquire recording shortcut lock: {}", e);
-            // Continue anyway since the hotkey might be registered
-            log::warn!("Continuing despite lock failure");
+    if shortcut_changed {
+        match app_state.recording_shortcut.lock() {
+            Ok(mut shortcut_guard) => {
+                *shortcut_guard = Some(new_shortcut);
+                log::debug!("Updated recording shortcut state");
+            }
+            Err(e) => {
+                log::error!("Failed to acquire recording shortcut lock: {}", e);
+                unregister_new_shortcut();
+                return Err("Failed to update shortcut state".to_string());
+            }
         }
     }
-
-    // Save to settings (original version for display)
-    let store = app.store("settings").map_err(|e| {
-        log::error!("Failed to get settings store: {}", e);
-        "Failed to access settings store".to_string()
-    })?;
 
     store.set("hotkey", json!(shortcut));
     if let Err(e) = store.save() {
         log::error!("Failed to save settings: {}", e);
-        // The shortcut is already registered, so this isn't a critical failure
-        log::warn!("Shortcut registered but settings save failed");
+        if shortcut_changed {
+            if let Ok(mut shortcut_guard) = app_state.recording_shortcut.lock() {
+                *shortcut_guard = old_shortcut;
+            }
+        }
+        restore_store_value();
+        unregister_new_shortcut();
+        return Err(format!("Failed to save settings: {}", e));
     }
 
+    if shortcut_changed {
+        if let Some(old) = old_shortcut {
+            if shortcuts.is_registered(old) {
+                log::debug!(
+                    "Unregistering old shortcut after committing new shortcut: {:?}",
+                    old
+                );
+                if let Err(e) = shortcuts.unregister(old) {
+                    log::error!("Failed to unregister old recording shortcut: {}", e);
+                    if let Ok(mut shortcut_guard) = app_state.recording_shortcut.lock() {
+                        *shortcut_guard = old_shortcut;
+                    }
+                    restore_store_value();
+                    if let Err(save_error) = store.save() {
+                        log::error!(
+                            "Failed to restore previous hotkey setting after unregister failure: {}",
+                            save_error
+                        );
+                    }
+                    unregister_new_shortcut();
+                    return Err(format!("Failed to replace previous hotkey: {}", e));
+                }
+            } else {
+                log::debug!(
+                    "Previous recording shortcut was not registered; no unregister needed: {:?}",
+                    old
+                );
+            }
+        }
+    }
     log::info!("Successfully updated global shortcut to: {}", shortcut);
 
     Ok(())
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HotkeyDiagnosticsResponse {
-    pub configured_hotkey: String,
-    pub normalized_hotkey: String,
-    pub recording_mode: String,
-    pub use_different_ptt_key: bool,
-    pub ptt_hotkey: Option<String>,
-    pub normalized_ptt_hotkey: Option<String>,
-    pub registration_status: String,
-    pub registration_error: Option<String>,
-    pub last_registration_attempt_at: Option<String>,
-    pub last_successful_registration_at: Option<String>,
-    pub last_event_at: Option<String>,
-    pub last_event_kind: Option<String>,
-    pub last_event_state: Option<String>,
-    pub event_count: u64,
-    pub current_recording_state: String,
-    pub generated_at: String,
-    pub is_registered: Option<bool>,
-}
-
-fn recording_state_label(state: RecordingState) -> &'static str {
-    match state {
-        RecordingState::Idle => "idle",
-        RecordingState::Starting => "starting",
-        RecordingState::Recording => "recording",
-        RecordingState::Stopping => "stopping",
-        RecordingState::Transcribing => "transcribing",
-        RecordingState::Error => "error",
-    }
-}
-
-#[tauri::command]
-pub async fn get_hotkey_diagnostics(app: AppHandle) -> Result<HotkeyDiagnosticsResponse, String> {
-    let settings = get_settings(app.clone()).await?;
-    let normalized_hotkey = normalize_shortcut_keys(&settings.hotkey);
-    let normalized_ptt_hotkey = settings
-        .ptt_hotkey
-        .as_ref()
-        .map(|hotkey| normalize_shortcut_keys(hotkey));
-
-    let app_state = app.state::<AppState>();
-    let diagnostics = app_state.primary_hotkey_diagnostics_snapshot();
-    let current_recording_state = recording_state_label(app_state.get_current_state()).to_string();
-
-    let is_registered = app_state
-        .recording_shortcut
-        .lock()
-        .ok()
-        .and_then(|guard| *guard)
-        .map(|shortcut| app.global_shortcut().is_registered(shortcut));
-
-    Ok(HotkeyDiagnosticsResponse {
-        configured_hotkey: settings.hotkey,
-        normalized_hotkey,
-        recording_mode: settings.recording_mode,
-        use_different_ptt_key: settings.use_different_ptt_key,
-        ptt_hotkey: settings.ptt_hotkey,
-        normalized_ptt_hotkey,
-        registration_status: diagnostics.registration_status.as_str().to_string(),
-        registration_error: diagnostics.registration_error,
-        last_registration_attempt_at: diagnostics.last_registration_attempt_at,
-        last_successful_registration_at: diagnostics.last_successful_registration_at,
-        last_event_at: diagnostics.last_event_at,
-        last_event_kind: diagnostics.last_event_kind,
-        last_event_state: diagnostics.last_event_state,
-        event_count: diagnostics.event_count,
-        current_recording_state,
-        generated_at: Utc::now().to_rfc3339(),
-        is_registered,
-    })
 }
 
 #[derive(Serialize)]
@@ -860,11 +1212,166 @@ pub async fn get_supported_languages() -> Result<Vec<LanguageInfo>, String> {
 
 #[tauri::command]
 pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(), String> {
+    // Check if this is a remote server selection
+    if let Some(connection_id) = model_name.strip_prefix("remote_") {
+        log::info!("Setting active remote server from tray: {}", connection_id);
+
+        {
+            let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+            let settings = remote_state.lock().await;
+            let connection = settings
+                .get_connection(connection_id)
+                .ok_or_else(|| format!("Connection '{}' not found", connection_id))?;
+
+            if !should_include_remote_connection_in_tray(&connection.status) {
+                return Err("Cannot select this Voicetypr instance as a remote server".to_string());
+            }
+        }
+
+        let refreshed_connection =
+            crate::commands::remote::refresh_saved_connection_status(&app, connection_id).await?;
+        if matches!(
+            refreshed_connection.status,
+            ConnectionStatus::SelfConnection
+        ) {
+            return Err("Cannot use this Voicetypr instance as its own remote server".to_string());
+        }
+
+        // Stop network sharing if enabled (can't share while using remote)
+        // and remember that it was active for auto-restore later
+        if let Some(server_manager) = app.try_state::<AsyncMutex<RemoteServerManager>>() {
+            let manager = server_manager.lock().await;
+            if manager.get_status().enabled {
+                drop(manager); // Release lock before calling stop
+                log::info!("🔧 [TRAY] Stopping network sharing - selecting remote server (will remember for auto-restore)");
+                let mut manager = server_manager.lock().await;
+                manager.stop().await;
+
+                // Set flag to remember sharing was active
+                let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+                let mut settings = remote_state.lock().await;
+                settings.sharing_was_active = true;
+                save_remote_settings(&app, &settings)?;
+                log::info!("🔧 [TRAY] Network sharing stopped, sharing_was_active flag set");
+            }
+        }
+
+        // Set the remote server as active
+        let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+        {
+            let mut settings = remote_state.lock().await;
+            settings.set_active_connection(Some(connection_id.to_string()))?;
+            save_remote_settings(&app, &settings)?;
+        }
+
+        // Update the tray menu to reflect the new selection
+        update_tray_menu(app.clone()).await?;
+
+        // Emit event to update UI
+        if let Err(e) = app.emit(
+            "model-changed",
+            json!({
+                "model": model_name,
+                "engine": "remote"
+            }),
+        ) {
+            log::warn!("Failed to emit model-changed event: {}", e);
+        }
+
+        if let Err(e) = app.emit("sharing-status-changed", json!({ "refresh": true })) {
+            log::warn!("Failed to emit sharing-status-changed event: {}", e);
+        }
+
+        return Ok(());
+    }
+
+    // Clear any active remote server when selecting a local model
+    // and restore sharing if it was previously active
+    let should_restore_sharing;
+    let restore_port: u16;
+    let restore_password: Option<String>;
+    {
+        let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+        let mut settings = remote_state.lock().await;
+        should_restore_sharing = settings.sharing_was_active;
+        restore_port = settings.server_config.port;
+        restore_password = settings.server_config.password.clone();
+
+        if settings.active_connection_id.is_some() {
+            log::info!("Clearing active remote server - switching to local model");
+            settings.set_active_connection(None)?;
+        }
+
+        save_remote_settings(&app, &settings)?;
+    }
+
+    if let Err(e) = app.emit("sharing-status-changed", json!({ "refresh": true })) {
+        log::warn!("Failed to emit sharing-status-changed event: {}", e);
+    }
+
+    if should_restore_sharing {
+        if let Some(server_manager) = app.try_state::<AsyncMutex<RemoteServerManager>>() {
+            let server_name = hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "Voicetypr Server".to_string());
+
+            log::info!(
+                "🔧 [TRAY] Auto-restoring network sharing on port {} with model {}",
+                restore_port,
+                model_name
+            );
+
+            let engine = if let Some(p) = crate::cloud_stt::CloudProvider::from_id(&model_name) {
+                p.id().to_string()
+            } else {
+                let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
+                let guard = whisper_state.read().await;
+                if guard.get_models_status().contains_key(&model_name) {
+                    "whisper".to_string()
+                } else {
+                    "parakeet".to_string()
+                }
+            };
+
+            if let Ok((model_path, engine)) =
+                resolve_shareable_model_config(&app, &model_name, &engine).await
+            {
+                let mut manager = server_manager.lock().await;
+                if let Err(e) = manager
+                    .start(
+                        restore_port,
+                        restore_password,
+                        server_name,
+                        model_path,
+                        model_name.clone(),
+                        engine,
+                        Some(app.clone()),
+                    )
+                    .await
+                {
+                    log::warn!("🔧 [TRAY] Failed to auto-restore sharing: {}", e);
+                } else {
+                    {
+                        let remote_state = app.state::<AsyncMutex<RemoteSettings>>();
+                        let mut settings = remote_state.lock().await;
+                        settings.sharing_was_active = false;
+                        save_remote_settings(&app, &settings)?;
+                    }
+                    let _ = app.emit("sharing-status-changed", json!({ "refresh": true }));
+                    log::info!("🔧 [TRAY] Network sharing auto-restored successfully");
+                }
+            } else {
+                log::warn!("🔧 [TRAY] Skipping auto-restore of network sharing: selected model '{}' is not shareable", model_name);
+            }
+        }
+    }
+
     // Get current settings
     let mut settings = get_settings(app.clone()).await?;
 
-    let engine = if model_name == "soniox" {
-        "soniox".to_string()
+    let engine = if let Some(p) = crate::cloud_stt::CloudProvider::from_id(&model_name) {
+        p.id().to_string()
     } else {
         let whisper_state = app.state::<tauri::async_runtime::RwLock<WhisperManager>>();
         let whisper_has = {
@@ -895,10 +1402,14 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     // Update the model
     settings.current_model = model_name.clone();
     settings.current_model_engine = engine.clone();
-    settings.language = "en".to_string();
-
+    if model_requires_english_speech(&engine, &model_name) {
+        settings.speech_language = "en".to_string();
+    }
     // Save settings (this will also preload the model)
     save_settings(app.clone(), settings).await?;
+
+    // Keep a running sharing server truthful after the selected model changes
+    sync_running_sharing_server_to_model(&app, &model_name, &engine).await?;
 
     // Update the tray menu to reflect the new selection
     update_tray_menu(app.clone()).await?;
@@ -919,18 +1430,78 @@ pub async fn set_model_from_tray(app: AppHandle, model_name: String) -> Result<(
     Ok(())
 }
 
+/// Increment the tray menu generation and return the new value.
+/// Used by callers who want to spawn background updates.
+pub fn next_tray_menu_generation() -> u64 {
+    TRAY_MENU_GENERATION.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// Get the current tray menu generation.
+pub fn current_tray_menu_generation() -> u64 {
+    TRAY_MENU_GENERATION.load(Ordering::SeqCst)
+}
+
 #[tauri::command]
 pub async fn update_tray_menu(app: AppHandle) -> Result<(), String> {
+    update_tray_menu_with_generation(app, None).await
+}
+
+/// Update tray menu with optional generation check.
+/// If generation is provided, the update will be skipped if a newer generation was requested.
+pub async fn update_tray_menu_with_generation(
+    app: AppHandle,
+    my_generation: Option<u64>,
+) -> Result<(), String> {
+    use std::time::Instant;
+    let start_time = Instant::now();
+
+    let gen_info = my_generation
+        .map(|g| format!(" (gen={})", g))
+        .unwrap_or_default();
+    log::debug!("⏱️ [TRAY TIMING] update_tray_menu called{}", gen_info);
+
     // Build the new menu
+    log::debug!(
+        "⏱️ [TRAY TIMING] Building tray menu...{} (+{}ms)",
+        gen_info,
+        start_time.elapsed().as_millis()
+    );
     let new_menu = crate::build_tray_menu(&app)
         .await
         .map_err(|e| format!("Failed to build tray menu: {}", e))?;
+    log::debug!(
+        "⏱️ [TRAY TIMING] Tray menu built{} (+{}ms)",
+        gen_info,
+        start_time.elapsed().as_millis()
+    );
+
+    // Check if this update is still current (if generation was provided)
+    if let Some(my_gen) = my_generation {
+        let current_gen = current_tray_menu_generation();
+        if my_gen < current_gen {
+            log::debug!(
+                "⏱️ [TRAY TIMING] Skipping stale tray menu update (gen={} < current={})",
+                my_gen,
+                current_gen
+            );
+            return Ok(());
+        }
+    }
 
     // Update the tray menu
     if let Some(tray) = app.tray_by_id("main") {
+        log::debug!(
+            "⏱️ [TRAY TIMING] Setting tray menu...{} (+{}ms)",
+            gen_info,
+            start_time.elapsed().as_millis()
+        );
         tray.set_menu(Some(new_menu))
             .map_err(|e| format!("Failed to set tray menu: {}", e))?;
-        log::info!("Tray menu updated successfully");
+        log::debug!(
+            "⏱️ [TRAY TIMING] Tray menu set{} - total: {}ms",
+            gen_info,
+            start_time.elapsed().as_millis()
+        );
     } else {
         log::warn!("Tray icon not found");
     }
@@ -1042,7 +1613,8 @@ pub async fn get_transcription_acceleration_status(
     app: AppHandle,
 ) -> Result<crate::whisper::gpu_sidecar::AccelerationRuntimeStatus, String> {
     let settings = get_settings(app.clone()).await?;
-    let mode = normalize_transcription_acceleration(Some(&settings.transcription_acceleration));
+    let mode =
+        normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
 
     if mode == "cpu" {
         return Ok(crate::whisper::gpu_sidecar::AccelerationRuntimeStatus {
@@ -1111,7 +1683,8 @@ pub async fn test_transcription_acceleration(
                 })?
         };
 
-        let mode = normalize_transcription_acceleration(Some(&settings.transcription_acceleration));
+        let mode =
+            normalize_stored_transcription_acceleration(Some(&settings.transcription_acceleration));
         let client = app.state::<crate::whisper::gpu_sidecar::GpuSidecarClient>();
         client.probe(&app, &model_path, &mode).await?;
         Ok(client.status().await)
@@ -1121,9 +1694,10 @@ pub async fn test_transcription_acceleration(
 #[cfg(test)]
 mod tests {
     use super::{
-        get_autostart_status, normalize_transcription_acceleration, resolve_pill_indicator_mode,
-        set_autostart, DEFAULT_TRANSCRIPTION_ACCELERATION,
+        get_autostart_status, recording_retention_days_from_legacy_count,
+        recording_retention_days_to_value, resolve_pill_indicator_mode, set_autostart,
     };
+    use serde_json::json;
 
     #[test]
     fn resolve_pill_indicator_mode_prefers_new_value() {
@@ -1157,41 +1731,6 @@ mod tests {
         assert_eq!(resolved, "when_recording");
     }
 
-    #[test]
-    fn normalize_transcription_acceleration_accepts_known_modes() {
-        assert_eq!(
-            normalize_transcription_acceleration(Some("auto")),
-            DEFAULT_TRANSCRIPTION_ACCELERATION
-        );
-        assert_eq!(normalize_transcription_acceleration(Some("cpu")), "cpu");
-        assert_eq!(normalize_transcription_acceleration(Some("gpu")), "gpu");
-    }
-
-    #[test]
-    fn normalize_transcription_acceleration_falls_back_to_auto() {
-        assert_eq!(
-            normalize_transcription_acceleration(None),
-            DEFAULT_TRANSCRIPTION_ACCELERATION
-        );
-        assert_eq!(
-            normalize_transcription_acceleration(Some("vulkan")),
-            DEFAULT_TRANSCRIPTION_ACCELERATION
-        );
-    }
-
-    #[test]
-    fn vulkan_preload_warm_follows_transcription_acceleration_mode() {
-        use crate::whisper::gpu_sidecar::should_attempt_vulkan_warm_on_preload;
-
-        let cpu = normalize_transcription_acceleration(Some("cpu"));
-        assert!(!should_attempt_vulkan_warm_on_preload(&cpu, None));
-
-        let auto = normalize_transcription_acceleration(Some("auto"));
-        assert!(should_attempt_vulkan_warm_on_preload(&auto, None));
-
-        let gpu = normalize_transcription_acceleration(Some("gpu"));
-        assert!(should_attempt_vulkan_warm_on_preload(&gpu, None));
-    }
     /// Verify the autostart command functions exist and compile.
     /// Compilation IS the test: if the functions don't exist or have
     /// wrong signatures, the imports and generate_handler! macro will fail.
@@ -1202,5 +1741,32 @@ mod tests {
         // further compile-time signature validation in lib.rs.
         let _get = get_autostart_status;
         let _set = set_autostart;
+    }
+
+    #[test]
+    fn recording_retention_days_none_saves_as_null() {
+        assert_eq!(
+            recording_retention_days_to_value(None),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn recording_retention_days_some_saves_as_number() {
+        assert_eq!(recording_retention_days_to_value(Some(30)), json!(30));
+    }
+
+    #[test]
+    fn recording_retention_days_migrates_legacy_counts_conservatively() {
+        assert_eq!(recording_retention_days_from_legacy_count(25), Some(7));
+        assert_eq!(recording_retention_days_from_legacy_count(50), Some(30));
+        assert_eq!(recording_retention_days_from_legacy_count(100), Some(90));
+    }
+
+    #[test]
+    fn recording_retention_days_legacy_unlimited_counts_keep_forever() {
+        assert_eq!(recording_retention_days_from_legacy_count(0), None);
+        assert_eq!(recording_retention_days_from_legacy_count(250), None);
+        assert_eq!(recording_retention_days_from_legacy_count(1), None);
     }
 }

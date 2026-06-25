@@ -22,7 +22,7 @@ const defaultIpcHandler = (cmd: string) => {
     case 'get_settings':
       return {
         hotkey: 'CommandOrControl+Shift+Space',
-        language: 'en',
+        speech_language: 'en',
         theme: 'system',
         current_model: 'base.en',
         current_model_engine: 'whisper',
@@ -75,7 +75,7 @@ const defaultIpcHandler = (cmd: string) => {
           },
           {
             name: 'soniox',
-            display_name: 'Soniox (Cloud)',
+            display_name: 'Soniox',
             size: 0,
             url: '',
             sha256: '',
@@ -112,7 +112,7 @@ const defaultIpcHandler = (cmd: string) => {
       return { enabled: false, provider: '', model: '', hasApiKey: false };
 
     case 'get_enhancement_options':
-      return { preset: 'Default', custom_vocabulary: [] };
+      return { preset: 'PersonalDictation' };
 
     case 'init_cleanup_schedule':
       return true;
@@ -195,15 +195,6 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   ask: vi.fn(() => Promise.resolve(true)), // Default to confirming dialogs
 }));
 
-// Mock global shortcut plugin
-vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
-  GlobalShortcutExt: vi.fn(),
-  ShortcutState: {
-    Pressed: 'pressed',
-    Released: 'released',
-  },
-}));
-
 // Mock OS plugin for platform detection
 vi.mock('@tauri-apps/plugin-os', () => ({
   type: vi.fn(() => 'macos'), // Default to macOS for tests
@@ -231,12 +222,13 @@ global.IntersectionObserver = vi.fn().mockImplementation(() => ({
   disconnect: vi.fn(),
 }));
 
-// Mock ResizeObserver
-global.ResizeObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}));
+class MockResizeObserver {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+}
+
+global.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
 
 // Export helper to emit mock events in tests
 export const emitMockEvent = (event: string, payload: any) => {

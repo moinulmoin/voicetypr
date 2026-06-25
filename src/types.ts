@@ -1,5 +1,21 @@
-export type SpeechModelEngine = 'whisper' | 'parakeet' | 'soniox';
+export type SpeechModelEngine = 'whisper' | 'parakeet' | 'soniox' | 'openai' | 'groq' | 'deepgram' | 'cohere';
 export type ModelKind = 'local' | 'cloud';
+
+/** A downloaded shareable model exposed by a remote Voicetypr host. */
+export interface RemoteShareableModel {
+  id: string;
+  display_name: string;
+  engine: Extract<SpeechModelEngine, 'whisper' | 'parakeet'>;
+  recommended?: boolean | null;
+  speed_score?: number | null;
+  accuracy_score?: number | null;
+}
+
+/** Remote-control-lite snapshot for changing the host's shared transcription model. */
+export interface RemoteModelControlSnapshot {
+  current: RemoteShareableModel;
+  available: RemoteShareableModel[];
+}
 
 interface BaseModelInfo {
   name: string;
@@ -40,26 +56,25 @@ export const isLocalModel = (model: ModelInfo): model is LocalModelInfo =>
 export type RecordingMode = 'toggle' | 'push_to_talk';
 export type PillIndicatorMode = 'never' | 'always' | 'when_recording';
 export type PillIndicatorPosition = 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
-export type TranscriptionAcceleration = 'auto' | 'cpu' | 'gpu';
-
+export type TranscriptionAcceleration = 'auto' | 'gpu' | 'cpu';
 
 export interface AppSettings {
   hotkey: string;
   current_model: string;
-  language: string;
-  translate_to_english?: boolean;
+  speech_language: string;
+  transcription_task?: 'transcribe' | 'translate_to_english';
+  final_text_language?: string;
   theme: string;
   transcription_cleanup_days?: number | null;
   launch_at_startup?: boolean;
   onboarding_completed?: boolean;
   check_updates_automatically?: boolean;
-  install_updates_automatically?: boolean;
   selected_microphone?: string | null;
   // Push-to-talk support
   recording_mode?: RecordingMode;
   use_different_ptt_key?: boolean;
   ptt_hotkey?: string;
-  current_model_engine?: 'whisper' | 'parakeet' | 'soniox';
+  current_model_engine?: SpeechModelEngine;
   auto_paste_transcription?: boolean;
   keep_transcription_in_clipboard?: boolean;
   // Audio feedback
@@ -69,12 +84,44 @@ export interface AppSettings {
   pill_indicator_mode?: PillIndicatorMode;
   // Pill indicator screen position
   pill_indicator_position?: PillIndicatorPosition;
-  // Pill indicator offset from screen edge in pixels (10-100)
+  // Pill indicator offset from screen edge in pixels (10-50)
   pill_indicator_offset?: number;
   // Pause system media during recording
   pause_media_during_recording?: boolean;
-  // Local Whisper acceleration mode
+  // Network sharing settings
+  sharing_port?: number;
+  sharing_password?: string;
+  // Recording persistence settings
+  save_recordings?: boolean;
+  recording_retention_days?: number | null; // null = keep forever
+  // Transcription acceleration (Windows only; stored-but-ignored on other platforms)
   transcription_acceleration?: TranscriptionAcceleration;
+}
+
+/** Writing-step outcome attached to a history row (mirrors the backend `writing` metadata blob). */
+export interface TranscriptionWritingMeta {
+  /** True when a required AI translation failed and the row holds the raw, untranslated transcript. */
+  translation_failed?: boolean;
+  /** The output language the failed translation targeted. */
+  target_language?: string;
+  /** Transcription source: 'desktop_recording' | 'audio_file' | 'audio_bytes' | 'remote_server' */
+  source?: string;
+  /** Engine/provider used (e.g. 'whisper', 'parakeet', 'soniox'). */
+  engine?: string;
+  /** Audio length in milliseconds. */
+  audio_duration_ms?: number;
+  /** Processing time in milliseconds. */
+  processing_duration_ms?: number;
+  /** True when speaker-diarization word segments are present. */
+  diarized?: boolean;
+  /** AI writing mode applied (desktop only). */
+  mode?: string;
+  /** True when an AI enhancement was applied (desktop only). */
+  ai_applied?: boolean;
+  /** Pre-AI raw transcript saved when AI formatting changed the text (desktop only). Never logged; local history only. */
+  original_text?: string;
+  /** App that received the dictated text (set when App Rules capture the active app). */
+  context_hint?: { app_name?: string };
 }
 
 export interface TranscriptionHistory {
@@ -82,6 +129,10 @@ export interface TranscriptionHistory {
   text: string;
   timestamp: Date;
   model: string;
+  recording_file?: string; // Filename of the saved recording (not full path)
+  source_recording_id?: string; // For re-transcriptions, references original transcription
+  status?: 'completed' | 'in_progress' | 'failed';
+  writing?: TranscriptionWritingMeta;
 }
 
 export interface LicenseStatus {

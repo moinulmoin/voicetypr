@@ -1,13 +1,13 @@
 # Voicetypr
 
-macOS desktop app for offline voice transcription using Whisper AI. Built with Tauri v2 (Rust backend) and React 19 (TypeScript frontend). Features system-wide hotkey recording, automatic text insertion at cursor, and local model management.
+macOS desktop app for offline voice transcription using Whisper AI. Built with Tauri v2 (Rust backend) and React 19 (TypeScript frontend). Features system-wide hotkey recording, automatic text insertion at cursor, local model management, and **remote transcription via network sharing**.
 
 ## Core Commands
 
 ```bash
 # Development
 pnpm dev              # Frontend only (Vite)
-pnpm tauri dev        # Full Tauri app (frontend + Rust)
+pnpm tauri:dev        # Full Tauri app (frontend + Rust)
 
 # Quality checks (run before commits)
 pnpm lint             # ESLint
@@ -41,6 +41,12 @@ src-tauri/src/                # Rust backend
 ├── commands/                 # Tauri command handlers
 ├── audio/                    # CoreAudio recording
 ├── whisper/                  # Transcription engine
+├── remote/                   # Network sharing (server + client)
+│   ├── server.rs             # HTTP server (warp)
+│   ├── client.rs             # HTTP client for remote transcription
+│   ├── lifecycle.rs          # Server start/stop management
+│   └── settings.rs           # Saved connections persistence
+├── menu/                     # System tray menu
 ├── ai/                       # AI model management
 ├── parakeet/                 # Parakeet sidecar integration
 ├── state/                    # Backend state management
@@ -94,17 +100,22 @@ git add -A && git commit -m "feat: description"
 7. **Large lib.rs**: Main Rust entry point at 96KB; navigate via module imports
 8. **Sidecar builds**: Parakeet Swift sidecar built via `build.rs` during `tauri build`
 
+9. **Windows CI is compile-only for Rust tests**: `cargo test --no-run` — Windows runtime behavior (hotkeys, Vulkan sidecar) needs manual smoke on a real machine.
+
 ## Key Files
 
 - `src-tauri/src/lib.rs` — Main Rust entry, command registration
 - `src-tauri/src/commands/` — All Tauri command implementations
+- `src-tauri/src/commands/audio.rs` — Recording and transcription flow
+- `src-tauri/src/commands/remote.rs` — Remote server commands
+- `src-tauri/src/remote/` — Network sharing implementation
+- `src-tauri/src/menu/tray.rs` — System tray menu
 - `src/hooks/` — React hooks for Tauri integration
 - `src/components/tabs/` — Main UI tab components
+- `src/components/sections/` — Section components (ModelsSection, NetworkSharingSection)
 - `src-tauri/capabilities/` — Tauri permission definitions
 
 ## References
 
-- `agent-docs/ARCHITECTURE.md` — Detailed architecture diagrams
-- `agent-docs/EVENT-FLOW-ANALYSIS.md` — Event system documentation
-- `CLAUDE.md` — Coding assistant guidelines
+- `CLAUDE.md` — Full coding guidelines
 - `README.md` — Product overview

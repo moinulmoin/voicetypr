@@ -37,6 +37,7 @@
     "process:allow-restart",
     "process:allow-exit",
     "os:default",
-    "notification:default"
+    "notification:default",
+    "log:default"
   ]
 }

@@ -1,13 +1,23 @@
 import { AlertCircle, RefreshCw, Bug } from 'lucide-react';
 import React, { useState } from 'react';
-import { ErrorBoundary as ReactErrorBoundary } from 'react-error-boundary';
+import { ErrorBoundary as ReactErrorBoundary, type FallbackProps } from 'react-error-boundary';
 import { Button } from './ui/button';
 import { CrashReportDialog } from './CrashReportDialog';
+import { createLogger } from '@/lib/logger';
 
-interface ErrorFallbackProps {
-  error: Error;
-  resetErrorBoundary: () => void;
-}
+const log = createLogger('error-boundary');
+
+type ErrorFallbackProps = FallbackProps;
+
+const asError = (error: unknown): Error => {
+  if (error instanceof Error) {
+    return error;
+  }
+  if (typeof error === 'string' && error.length > 0) {
+    return new Error(error);
+  }
+  return new Error('Unknown error');
+};
 
 function ErrorFallback({ error, resetErrorBoundary }: ErrorFallbackProps) {
   const [showReportDialog, setShowReportDialog] = useState(false);
@@ -19,7 +29,7 @@ function ErrorFallback({ error, resetErrorBoundary }: ErrorFallbackProps) {
         <div className="text-center space-y-2">
           <h2 className="text-lg font-semibold">Something went wrong</h2>
           <p className="text-sm text-muted-foreground max-w-md">
-            {error.message || 'An unexpected error occurred'}
+            {asError(error).message || 'An unexpected error occurred'}
           </p>
         </div>
         <div className="flex gap-2">
@@ -46,7 +56,7 @@ function ErrorFallback({ error, resetErrorBoundary }: ErrorFallbackProps) {
 
       {showReportDialog && (
         <CrashReportDialog
-          error={error}
+          error={asError(error)}
           isOpen={showReportDialog}
           onClose={() => setShowReportDialog(false)}
           onRetry={resetErrorBoundary}
@@ -58,7 +68,7 @@ function ErrorFallback({ error, resetErrorBoundary }: ErrorFallbackProps) {
 
 interface AppErrorBoundaryProps {
   children: React.ReactNode;
-  fallback?: React.ComponentType<ErrorFallbackProps>;
+  fallback?: React.ComponentType<FallbackProps>;
   onError?: (error: Error, errorInfo: React.ErrorInfo) => void;
   onReset?: () => void;
   showCrashReporter?: boolean;
@@ -77,9 +87,10 @@ export function AppErrorBoundary({
     <ReactErrorBoundary
       FallbackComponent={FallbackComponent}
       onError={(error, errorInfo) => {
-        console.error('Error caught by boundary:', error, errorInfo);
+        const normalizedError = asError(error);
+        log.error('Error caught by boundary:', normalizedError, errorInfo);
         if (onError) {
-          onError(error, errorInfo);
+          onError(normalizedError, errorInfo);
         }
       }}
       onReset={onReset}
@@ -97,7 +108,7 @@ function SimpleFallback({ error, resetErrorBoundary }: ErrorFallbackProps) {
       <div className="text-center space-y-2">
         <h2 className="text-lg font-semibold">Something went wrong</h2>
         <p className="text-sm text-muted-foreground max-w-md">
-          {error.message || 'An unexpected error occurred'}
+          {asError(error).message || 'An unexpected error occurred'}
         </p>
       </div>
       <Button
@@ -119,7 +130,7 @@ export function RecordingErrorBoundary({ children }: { children: React.ReactNode
     <AppErrorBoundary
       showCrashReporter={false}
       onError={(error) => {
-        console.error('Recording error:', error);
+        log.error('Recording error:', error);
       }}
       onReset={() => {
         // Could reset recording state here
@@ -134,12 +145,12 @@ export function SettingsErrorBoundary({ children }: { children: React.ReactNode 
   return (
     <AppErrorBoundary
       onError={(error) => {
-        console.error('Settings error:', error);
+        log.error('Settings error:', error);
       }}
       fallback={({ error, resetErrorBoundary }) => (
         <div className="p-4 border border-destructive/20 rounded-lg bg-destructive/5">
           <p className="text-sm text-destructive">
-            Failed to load settings: {error.message}
+            Failed to load settings: {asError(error).message}
           </p>
           <Button
             onClick={resetErrorBoundary}
@@ -161,7 +172,7 @@ export function ModelManagementErrorBoundary({ children }: { children: React.Rea
   return (
     <AppErrorBoundary
       onError={(error) => {
-        console.error('Model management error:', error);
+        log.error('Model management error:', error);
       }}
       fallback={({ resetErrorBoundary }) => (
         <div className="text-center p-4 space-y-2">

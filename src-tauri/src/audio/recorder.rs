@@ -1,7 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -26,6 +26,87 @@ impl RecordingSize {
         Ok(())
     }
 }
+const WRITER_QUEUE_CAPACITY: usize = 1024; // Bounded memory; multi-second disk-stall slack.
+
+// Minimum capacity (in i16 samples) of each recycled chunk and each scratch
+// conversion buffer. Real audio devices never deliver per-callback buffers this
+// large, so this floor guarantees a reused buffer can swallow any realistic
+// callback payload without growing — growing would allocate on the real-time
+// audio thread and glitch the capture.
+const CHUNK_CAPACITY_MIN: usize = 8192;
+// Fallback per-callback frame bound used when a host reports no buffer-size
+// range for its default input config (some ALSA/OSS setups). 8192 frames
+// comfortably exceeds the largest buffer real input devices expose.
+const CHUNK_FALLBACK_FRAMES: usize = 8192;
+// Buffers preallocated beyond the writer-queue depth so one is always free while
+// another is being written and a third is being assembled in the callback. By
+// conservation this guarantees the recycle channel is never empty during capture:
+// the RT callback only ever reuses a buffer — it never allocates (plan 008).
+const CHUNK_POOL_SLACK: usize = 4;
+// Capacity of the recycle (free-pool) channel. It must hold the ENTIRE
+// preallocated pool so returning a buffer never blocks and never heap-allocates:
+// a bounded `sync_channel` is backed by a fixed ring buffer (no per-send node,
+// unlike an unbounded `channel`), keeping the RT callback's queue-full drop path
+// alloc-free. By conservation the channel can never contain more than
+// `WRITER_QUEUE_CAPACITY + CHUNK_POOL_SLACK` buffers at once, so this exact bound
+// makes `try_send` on the real-time thread always succeed without blocking.
+const RECYCLE_CHANNEL_CAPACITY: usize = WRITER_QUEUE_CAPACITY + CHUNK_POOL_SLACK;
+
+enum WriterMsg {
+    Chunk(Vec<i16>),
+    Finalize,
+}
+
+fn f32_to_i16(sample: f32) -> i16 {
+    let clamped = sample.clamp(-1.0, 1.0);
+    (clamped * 32767.0) as i16
+}
+
+fn i16_to_f32(sample: i16) -> f32 {
+    sample as f32 / i16::MAX as f32
+}
+
+fn u16_to_f32(sample: u16) -> f32 {
+    (sample as f32 - 32768.0) / 32768.0
+}
+
+fn u16_to_i16(sample: u16) -> i16 {
+    (sample as i32 - 32768) as i16
+}
+
+/// Largest callback payload (in i16 samples) a CPAL input stream built from
+/// `config` could ever deliver on the real-time thread.
+///
+/// CPAL always delivers exactly one buffer per callback, and the host can only
+/// pick a frame count inside the device's supported buffer-size range, so the
+/// range maximum (times the channel count) bounds every callback's sample count.
+/// Sizing every preallocated chunk — and the scratch conversion buffers — to this
+/// bound means `extend_from_slice` on the real-time thread never reallocates.
+fn max_callback_samples(device: &cpal::Device, config: &cpal::SupportedStreamConfig) -> usize {
+    let channels = config.channels() as usize;
+    let format = config.sample_format();
+    let max_frames = device
+        .supported_input_configs()
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter(|c| c.channels() == config.channels() && c.sample_format() == format)
+        .filter_map(|c| match c.buffer_size() {
+            cpal::SupportedBufferSize::Range { max, .. } => Some(*max as usize),
+            cpal::SupportedBufferSize::Unknown => None,
+        })
+        .max()
+        .unwrap_or(CHUNK_FALLBACK_FRAMES);
+    chunk_capacity_for(max_frames, channels)
+}
+
+/// Pure core of [`max_callback_samples`]: the capacity (in i16 samples) needed so
+/// a reused buffer never grows for a callback delivering `max_frames` frames
+/// across `channels`. Floored at [`CHUNK_CAPACITY_MIN`] so a device that
+/// under-reports its range still leaves headroom.
+fn chunk_capacity_for(max_frames: usize, channels: usize) -> usize {
+    max_frames.saturating_mul(channels).max(CHUNK_CAPACITY_MIN)
+}
 
 pub struct AudioRecorder {
     recording_handle: Arc<Mutex<Option<RecordingHandle>>>,
@@ -49,17 +130,17 @@ impl Drop for AudioRecorder {
         }
 
         // Clear audio level receiver
-        if let Ok(mut receiver_guard) = self.audio_level_receiver.lock() {
-            receiver_guard.take();
-        } else {
-            log::error!("Failed to acquire audio level receiver lock during drop");
-        }
 
         // Clear silence event receiver
         if let Ok(mut receiver_guard) = self.silence_event_receiver.lock() {
             receiver_guard.take();
         } else {
             log::error!("Failed to acquire silence event receiver lock during drop");
+        }
+        if let Ok(mut receiver_guard) = self.audio_level_receiver.lock() {
+            receiver_guard.take();
+        } else {
+            log::error!("Failed to acquire audio level receiver lock during drop");
         }
     }
 }
@@ -104,7 +185,7 @@ impl AudioRecorder {
             return Err("Already recording".to_string());
         }
 
-        // Clear any leftover audio level and silence event receivers from previous recordings
+        // Clear any leftover side-channel receivers from previous recordings
         if let Ok(mut guard) = self.audio_level_receiver.lock() {
             guard.take();
         }
@@ -118,11 +199,7 @@ impl AudioRecorder {
 
         // Create audio level channel (f64 for EBU R128 loudness values)
         let (audio_level_tx, audio_level_rx) = mpsc::channel::<f64>();
-
-        // Silence tier events (bounded; realtime callback uses try_send)
         let (silence_event_tx, silence_event_rx) = mpsc::sync_channel::<SilenceDetectorEvent>(8);
-        let silence_event_tx_clone = silence_event_tx.clone();
-
         // Spawn recording thread
         let thread_handle = thread::spawn(move || -> Result<String, String> {
             let host = cpal::default_host();
@@ -163,19 +240,13 @@ impl AudioRecorder {
                 config.sample_format()
             );
 
-            // List all available input devices for debugging
-            log::info!("Available input devices:");
-            if let Ok(devices) = host.input_devices() {
-                for (idx, dev) in devices.enumerate() {
-                    if let Ok(name) = dev.name() {
-                        log::info!("  {}. {}", idx + 1, name);
-                    }
-                }
-            }
+            // Derive the largest callback payload (in i16 samples) this stream can
+            // ever deliver, so every preallocated chunk and scratch conversion
+            // buffer is sized to hold it without growing on the real-time thread.
+            let chunk_capacity = max_callback_samples(&device, &config);
 
             // Initialize silence detector and level meter
             let silence_detector = Arc::new(Mutex::new(SilenceDetector::new()));
-
             let level_meter = Arc::new(Mutex::new(
                 AudioLevelMeter::new(
                     config.sample_rate().0,
@@ -193,13 +264,79 @@ impl AudioRecorder {
                 sample_format: hound::SampleFormat::Int,
             };
 
-            let writer = Arc::new(Mutex::new(Some(
-                hound::WavWriter::create(&output_path, spec).map_err(|e| e.to_string())?,
-            )));
+            let writer = hound::WavWriter::create(&output_path, spec).map_err(|e| e.to_string())?;
+
+            let (writer_tx, writer_rx) = mpsc::sync_channel::<WriterMsg>(WRITER_QUEUE_CAPACITY);
+            // Bounded so returning a buffer is alloc-free (fixed ring buffer; no
+            // per-send heap node like an unbounded channel) and, by conservation
+            // (see RECYCLE_CHANNEL_CAPACITY), never blocks the real-time thread.
+            let (recycle_tx, recycle_rx) = mpsc::sync_channel::<Vec<i16>>(RECYCLE_CHANNEL_CAPACITY);
+            let recycle_tx_for_drop = recycle_tx.clone();
+            // Preallocate the chunk pool BEFORE the stream starts so the
+            // real-time audio callback reuses existing buffers and never
+            // allocates on the audio thread (plan 008: lock-free, no-alloc path).
+            for _ in 0..(WRITER_QUEUE_CAPACITY + CHUNK_POOL_SLACK) {
+                let _ = recycle_tx.send(Vec::with_capacity(chunk_capacity));
+            }
+            let bytes_written = Arc::new(AtomicU64::new(0));
+            let dropped_chunks = Arc::new(AtomicU64::new(0));
+            let writer_bytes = bytes_written.clone();
+            let writer_dropped = dropped_chunks.clone();
+            let stop_tx_for_size = stop_tx_clone.clone();
+            let writer_handle = thread::spawn(move || -> Result<(), String> {
+                let mut writer = writer;
+                let mut write_error = None::<String>;
+
+                while let Ok(WriterMsg::Chunk(mut samples)) = writer_rx.recv() {
+                    let sample_bytes = (samples.len() * 2) as u64;
+                    for &sample in &samples {
+                        if let Err(e) = writer.write_sample(sample) {
+                            write_error = Some(format!("Failed to write audio sample: {}", e));
+                            break;
+                        }
+                    }
+
+                    if write_error.is_some() {
+                        break;
+                    }
+
+                    let new_total =
+                        writer_bytes.fetch_add(sample_bytes, Ordering::SeqCst) + sample_bytes;
+                    if RecordingSize::check(new_total).is_err() {
+                        let _ = stop_tx_for_size.send(RecorderCommand::Stop);
+                    }
+
+                    samples.clear();
+                    let _ = recycle_tx.send(samples);
+                }
+
+                writer
+                    .finalize()
+                    .map_err(|e| format!("WAV finalize failed: {e}"))?;
+
+                let dropped = writer_dropped.load(Ordering::SeqCst);
+                if dropped > 0 {
+                    log::warn!(
+                        "Dropped {} audio chunks because the writer queue was full",
+                        dropped
+                    );
+                    return Err(format!(
+                        "Recording integrity failure: dropped {dropped} audio chunks before WAV finalization"
+                    ));
+                }
+
+                if let Some(error) = write_error {
+                    return Err(error);
+                }
+
+                Ok(())
+            });
+
             // Error callback that triggers stop on device errors (e.g., disconnection)
             let stop_tx_for_error = stop_tx_clone.clone();
             let error_occurred = Arc::new(Mutex::new(None::<String>));
             let error_occurred_for_callback = error_occurred.clone();
+
             let err_fn = move |err: cpal::StreamError| {
                 // Detailed logging for audio device errors
                 log::error!("═══════════════════════════════════════════════════════");
@@ -218,21 +355,17 @@ impl AudioRecorder {
                 let _ = stop_tx_for_error.send(RecorderCommand::Stop);
             };
 
-            // Shared state for size tracking
-            let bytes_written = Arc::new(Mutex::new(0u64));
-
             // Drain barrier flags shared between callback and stop path
             let stop_requested = Arc::new(AtomicBool::new(false));
             let callback_drained = Arc::new(AtomicBool::new(false));
 
             // Common audio processing closure
             let process_audio = {
-                let writer_clone = writer.clone();
-                let error_clone = error_occurred.clone();
-                let bytes_clone = bytes_written.clone();
-                let stop_tx_for_size = stop_tx_clone.clone();
+                let writer_tx_clone: SyncSender<WriterMsg> = writer_tx.clone();
+                let dropped_chunks_clone = dropped_chunks.clone();
+                let recycle_tx_for_drop = recycle_tx_for_drop.clone();
+                let silence_event_tx_clone = silence_event_tx.clone();
                 let silence_detector_clone = silence_detector.clone();
-                let silence_event_tx_for_callback = silence_event_tx_clone.clone();
                 let level_meter_clone = level_meter.clone();
                 let stop_requested_clone = stop_requested.clone();
                 let callback_drained_clone = callback_drained.clone();
@@ -242,24 +375,23 @@ impl AudioRecorder {
                     if stop_requested_clone.load(Ordering::SeqCst) {
                         // Only write on the first callback after stop; skip all subsequent ones
                         if !callback_drained_clone.load(Ordering::SeqCst) {
-                            // Use lock() not try_lock() here: we're draining, not in the
-                            // real-time hot path. The recording thread is in the drain wait
-                            // loop and won't hold this mutex until after stream.pause().
-                            // CPAL callbacks are serialized per-stream (one thread per stream
-                            // on both WASAPI and CoreAudio), so no concurrent callback contention.
-                            if let Ok(mut guard) = writer_clone.lock() {
-                                if let Some(writer) = guard.as_mut() {
-                                    for &sample in i16_samples {
-                                        if let Err(e) = writer.write_sample(sample) {
-                                            if let Ok(mut error_guard) = error_clone.lock() {
-                                                *error_guard = Some(format!(
-                                                    "Failed to write audio sample: {}",
-                                                    e
-                                                ));
-                                            }
-                                            break;
-                                        }
+                            if let Ok(mut chunk) = recycle_rx.try_recv() {
+                                chunk.clear();
+                                chunk.extend_from_slice(i16_samples);
+                                match writer_tx_clone.try_send(WriterMsg::Chunk(chunk)) {
+                                    Ok(()) => {}
+                                    Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
+                                        dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
+                                        chunk.clear();
+                                        // try_send: never blocks or allocates
+                                        // on the RT thread. By conservation
+                                        // (RECYCLE_CHANNEL_CAPACITY) the channel
+                                        // always has room; on the impossible
+                                        // full case the chunk is simply dropped.
+                                        let _ = recycle_tx_for_drop.try_send(chunk);
                                     }
+                                    Err(TrySendError::Full(WriterMsg::Finalize)) => {}
+                                    Err(TrySendError::Disconnected(_)) => {}
                                 }
                             }
                             callback_drained_clone.store(true, Ordering::SeqCst);
@@ -275,60 +407,54 @@ impl AudioRecorder {
                         let _ = meter.process_samples(f32_samples);
                     }
 
-                    // Emit silence tier transitions (non-blocking; never stops the recorder)
+                    // Emit sparse silence detector events over a bounded side channel.
                     if let Ok(mut detector) = silence_detector_clone.try_lock() {
                         if let Some(event) = detector.update(rms) {
-                            let _ = silence_event_tx_for_callback.try_send(event);
+                            let _ = silence_event_tx_clone.try_send(event);
                         }
                     }
 
-                    // Check size before writing
-                    let sample_bytes = i16_samples.len() * 2; // 2 bytes per i16 sample
-                    if let Ok(mut bytes_guard) = bytes_clone.lock() {
-                        let new_total = *bytes_guard + sample_bytes as u64;
-                        if RecordingSize::check(new_total).is_err() {
-                            let _ = stop_tx_for_size.send(RecorderCommand::Stop);
-                            return;
-                        }
-                        *bytes_guard = new_total;
-                    }
+                    let Ok(mut chunk) = recycle_rx.try_recv() else {
+                        // Pool exhausted (all buffers in flight under extreme
+                        // backpressure): drop this chunk rather than allocate on
+                        // the RT thread (consistent with the queue-full drop path).
+                        dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
+                        return;
+                    };
+                    chunk.clear();
+                    chunk.extend_from_slice(i16_samples);
 
-                    // Write audio data (i16 format)
-                    if let Ok(mut guard) = writer_clone.try_lock() {
-                        if let Some(writer) = guard.as_mut() {
-                            for &sample in i16_samples {
-                                if let Err(e) = writer.write_sample(sample) {
-                                    if let Ok(mut error_guard) = error_clone.lock() {
-                                        *error_guard =
-                                            Some(format!("Failed to write audio sample: {}", e));
-                                    }
-                                    break;
-                                }
-                            }
+                    match writer_tx_clone.try_send(WriterMsg::Chunk(chunk)) {
+                        Ok(()) => {}
+                        Err(TrySendError::Full(WriterMsg::Chunk(mut chunk))) => {
+                            dropped_chunks_clone.fetch_add(1, Ordering::SeqCst);
+                            chunk.clear();
+                            // try_send: never blocks or allocates on the RT
+                            // thread. By conservation (RECYCLE_CHANNEL_CAPACITY)
+                            // the channel always has room; on the impossible
+                            // full case the chunk is simply dropped.
+                            let _ = recycle_tx_for_drop.try_send(chunk);
                         }
+                        Err(TrySendError::Full(WriterMsg::Finalize)) => {}
+                        Err(TrySendError::Disconnected(_)) => {}
                     }
                 }
             };
 
             let stream = match config.sample_format() {
                 cpal::SampleFormat::F32 => {
-                    let process_clone = process_audio.clone();
+                    let process_audio = process_audio;
+                    let mut i16_scratch: Vec<i16> = Vec::with_capacity(chunk_capacity);
                     device
                         .build_input_stream(
                             &config.config(),
                             move |data: &[f32], _: &_| {
                                 // Convert F32 to I16 with proper clamping to avoid distortion
-                                let i16_samples: Vec<i16> = data
-                                    .iter()
-                                    .map(|&sample| {
-                                        // Clamp to avoid overflow and use 32767.0 for symmetric conversion
-                                        let clamped = sample.clamp(-1.0, 1.0);
-                                        (clamped * 32767.0) as i16
-                                    })
-                                    .collect();
+                                i16_scratch.clear();
+                                i16_scratch.extend(data.iter().map(|&sample| f32_to_i16(sample)));
 
                                 // Process audio
-                                process_clone(data, &i16_samples);
+                                process_audio(data, &i16_scratch);
                             },
                             err_fn,
                             None,
@@ -336,17 +462,18 @@ impl AudioRecorder {
                         .map_err(|e| e.to_string())?
                 }
                 cpal::SampleFormat::I16 => {
-                    let process_clone = process_audio.clone();
+                    let process_audio = process_audio;
+                    let mut f32_scratch: Vec<f32> = Vec::with_capacity(chunk_capacity);
                     device
                         .build_input_stream(
                             &config.config(),
                             move |data: &[i16], _: &_| {
                                 // Convert I16 to F32 for processing
-                                let f32_samples: Vec<f32> =
-                                    data.iter().map(|&x| x as f32 / i16::MAX as f32).collect();
+                                f32_scratch.clear();
+                                f32_scratch.extend(data.iter().map(|&sample| i16_to_f32(sample)));
 
                                 // Process audio
-                                process_clone(&f32_samples, data);
+                                process_audio(&f32_scratch, data);
                             },
                             err_fn,
                             None,
@@ -354,22 +481,23 @@ impl AudioRecorder {
                         .map_err(|e| e.to_string())?
                 }
                 cpal::SampleFormat::U16 => {
+                    let process_audio = process_audio;
+                    let mut f32_scratch: Vec<f32> = Vec::with_capacity(chunk_capacity);
+                    let mut i16_scratch: Vec<i16> = Vec::with_capacity(chunk_capacity);
                     device
                         .build_input_stream(
                             &config.config(),
                             move |data: &[u16], _: &_| {
                                 // Convert U16 to F32 for processing
-                                let f32_samples: Vec<f32> = data
-                                    .iter()
-                                    .map(|&x| (x as f32 - 32768.0) / 32768.0)
-                                    .collect();
+                                f32_scratch.clear();
+                                f32_scratch.extend(data.iter().map(|&sample| u16_to_f32(sample)));
 
                                 // Convert U16 to I16 for writing
-                                let i16_samples: Vec<i16> =
-                                    data.iter().map(|&x| (x as i32 - 32768) as i16).collect();
+                                i16_scratch.clear();
+                                i16_scratch.extend(data.iter().map(|&sample| u16_to_i16(sample)));
 
                                 // Process audio
-                                process_audio(&f32_samples, &i16_samples);
+                                process_audio(&f32_scratch, &i16_scratch);
                             },
                             err_fn,
                             None,
@@ -403,6 +531,7 @@ impl AudioRecorder {
                         "Drain timeout: proceeding with finalization after {}ms",
                         drain_start.elapsed().as_millis()
                     );
+                    callback_drained.store(true, Ordering::SeqCst);
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(5));
@@ -443,17 +572,20 @@ impl AudioRecorder {
                 log::info!("Audio stream stopped and cleaned up");
             }
 
-            // Check if any errors occurred during recording
+            let _ = writer_tx.send(WriterMsg::Finalize);
+            drop(writer_tx);
+            let writer_result = match writer_handle.join() {
+                Ok(result) => result,
+                Err(_) => Err("Writer thread panicked".to_string()),
+            };
+
+            writer_result?;
+
+            // Check if any errors occurred during recording after preserving writer integrity
+            // failures as the primary stop error.
             if let Ok(guard) = error_occurred.lock() {
                 if let Some(error) = &*guard {
                     return Err(error.clone());
-                }
-            }
-
-            // Take the writer out of the mutex to finalize it
-            if let Ok(mut guard) = writer.lock() {
-                if let Some(w) = guard.take() {
-                    w.finalize().map_err(|e| e.to_string())?;
                 }
             }
 
@@ -470,15 +602,17 @@ impl AudioRecorder {
             thread_handle,
         });
 
-        // Store the audio level and silence event receivers
-        *self
-            .audio_level_receiver
-            .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))? = Some(audio_level_rx);
+        // Store the audio level receiver
+
+        // Store the silence event receiver
         *self
             .silence_event_receiver
             .lock()
             .map_err(|e| format!("Failed to acquire lock: {}", e))? = Some(silence_event_rx);
+        *self
+            .audio_level_receiver
+            .lock()
+            .map_err(|e| format!("Failed to acquire lock: {}", e))? = Some(audio_level_rx);
 
         Ok(())
     }
@@ -490,11 +624,13 @@ impl AudioRecorder {
             .map_err(|e| format!("Failed to acquire lock: {}", e))?
             .take();
 
-        // Also clear the audio level and silence event receivers
-        if let Ok(mut guard) = self.audio_level_receiver.lock() {
+        // Also clear the audio level receiver
+
+        // Also clear the silence event receiver
+        if let Ok(mut guard) = self.silence_event_receiver.lock() {
             guard.take();
         }
-        if let Ok(mut guard) = self.silence_event_receiver.lock() {
+        if let Ok(mut guard) = self.audio_level_receiver.lock() {
             guard.take();
         }
 
@@ -526,6 +662,31 @@ impl AudioRecorder {
         }
     }
 
+    pub fn wait_for_recording_end(&mut self) -> Result<String, String> {
+        let handle = self
+            .recording_handle
+            .lock()
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?
+            .take();
+
+        if let Some(handle) = handle {
+            match handle.thread_handle.join() {
+                Ok(Ok(msg)) => Ok(msg),
+                Ok(Err(e)) => Err(e),
+                Err(_) => Err("Recording thread panicked".to_string()),
+            }
+        } else {
+            Err("Not recording".to_string())
+        }
+    }
+
+    pub fn take_silence_event_receiver(&mut self) -> Option<mpsc::Receiver<SilenceDetectorEvent>> {
+        self.silence_event_receiver
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
+    }
+
     pub fn is_recording(&self) -> bool {
         self.recording_handle
             .lock()
@@ -534,17 +695,15 @@ impl AudioRecorder {
     }
 
     /// Returns true if a recording worker exists but its thread has already
-    /// finished. This is the case when the recorder self-terminated (device
-    /// error or size cap) without `stop_recording` being
-    /// called. Non-consuming: `JoinHandle::is_finished` only borrows, so a
-    /// watchdog can poll this while the handle stays in the mutex.
+    /// finished. Non-consuming: the join handle stays stored so the normal
+    /// stop path can still take and join it.
     pub fn recording_thread_finished(&self) -> bool {
         self.recording_handle
             .lock()
             .map(|guard| {
                 guard
                     .as_ref()
-                    .map(|h| h.thread_handle.is_finished())
+                    .map(|handle| handle.thread_handle.is_finished())
                     .unwrap_or(false)
             })
             .unwrap_or(false)
@@ -552,13 +711,6 @@ impl AudioRecorder {
 
     pub fn take_audio_level_receiver(&mut self) -> Option<mpsc::Receiver<f64>> {
         self.audio_level_receiver
-            .lock()
-            .ok()
-            .and_then(|mut guard| guard.take())
-    }
-
-    pub fn take_silence_event_receiver(&mut self) -> Option<mpsc::Receiver<SilenceDetectorEvent>> {
-        self.silence_event_receiver
             .lock()
             .ok()
             .and_then(|mut guard| guard.take())
@@ -572,9 +724,51 @@ impl AudioRecorder {
     }
 }
 
+/// Classifies an error returned by [`AudioRecorder::stop_recording`]. Returns true when the
+/// recording worker did NOT finish, or the WAV writer could not finalize the file, so the
+/// capture must not be transcribed. A worker that finishes with an error (e.g. a CPAL device
+/// error) finalizes the WAV first, so those return false and the captured audio can still be
+/// recovered.
+pub(crate) fn stop_error_is_unfinalized(error: &str) -> bool {
+    error.contains("failed to stop within timeout")
+        || error.contains("panicked")
+        || error.contains("WAV finalize failed:")
+}
+
+pub(crate) fn stop_error_is_integrity_failure(error: &str) -> bool {
+    error.starts_with("Recording integrity failure:")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_error_is_unfinalized_distinguishes_finalized_from_unfinalized() {
+        // Worker did not finish -> WAV not finalized -> must not transcribe.
+        assert!(stop_error_is_unfinalized(
+            "Recording thread failed to stop within timeout"
+        ));
+        assert!(stop_error_is_unfinalized("Recording thread panicked"));
+        assert!(stop_error_is_unfinalized("Writer thread panicked"));
+        assert!(stop_error_is_unfinalized(
+            "WAV finalize failed: failed to seek"
+        ));
+        // Worker finished with an error -> WAV finalized -> recoverable, transcribe.
+        assert!(!stop_error_is_unfinalized(
+            "Audio device error: device disconnected"
+        ));
+    }
+
+    #[test]
+    fn stop_error_is_integrity_failure_matches_dropped_chunk_marker() {
+        assert!(stop_error_is_integrity_failure(
+            "Recording integrity failure: dropped 2 audio chunks before WAV finalization"
+        ));
+        assert!(!stop_error_is_integrity_failure(
+            "WAV finalize failed: failed to seek"
+        ));
+    }
 
     #[test]
     fn test_recording_size_check() {
@@ -592,6 +786,90 @@ mod tests {
 
         // Zero bytes is fine
         assert!(RecordingSize::check(0).is_ok());
+    }
+    #[test]
+    fn chunk_pool_depth_covers_max_inflight_buffers() {
+        // Invariant for the no-alloc RT audio callback (plan 008): the
+        // preallocated pool must hold more buffers than can ever be in flight at
+        // once. At most WRITER_QUEUE_CAPACITY sit in the bounded writer queue, one
+        // is mid-write in the writer thread, and one is being assembled in the
+        // callback — so the slack must cover those two extra slots. By conservation
+        // this guarantees the recycle channel is never empty during capture, so the
+        // callback only ever reuses a buffer and never allocates on the audio thread.
+        const _: () = assert!(
+            CHUNK_POOL_SLACK >= 2,
+            "pool slack must cover the writer-in-progress + callback-in-progress buffers"
+        );
+    }
+
+    #[test]
+    fn chunk_capacity_covers_any_realistic_callback_without_growing() {
+        // Reproduces the real-time allocation bug: a recycled chunk preallocated
+        // to a FIXED capacity smaller than a real callback forces
+        // `extend_from_slice` to reallocate on the audio thread. The pre-fix code
+        // used a hard-coded 4096-sample capacity, which a 4096-frame * 2-channel
+        // callback (8192 samples) already exceeds. The capacity must always be
+        // >= the full callback payload (max_frames * channels).
+        for &(frames, channels) in &[
+            (512usize, 2usize),
+            (1024, 2),
+            (2048, 2),
+            (4096, 2),
+            (8192, 1),
+            (8192, 2),
+        ] {
+            let payload = frames * channels;
+            let cap = chunk_capacity_for(frames, channels);
+            assert!(
+                cap >= payload,
+                "frames={frames} channels={channels}: chunk capacity {cap} < callback payload \
+                 {payload}; the RT thread would reallocate on extend_from_slice"
+            );
+        }
+    }
+
+    #[test]
+    fn chunk_capacity_floored_above_underreported_ranges() {
+        // A device that under-reports its buffer range must still leave headroom
+        // so a reused buffer never grows. The pre-fix 4096-capacity chunks
+        // violated this for any callback larger than 4096 samples.
+        assert!(chunk_capacity_for(64, 1) >= CHUNK_CAPACITY_MIN);
+        assert!(chunk_capacity_for(64, 1) > 4096);
+    }
+
+    #[test]
+    fn recycle_channel_is_bounded_so_rt_return_is_alloc_free() {
+        // Reproduces the recycle-path allocation bug: the queue-full drop branch
+        // returns a chunk through the recycle channel ON the real-time thread. An
+        // UNBOUNDED mpsc::channel heap-allocates a node per send — an allocation
+        // on the RT thread. A bounded sync_channel is backed by a fixed ring
+        // buffer (no per-send allocation) and, by conservation, never fills, so
+        // the RT try_send always succeeds without allocating or blocking.
+
+        // The conservation invariant: the channel bound must equal the whole
+        // preallocated pool depth, so returning a buffer always has room.
+        assert_eq!(
+            RECYCLE_CHANNEL_CAPACITY,
+            WRITER_QUEUE_CAPACITY + CHUNK_POOL_SLACK
+        );
+
+        // The entire pool must fit the bounded channel without blocking
+        // (mirrors pool population in start_recording). One more must eventually
+        // be refused — proving the channel is bounded (fixed ring buffer, hence
+        // alloc-free), unlike an unbounded channel which accepts indefinitely.
+        let (tx, _rx) = mpsc::sync_channel::<Vec<i16>>(RECYCLE_CHANNEL_CAPACITY);
+        for _ in 0..RECYCLE_CHANNEL_CAPACITY {
+            assert!(
+                tx.try_send(Vec::new()).is_ok(),
+                "pool population must fit the bounded recycle channel"
+            );
+        }
+        // Try a few extra sends: a bounded channel must refuse at least one.
+        let refused = (0..CHUNK_POOL_SLACK + 1).any(|_| tx.try_send(Vec::new()).is_err());
+        assert!(
+            refused,
+            "sync_channel must be bounded; an unbounded channel would accept all sends"
+        );
     }
 
     #[test]
@@ -634,9 +912,81 @@ mod tests {
     }
 
     #[test]
+    fn test_f32_to_i16_clamps_at_unit_bounds() {
+        assert_eq!(f32_to_i16(1.5), 32767);
+        assert_eq!(f32_to_i16(1.0), 32767);
+        assert_eq!(f32_to_i16(0.0), 0);
+        assert_eq!(f32_to_i16(-1.0), -32767);
+        assert_eq!(f32_to_i16(-1.5), -32767);
+    }
+
+    #[test]
+    fn test_u16_to_i16_midpoint_and_symmetry() {
+        assert_eq!(u16_to_i16(32768), 0);
+        assert_eq!(u16_to_i16(32769), 1);
+        assert_eq!(u16_to_i16(32767), -1);
+        assert_eq!(u16_to_i16(u16::MAX), i16::MAX);
+        assert_eq!(u16_to_i16(0), i16::MIN);
+    }
+
+    #[test]
+    fn test_u16_to_f32_midpoint_and_symmetry() {
+        assert_eq!(u16_to_f32(32768), 0.0);
+        assert_eq!(u16_to_f32(0), -1.0);
+        assert!((u16_to_f32(u16::MAX) - (32767.0 / 32768.0)).abs() < f32::EPSILON);
+        assert_eq!(u16_to_f32(32769), 1.0 / 32768.0);
+        assert_eq!(u16_to_f32(32767), -1.0 / 32768.0);
+    }
+
+    #[test]
+    fn test_wait_for_recording_end_returns_thread_result() {
+        let (stop_tx, _stop_rx) = mpsc::channel();
+        let thread_handle =
+            thread::spawn(|| Ok::<String, String>("Recording stopped by user".to_string()));
+        let handle = RecordingHandle {
+            stop_tx,
+            thread_handle,
+        };
+
+        let mut recorder = AudioRecorder::new();
+        {
+            let mut guard = recorder.recording_handle.lock().unwrap();
+            *guard = Some(handle);
+        }
+
+        let result = recorder.wait_for_recording_end().unwrap();
+        assert_eq!(result, "Recording stopped by user");
+        assert!(!recorder.is_recording());
+    }
+
+    #[test]
+    fn stop_recording_surfaces_worker_error_and_clears_handle() {
+        let (stop_tx, _stop_rx) = mpsc::channel::<RecorderCommand>();
+        let thread_handle = thread::spawn(|| Err::<String, String>("device failed".to_string()));
+        let mut recorder = AudioRecorder::new();
+
+        *recorder.recording_handle.lock().unwrap() = Some(RecordingHandle {
+            stop_tx,
+            thread_handle,
+        });
+
+        let err = recorder.stop_recording().unwrap_err();
+        assert_eq!(err, "device failed");
+        assert!(!recorder.is_recording());
+    }
+
+    #[test]
+    fn take_silence_event_receiver_consumes_receiver() {
+        let mut recorder = AudioRecorder::new();
+        let (_tx, rx) = mpsc::sync_channel::<SilenceDetectorEvent>(1);
+        *recorder.silence_event_receiver.lock().unwrap() = Some(rx);
+
+        assert!(recorder.take_silence_event_receiver().is_some());
+        assert!(recorder.take_silence_event_receiver().is_none());
+    }
+    #[test]
     fn recording_thread_finished_is_false_when_idle() {
         let recorder = AudioRecorder::new();
-        // No worker started: nothing to observe.
         assert!(!recorder.recording_thread_finished());
     }
 
@@ -644,8 +994,8 @@ mod tests {
     fn recording_thread_finished_is_true_after_worker_self_exits() {
         let recorder = AudioRecorder::new();
         let (stop_tx, _stop_rx) = mpsc::channel::<RecorderCommand>();
-        // Worker returns immediately, mimicking a device-error or size-cap self-stop.
         let thread_handle = thread::spawn(|| Ok::<String, String>("stopped".to_string()));
+
         let start = Instant::now();
         while !thread_handle.is_finished() {
             assert!(
@@ -654,11 +1004,12 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(1));
         }
+
         *recorder.recording_handle.lock().unwrap() = Some(RecordingHandle {
             stop_tx,
             thread_handle,
         });
-        // Handle still present but thread done: the orphan condition the watchdog detects.
+
         assert!(recorder.recording_thread_finished());
     }
 
@@ -666,17 +1017,17 @@ mod tests {
     fn recording_thread_finished_is_false_while_worker_runs() {
         let recorder = AudioRecorder::new();
         let (stop_tx, stop_rx) = mpsc::channel::<RecorderCommand>();
-        // Worker blocks until told to stop, mimicking an active recording.
         let thread_handle = thread::spawn(move || {
             let _ = stop_rx.recv();
             Ok::<String, String>("stopped".to_string())
         });
+
         *recorder.recording_handle.lock().unwrap() = Some(RecordingHandle {
             stop_tx,
             thread_handle,
         });
+
         assert!(!recorder.recording_thread_finished());
-        // Drop signals Stop (see Drop impl), so the worker exits cleanly.
         drop(recorder);
     }
 }

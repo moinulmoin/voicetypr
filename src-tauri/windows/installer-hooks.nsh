@@ -29,6 +29,7 @@
             DetailPrint "Visual C++ Runtime already installed (newer or same version)"
         ${Else}
             DetailPrint "Visual C++ Runtime installer returned code $1"
+            MessageBox MB_ICONEXCLAMATION "Visual C++ Runtime installation returned code $1. Voicetypr may fail to start if the runtime is missing."
         ${EndIf}
 
         Delete "$TEMP\vc_redist.x64.exe"

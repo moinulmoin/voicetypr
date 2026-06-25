@@ -1,6 +1,6 @@
 import { useAccessibilityPermission } from './useAccessibilityPermission';
 import { useMicrophonePermission } from './useMicrophonePermission';
-import { useModelAvailability } from './useModelAvailability';
+import { useModelAvailabilityContext } from '@/contexts/ModelAvailabilityContext';
 import { useLicenseStatus } from './useLicenseStatus';
 import { useSettings } from '@/contexts/SettingsContext';
 
@@ -14,14 +14,16 @@ export function useAppReadiness() {
 
   const accessibility = useAccessibilityPermission({ checkOnMount: onboardingCompleted });
   const microphone = useMicrophonePermission({ checkOnMount: onboardingCompleted });
-  const models = useModelAvailability();
+  const models = useModelAvailabilityContext();
   const license = useLicenseStatus();
 
   // Compute derived values
   const canRecord = Boolean(
     microphone.hasPermission && 
     models.hasModels && 
-    models.selectedModelAvailable
+    models.selectedModelAvailable &&
+    license.isValid &&
+    !license.isChecking
   );
 
   const canAutoInsert = Boolean(accessibility.hasPermission);
@@ -30,7 +32,9 @@ export function useAppReadiness() {
     microphone.hasPermission &&
     accessibility.hasPermission &&
     models.hasModels &&
-    models.selectedModelAvailable
+    models.selectedModelAvailable &&
+    license.isValid &&
+    !license.isChecking
   );
 
   // Check if any hook is still loading
@@ -52,6 +56,10 @@ export function useAppReadiness() {
     hasModels: models.hasModels,
     selectedModelAvailable: models.selectedModelAvailable,
     licenseValid: license.isValid,
+    licenseStatus: license.licenseStatus?.status ?? null,
+    remoteSelected: models.remoteSelected,
+    remoteAvailable: models.remoteAvailable,
+    remoteStatus: models.remoteStatus,
 
     // Computed values
     canRecord,

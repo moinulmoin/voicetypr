@@ -1,5 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
+
+import type { AiProvider } from '@/types/providers';
 import { emit } from '@tauri-apps/api/event';
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("keyring");
 
 /**
  * Save a value to the OS keyring
@@ -36,22 +41,26 @@ export const keyringHas = async (key: string): Promise<boolean> => {
   return await invoke<boolean>('keyring_has', { key });
 };
 
-// API Key specific helpers
-export const saveApiKey = async (provider: string, apiKey: string): Promise<void> => {
-  const key = `ai_api_key_${provider}`;
-  await keyringSet(key, apiKey);
-  
-  // Cache or validate depending on provider
-  const validated = provider === 'openai';
-  if (validated) {
-    // OpenAI-compatible requires validation (may include no-auth path via separate modal)
-    await invoke('validate_and_cache_api_key', { args: { provider, apiKey } });
-  } else {
-    await invoke('cache_ai_api_key', { args: { provider, apiKey } });
-  }
+interface SaveApiKeyOptions {
+  baseUrl?: string;
+  model?: string;
+  noAuth?: boolean;
+}
 
-  console.log(`[Keyring] API key ${validated ? 'saved and validated' : 'saved and cached'} for ${provider}`);
-  
+// API Key specific helpers
+
+export const saveApiKey = async (
+  provider: string,
+  apiKey: string,
+  options?: SaveApiKeyOptions,
+): Promise<void> => {
+  const key = `ai_api_key_${provider}`;
+
+  await invoke('validate_ai_api_key', { args: { provider, apiKey, ...options } });
+  await keyringSet(key, apiKey);
+  await invoke('cache_ai_api_key', { args: { provider, apiKey } });
+  log.debug(`[Keyring] API key saved and validated for ${provider}`);
+
   // Emit event to notify that API key was saved
   await emit('api-key-saved', { provider });
 };
@@ -73,7 +82,7 @@ export const removeApiKey = async (provider: string): Promise<void> => {
   // Clear backend cache for the same provider key
   await invoke('clear_ai_api_key_cache', { provider });
   
-  console.log(`[Keyring] API key removed for ${provider}`);
+  log.debug(`[Keyring] API key removed for ${provider}`);
   
   // Emit event to notify that API key was removed
   await emit('api-key-removed', { provider });
@@ -81,47 +90,46 @@ export const removeApiKey = async (provider: string): Promise<void> => {
 
 // Load all API keys to backend cache (for app startup)
 export const loadApiKeysToCache = async (): Promise<void> => {
-  const providers = ['gemini', 'openai', 'anthropic', 'custom'];
-  
+  let providers: AiProvider[];
+
+  try {
+    providers = await invoke<AiProvider[]>('list_ai_providers');
+  } catch (error) {
+    log.error('Failed to list AI providers for key cache warmup:', error);
+    return;
+  }
+
   for (const provider of providers) {
     try {
-      const apiKey = await getApiKey(provider);
+      const apiKey = await getApiKey(provider.id);
       if (apiKey) {
-        await invoke('cache_ai_api_key', { args: { provider, apiKey } });
-        console.log(`[Keyring] Loaded ${provider} API key from keyring to cache`);
+        await invoke('cache_ai_api_key', { args: { provider: provider.id, apiKey } });
+        log.debug(`[Keyring] Loaded ${provider.id} API key from keyring to cache`);
       }
     } catch (error) {
-      console.error(`Failed to load API key for ${provider}:`, error);
+      log.error(`Failed to load API key for ${provider.id}:`, error);
     }
   }
 };
 
 // STT (Speech-to-Text) cloud provider keys
-// Soniox support
-const STT_SONIOX_KEY = 'stt_api_key_soniox';
-
-export const saveSttApiKeySoniox = async (apiKey: string): Promise<void> => {
-  // Validate first; only persist to keyring on success
-  await invoke('validate_and_cache_soniox_key', { api_key: apiKey, apiKey });
-  await keyringSet(STT_SONIOX_KEY, apiKey);
-  await emit('stt-key-saved', { provider: 'soniox' });
+export const saveSttApiKey = async (provider: string, apiKey: string): Promise<void> => {
+  // Validate first; only persist on success
+  await invoke('validate_stt_key', { provider, apiKey });
+  await keyringSet(`stt_api_key_${provider}`, apiKey);
+  await emit('stt-key-saved', { provider });
 };
 
-export const getSttApiKeySoniox = async (): Promise<string | null> => {
-  return keyringGet(STT_SONIOX_KEY);
+export const hasSttApiKey = async (provider: string): Promise<boolean> => {
+  return keyringHas(`stt_api_key_${provider}`);
 };
 
-export const hasSttApiKeySoniox = async (): Promise<boolean> => {
-  return keyringHas(STT_SONIOX_KEY);
-};
-
-export const removeSttApiKeySoniox = async (): Promise<void> => {
-  await keyringDelete(STT_SONIOX_KEY);
-  // Clear any backend cache if added in future; call is optional
+export const removeSttApiKey = async (provider: string): Promise<void> => {
+  await keyringDelete(`stt_api_key_${provider}`);
   try {
-    await invoke('clear_soniox_key_cache');
+    await invoke('clear_stt_key_cache', { provider });
   } catch (_) {
-    // best-effort; command may not exist in older builds
+    // best-effort
   }
-  await emit('stt-key-removed', { provider: 'soniox' });
+  await emit('stt-key-removed', { provider });
 };

@@ -1,38 +1,26 @@
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Instant;
 use whisper_rs::{
-    convert_integer_to_float_audio, convert_stereo_to_mono_audio, print_system_info, FullParams,
-    SamplingStrategy, WhisperContext, WhisperContextParameters,
+    convert_integer_to_float_audio, convert_stereo_to_mono_audio, FullParams, SamplingStrategy,
+    WhisperContext, WhisperContextParameters,
 };
 
 use crate::utils::logger::*;
 #[cfg(debug_assertions)]
 use crate::utils::system_monitor;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TranscriptionBackend {
-    Cpu,
-    Metal,
-}
-
-impl TranscriptionBackend {
-    fn is_cpu(self) -> bool {
-        matches!(self, Self::Cpu)
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Cpu => "CPU",
-            Self::Metal => "Metal GPU",
-        }
-    }
-}
-
 pub struct Transcriber {
     context: WhisperContext,
-    backend: TranscriptionBackend,
+    cpu_profile: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhisperTranscriptionOutput {
+    pub raw_text: String,
+    pub transcript_language: Option<String>,
+    pub segments: Vec<crate::transcription::TranscriptionSegment>,
+    pub audio_duration_ms: u64,
+    pub processing_duration_ms: u64,
 }
 
 impl Transcriber {
@@ -64,8 +52,6 @@ impl Transcriber {
             );
             log::info!("🤖 Model file size: {}MB", size_mb);
         }
-
-        log::info!("🤖 whisper.cpp system info: {}", print_system_info());
 
         // Configure GPU usage based on platform and features
         let mut ctx_params = WhisperContextParameters::default();
@@ -114,36 +100,30 @@ impl Transcriber {
 
             match WhisperContext::new_with_params(model_path_str, ctx_params) {
                 Ok(ctx) => {
-                    let backend = if is_apple_silicon {
-                        TranscriptionBackend::Metal
-                    } else {
-                        TranscriptionBackend::Cpu
-                    };
+                    let cpu_profile = !is_apple_silicon;
                     let init_time = metal_start.elapsed().as_millis();
-                    let acceleration = if is_apple_silicon {
-                        "gpu_acceleration_enabled"
-                    } else {
-                        "cpu_only"
-                    };
+                    let backend_type = if cpu_profile { "CPU" } else { "Metal GPU" };
+                    let acceleration = if cpu_profile { "disabled" } else { "enabled" };
 
-                    log_performance("METAL_INIT", init_time as u64, Some(acceleration));
+                    log_performance(
+                        "METAL_INIT",
+                        init_time as u64,
+                        Some(if cpu_profile {
+                            "cpu_only"
+                        } else {
+                            "gpu_acceleration_enabled"
+                        }),
+                    );
                     log_with_context(
                         log::Level::Info,
-                        if is_apple_silicon {
-                            "🎮 METAL_SUCCESS"
-                        } else {
+                        if cpu_profile {
                             "🎮 CPU_INIT"
+                        } else {
+                            "🎮 METAL_SUCCESS"
                         },
                         &[
                             ("init_time_ms", init_time.to_string().as_str()),
-                            (
-                                "acceleration",
-                                if is_apple_silicon {
-                                    "enabled"
-                                } else {
-                                    "disabled"
-                                },
-                            ),
+                            ("acceleration", acceleration),
                         ],
                     );
 
@@ -151,12 +131,12 @@ impl Transcriber {
                     log_with_context(
                         log::Level::Debug,
                         "Transcriber initialized",
-                        &[("backend", backend.label()), ("model_path", model_path_str)],
+                        &[("backend", backend_type), ("model_path", model_path_str)],
                     );
 
                     return Ok(Self {
                         context: ctx,
-                        backend,
+                        cpu_profile,
                     });
                 }
                 Err(gpu_err) => {
@@ -180,21 +160,10 @@ impl Transcriber {
             }
         }
 
-        // Windows main app is CPU-only. Optional Vulkan acceleration runs in a
-        // separate sidecar process so Vulkan loader failures cannot prevent the
-        // Tauri app from starting or falling back to CPU transcription.
+        // Windows: CPU-only in main binary. GPU runs in whisper-vulkan-sidecar process.
         #[cfg(target_os = "windows")]
         {
-            log::info!("Windows main transcriber: CPU-only mode");
-            log_with_context(
-                log::Level::Info,
-                "🎮 CPU_ONLY_BUILD",
-                &[
-                    ("reason", "vulkan isolated in optional sidecar"),
-                    ("arch", std::env::consts::ARCH),
-                    ("fallback_to", "CPU"),
-                ],
-            );
+            log::info!("Windows: Using CPU-only Whisper path (GPU via sidecar)");
             ctx_params.use_gpu(false);
         }
 
@@ -210,8 +179,7 @@ impl Transcriber {
             format!("Failed to load model: {}", e)
         })?;
 
-        let backend = TranscriptionBackend::Cpu;
-        let backend_type = backend.label();
+        let backend_type = "CPU";
 
         let cpu_time = cpu_start.elapsed().as_millis();
 
@@ -262,18 +230,66 @@ impl Transcriber {
 
         Ok(Self {
             context: ctx,
-            backend,
+            cpu_profile: true,
         })
     }
 
-    pub fn transcribe_with_cancellation(
+    #[allow(dead_code)]
+    pub fn transcribe_with_translation(
         &self,
         audio_path: &Path,
         language: Option<&str>,
         translate: bool,
-        cancel_flag: Arc<AtomicBool>,
-        local_abort_flag: Arc<AtomicBool>,
     ) -> Result<String, String> {
+        self.transcribe_with_metadata(audio_path, language, translate, || false)
+            .map(|result| result.raw_text)
+    }
+
+    #[allow(dead_code)]
+    pub fn transcribe_with_cancellation<F>(
+        &self,
+        audio_path: &Path,
+        language: Option<&str>,
+        translate: bool,
+        should_cancel: F,
+    ) -> Result<String, String>
+    where
+        F: Fn() -> bool + Clone + 'static,
+    {
+        self.transcribe_with_metadata(audio_path, language, translate, should_cancel)
+            .map(|result| result.raw_text)
+    }
+
+    pub fn transcribe_with_metadata<F>(
+        &self,
+        audio_path: &Path,
+        language: Option<&str>,
+        translate: bool,
+        should_cancel: F,
+    ) -> Result<WhisperTranscriptionOutput, String>
+    where
+        F: Fn() -> bool + Clone + 'static,
+    {
+        self.transcribe_with_metadata_with_prompt(
+            audio_path,
+            language,
+            translate,
+            None,
+            should_cancel,
+        )
+    }
+
+    pub fn transcribe_with_metadata_with_prompt<F>(
+        &self,
+        audio_path: &Path,
+        language: Option<&str>,
+        translate: bool,
+        initial_prompt: Option<&str>,
+        should_cancel: F,
+    ) -> Result<WhisperTranscriptionOutput, String>
+    where
+        F: Fn() -> bool + Clone + 'static,
+    {
         let transcription_start = Instant::now();
         let audio_path_str = format!("{:?}", audio_path);
 
@@ -308,7 +324,8 @@ impl Transcriber {
             return Err(error);
         }
 
-        if is_cancelled(&cancel_flag) || is_cancelled(&local_abort_flag) {
+        // Early cancellation check
+        if should_cancel() {
             log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled before starting");
             return Err("Transcription cancelled".to_string());
         }
@@ -370,7 +387,8 @@ impl Transcriber {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to read audio samples: {}", e))?;
 
-        if is_transcription_cancelled(&cancel_flag, &local_abort_flag) {
+        // Check cancellation after reading samples
+        if should_cancel() {
             log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after reading samples");
             return Err("Transcription cancelled".to_string());
         }
@@ -381,7 +399,8 @@ impl Transcriber {
         let mut audio: Vec<f32> = vec![0.0; samples_i16.len()];
         convert_integer_to_float_audio(&samples_i16, &mut audio).map_err(|e| e.to_string())?;
 
-        if is_transcription_cancelled(&cancel_flag, &local_abort_flag) {
+        // Check cancellation after conversion
+        if should_cancel() {
             log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after audio conversion");
             return Err("Transcription cancelled".to_string());
         }
@@ -402,11 +421,6 @@ impl Transcriber {
             audio = convert_multichannel_to_mono(&audio, spec.channels as usize)?;
         } else if spec.channels != 1 {
             return Err(format!("Invalid channel count: {}", spec.channels));
-        }
-
-        if is_transcription_cancelled(&cancel_flag, &local_abort_flag) {
-            log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after channel conversion");
-            return Err("Transcription cancelled".to_string());
         }
 
         // Store original audio length before the move
@@ -451,7 +465,8 @@ impl Transcriber {
             ],
         );
 
-        if is_transcription_cancelled(&cancel_flag, &local_abort_flag) {
+        // Check cancellation after resampling
+        if should_cancel() {
             log::info!("[TRANSCRIPTION_DEBUG] Transcription cancelled after resampling");
             return Err("Transcription cancelled".to_string());
         }
@@ -462,8 +477,7 @@ impl Transcriber {
             resampled_audio.len() as f32 / 16_000_f32
         );
 
-        let cpu_profile = self.backend.is_cpu();
-        let mut params = if cpu_profile {
+        let mut params = if self.cpu_profile {
             log::info!("[PERFORMANCE] Using CPU fast transcription profile");
             FullParams::new(SamplingStrategy::Greedy { best_of: 1 })
         } else {
@@ -533,8 +547,8 @@ impl Transcriber {
 
         params.set_n_threads(threads);
 
-        params.set_no_context(cpu_profile);
-        params.set_no_timestamps(cpu_profile);
+        params.set_no_context(self.cpu_profile);
+        params.set_no_timestamps(self.cpu_profile);
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -556,16 +570,24 @@ impl Transcriber {
         // Use default log probability threshold to avoid being too strict
         params.set_logprob_thold(-1.0); // Default value - balanced probability requirements
 
-        // Set initial prompt to help with context
-        params.set_initial_prompt(""); // Empty prompt to avoid biasing the model
+        params.set_initial_prompt(initial_prompt.unwrap_or(""));
 
-        params.set_temperature(if cpu_profile { 0.0 } else { 0.2 });
-        params.set_temperature_inc(if cpu_profile { 0.0 } else { 0.2 });
+        params.set_temperature(if self.cpu_profile { 0.0 } else { 0.2 });
+        params.set_temperature_inc(0.2); // Increase by 0.2 on fallback (default)
         params.set_max_initial_ts(1.0); // Limit initial timestamp search
 
         // Limit segment length to prevent runaway hallucinations
         params.set_max_len(0); // 0 means no limit
         params.set_length_penalty(-1.0); // Default penalty
+
+        // Run transcription
+        log::info!("[TRANSCRIPTION_DEBUG] Creating Whisper state...");
+        let mut state = self.context.create_state().map_err(|e| {
+            let error = format!("Failed to create Whisper state: {}", e);
+            log::error!("[TRANSCRIPTION_DEBUG] {}", error);
+
+            error
+        })?;
 
         let samples_count = resampled_audio.len();
         let duration_seconds = samples_count as f32 / 16_000_f32;
@@ -577,47 +599,7 @@ impl Transcriber {
             return Err(error);
         }
 
-        let audio_metrics = calculate_audio_metrics(&resampled_audio);
-        log_audio_metrics(
-            "WHISPER_INPUT",
-            audio_metrics.rms,
-            audio_metrics.peak,
-            duration_seconds,
-            None,
-        );
-
-        if is_likely_silence(audio_metrics) {
-            log::info!(
-                "[TRANSCRIPTION_DEBUG] Skipping Whisper inference because audio is below speech threshold: rms={:.6}, peak={:.6}",
-                audio_metrics.rms,
-                audio_metrics.peak
-            );
-            return Ok(String::new());
-        }
-
-        let abort_cancel_flag = cancel_flag.clone();
-        let abort_local_flag = local_abort_flag.clone();
-        let abort_callback: Box<dyn FnMut() -> bool> =
-            Box::new(move || is_cancelled(&abort_cancel_flag) || is_cancelled(&abort_local_flag));
-        params
-            .set_abort_callback_safe::<Option<Box<dyn FnMut() -> bool>>, Box<dyn FnMut() -> bool>>(
-                Some(abort_callback),
-            );
-        let progress_callback: Box<dyn FnMut(i32)> = Box::new(|progress| {
-            log::debug!("[TRANSCRIPTION_DEBUG] Whisper progress: {}%", progress);
-        });
-        params.set_progress_callback_safe::<Option<Box<dyn FnMut(i32)>>, Box<dyn FnMut(i32)>>(
-            Some(progress_callback),
-        );
-
-        // Run transcription
-        log::info!("[TRANSCRIPTION_DEBUG] Creating Whisper state...");
-        let mut state = self.context.create_state().map_err(|e| {
-            let error = format!("Failed to create Whisper state: {}", e);
-            log::error!("[TRANSCRIPTION_DEBUG] {}", error);
-
-            error
-        })?;
+        log_audio_metrics("WHISPER_INPUT", 0.0, 0.0, duration_seconds, None);
 
         let inference_start = Instant::now();
         log_start("WHISPER_INFERENCE");
@@ -634,6 +616,9 @@ impl Transcriber {
                 ("translate", translate.to_string().as_str()),
             ],
         );
+
+        let should_cancel_for_abort = should_cancel.clone();
+        params.set_abort_callback_safe(should_cancel_for_abort);
 
         match state.full(params, &resampled_audio) {
             Ok(_) => {
@@ -655,8 +640,8 @@ impl Transcriber {
                 );
             }
             Err(e) => {
-                if is_transcription_cancelled(&cancel_flag, &local_abort_flag) {
-                    log::info!("[TRANSCRIPTION_DEBUG] Whisper inference aborted by cancellation");
+                if should_cancel() {
+                    log::info!("[TRANSCRIPTION_DEBUG] Whisper inference was cancelled");
                     return Err("Transcription cancelled".to_string());
                 }
 
@@ -692,11 +677,22 @@ impl Transcriber {
         );
 
         let mut text = String::new();
+        let mut segments = Vec::with_capacity(num_segments as usize);
         for (i, segment) in state.as_iter().enumerate() {
             let segment_text = segment.to_string();
-            log::info!("[TRANSCRIPTION_DEBUG] Segment {}: '{}'", i, segment_text);
+            log::debug!(
+                "[TRANSCRIPTION_DEBUG] Segment {}: {} chars",
+                i,
+                segment_text.chars().count()
+            );
             text.push_str(&segment_text);
             text.push(' ');
+            segments.push(crate::transcription::TranscriptionSegment {
+                text: segment_text,
+                start_ms: None,
+                end_ms: None,
+                speaker_id: None,
+            });
         }
 
         let result = text.trim().to_string();
@@ -765,58 +761,24 @@ impl Transcriber {
             );
         }
 
-        Ok(result)
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct AudioMetrics {
-    rms: f64,
-    peak: f64,
-}
-
-const SILENCE_RMS_THRESHOLD: f64 = 0.0005;
-const SILENCE_PEAK_THRESHOLD: f64 = 0.003;
-
-fn is_transcription_cancelled(cancel_flag: &AtomicBool, local_abort_flag: &AtomicBool) -> bool {
-    is_cancelled(cancel_flag) || is_cancelled(local_abort_flag)
-}
-
-fn is_cancelled(cancel_flag: &AtomicBool) -> bool {
-    cancel_flag.load(Ordering::SeqCst)
-}
-
-fn calculate_audio_metrics(samples: &[f32]) -> AudioMetrics {
-    if samples.is_empty() {
-        return AudioMetrics {
-            rms: 0.0,
-            peak: 0.0,
+        let transcript_language = if translate {
+            Some("en".to_string())
+        } else {
+            final_lang.map(str::to_string)
         };
+
+        Ok(WhisperTranscriptionOutput {
+            raw_text: result,
+            transcript_language,
+            segments,
+            audio_duration_ms: (duration_seconds * 1000.0) as u64,
+            processing_duration_ms: total_time.as_millis() as u64,
+        })
     }
-
-    let mut sum_squares = 0.0f64;
-    let mut peak = 0.0f64;
-
-    for &sample in samples {
-        let value = f64::from(sample);
-        let abs = value.abs();
-        sum_squares += value * value;
-        if abs > peak {
-            peak = abs;
-        }
-    }
-
-    AudioMetrics {
-        rms: (sum_squares / samples.len() as f64).sqrt(),
-        peak,
-    }
-}
-
-fn is_likely_silence(metrics: AudioMetrics) -> bool {
-    metrics.rms < SILENCE_RMS_THRESHOLD && metrics.peak < SILENCE_PEAK_THRESHOLD
 }
 
 /// Convert multi-channel audio to mono by averaging all channels
+///
 /// # Arguments
 /// * `audio` - Interleaved audio samples (ch1, ch2, ch3, ch4, ch1, ch2, ...)
 /// * `channels` - Number of channels in the audio
@@ -894,26 +856,6 @@ mod tests {
         let mono_audio = vec![1.0, 2.0, 3.0, 4.0];
         let result = convert_multichannel_to_mono(&mono_audio, 1).unwrap();
         assert_eq!(result, mono_audio);
-    }
-
-    #[test]
-    fn test_audio_metrics_for_silence() {
-        let samples = vec![0.0f32; 16_000];
-        let metrics = calculate_audio_metrics(&samples);
-
-        assert_eq!(metrics.rms, 0.0);
-        assert_eq!(metrics.peak, 0.0);
-        assert!(is_likely_silence(metrics));
-    }
-
-    #[test]
-    fn test_audio_metrics_detect_speech_like_signal() {
-        let samples = vec![0.02f32; 16_000];
-        let metrics = calculate_audio_metrics(&samples);
-
-        assert!(metrics.rms > SILENCE_RMS_THRESHOLD);
-        assert!(metrics.peak > SILENCE_PEAK_THRESHOLD);
-        assert!(!is_likely_silence(metrics));
     }
 
     #[test]

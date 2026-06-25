@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { ask } from '@tauri-apps/plugin-dialog';
-import { relaunch } from '@tauri-apps/plugin-process';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { toast } from 'sonner';
 
@@ -38,25 +37,36 @@ vi.mock('sonner', () => ({
 }));
 
 import { UpdateService } from './updateService';
+import { sendNotification, isPermissionGranted } from '@tauri-apps/plugin-notification';
 import type { DistributionInfo } from '@/types/distribution';
 import type { AppSettings } from '@/types';
 
 const JUST_UPDATED_KEY = 'just_updated_version';
+const storage = new Map<string, string>();
 
-type TestUpdate = Update & {
-  downloadAndInstall: ReturnType<typeof vi.fn>;
-};
+const testSettings = (overrides: Partial<AppSettings> = {}): AppSettings => ({
+  hotkey: 'CmdOrCtrl+Shift+Space',
+  current_model: 'tiny.en',
+  speech_language: 'en',
+  theme: 'system',
+  ...overrides,
+});
 
-function createAvailableUpdate(): TestUpdate {
-  return {
-    available: true,
-    currentVersion: '1.0.0',
-    version: '1.2.3',
-    body: 'Security and reliability fixes',
-    rawJson: {},
-    downloadAndInstall: vi.fn().mockResolvedValue(undefined),
-  } as unknown as TestUpdate;
-}
+Object.defineProperty(window, 'localStorage', {
+  configurable: true,
+  value: {
+    getItem: vi.fn((key: string) => storage.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      storage.set(key, value);
+    }),
+    removeItem: vi.fn((key: string) => {
+      storage.delete(key);
+    }),
+    clear: vi.fn(() => {
+      storage.clear();
+    }),
+  },
+});
 
 function mockDirectDistribution(): void {
   vi.mocked(invoke).mockImplementation(async (command) => {
@@ -75,12 +85,11 @@ function mockDirectDistribution(): void {
     return undefined;
   });
 }
-
 describe('UpdateService version marker', () => {
   let service: UpdateService;
 
   beforeEach(() => {
-    localStorage.clear();
+    storage.clear();
     vi.clearAllMocks();
     mockDirectDistribution();
     // Get a fresh instance per test to reset internal state
@@ -138,110 +147,65 @@ describe('UpdateService version marker', () => {
     expect(result).toBe('1.12.1');
   });
 
-  it('asks before installing an update found during a background check', async () => {
-    const update = createAvailableUpdate();
-    vi.mocked(check).mockResolvedValue(update);
-    vi.mocked(ask).mockResolvedValue(false);
-
-    await service.checkForUpdatesInBackground();
-
-    expect(ask).toHaveBeenCalledWith(
-      expect.stringContaining('Update 1.2.3 is available'),
-      expect.objectContaining({
-        title: 'Update Available',
-        okLabel: 'Update',
-        cancelLabel: 'Later',
-      }),
-    );
-    expect(update.downloadAndInstall).not.toHaveBeenCalled();
-    expect(relaunch).not.toHaveBeenCalled();
-  });
-
-  it('installs a background update only after explicit confirmation', async () => {
-    const update = createAvailableUpdate();
-    vi.mocked(check).mockResolvedValue(update);
-    vi.mocked(ask).mockResolvedValue(true);
-    vi.mocked(relaunch).mockResolvedValue(undefined);
-
-    await service.checkForUpdatesInBackground();
-
-    expect(update.downloadAndInstall).toHaveBeenCalledOnce();
-    expect(relaunch).toHaveBeenCalledOnce();
-    expect(localStorage.getItem(JUST_UPDATED_KEY)).toBe('1.2.3');
-  });
 });
 
-describe('UpdateService update consent', () => {
+describe('UpdateService update checks', () => {
   let service: UpdateService;
-  let update: Update;
-  let downloadAndInstall: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    localStorage.clear();
+    storage.clear();
     vi.clearAllMocks();
     mockDirectDistribution();
     // @ts-expect-error accessing private static for test isolation
     UpdateService.instance = undefined;
     service = UpdateService.getInstance();
-    downloadAndInstall = vi.fn(async () => undefined);
-    update = {
+  });
+
+  it('initializes background checks by default without installing updates', async () => {
+    vi.mocked(check).mockResolvedValue(null);
+    await service.initialize(testSettings());
+
+    expect(check).toHaveBeenCalledTimes(1);
+  });
+
+  it('background checks notify without installing updates', async () => {
+    const downloadAndInstall = vi.fn();
+    vi.mocked(isPermissionGranted).mockResolvedValue(true);
+    vi.mocked(check).mockResolvedValue({
       available: true,
-      version: '1.12.4',
-      currentVersion: '1.12.3',
-      body: 'Bug fixes',
-      date: null,
-      rawJson: {},
+      version: '2.0.0',
+      body: 'Release notes',
       downloadAndInstall,
       close: vi.fn().mockResolvedValue(undefined),
-    } as unknown as Update;
-    vi.mocked(check).mockResolvedValue(update);
-  });
+    } as unknown as Update);
 
-  it('prompts on startup but does not download when user declines', async () => {
-    vi.mocked(ask).mockResolvedValue(false);
+    await service.initialize(testSettings({ check_updates_automatically: true }));
 
-    await service.initialize({
-      hotkey: 'CommandOrControl+Shift+Space',
-      current_model: 'base.en',
-      language: 'en',
-      theme: 'system',
-    });
-
-    expect(check).toHaveBeenCalledOnce();
-    expect(ask).toHaveBeenCalledWith(expect.stringContaining('Update 1.12.4 is available'), {
-      title: 'Update Available',
-      kind: 'info',
-      okLabel: 'Update',
-      cancelLabel: 'Later',
-    });
+    expect(check).toHaveBeenCalledTimes(1);
     expect(downloadAndInstall).not.toHaveBeenCalled();
-    expect(relaunch).not.toHaveBeenCalled();
-  });
-
-  it('auto-installs background updates only after explicit opt-in', async () => {
-    await service.initialize({
-      hotkey: 'CommandOrControl+Shift+Space',
-      current_model: 'base.en',
-      language: 'en',
-      theme: 'system',
-      install_updates_automatically: true,
+    expect(toast.info).toHaveBeenCalledWith(
+      'Update 2.0.0 is available. Open Settings to install it.',
+    );
+    expect(sendNotification).toHaveBeenCalledWith({
+      title: 'Update Available',
+      body: 'Voicetypr 2.0.0 is ready to install from Settings.',
     });
-
-    expect(check).toHaveBeenCalledOnce();
-    expect(ask).not.toHaveBeenCalled();
-    expect(downloadAndInstall).toHaveBeenCalledOnce();
-    expect(relaunch).toHaveBeenCalledOnce();
   });
 
-  it('downloads and relaunches only after user accepts', async () => {
-    vi.mocked(ask).mockResolvedValue(true);
+  it('manual checks still ask before installing', async () => {
+    const downloadAndInstall = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(check).mockResolvedValue({
+      available: true,
+      version: '2.0.0',
+      body: 'Release notes',
+      downloadAndInstall,
+    } as never);
+    vi.mocked(ask).mockResolvedValue(false);
 
     await service.checkForUpdatesManually();
 
-    expect(check).toHaveBeenCalledOnce();
     expect(ask).toHaveBeenCalled();
-    expect(downloadAndInstall).toHaveBeenCalledOnce();
-    expect(relaunch).toHaveBeenCalledOnce();
+    expect(downloadAndInstall).not.toHaveBeenCalled();
   });
 
   it('deduplicates concurrent distribution info requests', async () => {
@@ -261,7 +225,7 @@ describe('UpdateService update consent', () => {
     const settings: AppSettings = {
       hotkey: 'CommandOrControl+Shift+Space',
       current_model: 'base.en',
-      language: 'en',
+      speech_language: 'en',
       theme: 'system',
       check_updates_automatically: false,
     };
@@ -327,7 +291,7 @@ describe('UpdateService update consent', () => {
     await service.initialize({
       hotkey: 'CommandOrControl+Shift+Space',
       current_model: 'base.en',
-      language: 'en',
+      speech_language: 'en',
       theme: 'system',
     });
 

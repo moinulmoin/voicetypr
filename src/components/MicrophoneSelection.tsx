@@ -19,6 +19,9 @@ import * as React from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { toast } from "sonner"
+import { createLogger } from "@/lib/logger"
+
+const log = createLogger("microphone")
 
 interface MicrophoneSelectionProps {
   value?: string
@@ -41,16 +44,16 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
         // This cleans up stale selections from previously connected devices
         const wasReset = await invoke<boolean>("validate_microphone_selection")
         if (wasReset) {
-          console.log("Stale microphone selection was reset to default")
+          log.debug("Stale microphone selection was reset to default")
           toast.info("Previously selected microphone is no longer available, using default")
         }
         
         // Then fetch current devices
         const audioDevices = await invoke<string[]>("get_audio_devices")
-        console.log("Fetched audio devices:", audioDevices)
+        log.debug("Fetched audio devices:", audioDevices)
         setDevices(audioDevices)
       } catch (error) {
-        console.error("Failed to initialize audio devices:", error)
+        log.error("Failed to initialize audio devices:", error)
         toast.error("Failed to load audio devices")
       } finally {
         setLoading(false)
@@ -60,11 +63,11 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
     initializeDevices()
 
     const listenerPromise = listen<string[]>("audio-devices-updated", ({ payload }) => {
-      console.log("Audio devices updated:", payload)
+      log.debug("Audio devices updated:", payload)
       setDevices(Array.isArray(payload) ? payload : [])
     })
       .catch((error) => {
-        console.warn("Failed to listen for audio device updates:", error)
+        log.warn("Failed to listen for audio device updates:", error)
         return () => {}
       })
 
@@ -74,7 +77,7 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
           dispose()
         })
         .catch((error) => {
-          console.warn("Failed to unsubscribe from audio device updates:", error)
+          log.warn("Failed to unsubscribe from audio device updates:", error)
         })
     }
   }, [])
@@ -82,14 +85,14 @@ export function MicrophoneSelection({ value, onValueChange, className }: Microph
   // Check if selected device is available when devices list changes
   React.useEffect(() => {
     if (value && devices.length > 0 && !devices.includes(value)) {
-      console.log(`Selected device "${value}" is no longer available, resetting to default`)
+      log.debug(`Selected device "${value}" is no longer available, resetting to default`)
       toast.info(`${value} is no longer available, switching to default microphone`)
       onValueChange(undefined) // Reset to default
     }
   }, [devices, value, onValueChange])
 
   const handleDeviceSelect = async (deviceName: string | undefined) => {
-    console.log(`Selecting microphone: ${deviceName || 'Default'}`)
+    log.debug(`Selecting microphone: ${deviceName || 'Default'}`)
     onValueChange(deviceName)
     setOpen(false)
   }

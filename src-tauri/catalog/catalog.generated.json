@@ -1,0 +1,974 @@
+{
+  "generated_from_sha": "79627f3b5accfd726da15d1ad13b2220b2b391621c5fd664fb080382b6f0a0f2",
+  "providers": [
+    {
+      "adapter": "Anthropic",
+      "docs_url": "https://docs.anthropic.com/en/docs/about-claude/models",
+      "id": "anthropic",
+      "label": "Anthropic",
+      "models": [
+        {
+          "context": 200000,
+          "cost_input": 1,
+          "cost_output": 5,
+          "label": "Claude Haiku 4.5 (latest)",
+          "model_id": "claude-haiku-4-5",
+          "output": 64000,
+          "reasoning": true,
+          "recommended": true
+        },
+        {
+          "context": 200000,
+          "cost_input": 3,
+          "cost_output": 15,
+          "label": "Claude Sonnet 4.5 (latest)",
+          "model_id": "claude-sonnet-4-5",
+          "output": 64000,
+          "reasoning": true,
+          "recommended": true
+        },
+        {
+          "context": 200000,
+          "cost_input": 0.8,
+          "cost_output": 4,
+          "label": "Claude Haiku 3.5",
+          "model_id": "claude-3-5-haiku-20241022",
+          "output": 8192,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 0.8,
+          "cost_output": 4,
+          "label": "Claude Haiku 3.5 (latest)",
+          "model_id": "claude-3-5-haiku-latest",
+          "output": 8192,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 3,
+          "cost_output": 15,
+          "label": "Claude Sonnet 3.5",
+          "model_id": "claude-3-5-sonnet-20240620",
+          "output": 8192,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 3,
+          "cost_output": 15,
+          "label": "Claude Sonnet 3.5 v2",
+          "model_id": "claude-3-5-sonnet-20241022",
+          "output": 8192,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 3,
+          "cost_output": 15,
+          "label": "Claude Sonnet 3.7",
+          "model_id": "claude-3-7-sonnet-20250219",
+          "output": 64000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 0.25,
+          "cost_output": 1.25,
+          "label": "Claude Haiku 3",
+          "model_id": "claude-3-haiku-20240307",
+          "output": 4096,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 15,
+          "cost_output": 75,
+          "label": "Claude Opus 3",
+          "model_id": "claude-3-opus-20240229",
+          "output": 4096,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 3,
+          "cost_output": 15,
+          "label": "Claude Sonnet 3",
+          "model_id": "claude-3-sonnet-20240229",
+          "output": 4096,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 1000000,
+          "cost_input": 10,
+          "cost_output": 50,
+          "label": "Claude Fable 5",
+          "model_id": "claude-fable-5",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 1,
+          "cost_output": 5,
+          "label": "Claude Haiku 4.5",
+          "model_id": "claude-haiku-4-5-20251001",
+          "output": 64000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 15,
+          "cost_output": 75,
+          "label": "Claude Opus 4 (latest)",
+          "model_id": "claude-opus-4-0",
+          "output": 32000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 15,
+          "cost_output": 75,
+          "label": "Claude Opus 4.1 (latest)",
+          "model_id": "claude-opus-4-1",
+          "output": 32000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 15,
+          "cost_output": 75,
+          "label": "Claude Opus 4.1",
+          "model_id": "claude-opus-4-1-20250805",
+          "output": 32000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 15,
+          "cost_output": 75,
+          "label": "Claude Opus 4",
+          "model_id": "claude-opus-4-20250514",
+          "output": 32000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 5,
+          "cost_output": 25,
+          "label": "Claude Opus 4.5 (latest)",
+          "model_id": "claude-opus-4-5",
+          "output": 64000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 5,
+          "cost_output": 25,
+          "label": "Claude Opus 4.5",
+          "model_id": "claude-opus-4-5-20251101",
+          "output": 64000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1000000,
+          "cost_input": 5,
+          "cost_output": 25,
+          "label": "Claude Opus 4.6",
+          "model_id": "claude-opus-4-6",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1000000,
+          "cost_input": 5,
+          "cost_output": 25,
+          "label": "Claude Opus 4.7",
+          "model_id": "claude-opus-4-7",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1000000,
+          "cost_input": 5,
+          "cost_output": 25,
+          "label": "Claude Opus 4.8",
+          "model_id": "claude-opus-4-8",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 3,
+          "cost_output": 15,
+          "label": "Claude Sonnet 4 (latest)",
+          "model_id": "claude-sonnet-4-0",
+          "output": 64000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 3,
+          "cost_output": 15,
+          "label": "Claude Sonnet 4",
+          "model_id": "claude-sonnet-4-20250514",
+          "output": 64000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 3,
+          "cost_output": 15,
+          "label": "Claude Sonnet 4.5",
+          "model_id": "claude-sonnet-4-5-20250929",
+          "output": 64000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1000000,
+          "cost_input": 3,
+          "cost_output": 15,
+          "label": "Claude Sonnet 4.6",
+          "model_id": "claude-sonnet-4-6",
+          "output": 64000,
+          "reasoning": true,
+          "recommended": false
+        }
+      ],
+      "namespace": null,
+      "requires_api_key": true,
+      "status": "production",
+      "supports_base_url": false,
+      "supports_reasoning": true
+    },
+    {
+      "adapter": "Gemini",
+      "docs_url": "https://ai.google.dev/gemini-api/docs/models",
+      "id": "gemini",
+      "label": "Google Gemini",
+      "models": [
+        {
+          "context": 1048576,
+          "cost_input": 0.3,
+          "cost_output": 2.5,
+          "label": "Gemini 2.5 Flash",
+          "model_id": "gemini-2.5-flash",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": true
+        },
+        {
+          "context": 1048576,
+          "cost_input": 0.1,
+          "cost_output": 0.4,
+          "label": "Gemini 2.5 Flash-Lite",
+          "model_id": "gemini-2.5-flash-lite",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": true
+        },
+        {
+          "context": 1048576,
+          "cost_input": 0.1,
+          "cost_output": 0.4,
+          "label": "Gemini 2.0 Flash",
+          "model_id": "gemini-2.0-flash",
+          "output": 8192,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 1048576,
+          "cost_input": 0.075,
+          "cost_output": 0.3,
+          "label": "Gemini 2.0 Flash-Lite",
+          "model_id": "gemini-2.0-flash-lite",
+          "output": 8192,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 32768,
+          "cost_input": 0.3,
+          "cost_output": 30,
+          "label": "Nano Banana",
+          "model_id": "gemini-2.5-flash-image",
+          "output": 32768,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1048576,
+          "cost_input": 1.25,
+          "cost_output": 10,
+          "label": "Gemini 2.5 Pro",
+          "model_id": "gemini-2.5-pro",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1048576,
+          "cost_input": 0.5,
+          "cost_output": 3,
+          "label": "Gemini 3 Flash Preview",
+          "model_id": "gemini-3-flash-preview",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 131072,
+          "cost_input": 2,
+          "cost_output": 120,
+          "label": "Nano Banana Pro",
+          "model_id": "gemini-3-pro-image-preview",
+          "output": 32768,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1048576,
+          "cost_input": 2,
+          "cost_output": 12,
+          "label": "Gemini 3 Pro Preview",
+          "model_id": "gemini-3-pro-preview",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 65536,
+          "cost_input": 0.5,
+          "cost_output": 60,
+          "label": "Nano Banana 2",
+          "model_id": "gemini-3.1-flash-image-preview",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1048576,
+          "cost_input": 0.25,
+          "cost_output": 1.5,
+          "label": "Gemini 3.1 Flash Lite",
+          "model_id": "gemini-3.1-flash-lite",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1048576,
+          "cost_input": 0.25,
+          "cost_output": 1.5,
+          "label": "Gemini 3.1 Flash Lite Preview",
+          "model_id": "gemini-3.1-flash-lite-preview",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1048576,
+          "cost_input": 2,
+          "cost_output": 12,
+          "label": "Gemini 3.1 Pro Preview",
+          "model_id": "gemini-3.1-pro-preview",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1048576,
+          "cost_input": 2,
+          "cost_output": 12,
+          "label": "Gemini 3.1 Pro Preview Custom Tools",
+          "model_id": "gemini-3.1-pro-preview-customtools",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1048576,
+          "cost_input": 1.5,
+          "cost_output": 9,
+          "label": "Gemini 3.5 Flash",
+          "model_id": "gemini-3.5-flash",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 2048,
+          "cost_input": 0.15,
+          "cost_output": 0,
+          "label": "Gemini Embedding 001",
+          "model_id": "gemini-embedding-001",
+          "output": 1,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 1048576,
+          "cost_input": 0.3,
+          "cost_output": 2.5,
+          "label": "Gemini Flash Latest",
+          "model_id": "gemini-flash-latest",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1048576,
+          "cost_input": 0.1,
+          "cost_output": 0.4,
+          "label": "Gemini Flash-Lite Latest",
+          "model_id": "gemini-flash-lite-latest",
+          "output": 65536,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 262144,
+          "label": "Gemma 4 26B A4B IT",
+          "model_id": "gemma-4-26b-a4b-it",
+          "output": 32768,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 262144,
+          "label": "Gemma 4 31B IT",
+          "model_id": "gemma-4-31b-it",
+          "output": 32768,
+          "reasoning": true,
+          "recommended": false
+        }
+      ],
+      "namespace": null,
+      "requires_api_key": true,
+      "status": "production",
+      "supports_base_url": false,
+      "supports_reasoning": true
+    },
+    {
+      "adapter": "OpenAI",
+      "docs_url": "https://platform.openai.com/docs/models",
+      "id": "openai",
+      "label": "OpenAI",
+      "models": [
+        {
+          "context": 400000,
+          "cost_input": 0.25,
+          "cost_output": 2,
+          "label": "GPT-5 Mini",
+          "model_id": "gpt-5-mini",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": true
+        },
+        {
+          "context": 400000,
+          "cost_input": 0.05,
+          "cost_output": 0.4,
+          "label": "GPT-5 Nano",
+          "model_id": "gpt-5-nano",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": true
+        },
+        {
+          "context": 0,
+          "label": "chatgpt-image-latest",
+          "model_id": "chatgpt-image-latest",
+          "output": 0,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 16385,
+          "cost_input": 0.5,
+          "cost_output": 1.5,
+          "label": "GPT-3.5-turbo",
+          "model_id": "gpt-3.5-turbo",
+          "output": 4096,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 8192,
+          "cost_input": 30,
+          "cost_output": 60,
+          "label": "GPT-4",
+          "model_id": "gpt-4",
+          "output": 8192,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 128000,
+          "cost_input": 10,
+          "cost_output": 30,
+          "label": "GPT-4 Turbo",
+          "model_id": "gpt-4-turbo",
+          "output": 4096,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 1047576,
+          "cost_input": 2,
+          "cost_output": 8,
+          "label": "GPT-4.1",
+          "model_id": "gpt-4.1",
+          "output": 32768,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 1047576,
+          "cost_input": 0.4,
+          "cost_output": 1.6,
+          "label": "GPT-4.1 mini",
+          "model_id": "gpt-4.1-mini",
+          "output": 32768,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 1047576,
+          "cost_input": 0.1,
+          "cost_output": 0.4,
+          "label": "GPT-4.1 nano",
+          "model_id": "gpt-4.1-nano",
+          "output": 32768,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 128000,
+          "cost_input": 2.5,
+          "cost_output": 10,
+          "label": "GPT-4o",
+          "model_id": "gpt-4o",
+          "output": 16384,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 128000,
+          "cost_input": 5,
+          "cost_output": 15,
+          "label": "GPT-4o (2024-05-13)",
+          "model_id": "gpt-4o-2024-05-13",
+          "output": 4096,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 128000,
+          "cost_input": 2.5,
+          "cost_output": 10,
+          "label": "GPT-4o (2024-08-06)",
+          "model_id": "gpt-4o-2024-08-06",
+          "output": 16384,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 128000,
+          "cost_input": 2.5,
+          "cost_output": 10,
+          "label": "GPT-4o (2024-11-20)",
+          "model_id": "gpt-4o-2024-11-20",
+          "output": 16384,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 128000,
+          "cost_input": 0.15,
+          "cost_output": 0.6,
+          "label": "GPT-4o mini",
+          "model_id": "gpt-4o-mini",
+          "output": 16384,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 1.25,
+          "cost_output": 10,
+          "label": "GPT-5",
+          "model_id": "gpt-5",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 1.25,
+          "cost_output": 10,
+          "label": "GPT-5 Chat (latest)",
+          "model_id": "gpt-5-chat-latest",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 1.25,
+          "cost_output": 10,
+          "label": "GPT-5-Codex",
+          "model_id": "gpt-5-codex",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 15,
+          "cost_output": 120,
+          "label": "GPT-5 Pro",
+          "model_id": "gpt-5-pro",
+          "output": 272000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 1.25,
+          "cost_output": 10,
+          "label": "GPT-5.1",
+          "model_id": "gpt-5.1",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 128000,
+          "cost_input": 1.25,
+          "cost_output": 10,
+          "label": "GPT-5.1 Chat",
+          "model_id": "gpt-5.1-chat-latest",
+          "output": 16384,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 1.25,
+          "cost_output": 10,
+          "label": "GPT-5.1 Codex",
+          "model_id": "gpt-5.1-codex",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 1.25,
+          "cost_output": 10,
+          "label": "GPT-5.1 Codex Max",
+          "model_id": "gpt-5.1-codex-max",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 0.25,
+          "cost_output": 2,
+          "label": "GPT-5.1 Codex mini",
+          "model_id": "gpt-5.1-codex-mini",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 1.75,
+          "cost_output": 14,
+          "label": "GPT-5.2",
+          "model_id": "gpt-5.2",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 128000,
+          "cost_input": 1.75,
+          "cost_output": 14,
+          "label": "GPT-5.2 Chat",
+          "model_id": "gpt-5.2-chat-latest",
+          "output": 16384,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 1.75,
+          "cost_output": 14,
+          "label": "GPT-5.2 Codex",
+          "model_id": "gpt-5.2-codex",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 21,
+          "cost_output": 168,
+          "label": "GPT-5.2 Pro",
+          "model_id": "gpt-5.2-pro",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 128000,
+          "cost_input": 1.75,
+          "cost_output": 14,
+          "label": "GPT-5.3 Chat (latest)",
+          "model_id": "gpt-5.3-chat-latest",
+          "output": 16384,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 1.75,
+          "cost_output": 14,
+          "label": "GPT-5.3 Codex",
+          "model_id": "gpt-5.3-codex",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 128000,
+          "cost_input": 1.75,
+          "cost_output": 14,
+          "label": "GPT-5.3 Codex Spark",
+          "model_id": "gpt-5.3-codex-spark",
+          "output": 32000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1050000,
+          "cost_input": 2.5,
+          "cost_output": 15,
+          "label": "GPT-5.4",
+          "model_id": "gpt-5.4",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 0.75,
+          "cost_output": 4.5,
+          "label": "GPT-5.4 mini",
+          "model_id": "gpt-5.4-mini",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 400000,
+          "cost_input": 0.2,
+          "cost_output": 1.25,
+          "label": "GPT-5.4 nano",
+          "model_id": "gpt-5.4-nano",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1050000,
+          "cost_input": 30,
+          "cost_output": 180,
+          "label": "GPT-5.4 Pro",
+          "model_id": "gpt-5.4-pro",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1050000,
+          "cost_input": 5,
+          "cost_output": 30,
+          "label": "GPT-5.5",
+          "model_id": "gpt-5.5",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 1050000,
+          "cost_input": 30,
+          "cost_output": 180,
+          "label": "GPT-5.5 Pro",
+          "model_id": "gpt-5.5-pro",
+          "output": 128000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 0,
+          "label": "gpt-image-1-mini",
+          "model_id": "gpt-image-1-mini",
+          "output": 0,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 0,
+          "label": "gpt-image-1.5",
+          "model_id": "gpt-image-1.5",
+          "output": 0,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 15,
+          "cost_output": 60,
+          "label": "o1",
+          "model_id": "o1",
+          "output": 100000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 150,
+          "cost_output": 600,
+          "label": "o1-pro",
+          "model_id": "o1-pro",
+          "output": 100000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 2,
+          "cost_output": 8,
+          "label": "o3",
+          "model_id": "o3",
+          "output": 100000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 10,
+          "cost_output": 40,
+          "label": "o3-deep-research",
+          "model_id": "o3-deep-research",
+          "output": 100000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 1.1,
+          "cost_output": 4.4,
+          "label": "o3-mini",
+          "model_id": "o3-mini",
+          "output": 100000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 20,
+          "cost_output": 80,
+          "label": "o3-pro",
+          "model_id": "o3-pro",
+          "output": 100000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 1.1,
+          "cost_output": 4.4,
+          "label": "o4-mini",
+          "model_id": "o4-mini",
+          "output": 100000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 200000,
+          "cost_input": 2,
+          "cost_output": 8,
+          "label": "o4-mini-deep-research",
+          "model_id": "o4-mini-deep-research",
+          "output": 100000,
+          "reasoning": true,
+          "recommended": false
+        },
+        {
+          "context": 8191,
+          "cost_input": 0.13,
+          "cost_output": 0,
+          "label": "text-embedding-3-large",
+          "model_id": "text-embedding-3-large",
+          "output": 3072,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 8191,
+          "cost_input": 0.02,
+          "cost_output": 0,
+          "label": "text-embedding-3-small",
+          "model_id": "text-embedding-3-small",
+          "output": 1536,
+          "reasoning": false,
+          "recommended": false
+        },
+        {
+          "context": 8192,
+          "cost_input": 0.1,
+          "cost_output": 0,
+          "label": "text-embedding-ada-002",
+          "model_id": "text-embedding-ada-002",
+          "output": 1536,
+          "reasoning": false,
+          "recommended": false
+        }
+      ],
+      "namespace": null,
+      "requires_api_key": true,
+      "status": "production",
+      "supports_base_url": false,
+      "supports_reasoning": true
+    }
+  ]
+}

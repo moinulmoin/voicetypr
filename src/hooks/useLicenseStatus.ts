@@ -9,7 +9,7 @@ export function useLicenseStatus() {
 
   // Derive the isValid computed value
   const isValid = status ?
-    ['active', 'trial'].includes(status.status) :
+    ['licensed', 'trial'].includes(status.status) :
     false;
 
   return {

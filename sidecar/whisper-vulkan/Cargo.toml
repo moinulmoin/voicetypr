@@ -9,6 +9,7 @@ name = "whisper-vulkan-sidecar"
 path = "src/main.rs"
 
 [dependencies]
+audioadapter-buffers = "3.0"
 hound = "3.5.1"
 rubato = "2.0"
 serde = { version = "1", features = ["derive"] }

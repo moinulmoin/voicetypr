@@ -21,7 +21,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '24'
+          node-version: '22.19.0'
           package-manager-cache: false
 
       - name: Setup pnpm
@@ -57,10 +57,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Select Swift 6 toolchain (Parakeet sidecar needs Xcode 16+)
+        run: |
+          xcode=$(ls -d /Applications/Xcode_1[6-9]*.app /Applications/Xcode_[2-9][0-9]*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$xcode" ]; then echo "No Xcode >=16 (Swift 6) found on runner" >&2; exit 1; fi
+          echo "Selecting $xcode"
+          sudo xcode-select -s "$xcode"
+          swift --version
+
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '24'
+          node-version: '22.19.0'
           package-manager-cache: false
 
       - name: Setup pnpm
@@ -113,7 +121,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '24'
+          node-version: '22.19.0'
           package-manager-cache: false
 
       - name: Setup pnpm

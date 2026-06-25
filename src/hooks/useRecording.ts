@@ -2,6 +2,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useCallback, useEffect, useState } from 'react';
 import { updateService } from '@/services/updateService';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger("recording");
 
 type RecordingState = 'idle' | 'starting' | 'recording' | 'stopping' | 'transcribing' | 'error';
 
@@ -12,6 +15,16 @@ interface UseRecordingReturn {
   stopRecording: () => Promise<void>;
   isActive: boolean;
 }
+
+const getCommandErrorMessage = (err: unknown, fallback: string) => {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message;
+  }
+  if (typeof err === 'string' && err.trim()) {
+    return err;
+  }
+  return fallback;
+};
 
 export function useRecording(): UseRecordingReturn {
   const [state, setState] = useState<RecordingState>('idle');
@@ -25,11 +38,11 @@ export function useRecording(): UseRecordingReturn {
         if (!currentState || typeof currentState.state !== 'string') {
           return;
         }
-        console.log('[Recording Hook] Initial state:', currentState);
+        log.debug('[Recording Hook] Initial state:', currentState);
         setState(currentState.state);
         setError(currentState.error);
       } catch (err) {
-        console.error('[Recording Hook] Failed to get initial state:', err);
+        log.error('[Recording Hook] Failed to get initial state:', err);
       }
     };
     checkInitialState();
@@ -42,31 +55,31 @@ export function useRecording(): UseRecordingReturn {
     const setupListeners = async () => {
       // Backend state changes
       unsubscribers.push(await listen('recording-state-changed', (event: any) => {
-        console.log('[Recording Hook] State changed:', event.payload);
+        log.debug('[Recording Hook] State changed:', event.payload);
         setState(event.payload.state);
         setError(event.payload.error || null);
       }));
 
       // Legacy events for compatibility
       unsubscribers.push(await listen('recording-started', () => {
-        console.log('[Recording Hook] Recording started');
+        log.info('[Recording Hook] Recording started');
         setState('recording');
         setError(null);
       }));
 
       unsubscribers.push(await listen('recording-timeout', () => {
-        console.log('[Recording Hook] Recording timeout');
+        log.debug('[Recording Hook] Recording timeout');
         setState('stopping');
       }));
 
       unsubscribers.push(await listen('recording-stopped-silence', () => {
-        console.log('[Recording Hook] Recording stopped due to silence');
+        log.debug('[Recording Hook] Recording stopped due to silence');
         // You could show a toast or notification here
         // For now, just log it
       }));
 
       unsubscribers.push(await listen('transcription-started', () => {
-        console.log('[Recording Hook] Transcription started');
+        log.debug('[Recording Hook] Transcription started');
         setState('transcribing');
       }));
 
@@ -97,21 +110,23 @@ export function useRecording(): UseRecordingReturn {
   // Simple command invocations - let backend handle all state management
   const startRecording = useCallback(async () => {
     try {
-      console.log('[Recording Hook] Invoking start_recording...');
+      log.debug('[Recording Hook] Invoking start_recording...');
       await invoke('start_recording');
     } catch (err) {
-      console.error('[Recording Hook] Failed to start recording:', err);
-      // Backend will emit appropriate error events
+      log.error('[Recording Hook] Failed to start recording:', err);
+      setState('error');
+      setError(`${getCommandErrorMessage(err, 'Recording could not start')}. Try again in a moment.`);
     }
   }, []);
 
   const stopRecording = useCallback(async () => {
     try {
-      console.log('[Recording Hook] Invoking stop_recording...');
+      log.debug('[Recording Hook] Invoking stop_recording...');
       await invoke('stop_recording');
     } catch (err) {
-      console.error('[Recording Hook] Failed to stop recording:', err);
-      // Backend will emit appropriate error events
+      log.error('[Recording Hook] Failed to stop recording:', err);
+      setState('error');
+      setError(`${getCommandErrorMessage(err, 'Recording could not stop')}. Try again in a moment.`);
     }
   }, []);
 

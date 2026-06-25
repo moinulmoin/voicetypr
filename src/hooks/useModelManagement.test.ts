@@ -1,20 +1,21 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { sortModels, useModelManagement } from './useModelManagement';
-import { LocalModelInfo } from '@/types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { toast } from 'sonner';
+import { useModelManagement } from './useModelManagement';
 
-const mockTauri = vi.hoisted(() => ({
-  invoke: vi.fn(),
-  ask: vi.fn(),
-  handlers: {} as Record<string, (payload: unknown) => void>,
-}));
+const mockInvoke = vi.fn();
+const eventHandlers = new Map<string, (payload: unknown) => void | Promise<void>>();
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: mockTauri.invoke,
+  invoke: (...args: unknown[]) => mockInvoke(...args),
+}));
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async () => vi.fn()),
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
-  ask: mockTauri.ask,
+  ask: vi.fn(),
 }));
 
 vi.mock('sonner', () => ({
@@ -27,145 +28,266 @@ vi.mock('sonner', () => ({
 
 vi.mock('./useEventCoordinator', () => ({
   useEventCoordinator: () => ({
-    registerEvent: vi.fn((event: string, callback: (payload: unknown) => void) => {
-      mockTauri.handlers[event] = callback;
-      return Promise.resolve(vi.fn());
+    registerEvent: vi.fn(async (eventName: string, handler: (payload: unknown) => void | Promise<void>) => {
+      eventHandlers.set(eventName, handler);
+      return () => {
+        eventHandlers.delete(eventName);
+      };
     }),
   }),
 }));
 
+const parakeetModel = {
+  name: 'parakeet-tdt-0.6b-v3',
+  display_name: 'Parakeet V3',
+  size: 1,
+  url: '',
+  sha256: '',
+  downloaded: false,
+  speed_score: 10,
+  accuracy_score: 10,
+  recommended: true,
+  engine: 'parakeet',
+};
 
-function whisperModel(
-  name: string,
-  accuracy_score: number,
-  speed_score: number,
-  size: number
-): LocalModelInfo {
-  return {
-    name,
-    display_name: name,
-    engine: 'whisper',
-    kind: 'local',
-    recommended: false,
-    downloaded: false,
-    requires_setup: false,
-    size,
-    url: `https://example.com/${name}.bin`,
-    sha256: `${name}-sha256`,
-    speed_score,
-    accuracy_score,
-  };
-}
+const emitModelEvent = async (eventName: string, payload: unknown) => {
+  const handler = eventHandlers.get(eventName);
+  expect(handler).toBeDefined();
+  await handler?.(payload);
+};
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  for (const key of Object.keys(mockTauri.handlers)) {
-    delete mockTauri.handlers[key];
-  }
-  mockTauri.ask.mockResolvedValue(true);
-  mockTauri.invoke.mockImplementation((command: string) => {
-    if (command === 'get_model_status') {
-      return Promise.resolve({
-        models: [whisperModel('base.en', 5, 8, 147_964_211)],
+const getDownloadRequestId = (index: number) => {
+  const downloadCalls = mockInvoke.mock.calls.filter(([command]) => command === 'download_model');
+  const payload = downloadCalls[index]?.[1] as { requestId?: string } | undefined;
+  const requestId = payload?.requestId;
+  expect(requestId).toBeTruthy();
+  return requestId as string;
+};
+
+describe('useModelManagement', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    eventHandlers.clear();
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'get_model_status') {
+        return Promise.resolve({ models: [parakeetModel] });
+      }
+
+      if (command === 'download_model') {
+        return new Promise(() => undefined);
+      }
+
+      if (command === 'cancel_download') {
+        return Promise.resolve(null);
+      }
+
+      return Promise.resolve(null);
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not show a downloaded toast when completion arrives after cancellation', async () => {
+    const { result } = renderHook(() => useModelManagement());
+
+    await waitFor(() => {
+      expect(result.current.models['parakeet-tdt-0.6b-v3']).toBeDefined();
+      expect(eventHandlers.has('model-downloaded')).toBe(true);
+      expect(eventHandlers.has('download-cancelled')).toBe(true);
+    });
+
+    await act(async () => {
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
+    });
+
+    await act(async () => {
+      await result.current.cancelDownload('parakeet-tdt-0.6b-v3');
+    });
+
+    await act(async () => {
+      await emitModelEvent('download-cancelled', { model: 'parakeet-tdt-0.6b-v3' });
+      await emitModelEvent('model-downloaded', { model: 'parakeet-tdt-0.6b-v3' });
+    });
+
+    expect(toast.info).toHaveBeenCalledWith('Download cancelled for Parakeet V3');
+    expect(toast.success).not.toHaveBeenCalledWith('Parakeet V3 downloaded successfully');
+    expect(result.current.downloadProgress).not.toHaveProperty('parakeet-tdt-0.6b-v3');
+  });
+
+  it('keeps cancellation active until acknowledgement and ignores stale success', async () => {
+    const { result } = renderHook(() => useModelManagement());
+
+    await waitFor(() => {
+      expect(result.current.models['parakeet-tdt-0.6b-v3']).toBeDefined();
+      expect(eventHandlers.has('model-downloaded')).toBe(true);
+      expect(eventHandlers.has('download-cancelled')).toBe(true);
+    });
+
+    await act(async () => {
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
+    });
+    const cancelledRequestId = getDownloadRequestId(0);
+
+    await act(async () => {
+      await result.current.cancelDownload('parakeet-tdt-0.6b-v3');
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
+    });
+
+    expect(mockInvoke.mock.calls.filter(([command]) => command === 'download_model')).toHaveLength(1);
+    expect(toast.info).toHaveBeenCalledWith('Parakeet V3 is already downloading');
+
+    await act(async () => {
+      await emitModelEvent('model-downloaded', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId: cancelledRequestId,
       });
-    }
-    return Promise.resolve();
+      await emitModelEvent('download-cancelled', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId: cancelledRequestId,
+      });
+    });
+
+    expect(toast.success).not.toHaveBeenCalledWith('Parakeet V3 downloaded successfully');
+
+    await act(async () => {
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
+    });
+    const retryRequestId = getDownloadRequestId(1);
+
+    await act(async () => {
+      await emitModelEvent('model-downloaded', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId: retryRequestId,
+      });
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('Parakeet V3 downloaded successfully');
   });
-});
 
-
-describe('sortModels', () => {
-  it('orders whisper models by accuracy without medium', () => {
-    const entries: [string, LocalModelInfo][] = [
-      ['large-v3-q5_0', whisperModel('large-v3-q5_0', 8, 4, 1_081_140_203)],
-      ['small.en', whisperModel('small.en', 6, 7, 487_614_201)],
-      ['base.en', whisperModel('base.en', 5, 8, 147_964_211)],
-    ];
-
-    const sorted = sortModels(entries, 'accuracy');
-
-    expect(sorted.map(([name]) => name)).toEqual([
-      'base.en',
-      'small.en',
-      'large-v3-q5_0',
-    ]);
-  });
-});
-
-describe('useModelManagement terminal download events', () => {
-  it('clears verifying state when post-download verification fails', async () => {
-    const { result } = renderHook(() => useModelManagement({ showToasts: false }));
+  it('records download errors per model and clears verifying state', async () => {
+    const { result } = renderHook(() => useModelManagement());
 
     await waitFor(() => {
-      expect(mockTauri.handlers['model-verifying']).toEqual(expect.any(Function));
-      expect(mockTauri.handlers['download-error']).toEqual(expect.any(Function));
+      expect(result.current.models['parakeet-tdt-0.6b-v3']).toBeDefined();
+      expect(eventHandlers.has('model-verifying')).toBe(true);
+      expect(eventHandlers.has('download-error')).toBe(true);
     });
 
-    act(() => {
-      mockTauri.handlers['model-verifying']({ model: 'base.en' });
+    await act(async () => {
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
     });
+    const requestId = getDownloadRequestId(0);
 
-    await waitFor(() => {
-      expect(result.current.verifyingModels.has('base.en')).toBe(true);
-    });
-
-    act(() => {
-      mockTauri.handlers['download-error']({
-        model: 'base.en',
+    await act(async () => {
+      await emitModelEvent('model-verifying', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId,
+      });
+      await emitModelEvent('download-error', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId,
         error: 'verification_failed',
       });
     });
 
-    await waitFor(() => {
-      expect(result.current.verifyingModels.has('base.en')).toBe(false);
-    });
-    expect(result.current.downloadProgress['base.en']).toBeUndefined();
-    expect(result.current.downloadErrors['base.en']).toBe('verification_failed');
+    expect(result.current.downloadErrors['parakeet-tdt-0.6b-v3']).toBe('verification_failed');
+    expect(result.current.downloadProgress).not.toHaveProperty('parakeet-tdt-0.6b-v3');
+    expect(result.current.downloadPhases).not.toHaveProperty('parakeet-tdt-0.6b-v3');
+    expect(result.current.verifyingModels.has('parakeet-tdt-0.6b-v3')).toBe(false);
   });
 
-  it('keeps detailed event error when invoke later rejects generically', async () => {
-    let rejectDownload!: (error: string) => void;
-    mockTauri.invoke.mockImplementation((command: string) => {
-      if (command === 'get_model_status') {
-        return Promise.resolve({
-          models: [whisperModel('base.en', 5, 8, 147_964_211)],
-        });
-      }
-      if (command === 'download_model') {
-        return new Promise((_, reject) => {
-          rejectDownload = reject;
-        });
-      }
-      return Promise.resolve();
-    });
-
-    const { result } = renderHook(() => useModelManagement({ showToasts: false }));
+  it('does not let an old verification timer hide a retry progress update', async () => {
+    const { result } = renderHook(() => useModelManagement());
 
     await waitFor(() => {
-      expect(result.current.models['base.en']).toBeDefined();
-      expect(mockTauri.handlers['download-error']).toEqual(expect.any(Function));
+      expect(result.current.models['parakeet-tdt-0.6b-v3']).toBeDefined();
+      expect(eventHandlers.has('model-verifying')).toBe(true);
+      expect(eventHandlers.has('download-progress')).toBe(true);
     });
 
-    act(() => {
-      result.current.downloadModel('base.en');
-    });
+    vi.useFakeTimers();
 
-    act(() => {
-      mockTauri.handlers['download-error']({
-        model: 'base.en',
-        error: 'Checksum verification failed: expected abc, calculated def',
+    await act(async () => {
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
+    });
+    const staleRequestId = getDownloadRequestId(0);
+
+    await act(async () => {
+      await emitModelEvent('model-verifying', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId: staleRequestId,
+      });
+      await result.current.cancelDownload('parakeet-tdt-0.6b-v3');
+      await emitModelEvent('download-cancelled', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId: staleRequestId,
+      });
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
+    });
+    const retryRequestId = getDownloadRequestId(1);
+
+    await act(async () => {
+      await emitModelEvent('download-progress', {
+        model: 'parakeet-tdt-0.6b-v3',
+        downloaded: 25,
+        total: 100,
+        progress: 25,
+        requestId: retryRequestId,
+        phase: 'downloading 1/4',
       });
     });
 
+    expect(result.current.downloadProgress['parakeet-tdt-0.6b-v3']).toBe(25);
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(result.current.downloadProgress['parakeet-tdt-0.6b-v3']).toBe(25);
+    expect(result.current.downloadPhases['parakeet-tdt-0.6b-v3']).toBe('downloading 1/4');
+  });
+
+  it('does not double-handle a failure delivered via both the command rejection and the download-error event', async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      if (command === 'get_model_status') {
+        return Promise.resolve({ models: [parakeetModel] });
+      }
+      if (command === 'download_model') {
+        return Promise.reject(new Error('verification_failed'));
+      }
+      return Promise.resolve(null);
+    });
+
+    const { result } = renderHook(() => useModelManagement());
+
     await waitFor(() => {
-      expect(result.current.downloadErrors['base.en']).toBe('Checksum verification failed: expected abc, calculated def');
+      expect(result.current.models['parakeet-tdt-0.6b-v3']).toBeDefined();
+      expect(eventHandlers.has('download-error')).toBe(true);
     });
 
     await act(async () => {
-      rejectDownload('verification_failed');
-      await Promise.resolve();
+      await result.current.downloadModel('parakeet-tdt-0.6b-v3');
     });
 
-    expect(result.current.downloadErrors['base.en']).toBe('Checksum verification failed: expected abc, calculated def');
+    const requestId = getDownloadRequestId(0);
+
+    // The command rejection handles the failure first: exactly one error toast.
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledTimes(1);
+    });
+
+    // The backend also emits download-error for the SAME request; it must NOT toast again.
+    await act(async () => {
+      await emitModelEvent('download-error', {
+        model: 'parakeet-tdt-0.6b-v3',
+        requestId,
+        error: 'verification_failed',
+      });
+    });
+
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(result.current.downloadErrors['parakeet-tdt-0.6b-v3']).toBeTruthy();
   });
 });

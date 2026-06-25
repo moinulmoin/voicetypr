@@ -32,6 +32,39 @@ mod logging_performance_tests;
 mod log_commands_tests;
 
 #[cfg(test)]
+mod remote_server_tests;
+
+#[cfg(test)]
+mod remote_client_tests;
+
+#[cfg(test)]
+mod remote_settings_tests;
+
+#[cfg(test)]
+mod remote_http_tests;
+
+#[cfg(test)]
+mod remote_lifecycle_tests;
+
+#[cfg(test)]
+mod remote_transcription_tests;
+
+#[cfg(test)]
+mod remote_commands_tests;
+
+#[cfg(test)]
+mod audio_recording_tests;
+
+#[cfg(test)]
+mod recording_state_characterization;
+
+#[cfg(test)]
+mod tray_menu_tests;
+
+#[cfg(test)]
+mod shortcut_bindings;
+
+#[cfg(test)]
 mod integration_tests {
     use crate::whisper::manager::{ModelSize, WhisperManager};
     use tempfile::TempDir;

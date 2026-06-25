@@ -98,13 +98,13 @@ describe('useRecording', () => {
     expect(result.current.state).toBe('idle'); // State managed by backend
   });
 
-  it('should handle command errors gracefully', async () => {
+  it('surfaces rejected start_recording command errors', async () => {
     const { result } = renderHook(() => useRecording());
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    // Mock IPC to reject
     mockIPC((cmd) => {
-      if (cmd === 'start_recording') return Promise.reject(new Error('Command failed'));
+      if (cmd === 'start_recording') return Promise.reject(new Error('License readiness is still loading'));
+      if (cmd === 'get_current_recording_state') return Promise.resolve({ state: 'idle' });
       return Promise.resolve();
     });
 
@@ -112,8 +112,36 @@ describe('useRecording', () => {
       await result.current.startRecording();
     });
 
+    expect(result.current.state).toBe('error');
+    expect(result.current.error).toBe('License readiness is still loading. Try again in a moment.');
+    expect(result.current.isActive).toBe(false);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       '[Recording Hook] Failed to start recording:',
+      expect.any(Error)
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('surfaces rejected stop_recording command errors', async () => {
+    const { result } = renderHook(() => useRecording());
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mockIPC((cmd) => {
+      if (cmd === 'stop_recording') return Promise.reject(new Error('Stop command failed'));
+      if (cmd === 'get_current_recording_state') return Promise.resolve({ state: 'idle' });
+      return Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.stopRecording();
+    });
+
+    expect(result.current.state).toBe('error');
+    expect(result.current.error).toBe('Stop command failed. Try again in a moment.');
+    expect(result.current.isActive).toBe(false);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[Recording Hook] Failed to stop recording:',
       expect.any(Error)
     );
 

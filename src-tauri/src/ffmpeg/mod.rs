@@ -161,45 +161,6 @@ fn push_search_dir(search_dirs: &mut Vec<PathBuf>, seen_dirs: &mut HashSet<PathB
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::collect_search_dirs;
-    use std::path::PathBuf;
-
-    // Portable fixtures only: these tests compare PathBuf values and never touch the filesystem.
-    fn path(value: &str) -> PathBuf {
-        PathBuf::from(value)
-    }
-
-    #[test]
-    fn store_search_dirs_exclude_development_and_parent_fallbacks() {
-        let dirs = collect_search_dirs(
-            Some(path("/package/Resources")),
-            Some(path("/package/voicetypr.exe")),
-            Some(path("/repo")),
-            true,
-        );
-
-        assert!(dirs.contains(&path("/package/Resources")));
-        assert!(dirs.contains(&path("/package/sidecar/ffmpeg/dist")));
-        assert!(!dirs.contains(&path("/repo/sidecar/ffmpeg/dist")));
-        assert!(!dirs.contains(&path("/sidecar/ffmpeg/dist")));
-    }
-
-    #[test]
-    fn direct_search_dirs_include_development_fallbacks() {
-        let dirs = collect_search_dirs(
-            Some(path("/package/Resources")),
-            Some(path("/package/voicetypr.exe")),
-            Some(path("/repo")),
-            false,
-        );
-
-        assert!(dirs.contains(&path("/repo/sidecar/ffmpeg/dist")));
-        assert!(dirs.contains(&path("/sidecar/ffmpeg/dist")));
-    }
-}
-
 async fn run_ffmpeg_command(
     app: &AppHandle,
     candidates: &[&str],
@@ -327,4 +288,43 @@ pub async fn segment(
         out_pattern.to_string_lossy().to_string(),
     ];
     run_ffmpeg_command(app, FFMPEG_CANDIDATES, &args, "ffmpeg").await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_search_dirs;
+    use std::path::PathBuf;
+
+    // Portable fixtures only: these tests compare PathBuf values and never touch the filesystem.
+    fn path(value: &str) -> PathBuf {
+        PathBuf::from(value)
+    }
+
+    #[test]
+    fn store_search_dirs_exclude_development_and_parent_fallbacks() {
+        let dirs = collect_search_dirs(
+            Some(path("/package/Resources")),
+            Some(path("/package/voicetypr.exe")),
+            Some(path("/repo")),
+            true,
+        );
+
+        assert!(dirs.contains(&path("/package/Resources")));
+        assert!(dirs.contains(&path("/package/sidecar/ffmpeg/dist")));
+        assert!(!dirs.contains(&path("/repo/sidecar/ffmpeg/dist")));
+        assert!(!dirs.contains(&path("/sidecar/ffmpeg/dist")));
+    }
+
+    #[test]
+    fn direct_search_dirs_include_development_fallbacks() {
+        let dirs = collect_search_dirs(
+            Some(path("/package/Resources")),
+            Some(path("/package/voicetypr.exe")),
+            Some(path("/repo")),
+            false,
+        );
+
+        assert!(dirs.contains(&path("/repo/sidecar/ffmpeg/dist")));
+        assert!(dirs.contains(&path("/sidecar/ffmpeg/dist")));
+    }
 }

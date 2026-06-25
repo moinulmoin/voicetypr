@@ -34,10 +34,10 @@ target/
 *.sw?
 
 agent-docs
+agent-docs/
+agent-reports
 
 CLAUDE.local.md
-
-agent-reports
 
 /release-*
 
@@ -45,11 +45,25 @@ notarized-build-*
 
 claudedocs/
 
-agent-docs/
-
 # Swift build artifacts
 .build/
 
 sidecar/ffmpeg/vendor
 opencodetmp
+
+# Git worktrees for parallel development
+.worktrees/
+
+# Agent counter for multi-agent coordination
+.agent-counter
+
+# Stray agent-harness tooling (local skill packs / lockfile, not part of this project)
+.agents/
+.claude/skills/
+skills-lock.json
+
+# bv (beads viewer) local config and caches
+.bv/
 pi-session-*.html
+# Whisper Vulkan sidecar build artifacts
+sidecar/whisper-vulkan/target/

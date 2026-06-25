@@ -10,7 +10,7 @@ const baseSettings: AppSettings = {
   recording_mode: 'toggle',
   hotkey: 'CommandOrControl+Shift+Space',
   current_model: '',
-  language: 'en',
+  speech_language: 'en',
   theme: 'system',
   keep_transcription_in_clipboard: false,
   play_sound_on_recording: true,

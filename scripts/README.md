@@ -4,7 +4,8 @@
 
 ### Main Release Scripts
 - `release-separate.sh` - macOS release script (creates version, builds both architectures, creates GitHub release)
-- `release-windows.ps1` - Windows release script (single CPU-safe installer with bundled optional Vulkan GPU sidecar)
+- `release-windows.ps1` - Windows release script (builds NSIS installer, updates existing release)
+- `release-windows.bat` - Batch wrapper for the PowerShell script
 
 ### Microsoft Store MSIX
 - `build-msix-store.ps1` - Windows Microsoft Store MSIX package builder
@@ -30,16 +31,21 @@ The recommended release process is:
    - Creates GitHub draft release with macOS artifacts
    - Generates initial latest.json with macOS platforms
 
-2. **Windows Release** (adds to existing release):
+2. **Windows x86_64 Release** (adds to existing release):
    ```powershell
-   .\scripts\release-windows.ps1
+   .\scripts\release-windows.ps1 [version]
+   ```
+   OR
+   ```batch
+   scripts\release-windows.bat [version]
    ```
    - Reads version from package.json (or uses provided version)
    - Verifies the GitHub release exists
-   - Builds one Windows NSIS installer
-   - Keeps `voicetypr.exe` CPU-safe and free of `vulkan-1.dll`
-   - Bundles the optional Vulkan Whisper sidecar and Vulkan Runtime installer resource
-   - Signs the installer, updates latest.json, and uploads Windows artifacts
+   - Builds the Windows x64 NSIS installer (CPU-safe main app + optional x86_64 Vulkan sidecar)
+   - Uses `src-tauri/tauri.windows.conf.json`, which is x86_64-only (Windows ARM64 stays CPU-only)
+   - Bundles VC++ and Vulkan Runtime installers as best-effort post-install steps after Authenticode publisher verification
+   - Signs the installer and updates latest.json with the Windows platform
+   - Uploads the installer, signature, and latest.json to the existing release
 
 ### Environment Variables
 
@@ -49,12 +55,41 @@ The recommended release process is:
 - OR `APPLE_ID` + `APPLE_PASSWORD` + `APPLE_TEAM_ID` - Apple ID authentication
 - `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` - Tauri update signing
 
-**Windows (release-windows.ps1)**:
-- `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` - Tauri update signing
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` - Password for signing key (if needed)
+**Windows x86_64 (release-windows.ps1)**:
+- `VULKAN_SDK` - Path to Vulkan SDK (required to build the optional x64 GPU sidecar)
+- `VULKAN_RUNTIME_VERSION` or `VULKAN_VERSION` - Vulkan Runtime version for bundling (defaults to SDK folder name)
+- `CARGO_TARGET_DIR` - Optional short build output path (honored for target-specific sidecar and main app builds)
+- `TAURI_SIGNING_PRIVATE_KEY_PATH` - Preferred Tauri update signing key path
+- `TAURI_SIGNING_PRIVATE_KEY` - Tauri update signing key content, written to a temporary key file when no path is set
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` - Password for signing key (if needed; empty passwords are supported)
+- If neither signing key env var is set, the script falls back to `%USERPROFILE%\.tauri\voicetypr.key`
 - `GITHUB_TOKEN` - GitHub authentication (usually handled by gh CLI)
-- `VULKAN_SDK` - Required when building Windows releases; used only for the optional GPU sidecar/runtime resource
-- `VULKAN_RUNTIME_VERSION` - Optional pinned Vulkan Runtime installer version; defaults to `VULKAN_VERSION`/SDK folder name
+
+### Windows x86_64 Build Prerequisites
+
+This release path builds an x64 installer with an optional x86_64 Vulkan sidecar using the `x86_64-pc-windows-msvc` target.
+Windows ARM64 builds are CPU-only and must not use `src-tauri/tauri.windows.conf.json`.
+The release script and GitHub workflow verify downloaded VC++ and Vulkan Runtime installers with Authenticode before bundling them. GPU acceleration still depends on compatible GPU drivers/runtime availability; CPU fallback remains the safe path.
+
+
+**1. Vulkan SDK**
+Download from https://vulkan.lunarg.com/sdk/home and ensure `VULKAN_SDK` is set.
+
+**2. FFmpeg Sidecar Binaries**
+Place the following files in `sidecar/ffmpeg/dist/`:
+- `ffmpeg.exe` and `ffprobe.exe` (base binaries)
+- `ffmpeg-x86_64-pc-windows-msvc.exe` and `ffprobe-x86_64-pc-windows-msvc.exe`
+- `ffmpeg.exe-x86_64-pc-windows-msvc.exe` and `ffprobe.exe-x86_64-pc-windows-msvc.exe`
+
+These are not tracked in git due to their size (~100MB each).
+
+**3. Windows MAX_PATH Limitation**
+Windows has a 260-character path limit. When using git worktrees or long paths, set a short target directory for both the sidecar and main app builds:
+```powershell
+$env:CARGO_TARGET_DIR = "C:\tmp\vt-target"
+.\scripts\release-windows.ps1 -SkipPublish
+```
+This is especially important for worktrees where paths become very long.
 
 ## Important: AppleDouble Files Fix
 

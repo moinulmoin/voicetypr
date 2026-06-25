@@ -231,20 +231,4 @@ describe('ModelCard', () => {
     // The component shows the display_name
     expect(screen.getByText('Base (English)')).toBeInTheDocument();
   });
-
-  it('shows terminal download errors after verification fails', () => {
-    render(
-      <ModelCard
-        name="base"
-        model={mockModel}
-        downloadError="Checksum verification failed"
-        onDownload={mockOnDownload}
-        onDelete={mockOnDelete}
-        onSelect={mockOnSelect}
-      />
-    );
-
-    expect(screen.getByRole('alert')).toHaveTextContent('Checksum verification failed');
-    expect(screen.getByRole('button')).toHaveTextContent('Download');
-  });
 });

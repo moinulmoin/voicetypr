@@ -1,21 +1,18 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Voicetypr",
+  "version": "2.0.0",
   "identifier": "com.ideaplexa.voicetypr.dev",
-  "build": {
-    "beforeDevCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm run sidecar:ensure-ffmpeg && pnpm build",
-    "frontendDist": "../dist"
-  },
   "app": {
     "windows": [
       {
         "title": "Voicetypr",
         "label": "main",
-        "width": 800,
-        "height": 600,
-        "resizable": false,
+        "width": 1120,
+        "height": 760,
+        "minWidth": 1040,
+        "minHeight": 700,
+        "resizable": true,
         "center": true,
         "visible": false,
         "skipTaskbar": true,
@@ -32,7 +29,7 @@
         "img-src": "'self' asset: data:",
         "font-src": "'self'",
         "connect-src": "'self' ipc: https://voicetypr.com https://api.voicetypr.com https://github.com asset:",
-        "media-src": "'self'"
+        "media-src": "'self' asset:"
       }
     }
   },
@@ -44,10 +41,6 @@
       "app",
       "dmg"
     ],
-    "externalBin": [
-      "../sidecar/ffmpeg/dist/ffmpeg",
-      "../sidecar/ffmpeg/dist/ffprobe"
-    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -56,7 +49,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "13.0",
+      "minimumSystemVersion": "14.0",
       "entitlements": "./entitlements.plist",
       "hardenedRuntime": true,
       "signingIdentity": "-"

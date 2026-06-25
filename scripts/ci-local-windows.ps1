@@ -17,6 +17,15 @@ function Require-Command($Command) {
     }
 }
 
+function Require-Node2219() {
+    $version = [version]((node -p "process.versions.node") | Select-Object -First 1)
+    $minimum = [version]"22.19.0"
+    if ($version -lt $minimum) {
+        Write-ErrorMsg "Node >= 22.19.0 required for the frontend build toolchain (found v$version)"
+        exit 1
+    }
+}
+
 if ($Help) {
     Write-Host @"
 Local Windows CI runner
@@ -60,6 +69,7 @@ if ($Full) {
 
     Write-Info "node: $(node -v)"
     Write-Info "pnpm: $(pnpm -v)"
+    Require-Node2219
 
     if (-not $SkipInstall) {
         Write-Step "pnpm install --frozen-lockfile"

@@ -3,6 +3,9 @@ import { useEffect } from "react";
 import { toast } from "sonner";
 import { AccountSection } from "../sections/AccountSection";
 import { useEventCoordinator } from "@/hooks/useEventCoordinator";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("account-tab");
 
 export function AccountTab() {
   const { registerEvent } = useEventCoordinator("main");
@@ -15,7 +18,7 @@ export function AccountTab() {
         registerEvent<{ title: string; message: string; action: string }>(
           "license-required",
           async (event) => {
-            console.log("License required event:", event);
+            log.debug("License required event:", event);
 
             // Small delay to prevent window animation conflicts
             await new Promise((resolve) => setTimeout(resolve, 100));
@@ -31,14 +34,14 @@ export function AccountTab() {
                 });
               }, 200);
             } catch (error) {
-              console.error("Failed to focus window:", error);
+              log.error("Failed to focus window:", error);
               // If window focus fails, still show the toast
               toast.error(event.message);
             }
           }
         );
       } catch (error) {
-        console.error("Failed to initialize account tab:", error);
+        log.error("Failed to initialize account tab:", error);
       }
     };
 

@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::async_runtime::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
 use tauri_plugin_store::StoreExt;
@@ -14,21 +14,29 @@ use crate::utils::logger::*;
 
 mod ai;
 mod audio;
+pub mod cli;
+mod cloud_stt;
 mod commands;
 mod ffmpeg;
 mod license;
 mod media;
 mod menu;
 mod parakeet;
+pub mod provider_capabilities;
 mod recognition;
 mod recording;
+mod remote;
 mod secure_store;
 mod simple_cache;
 mod state;
 mod state_machine;
+mod telemetry;
+pub mod transcription;
+mod trigger;
 mod utils;
 mod whisper;
 mod window_manager;
+mod writing;
 
 #[cfg(test)]
 mod tests;
@@ -46,15 +54,145 @@ pub fn hide_dock_icon(app: &tauri::AppHandle) {
     log::debug!("Dock icon hidden (ActivationPolicy::Accessory)");
 }
 
+/// Show the main window and keep the macOS Dock icon in sync. Single entry point so
+/// no caller forgets to reveal the Dock icon when the window becomes visible.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        #[cfg(target_os = "macos")]
+        show_dock_icon(app);
+    }
+}
+
+/// Hide the main window and the macOS Dock icon — back to the menubar/tray.
+fn hide_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(e) = window.hide() {
+            log::error!("Failed to hide main window: {}", e);
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        hide_dock_icon(app);
+    }
+}
+
+#[cfg(target_os = "macos")]
+const APP_QUIT_TO_TRAY_ID: &str = "app-quit-to-tray";
+#[cfg(target_os = "macos")]
+const HELP_CHECK_UPDATES_ID: &str = "help-check-updates";
+#[cfg(target_os = "macos")]
+const HELP_REPORT_ISSUE_ID: &str = "help-report-issue";
+#[cfg(target_os = "macos")]
+const HELP_RELEASE_NOTES_ID: &str = "help-release-notes";
+
+/// Custom macOS app menu. Mirrors Tauri's default but: (1) the app-menu Quit (Cmd+Q)
+/// is a normal item that hides to the tray instead of the predefined Quit (which maps
+/// to native `terminate:` and can't be intercepted) — true quit stays on the tray menu
+/// and Dock -> Quit; (2) About/Hide labels are branded "Voicetypr" with Ideaplexa LLC
+/// metadata; (3) a Help submenu links updates, issues, and release notes.
+#[cfg(target_os = "macos")]
+fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{AboutMetadataBuilder, Menu, MenuItem, PredefinedMenuItem, Submenu};
+
+    let about_metadata = AboutMetadataBuilder::new()
+        .name(Some("Voicetypr"))
+        .version(Some(env!("CARGO_PKG_VERSION")))
+        .copyright(Some("© Ideaplexa LLC"))
+        .authors(Some(vec!["Ideaplexa LLC".to_string()]))
+        .website(Some("https://voicetypr.com"))
+        .website_label(Some("voicetypr.com"))
+        .build();
+
+    let quit_to_tray = MenuItem::with_id(
+        app,
+        APP_QUIT_TO_TRAY_ID,
+        "Quit Voicetypr",
+        true,
+        Some("CmdOrCtrl+Q"),
+    )?;
+
+    let app_menu = Submenu::with_items(
+        app,
+        "Voicetypr",
+        true,
+        &[
+            &PredefinedMenuItem::about(app, Some("About Voicetypr"), Some(about_metadata))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, Some("Hide Voicetypr"))?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &quit_to_tray,
+        ],
+    )?;
+
+    let edit_menu = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+
+    let check_updates = MenuItem::with_id(
+        app,
+        HELP_CHECK_UPDATES_ID,
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
+    let report_issue = MenuItem::with_id(
+        app,
+        HELP_REPORT_ISSUE_ID,
+        "Report an Issue",
+        true,
+        None::<&str>,
+    )?;
+    let release_notes = MenuItem::with_id(
+        app,
+        HELP_RELEASE_NOTES_ID,
+        "Release Notes",
+        true,
+        None::<&str>,
+    )?;
+
+    let help_menu = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[
+            &check_updates,
+            &PredefinedMenuItem::separator(app)?,
+            &report_issue,
+            &release_notes,
+        ],
+    )?;
+
+    Menu::with_items(app, &[&app_menu, &edit_menu, &help_menu])
+}
+
 use audio::recorder::AudioRecorder;
+use commands::remote::load_remote_settings;
+use commands::telemetry::{get_telemetry_status, report_frontend_error, set_telemetry_consent};
 use commands::{
     ai::{
         cache_ai_api_key, clear_ai_api_key_cache, disable_ai_enhancement, enhance_transcription,
         get_ai_settings, get_ai_settings_for_provider, get_enhancement_options, get_openai_config,
-        list_provider_models, set_openai_config, test_openai_endpoint, update_ai_settings,
-        update_enhancement_options, validate_and_cache_api_key,
+        get_writing_settings, list_ai_providers, list_provider_models, set_openai_config,
+        test_openai_endpoint, update_ai_settings, update_enhancement_options,
+        update_writing_settings, validate_ai_api_key,
     },
     audio::*,
+    cli_tool::{cli_tool_status, install_cli_tool, uninstall_cli_tool},
     clipboard::{copy_image_to_clipboard, save_image_to_file},
     debug::{debug_transcription_flow, test_transcription_event},
     device::get_device_id,
@@ -63,33 +201,72 @@ use commands::{
     license::*,
     logs::{clear_old_logs, get_latest_log_for_bug_report, get_log_directory, open_logs_folder},
     model::{
-        cancel_download, delete_model, download_model, get_model_status, list_downloaded_models,
-        preload_model, verify_model,
+        cancel_download, delete_model, download_model, download_parakeet_vocabulary_model,
+        get_model_status, get_parakeet_vocabulary_status, list_downloaded_models, preload_model,
+        verify_model,
     },
     permissions::{
-        check_accessibility_permission, check_microphone_permission,
+        check_accessibility_permission, check_microphone_permission, open_accessibility_settings,
         request_accessibility_permission, request_microphone_permission,
         test_automation_permission,
     },
+    remote::{
+        add_remote_server, check_remote_server_status, discover_remote_servers,
+        get_active_remote_server, get_firewall_status, get_local_ips, get_local_machine_id,
+        get_remote_transcription_control, get_sharing_status, list_remote_servers,
+        open_firewall_settings, refresh_active_remote_server_status, refresh_remote_servers,
+        remove_remote_server, set_active_remote_server, start_sharing, stop_sharing,
+        test_remote_connection, test_remote_server, transcribe_remote,
+        update_remote_model_control_enabled, update_remote_server,
+        update_remote_transcription_control,
+    },
     reset::reset_app_data,
     settings::*,
-    stt::{clear_soniox_key_cache, validate_and_cache_soniox_key},
+    shortcuts::{get_shortcut_settings, list_shortcut_actions, update_shortcut_settings},
+    stt::{clear_stt_key_cache, validate_stt_key},
     system_info::get_system_specs,
     text::*,
-    utils::export_transcriptions,
+    utils::{export_transcriptions, save_transcript_file},
     window::*,
 };
+use remote::lifecycle::RemoteServerManager;
 use whisper::cache::TranscriberCache;
 use window_manager::WindowManager;
 
 use menu::build_tray_menu;
 pub use recognition::{
-    auto_select_model_if_needed, recognition_availability_snapshot, RecognitionAvailabilitySnapshot,
+    auto_select_model_if_needed, get_recognition_availability_snapshot,
+    recognition_availability_snapshot, RecognitionAvailabilitySnapshot,
 };
 pub use state::{
     emit_to_all, emit_to_window, flush_pill_event_queue, get_recording_state,
     update_recording_state, AppState, QueuedPillEvent, RecordingMode, RecordingState,
 };
+
+/// Shared log filter predicate applied to every tauri_plugin_log target.
+/// Drops noisy third-party logs:
+/// - Audio crates (always): whisper_rs, cpal, rubato, hound, audio::level_meter
+/// - HTTP/transport crates below Warn: h2, hyper, hyper_util, reqwest, tower
+fn log_filter_predicate(metadata: &log::Metadata) -> bool {
+    let target = metadata.target();
+    // Always drop low-level audio processing noise
+    if target.contains("whisper_rs")
+        || target.contains("audio::level_meter")
+        || target.contains("cpal")
+        || target.contains("rubato")
+        || target.contains("hound")
+    {
+        return false;
+    }
+    // Drop HTTP/transport framing noise at Info/Debug/Trace; keep Warn and Error
+    let is_http_transport = target == "h2"
+        || target.starts_with("h2::")
+        || target.starts_with("hyper")
+        || target.starts_with("hyper_util")
+        || target.starts_with("reqwest")
+        || target.starts_with("tower");
+    !(is_http_transport && metadata.level() > log::Level::Warn)
+}
 
 // Setup logging with daily rotation
 fn setup_logging() -> tauri_plugin_log::Builder {
@@ -97,27 +274,11 @@ fn setup_logging() -> tauri_plugin_log::Builder {
 
     LogBuilder::default()
         .targets([
-            Target::new(TargetKind::Stdout).filter(|metadata| {
-                // Filter out noisy logs
-                let target = metadata.target();
-                !target.contains("whisper_rs")
-                    && !target.contains("audio::level_meter")
-                    && !target.contains("cpal")
-                    && !target.contains("rubato")
-                    && !target.contains("hound")
-            }),
+            Target::new(TargetKind::Stdout).filter(log_filter_predicate),
             Target::new(TargetKind::LogDir {
                 file_name: Some(format!("voicetypr-{}", today)),
             })
-            .filter(|metadata| {
-                // Filter out noisy logs from file as well
-                let target = metadata.target();
-                !target.contains("whisper_rs")
-                    && !target.contains("audio::level_meter")
-                    && !target.contains("cpal")
-                    && !target.contains("rubato")
-                    && !target.contains("hound")
-            }),
+            .filter(log_filter_predicate),
         ])
         .rotation_strategy(RotationStrategy::KeepAll)
         .max_file_size(10_000_000) // 10MB per file
@@ -136,16 +297,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Log application startup
     log_lifecycle_event("APPLICATION_START", Some(app_version), None);
 
-    // Load .env file if it exists (for development)
-    log_start("ENV_FILE_LOAD");
-    match dotenv::dotenv() {
-        Ok(path) => {
-            log_file_operation("LOAD", &format!("{:?}", path), true, None, None);
-            println!("Loaded .env file from: {:?}", path);
-        }
-        Err(e) => {
-            log::info!("📄 No .env file found or error loading it: {}", e);
-            println!("No .env file found or error loading it: {}", e);
+    #[cfg(debug_assertions)]
+    {
+        // Load .env file if it exists (development builds only)
+        log_start("ENV_FILE_LOAD");
+        match dotenv::dotenv() {
+            Ok(path) => {
+                log_file_operation("LOAD", &format!("{:?}", path), true, None, None);
+            }
+            Err(e) => {
+                log::info!("📄 No .env file found or error loading it: {}", e);
+            }
         }
     }
 
@@ -167,6 +329,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("✅ Encryption initialized successfully");
     }
 
+    // Initialize opt-in, anonymous error reporting. No-op unless the user has
+    // opted in AND a DSN was baked in at build time. Native minidumps are
+    // disabled, so no raw process memory is ever captured. The guard must
+    // outlive the app, so it is held until `run()` returns.
+    let app_context = tauri::generate_context!();
+    let (telemetry_enabled, telemetry_install_id) =
+        telemetry::read_consent(app_context.config().identifier.as_str());
+    // Held for the whole process so the Sentry client stays alive (Rust panics +
+    // frontend-error capture). We do NOT register tauri-plugin-sentry: no JS
+    // injection and no envelope/breadcrumb IPC, so `before_send` is the single
+    // egress chokepoint. Inert unless opted in AND a DSN was compiled in.
+    let _sentry_guard = telemetry::init(telemetry_enabled, telemetry_install_id);
+
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(setup_logging().build())
@@ -178,10 +353,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // When a second instance is launched, bring the existing window to focus
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.show();
-                let _ = win.set_focus();
-            }
+            show_main_window(app);
         }))
         .plugin({
             #[cfg(target_os = "macos")]
@@ -207,7 +379,28 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         builder = builder
             .plugin(tauri_nspanel::init())
-            .plugin(tauri_plugin_macos_permissions::init());
+            .plugin(tauri_plugin_macos_permissions::init())
+            .menu(build_app_menu)
+            .on_menu_event(|app, event| {
+                use tauri_plugin_opener::OpenerExt;
+                let id = event.id();
+                if id == APP_QUIT_TO_TRAY_ID {
+                    // Cmd+Q / app-menu Quit: hide to tray instead of terminating.
+                    hide_main_window(app);
+                } else if id == HELP_CHECK_UPDATES_ID {
+                    let _ = app.emit("tray-check-updates", ());
+                } else if id == HELP_REPORT_ISSUE_ID {
+                    let _ = app.opener().open_url(
+                        "https://github.com/moinulmoin/voicetypr/issues",
+                        None::<&str>,
+                    );
+                } else if id == HELP_RELEASE_NOTES_ID {
+                    let _ = app.opener().open_url(
+                        "https://github.com/moinulmoin/voicetypr/releases",
+                        None::<&str>,
+                    );
+                }
+            });
     }
 
     builder
@@ -239,7 +432,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ("component", "panic_handler")
             ]);
 
-            std::panic::set_hook(Box::new(|panic_info| {
+            // Chain the previous panic hook instead of replacing it. Telemetry
+            // init installed sentry's panic hook (via the `panic` feature) to
+            // capture release panics as events; overwriting it here would
+            // silently drop panic capture. Run our local diagnostics first, then
+            // forward to the prior hook so Sentry still records the event.
+            let prev_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |panic_info| {
                 let location = panic_info.location()
                     .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
                     .unwrap_or_else(|| "unknown location".to_string());
@@ -269,6 +468,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         location, message, panic_info, chrono::Local::now()
                     ));
                 }
+                // Forward to the prior (Sentry) hook so panics are still captured.
+                prev_hook(panic_info);
             }));
 
             log::info!("✅ Panic handler configured");
@@ -302,7 +503,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
 
-            // Set activation policy on macOS to prevent focus stealing
+            // Accessory by default: Voicetypr is a background/menubar app, so it shows
+            // no Dock icon until a window is open (show_dock_icon -> Regular). Hiding the
+            // window returns to Accessory, mirroring the Windows close-to-tray behaviour.
+            // The recording pill is a non-activating NSPanel.
             #[cfg(target_os = "macos")]
             {
                 log_start("MACOS_SETUP");
@@ -368,8 +572,129 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Cache size is 1: only the current model (1-3GB RAM)
             // When user switches models, old one is unloaded immediately
             app.manage(AsyncMutex::new(TranscriberCache::new()));
-            app.manage(whisper::gpu_sidecar::GpuSidecarClient::new());
-            log::info!("🎮 GPU sidecar client initialized");
+            app.manage(crate::whisper::gpu_sidecar::GpuSidecarClient::new());
+            log::info!("GPU sidecar client initialized");
+
+            // Initialize remote transcription state
+            app.manage(AsyncMutex::new(RemoteServerManager::new()));
+            // Load saved remote settings from store (persists connections across restarts)
+            let remote_settings = load_remote_settings(app.handle());
+            let connection_count = remote_settings.saved_connections.len();
+            let active_id = remote_settings.active_connection_id.clone();
+            let sharing_was_enabled = remote_settings.server_config.enabled;
+            log::info!(
+                "🌐 [STARTUP] Remote settings loaded: {} connections, active_connection_id={:?}, sharing_enabled={}",
+                connection_count,
+                active_id,
+                sharing_was_enabled
+            );
+            app.manage(AsyncMutex::new(remote_settings));
+            log::info!("🌐 Remote transcription state initialized ({} saved connections)", connection_count);
+
+            // Auto-start network sharing if it was enabled before app closed
+            // BUT only if no remote server is active (can't share and use remote at same time)
+            if sharing_was_enabled && active_id.is_none() {
+                let app_handle_for_sharing = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+
+                    log::info!("🌐 [STARTUP] Auto-starting network sharing (was enabled before shutdown)");
+
+                    let server_manager = app_handle_for_sharing.state::<AsyncMutex<crate::remote::lifecycle::RemoteServerManager>>();
+                    let whisper_manager = app_handle_for_sharing.state::<AsyncRwLock<crate::whisper::manager::WhisperManager>>();
+                    let remote_state = app_handle_for_sharing.state::<AsyncMutex<crate::remote::settings::RemoteSettings>>();
+
+                    let refreshed_remote_settings = {
+                        let settings = remote_state.lock().await;
+                        settings.clone()
+                    };
+
+                    if !refreshed_remote_settings.server_config.enabled {
+                        log::info!("🌐 [STARTUP] Skipping network sharing auto-start: sharing was disabled during startup delay");
+                        return;
+                    }
+
+                    if refreshed_remote_settings.active_connection_id.is_some() {
+                        log::info!(
+                            "🌐 [STARTUP] Skipping network sharing auto-start: remote server became active during startup delay (id={:?})",
+                            refreshed_remote_settings.active_connection_id
+                        );
+                        return;
+                    }
+
+                    let restore_port = refreshed_remote_settings.server_config.port;
+                    let restore_password = refreshed_remote_settings.server_config.password.clone();
+
+                    let result = async {
+                        let server_name = hostname::get()
+                            .ok()
+                            .and_then(|h| h.into_string().ok())
+                            .unwrap_or_else(|| "Voicetypr Server".to_string());
+
+                        let store = app_handle_for_sharing
+                            .store("settings")
+                            .map_err(|e| format!("Failed to access store: {}", e))?;
+
+                        let stored_model = store
+                            .get("current_model")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                            .unwrap_or_default();
+
+                        let stored_engine = store
+                            .get("current_model_engine")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                            .unwrap_or_else(|| "whisper".to_string());
+
+                        let model_name = if stored_model.is_empty() {
+                            let wm = whisper_manager.read().await;
+                            wm.get_first_downloaded_model()
+                                .ok_or("No model downloaded")?
+                        } else {
+                            stored_model
+                        };
+
+                        let (model_path, validated_engine) = match crate::commands::remote::resolve_shareable_model_config(
+                            &app_handle_for_sharing,
+                            &model_name,
+                            &stored_engine,
+                        ).await {
+                            Ok(config) => config,
+                            Err(e) => {
+                                let mut settings = remote_state.lock().await;
+                                settings.server_config.enabled = false;
+                                settings.sharing_was_active = false;
+                                let _ = crate::commands::remote::save_remote_settings(&app_handle_for_sharing, &settings);
+                                return Err(e);
+                            }
+                        };
+
+                        let mut manager = server_manager.lock().await;
+                        manager
+                            .start(
+                                restore_port,
+                                restore_password,
+                                server_name,
+                                model_path,
+                                model_name,
+                                validated_engine,
+                                Some(app_handle_for_sharing.clone()),
+                            )
+                            .await?;
+
+                        Ok::<(), String>(())
+                    }.await;
+
+                    match result {
+                        Ok(()) => log::info!("🌐 [STARTUP] Network sharing auto-started successfully on port {}", restore_port),
+                        Err(e) => log::warn!("🌐 [STARTUP] Failed to auto-start network sharing: {}", e),
+                    }
+                });
+            } else if sharing_was_enabled && active_id.is_some() {
+                log::info!(
+                    "🌐 [STARTUP] Skipping network sharing auto-start: remote server is active (id={:?})",
+                    active_id
+                );
+            }
 
             // Initialize unified application state
             app.manage(AppState::new());
@@ -380,10 +705,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let window_manager = WindowManager::new(app.app_handle().clone());
             app_state.set_window_manager(window_manager);
 
+            migrate_ai_settings_before_key_cache(&app.handle().clone());
+
             // Warm AI API key cache from secure store BEFORE startup checks run.
             // This ensures persisted credentials are visible to perform_startup_checks()
             // without depending on frontend React mount timing.
             crate::commands::ai::warm_ai_key_cache_from_secure_store(&app.handle().clone());
+
 
             // Run comprehensive startup checks after state/window manager are ready
             let app_handle = app.handle().clone();
@@ -488,32 +816,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let menu = tauri::async_runtime::block_on(build_tray_menu(app.app_handle()))?;
 
 
-            // Use default window icon for tray
-            let tray_icon = match app.default_window_icon() {
-                Some(icon) => icon.clone(),
-                None => {
-                    log::error!("Default window icon not found, cannot create tray");
-                    return Err(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "Default window icon not available"
-                    )));
-                }
-            };
+            // Bare-mark template icon for the menubar (no background; adapts to light/dark).
+            let tray_icon = tauri::include_image!("icons/tray.png");
 
             let _tray = TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
+                .icon_as_template(true)
                 .tooltip("Voicetypr")
                 .menu(&menu)
                 .on_menu_event(move |app, event| {
                     log::info!("Tray menu event: {:?}", event.id);
                     let event_id = event.id.as_ref().to_string();
 
-                    if event_id == "settings" {
+                    if event_id == "dashboard" {
+                        show_main_window(app);
                         if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                            // Emit event to navigate to settings
-                            let _ = window.emit("navigate-to-settings", ());
+                            let _ = window.emit("navigate-to-overview", ());
                         }
                     } else if event_id == "quit" {
                         app.exit(0);
@@ -580,6 +898,38 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         });
                     }
+                    else if event_id == "copy_last_transcription" {
+                        let app_handle = app.app_handle().clone();
+                        tauri::async_runtime::spawn(async move {
+                            match app_handle.store("transcriptions") {
+                                Ok(store) => {
+                                    let mut entries: Vec<(String, serde_json::Value)> = Vec::new();
+                                    for key in store.keys() {
+                                        if let Some(value) = store.get(&key) {
+                                            entries.push((key.to_string(), value));
+                                        }
+                                    }
+
+                                    if let Some(timestamp) = crate::menu::latest_copyable_transcription_id(&entries) {
+                                        if let Some(text) = store
+                                            .get(&timestamp)
+                                            .and_then(|value| value.get("text").and_then(|text| text.as_str().map(str::to_string)))
+                                        {
+                                            if let Err(error) = crate::commands::text::copy_text_to_clipboard(text).await {
+                                                log::error!("Failed to copy last transcription: {}", error);
+                                                let _ = app_handle.emit("tray-action-error", &format!("Failed to copy: {}", error));
+                                            } else {
+                                                log::info!("Copied last transcription to clipboard");
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    log::error!("Failed to open transcriptions store: {}", error);
+                                }
+                            }
+                        });
+                    }
                     // Recent transcriptions copy handler
                     else if let Some(ts) = event_id.strip_prefix("recent_copy_") {
                         let ts_owned = ts.to_string();
@@ -642,13 +992,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     } = event
                     {
                         let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                            // Show dock icon when main window is shown via tray icon
-                            #[cfg(target_os = "macos")]
-                            show_dock_icon(app);
-                        }
+                        show_main_window(app);
                     }
                 })
                 .build(app)?;
@@ -661,13 +1005,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             let hotkey_str = match app.store("settings") {
                 Ok(store) => {
-                    store
-                        .get("hotkey")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .unwrap_or_else(|| {
+                    match store.get("hotkey").and_then(|v| v.as_str().map(|s| s.to_string())) {
+                        Some(s) if !s.is_empty() => s,
+                        None => {
                             log::info!("🎹 No hotkey configured, using default");
                             "CommandOrControl+Shift+Space".to_string()
-                        })
+                        }
+                        _ => {
+                            // Explicitly empty = primary hotkey was cleared (modifier-hold in use)
+                            log::info!("🎹 Primary hotkey cleared; will skip global shortcut registration");
+                            String::new()
+                        }
+                    }
                 }
                 Err(e) => {
                     log_failed("SETTINGS_LOAD", &format!("Failed to load settings store: {}", e));
@@ -718,6 +1067,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 log::info!("Recording mode set to: {:?}", recording_mode);
             }
 
+            // Skip global shortcut registration only when the primary hotkey was
+            // explicitly cleared AND a live HoldToRecord engine binding covers
+            // recording. If the state is inconsistent (empty hotkey but no engine
+            // binding), fall through so the default hotkey gets registered.
+            let has_engine_recording = crate::commands::shortcuts::load_shortcut_settings(app.handle())
+                .map(|s| crate::trigger::mapping::has_recording_engine_binding(&s.bindings))
+                .unwrap_or(false);
+
+            'register_primary: {
+            if hotkey_str.is_empty() {
+                if has_engine_recording {
+                    log::info!("🎹 Primary hotkey empty; engine HoldToRecord binding present — skipping global shortcut registration");
+                    log_complete("HOTKEY_SETUP", 0);
+                    break 'register_primary;
+                } else {
+                    log::warn!("Primary hotkey empty but no enabled hold-to-record engine binding found; falling back to default hotkey");
+                    // Fall through — empty string fails parse below, triggering the
+                    // CommandOrControl+Shift+Space fallback at line ~915.
+                }
+            }
+
             // Normalize the hotkey for Tauri
             let normalized_hotkey = crate::commands::key_normalizer::normalize_shortcut_keys(&hotkey_str);
 
@@ -730,12 +1100,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(default_shortcut) => default_shortcut,
                         Err(e) => {
                             log::error!("Even default shortcut failed to parse: {}", e);
-                            let app_state = app.state::<AppState>();
-                            app_state.record_primary_registration_attempt();
-                            app_state.record_primary_registration_failure(format!(
-                                "Failed to parse default shortcut: {}",
-                                e
-                            ));
                             // Emit event to notify frontend that hotkey registration failed
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.emit("hotkey-registration-failed", ());
@@ -754,7 +1118,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Try to register global shortcut with panic protection
-            app_state.record_primary_registration_attempt();
             let registration_start = Instant::now();
             let registration_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 app.global_shortcut().register(shortcut)
@@ -762,7 +1125,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
             match registration_result {
                 Ok(Ok(_)) => {
-                    app_state.record_primary_registration_success();
                     log_complete("HOTKEY_REGISTRATION", registration_start.elapsed().as_millis() as u64);
                     log_with_context(log::Level::Debug, "Hotkey registered", &[
                         ("hotkey", &hotkey_str),
@@ -771,7 +1133,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     log::info!("✅ Successfully registered global hotkey: {}", hotkey_str);
                 }
                 Ok(Err(e)) => {
-                    app_state.record_primary_registration_failure(e.to_string());
                     log_failed("HOTKEY_REGISTRATION", &e.to_string());
                     log_with_context(log::Level::Debug, "Hotkey registration failed", &[
                         ("hotkey", &hotkey_str),
@@ -800,7 +1161,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "Unknown panic during hotkey registration".to_string()
                     };
 
-                    app_state.record_primary_registration_failure(panic_msg.clone());
                     log::error!("💥 PANIC during hotkey registration: {}", panic_msg);
                     log::warn!("⚠️  Continuing without global hotkey due to panic");
 
@@ -814,6 +1174,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            } // end 'register_primary
 
             // Register PTT shortcut if configured differently
             if recording_mode == RecordingMode::PushToTalk && use_different_ptt_key {
@@ -848,6 +1209,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         log::warn!("Invalid PTT hotkey format: {}", ptt_key);
                     }
                 }
+            }
+
+            if let Err(error) = crate::commands::shortcuts::register_saved_shortcuts(app.app_handle()) {
+                log::error!("Failed to register saved custom shortcuts: {}", error);
+            }
+
+            // Start the native trigger engine (modifier-hold / double-tap).
+            // On macOS the tap needs Accessibility; if not yet granted, start()
+            // logs and we retry when the grant event fires.
+            crate::trigger::engine_host::start_engine(app.app_handle());
+            {
+                let engine_app = app.app_handle().clone();
+                app.listen("accessibility-granted", move |_event| {
+                    crate::trigger::engine_host::start_engine(&engine_app);
+                });
             }
 
             // Preload current model if set (graceful degradation)
@@ -1044,26 +1420,24 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Hide main window on start (menu bar only)
-            // Check if this is first launch by looking for current_model setting
+            // Only a configured local/cloud model hides the main window immediately.
+            // Remote-only sessions stay visible until startup checks verify the remote is available.
             let should_hide_main = if let Ok(store) = app.store("settings") {
-                // If user has a model configured, they've completed onboarding
-                store.get("current_model")
+                let has_local_or_cloud_model = store
+                    .get("current_model")
                     .and_then(|v| v.as_str().map(|s| !s.is_empty()))
-                    .unwrap_or(false)
+                    .unwrap_or(false);
+
+                has_local_or_cloud_model && active_id.is_none()
             } else {
                 false
             };
 
             if should_hide_main {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
-                    log::info!("Main window hidden - menubar mode active");
-                }
-                // Keep dock icon hidden when main window is hidden
-                #[cfg(target_os = "macos")]
-                hide_dock_icon(app.app_handle());
+                hide_main_window(app.app_handle());
+                log::info!("Main window hidden - menubar mode active");
             } else {
-                log::info!("👋 First launch or no model configured - keeping main window visible");
+                log::info!("👋 First launch or no source configured - keeping main window visible");
                 // Show dock icon when main window is visible
                 #[cfg(target_os = "macos")]
                 show_dock_icon(app.app_handle());
@@ -1087,10 +1461,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_current_audio_device,
             download_model,
             get_model_status,
+            get_parakeet_vocabulary_status,
+            download_parakeet_vocabulary_model,
             preload_model,
             verify_model,
             transcribe_audio,
             transcribe_audio_file,
+            diarize_audio_file,
             get_settings,
             save_settings,
             get_transcription_acceleration_status,
@@ -1098,7 +1475,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             set_audio_device,
             validate_microphone_selection,
             set_global_shortcut,
-            get_hotkey_diagnostics,
+            get_shortcut_settings,
+            update_shortcut_settings,
+            list_shortcut_actions,
             get_supported_languages,
             set_model_from_tray,
             update_tray_menu,
@@ -1107,17 +1486,28 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             list_downloaded_models,
             cancel_download,
             cleanup_old_transcriptions,
+            get_recordings_directory,
+            open_recordings_folder,
+            check_recording_exists,
+            get_recording_path,
+            save_retranscription,
+            update_transcription,
+            show_in_folder,
             get_transcription_history,
+            get_transcription_count,
             delete_transcription_entry,
             clear_all_transcriptions,
             export_transcriptions,
+            save_transcript_file,
             show_pill_widget,
             hide_pill_widget,
             close_pill_widget,
+            recreate_pill_widget,
             hide_toast_window,
             focus_main_window,
             check_accessibility_permission,
             request_accessibility_permission,
+            open_accessibility_settings,
             check_microphone_permission,
             request_microphone_permission,
             test_automation_permission,
@@ -1134,7 +1524,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_ai_settings,
             get_ai_settings_for_provider,
             cache_ai_api_key,
-            validate_and_cache_api_key,
+            validate_ai_api_key,
             set_openai_config,
             get_openai_config,
             test_openai_endpoint,
@@ -1144,13 +1534,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             disable_ai_enhancement,
             get_enhancement_options,
             update_enhancement_options,
+            get_writing_settings,
+            update_writing_settings,
+            list_ai_providers,
             list_provider_models,
             keyring_set,
             keyring_get,
             keyring_delete,
             keyring_has,
-            validate_and_cache_soniox_key,
-            clear_soniox_key_cache,
+            validate_stt_key,
+            clear_stt_key_cache,
             get_latest_log_for_bug_report,
             get_log_directory,
             open_logs_folder,
@@ -1159,24 +1552,51 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             get_device_id,
             get_distribution_info,
             get_system_specs,
+            // CLI launcher (voicetypr on PATH)
+            install_cli_tool,
+            uninstall_cli_tool,
+            cli_tool_status,
+            // Telemetry (opt-in error reporting) consent
+            get_telemetry_status,
+            set_telemetry_consent,
+            report_frontend_error,
+            // Remote transcription commands
+            refresh_active_remote_server_status,
+            get_recognition_availability_snapshot,
+            start_sharing,
+            stop_sharing,
+            get_sharing_status,
+            update_remote_model_control_enabled,
+            get_local_ips,
+            get_local_machine_id,
+            get_firewall_status,
+            discover_remote_servers,
+            open_firewall_settings,
+            add_remote_server,
+            remove_remote_server,
+            update_remote_server,
+            list_remote_servers,
+            test_remote_connection,
+            test_remote_server,
+            set_active_remote_server,
+            get_active_remote_server,
+            transcribe_remote,
+            refresh_remote_servers,
+            check_remote_server_status,
+            get_remote_transcription_control,
+            update_remote_transcription_control,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // Only hide the window instead of closing it (except for pill)
                 if window.label() == "main" {
                     api.prevent_close();
-                    if let Err(e) = window.hide() {
-                        log::error!("Failed to hide main window: {}", e);
-                    } else {
-                        log::info!("Main window hidden instead of closed");
-                        // Hide dock icon when main window is hidden
-                        #[cfg(target_os = "macos")]
-                        hide_dock_icon(window.app_handle());
-                    }
+                    hide_main_window(window.app_handle());
+                    log::info!("Main window hidden instead of closed");
                 }
             }
         })
-        .build(tauri::generate_context!())
+        .build(app_context)
         .map_err(|e| -> Box<dyn std::error::Error> {
             log_failed("APPLICATION_BUILD", &format!("Critical error building Tauri application: {}", e));
             log_with_context(log::Level::Error, "Application build failed", &[
@@ -1190,12 +1610,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
                 if !has_visible_windows {
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        // Show dock icon when main window is shown
-                        show_dock_icon(app_handle);
-                    }
+                    show_main_window(app_handle);
                 }
             }
         });
@@ -1204,6 +1619,112 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     log_lifecycle_event("APPLICATION_READY", Some(app_version), None);
 
     Ok(())
+}
+
+fn migrate_ai_settings_before_key_cache(app: &tauri::AppHandle) {
+    let Ok(store) = app.store("settings") else {
+        log::warn!("AI settings migration skipped: settings store unavailable");
+        return;
+    };
+
+    let mut values = serde_json::Map::new();
+    for key in [
+        "ai_enabled",
+        "ai_provider",
+        "ai_model",
+        "ai_models_by_provider",
+    ] {
+        if let Some(value) = store.get(key) {
+            values.insert(key.to_string(), value.clone());
+        }
+    }
+
+    if migrate_ai_settings_values(&mut values) {
+        for (key, value) in values {
+            store.set(key, value);
+        }
+        if let Err(error) = store.save() {
+            log::warn!("AI settings migration save failed: {}", error);
+        } else {
+            log::info!("AI settings migration applied");
+        }
+    }
+}
+
+fn migrate_ai_settings_values(values: &mut serde_json::Map<String, serde_json::Value>) -> bool {
+    let mut changed = false;
+
+    let provider = values
+        .get("ai_provider")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let migrated_provider = if provider == "google" {
+        changed = true;
+        "gemini".to_string()
+    } else {
+        provider
+    };
+    if values
+        .get("ai_provider")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        != migrated_provider
+    {
+        values.insert(
+            "ai_provider".to_string(),
+            serde_json::Value::String(migrated_provider.clone()),
+        );
+        changed = true;
+    }
+
+    if let Some(models) = values
+        .get_mut("ai_models_by_provider")
+        .and_then(|value| value.as_object_mut())
+    {
+        if let Some(google_model) = models.remove("google") {
+            if !models.contains_key("gemini") {
+                models.insert("gemini".to_string(), google_model);
+            }
+            changed = true;
+        }
+    }
+
+    let current_model = values
+        .get("ai_model")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let ai_enabled = values
+        .get("ai_enabled")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    if !current_model.is_empty()
+        && !ai_model_is_valid_for_provider(&migrated_provider, &current_model)
+    {
+        values.insert(
+            "ai_model".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+        if ai_enabled {
+            values.insert(
+                "ai_model_needs_reselection".to_string(),
+                serde_json::Value::Bool(true),
+            );
+        }
+        changed = true;
+    }
+
+    changed
+}
+
+fn ai_model_is_valid_for_provider(provider: &str, model: &str) -> bool {
+    if provider == "custom" {
+        return !model.trim().is_empty();
+    }
+    crate::ai::providers::recommended_models(provider)
+        .iter()
+        .any(|candidate| candidate.model_id == model)
 }
 
 /// Perform essential startup checks
@@ -1216,7 +1737,31 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         &[("stage", "comprehensive_validation")],
     );
 
-    let availability = recognition_availability_snapshot(&app).await;
+    if let Err(err) = crate::commands::license::check_license_status_internal(&app).await {
+        log::warn!(
+            "Failed to warm runtime license cache during startup checks: {}",
+            err
+        );
+    }
+
+    if let Some(remote_settings) =
+        app.try_state::<AsyncMutex<crate::remote::settings::RemoteSettings>>()
+    {
+        if let Err(err) = crate::commands::remote::refresh_active_remote_server_status_impl(
+            &app,
+            &remote_settings,
+        )
+        .await
+        {
+            log::warn!(
+                "Failed to refresh active remote status during startup checks: {}",
+                err
+            );
+        }
+    }
+
+    let availability = crate::recognition::emit_recognition_availability(&app).await;
+
     log_model_operation(
         "AVAILABILITY_CHECK",
         "all",
@@ -1228,19 +1773,27 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         None,
     );
 
-    if let Err(err) = app.emit("recognition-availability", availability.clone()) {
-        log::warn!("Failed to emit recognition availability event: {}", err);
-    }
-
     if availability.any_available() {
         if let Err(e) = auto_select_model_if_needed(&app, &availability).await {
             log::warn!("Failed to auto-select default model: {}", e);
+        }
+        if availability.remote_available {
+            let onboarding_completed = app
+                .store("settings")
+                .ok()
+                .and_then(|store| store.get("onboarding_completed").and_then(|v| v.as_bool()))
+                .unwrap_or(false);
+
+            if onboarding_completed {
+                hide_main_window(&app);
+            }
         }
     }
 
     if !availability.any_available() {
         log::warn!("⚠️  No speech recognition engines are ready");
         let _ = app.emit("no-models-on-startup", ());
+        show_main_window(&app);
     } else {
         log::info!("✅ At least one speech recognition engine is ready");
     }
@@ -1306,19 +1859,24 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
 
     // Pre-check recording settings
     if let Ok(store) = app.store("settings") {
-        // Validate language setting
-        let language = store
-            .get("language")
+        // Validate speech language setting and keep the legacy key in sync.
+        let speech_language = store
+            .get("speech_language")
+            .or_else(|| store.get("language"))
             .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-        if let Some(lang) = language {
+        if let Some(lang) = speech_language {
             use crate::whisper::languages::validate_language;
             let validated = validate_language(Some(&lang));
             if validated != lang.as_str() {
                 log::warn!(
-                    "Invalid language '{}' in settings, resetting to '{}'",
+                    "Invalid speech language '{}' in settings, resetting to '{}'",
                     lang,
                     validated
+                );
+                store.set(
+                    "speech_language",
+                    serde_json::Value::String(validated.to_string()),
                 );
                 store.set("language", serde_json::Value::String(validated.to_string()));
                 let _ = store.save();
@@ -1417,4 +1975,127 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
         "✅ Startup checks COMPLETED in {}ms",
         checks_start.elapsed().as_millis()
     );
+}
+
+// AI settings migration tests live here because startup owns the migration call.
+#[cfg(test)]
+mod ai_settings_migration_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn values(
+        provider: &str,
+        model: &str,
+        models: serde_json::Value,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        values_with_enabled(true, provider, model, models)
+    }
+
+    fn values_with_enabled(
+        enabled: bool,
+        provider: &str,
+        model: &str,
+        models: serde_json::Value,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut values = serde_json::Map::new();
+        values.insert("ai_enabled".to_string(), json!(enabled));
+        values.insert("ai_provider".to_string(), json!(provider));
+        values.insert("ai_model".to_string(), json!(model));
+        values.insert("ai_models_by_provider".to_string(), models);
+        values
+    }
+
+    #[test]
+    fn migrates_google_provider_and_model_memory_to_gemini() {
+        let mut values = values(
+            "google",
+            "gemini-2.5-flash",
+            json!({ "google": "gemini-2.5-flash" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_provider"], json!("gemini"));
+        assert_eq!(
+            values["ai_models_by_provider"],
+            json!({ "gemini": "gemini-2.5-flash" })
+        );
+        assert_eq!(values["ai_model"], json!("gemini-2.5-flash"));
+        assert_eq!(values.get("ai_model_needs_reselection"), None);
+    }
+
+    #[test]
+    fn migration_keeps_existing_gemini_model_memory() {
+        let mut values = values(
+            "google",
+            "gemini-2.5-flash",
+            json!({ "google": "gemini-3-flash-preview", "gemini": "gemini-2.5-flash" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(
+            values["ai_models_by_provider"],
+            json!({ "gemini": "gemini-2.5-flash" })
+        );
+        assert_eq!(values.get("ai_model_needs_reselection"), None);
+    }
+
+    #[test]
+    fn migration_flags_enabled_invalid_model_for_reselection_without_substitution() {
+        let mut values = values("google", "text-bison", json!({ "google": "text-bison" }));
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_enabled"], json!(true));
+        assert_eq!(values["ai_provider"], json!("gemini"));
+        assert_eq!(values["ai_model"], json!(""));
+        assert_eq!(values["ai_model_needs_reselection"], json!(true));
+    }
+
+    #[test]
+    fn migration_does_not_flag_disabled_invalid_model() {
+        let mut values = values_with_enabled(
+            false,
+            "google",
+            "text-bison",
+            json!({ "google": "text-bison" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_enabled"], json!(false));
+        assert_eq!(values["ai_provider"], json!("gemini"));
+        assert_eq!(values["ai_model"], json!(""));
+        assert_eq!(values.get("ai_model_needs_reselection"), None);
+    }
+
+    #[test]
+    fn migration_does_not_flag_empty_model() {
+        let mut values = values("google", "", json!({ "google": "" }));
+
+        assert!(migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_enabled"], json!(true));
+        assert_eq!(values["ai_provider"], json!("gemini"));
+        assert_eq!(values["ai_model"], json!(""));
+        assert_eq!(values.get("ai_model_needs_reselection"), None);
+    }
+
+    #[test]
+    fn migration_keeps_custom_free_text_model() {
+        let mut values = values("custom", "local-model", json!({ "custom": "local-model" }));
+
+        assert!(!migrate_ai_settings_values(&mut values));
+        assert_eq!(values["ai_model"], json!("local-model"));
+    }
+
+    #[test]
+    fn migration_is_idempotent_after_first_pass() {
+        let mut values = values(
+            "google",
+            "gemini-2.5-flash",
+            json!({ "google": "gemini-2.5-flash" }),
+        );
+
+        assert!(migrate_ai_settings_values(&mut values));
+        let first = values.clone();
+        assert!(!migrate_ai_settings_values(&mut values));
+        assert_eq!(values, first);
+    }
 }
