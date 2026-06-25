@@ -207,7 +207,7 @@ use commands::{
     },
     permissions::{
         check_accessibility_permission, check_microphone_permission, open_accessibility_settings,
-        request_accessibility_permission, request_microphone_permission,
+        open_microphone_settings, request_accessibility_permission, request_microphone_permission,
         test_automation_permission,
     },
     remote::{
@@ -1508,6 +1508,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             check_accessibility_permission,
             request_accessibility_permission,
             open_accessibility_settings,
+            open_microphone_settings,
             check_microphone_permission,
             request_microphone_permission,
             test_automation_permission,
@@ -1856,6 +1857,7 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
     }
 
     let mut autoload_parakeet_model: Option<String> = None;
+    let mut selection_was_reset = false;
 
     // Pre-check recording settings
     if let Ok(store) = app.store("settings") {
@@ -1900,24 +1902,39 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
                     // Check ParakeetManager for Parakeet models
                     if let Some(parakeet_manager) = app.try_state::<parakeet::ParakeetManager>() {
                         let models = parakeet_manager.list_models();
+                        // Is the selected id a known catalog entry (downloaded or not)?
+                        let model_known = models.iter().any(|m| m.name == current_model);
                         if let Some(status) = models.iter().find(|m| m.name == current_model) {
                             _model_available = status.downloaded;
                             if status.downloaded {
                                 autoload_parakeet_model = Some(current_model.clone());
                             }
                         }
-                        if !_model_available {
+                        if model_known {
+                            // Registered model: keep the selection even when the
+                            // on-disk file is missing, so the dashboard / Repair
+                            // flow and `requires_setup` can recover it.
+                            if !_model_available {
+                                log::warn!(
+                                    "Current Parakeet model '{}' is registered but not on disk; keeping selection",
+                                    current_model
+                                );
+                            }
+                        } else {
+                            // Unknown id (e.g. removed from the registry): fall
+                            // back to auto-select instead of being stuck on an
+                            // unloadable model.
                             log::warn!(
-                                "Current Parakeet model '{}' no longer available",
+                                "Current Parakeet model '{}' is not a known catalog entry; resetting selection",
                                 current_model
                             );
-                            // Clear the selection
                             store.set("current_model", serde_json::Value::String(String::new()));
                             store.set(
                                 "current_model_engine",
                                 serde_json::Value::String("whisper".to_string()),
                             );
                             let _ = store.save();
+                            selection_was_reset = true;
                         }
                     }
                 } else {
@@ -1925,20 +1942,49 @@ async fn perform_startup_checks(app: tauri::AppHandle) {
                     if let Some(whisper_manager) =
                         app.try_state::<AsyncRwLock<whisper::manager::WhisperManager>>()
                     {
-                        let downloaded = whisper_manager.read().await.get_downloaded_model_names();
+                        let guard = whisper_manager.read().await;
+                        // Is the selected id a known registered Whisper model?
+                        let model_known = guard.get_models_status().contains_key(&current_model);
+                        let downloaded = guard.get_downloaded_model_names();
                         _model_available = downloaded.contains(&current_model);
-                        if !_model_available {
+                        if model_known {
+                            // Registered model: keep the selection even when the
+                            // on-disk file is missing, so the dashboard / Repair
+                            // flow and `requires_setup` can recover it.
+                            if !_model_available {
+                                log::warn!(
+                                    "Current Whisper model '{}' is registered but not on disk; keeping selection",
+                                    current_model
+                                );
+                            }
+                        } else {
+                            // Unknown id (e.g. removed from the registry): fall
+                            // back to auto-select instead of being stuck on an
+                            // unloadable model.
                             log::warn!(
-                                "Current Whisper model '{}' no longer available",
+                                "Current Whisper model '{}' is not a known catalog entry; resetting selection",
                                 current_model
                             );
-                            // Clear the selection
                             store.set("current_model", serde_json::Value::String(String::new()));
                             let _ = store.save();
+                            selection_was_reset = true;
                         }
                     }
                 }
             }
+        }
+    }
+
+    // A removed/unknown selection was cleared above. The earlier
+    // `auto_select_model_if_needed` ran while the stale id was still set (so it
+    // no-op'd); re-run it now that the selection is empty so a downloaded model
+    // is chosen instead of leaving the user with no selection.
+    if selection_was_reset && availability.any_available() {
+        if let Err(e) = auto_select_model_if_needed(&app, &availability).await {
+            log::warn!(
+                "Failed to auto-select after clearing unknown model selection: {}",
+                e
+            );
         }
     }
 

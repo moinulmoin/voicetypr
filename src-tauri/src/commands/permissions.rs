@@ -293,3 +293,34 @@ pub fn open_accessibility_settings() -> Result<(), String> {
         Ok(())
     }
 }
+
+/// Open the system microphone (Privacy & Security) settings
+#[tauri::command]
+pub fn open_microphone_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+
+        // Open Privacy & Security > Microphone
+        let _ = Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+            .spawn();
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        Command::new("cmd")
+            .args(["/C", "start", "", "ms-settings:privacy-microphone"])
+            .spawn()
+            .map_err(|e| format!("Failed to open microphone settings: {}", e))?;
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Ok(())
+    }
+}
