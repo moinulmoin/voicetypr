@@ -115,38 +115,43 @@ impl KeyEventSource for WinKeyboardHook {
 
 unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 {
-        let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
-        // Ignore synthetic keystrokes (LLKHF_INJECTED). rdev's post-transcription
-        // paste is injected via SendInput, which sets this flag; forwarding it to
-        // the matcher could re-trigger a ModifierHold hotkey on Ctrl (the paste
-        // modifier), spuriously satisfy a DoubleTap/Chord, or wedge state if a
-        // synthetic key-up is missed. A WH_KEYBOARD_LL hook cannot see the
-        // injecting pid, so this also drops other tools' injected input (e.g.
-        // AutoHotkey firing the hotkey) — accepted: global hotkeys are physical
-        // input only. Still chain CallNextHookEx for pass-through.
-        if (kb.flags.0 & LLKHF_INJECTED.0) != 0 {
-            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-        }
-        let message = wparam.0 as u32;
-        let down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
-        let vk = kb.vkCode;
-        HOOK_STATE.with(|s| {
-            if let Some(state) = s.borrow_mut().as_mut() {
-                let is_repeat = if down {
-                    !state.down.insert(vk)
-                } else {
-                    state.down.remove(&vk);
-                    false
-                };
-                let (key, side) = map_vk(vk);
-                let _ = state.tx.send(Msg::Raw(RawKeyEvent {
-                    key,
-                    side,
-                    down,
-                    is_repeat,
-                }));
+        // A panic unwinding out of an `extern "system"` (Win32) callback is UB
+        // and aborts the whole process across the FFI boundary, so catch it and
+        // always fall through to the trailing CallNextHookEx below.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+            // Ignore synthetic keystrokes (LLKHF_INJECTED). rdev's post-transcription
+            // paste is injected via SendInput, which sets this flag; forwarding it to
+            // the matcher could re-trigger a ModifierHold hotkey on Ctrl (the paste
+            // modifier), spuriously satisfy a DoubleTap/Chord, or wedge state if a
+            // synthetic key-up is missed. A WH_KEYBOARD_LL hook cannot see the
+            // injecting pid, so this also drops other tools' injected input (e.g.
+            // AutoHotkey firing the hotkey) — accepted: global hotkeys are physical
+            // input only. Still chain CallNextHookEx for pass-through.
+            if (kb.flags.0 & LLKHF_INJECTED.0) != 0 {
+                return;
             }
-        });
+            let message = wparam.0 as u32;
+            let down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+            let vk = kb.vkCode;
+            HOOK_STATE.with(|s| {
+                if let Some(state) = s.borrow_mut().as_mut() {
+                    let is_repeat = if down {
+                        !state.down.insert(vk)
+                    } else {
+                        state.down.remove(&vk);
+                        false
+                    };
+                    let (key, side) = map_vk(vk);
+                    let _ = state.tx.send(Msg::Raw(RawKeyEvent {
+                        key,
+                        side,
+                        down,
+                        is_repeat,
+                    }));
+                }
+            });
+        }));
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
