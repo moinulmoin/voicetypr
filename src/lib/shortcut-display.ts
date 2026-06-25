@@ -12,7 +12,7 @@ const BARE_MOD_ICONS: Record<string, string> = {
  * Locate the active native "primary" recording trigger among shortcut bindings.
  *
  * The primary is the onboarding hold binding, or — failing that — the first
- * enabled engine-kind binding (`modifier_hold` / `double_tap` / `isolated_tap`)
+ * enabled engine-kind binding (`modifier_hold` / `isolated_tap`)
  * that drives recording (`hold_to_record` / `toggle_recording`). Combo shortcuts
  * live in `settings.hotkey` (the `global_shortcut` path) and are intentionally
  * not considered here.
@@ -29,7 +29,6 @@ export function findActivePrimaryBinding(
         b.enabled &&
         (b.action === "hold_to_record" || b.action === "toggle_recording") &&
         (b.trigger_kind === "modifier_hold" ||
-          b.trigger_kind === "double_tap" ||
           b.trigger_kind === "isolated_tap"),
     ) ??
     null
@@ -51,7 +50,7 @@ export function formatModifierLabel(mod: ModifierSpec): string {
  *
  * This is the single source of truth for "what trigger starts recording":
  * - Bare-modifier primary (stored in `ShortcutSettings`; `hotkey` is empty) → a
- *   human label such as "Hold ⌘ to talk" or "Double-tap ⌥ to toggle".
+ *   human label such as "Hold ⌘ to talk" or "Tap ⌥ to toggle".
  * - Combo primary (stored in `settings.hotkey`) → the raw combo string.
  * - Nothing configured → "Not set".
  *
@@ -65,8 +64,6 @@ export function formatPrimaryHotkeyLabel(
   if (modSpec) {
     const mod = formatModifierLabel(modSpec);
     if (binding?.trigger_kind === "modifier_hold") return `Hold ${mod} to talk`;
-    if (binding?.trigger_kind === "double_tap")
-      return `Double-tap ${mod} to toggle`;
     if (binding?.trigger_kind === "isolated_tap") return `Tap ${mod} to toggle`;
     return mod;
   }

@@ -374,7 +374,6 @@ describe("OnboardingDesktop", () => {
       allow_risky_combo: false,
       trigger_kind: "combo",
       modifier: null,
-      double_tap_ms: null,
     };
     const onboardingHold = {
       id: "onboarding-primary-hold",
@@ -385,7 +384,6 @@ describe("OnboardingDesktop", () => {
       allow_risky_combo: false,
       trigger_kind: "modifier_hold",
       modifier: { modifier: "alt", side: "right" },
-      double_tap_ms: null,
     };
     invokeMock.mockImplementation((command: string) => {
       switch (command) {

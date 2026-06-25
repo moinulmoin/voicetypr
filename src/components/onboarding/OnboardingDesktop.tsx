@@ -632,7 +632,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
               modifier: capturedBareModifier.modifier as ModifierKind,
               side: capturedBareModifier.side as ModifierSide,
             },
-            double_tap_ms: null,
           }
         : {
             id: ONBOARDING_HOLD_ID,
@@ -646,7 +645,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
               modifier: capturedBareModifier.modifier as ModifierKind,
               side: capturedBareModifier.side as ModifierSide,
             },
-            double_tap_ms: null,
           };
       await invoke("update_shortcut_settings", {
         settings: {

@@ -105,19 +105,11 @@ export const HotkeyInput = React.memo(function HotkeyInput({
 
       // Add modifier keys - handle platform differences correctly
       if (isMacOS) {
-        // On macOS, handle Command and Control carefully
-        // Tauri doesn't accept both CommandOrControl AND Control together
-        if (e.metaKey && !e.ctrlKey) {
-          // Only Command pressed → CommandOrControl
-          newKeys.add("CommandOrControl");
-        } else if (e.ctrlKey && !e.metaKey) {
-          // Only Control pressed → Control
-          newKeys.add("Control");
-        } else if (e.metaKey && e.ctrlKey) {
-          // BOTH pressed → Just use Control (since Cmd+Ctrl is rare and Control is more specific)
-          // Note: This is a limitation - true Cmd+Ctrl combos aren't supported by Tauri
-          newKeys.add("Control");
-        }
+        // On macOS, Command maps to CommandOrControl and Control is tracked
+        // separately, so both can coexist in a single combo (e.g. Cmd+Ctrl+K).
+        // A lone Command → CommandOrControl; a lone Control → Control.
+        if (e.metaKey) newKeys.add("CommandOrControl");
+        if (e.ctrlKey) newKeys.add("Control");
       } else {
         // On Windows/Linux, Control key maps to CommandOrControl
         if (e.ctrlKey) newKeys.add("CommandOrControl");

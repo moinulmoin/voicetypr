@@ -95,6 +95,7 @@ impl Matcher {
             if !repeat {
                 self.handle_double_tap(gesture, now, emit);
                 self.handle_isolated_down(gesture, now);
+                self.handle_combo_exact_down(ev, emit);
             }
         } else {
             match modifier {
@@ -112,6 +113,7 @@ impl Matcher {
         }
 
         self.recompute_levels(emit);
+        self.maintain_combo_exact(emit);
     }
 
     /// Double-tap edge detection for a concrete `gesture` (a non-repeat down).
@@ -253,6 +255,7 @@ impl Matcher {
                 }
                 Trigger::DoubleTap { .. } => continue, // edge trigger, handled elsewhere
                 Trigger::IsolatedTap { .. } => continue,
+                Trigger::ComboExact { .. } => continue, // edge-activated; see handle_combo_exact_down / maintain_combo_exact
             };
             let was = self.active.get(id).copied().unwrap_or(false);
             if now_active && !was {
@@ -267,6 +270,61 @@ impl Matcher {
                     id: id.clone(),
                     phase: KeyPhase::Released,
                 });
+            }
+        }
+        self.bindings = bindings;
+    }
+
+    /// Edge activation for [`Trigger::ComboExact`]: on a NON-REPEAT down of a
+    /// non-modifier `key`, fire `Pressed` iff the currently-held modifier set
+    /// EQUALS the binding's `mods` exactly. A superset (or subset) of modifiers
+    /// does NOT activate, and a key held before the modifiers arrive never
+    /// activates — activation is strictly the key-down edge with exact mods
+    /// already held. This is what separates `ComboExact` from the subset-based
+    /// [`Trigger::Chord`] evaluated in [`Matcher::recompute_levels`].
+    fn handle_combo_exact_down(&mut self, ev: RawKeyEvent, emit: &mut dyn FnMut(TriggerEvent)) {
+        // Only a non-repeat, non-modifier key-down can start a combo; modifier
+        // presses arrive as their own events and never feed this path.
+        if ev.is_repeat || modifier_of(ev.key).is_some() {
+            return;
+        }
+        let modset = self.current_modset();
+        let bindings = std::mem::take(&mut self.bindings);
+        for (id, trig) in &bindings {
+            if let Trigger::ComboExact { mods, key } = trig {
+                if *key == ev.key && *mods == modset {
+                    self.active.insert(id.clone(), true);
+                    emit(TriggerEvent {
+                        id: id.clone(),
+                        phase: KeyPhase::Pressed,
+                    });
+                }
+            }
+        }
+        self.bindings = bindings;
+    }
+
+    /// Release any active [`Trigger::ComboExact`] binding whose hold condition
+    /// no longer holds: the bound `key` is no longer down, or the held modifier
+    /// set drifted away from the exact `mods`. Runs on every event so PTT-style
+    /// releases (lifting a required modifier while the key stays down) fire
+    /// promptly. Bindings that never activated are skipped (nothing to release).
+    fn maintain_combo_exact(&mut self, emit: &mut dyn FnMut(TriggerEvent)) {
+        let modset = self.current_modset();
+        let bindings = std::mem::take(&mut self.bindings);
+        for (id, trig) in &bindings {
+            if let Trigger::ComboExact { mods, key } = trig {
+                let active = self.active.get(id).copied().unwrap_or(false);
+                if active {
+                    let holds = self.keys_down.contains(key) && *mods == modset;
+                    if !holds {
+                        self.active.insert(id.clone(), false);
+                        emit(TriggerEvent {
+                            id: id.clone(),
+                            phase: KeyPhase::Released,
+                        });
+                    }
+                }
             }
         }
         self.bindings = bindings;

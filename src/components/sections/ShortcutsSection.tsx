@@ -75,10 +75,10 @@ const MOD_LABELS: Record<string, string> = {
 function formatBindingDisplay(binding: ShortcutBinding): string {
   const kind = binding.trigger_kind ?? "combo";
   const mod = binding.modifier;
-  if (mod && (kind === "modifier_hold" || kind === "isolated_tap" || kind === "double_tap")) {
+  if (mod && (kind === "modifier_hold" || kind === "isolated_tap")) {
     const sideLabel = mod.side === "right" ? "Right " : mod.side === "left" ? "Left " : "";
     const modLabel = MOD_LABELS[mod.modifier] ?? mod.modifier;
-    const verbLabel = kind === "modifier_hold" ? "Hold" : kind === "double_tap" ? "Double-tap" : "Tap";
+    const verbLabel = kind === "modifier_hold" ? "Hold" : "Tap";
     return `${verbLabel} ${sideLabel}${modLabel}`;
   }
   return binding.shortcut || "No shortcut configured";

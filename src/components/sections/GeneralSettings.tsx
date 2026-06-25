@@ -215,7 +215,6 @@ export function GeneralSettings() {
               b.enabled &&
               (b.action === "hold_to_record" || b.action === "toggle_recording") &&
               (b.trigger_kind === "modifier_hold" ||
-                b.trigger_kind === "double_tap" ||
                 b.trigger_kind === "isolated_tap"),
           );
         const stableId = existingPrimary?.id ?? "onboarding-primary-hold";

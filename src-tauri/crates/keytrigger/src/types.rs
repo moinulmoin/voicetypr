@@ -114,11 +114,23 @@ pub enum NamedKey {
     Numpad8,
     Numpad9,
     NumpadEnter,
-    NumpadPlus,
-    NumpadMinus,
+    NumpadAdd,
+    NumpadSubtract,
     NumpadMultiply,
     NumpadDivide,
     NumpadDecimal,
+    // Punctuation / OEM keys (US ANSI layout names).
+    Comma,
+    Period,
+    Semicolon,
+    Quote,
+    BracketLeft,
+    BracketRight,
+    Backslash,
+    Slash,
+    Equal,
+    Minus,
+    Backquote,
     // Modifier keys as named physical keys.
     AltLeft,
     AltRight,
@@ -218,6 +230,14 @@ pub enum Trigger {
     IsolatedTap { key: TapKey, within: Duration },
     /// Fires while `key` is down and all `mods` are held (sides ignored).
     Chord { mods: ModSet, key: KeySpec },
+    /// Fires while `key` is down and the held modifier set EQUALS `mods` exactly
+    /// — neither a subset nor a superset. Unlike [`Trigger::Chord`] (subset),
+    /// activation is strictly on the non-repeat key-down EDGE with `mods`
+    /// already held: a key held before the modifiers arrive never fires, and
+    /// extra modifiers held alongside `mods` suppress activation. Releases when
+    /// `key` goes up OR the held modifier set drifts away from the exact `mods`
+    /// (push-to-talk semantics).
+    ComboExact { mods: ModSet, key: KeySpec },
     /// Fires while `key` is down and NO modifiers are held.
     SingleKey { key: KeySpec },
 }

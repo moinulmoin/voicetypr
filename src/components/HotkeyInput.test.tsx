@@ -151,6 +151,35 @@ describe('HotkeyInput', () => {
     });
   });
 
+  it('captures Cmd+Ctrl combinations on macOS (both modifiers emitted)', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <HotkeyInput
+        value=""
+        onChange={mockOnChange}
+        placeholder="Click to set hotkey"
+      />
+    );
+
+    const editButton = screen.getByTitle('Change hotkey');
+    await user.click(editButton);
+
+    // Hold both Command and Control, then press K.
+    await user.keyboard('{Meta>}{Control>}k{/Control}{/Meta}');
+
+    // The combined combo should validate and be savable.
+    await waitFor(() => {
+      expect(screen.getByTitle('Save hotkey')).not.toBeDisabled();
+    });
+
+    await user.click(screen.getByTitle('Save hotkey'));
+
+    await waitFor(() => {
+      expect(mockOnChange).toHaveBeenCalledWith('CommandOrControl+Control+K');
+    });
+  });
+
   it('displays platform-specific symbols correctly', () => {
     render(
       <HotkeyInput 
