@@ -14,7 +14,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
@@ -103,7 +102,6 @@ interface DiscoveredRemoteServer {
 const SOURCE_OPTIONS: Array<{
   id: SourceType;
   title: string;
-  eyebrow: string;
   description: string;
   icon: typeof Laptop;
   bullets: string[];
@@ -111,7 +109,6 @@ const SOURCE_OPTIONS: Array<{
   {
     id: "local",
     title: "Use this device",
-    eyebrow: "Local source",
     description: "Download a local model and transcribe on this device.",
     icon: Laptop,
     bullets: ["Raw audio stays here", "Works offline after setup", "Best default for one device"],
@@ -119,7 +116,6 @@ const SOURCE_OPTIONS: Array<{
   {
     id: "remote",
     title: "Use another Voicetypr",
-    eyebrow: "Network source",
     description: "Connect to a stronger device or workstation running Voicetypr on your network.",
     icon: Network,
     bullets: ["Skip local model download", "Use a faster machine", "Great for weak laptops"],
@@ -225,7 +221,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
   const [sourceConfirmed, setSourceConfirmed] = useState(false);
   const sourceConfirmedRef = useRef(false);
   const [hotkey, setHotkey] = useState(
-    settings?.hotkey || "CommandOrControl+Shift+Space",
+    settings?.hotkey || "Alt+Space",
   );
   const [isEditingHotkey, setIsEditingHotkey] = useState(false);
   const [capturedBareModifier, setCapturedBareModifier] = useState<BareModifierSpec | null>(null);
@@ -298,7 +294,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
   );
 
   const currentIndex = steps.indexOf(currentStep);
-  const progress = ((currentIndex + 1) / steps.length) * 100;
   const selectedModelName = settings?.current_model || null;
   const selectedModel = selectedModelName ? models[selectedModelName] : null;
   const activeRemoteServer = useMemo(
@@ -797,17 +792,14 @@ export const OnboardingDesktop = function OnboardingDesktop({
   };
 
   return (
-    <div className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,var(--color-voice-wash),transparent_34%),linear-gradient(180deg,var(--color-background),var(--color-muted))] text-foreground">
+    <div className="min-h-screen overflow-hidden bg-[radial-gradient(110%_80%_at_50%_-10%,var(--sage-bg),transparent_55%),linear-gradient(180deg,var(--background),var(--background))] text-foreground">
       {currentStep !== "success" && (
-        <div className="mx-auto flex w-full max-w-5xl items-center gap-4 px-8 py-5">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-8 py-6">
           <div>
             <p className="text-sm font-semibold tracking-tight">Voicetypr Setup</p>
             <p className="text-xs text-muted-foreground">{sourceLabel(sourceType, sourceConfirmed)}</p>
           </div>
-          <Progress value={progress} className="h-2 flex-1" />
-          <p className="text-xs tabular-nums text-muted-foreground">
-            {currentIndex + 1}/{steps.length}
-          </p>
+          <StepDots currentIndex={currentIndex} total={steps.length} />
         </div>
       )}
 
@@ -834,24 +826,26 @@ export const OnboardingDesktop = function OnboardingDesktop({
               </div>
             </div>
 
-            <Card className="border-border/70 bg-card/80 shadow-xl shadow-foreground/10 backdrop-blur">
+            <Card className="rounded-2xl border border-border bg-card shadow-sm">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-xl">
-                  <Sparkles className="size-5 text-primary" />
+                <CardTitle className="flex items-center gap-2.5 text-lg">
+                  <span className="flex size-8 items-center justify-center rounded-lg bg-sage-bg text-sage">
+                    <Sparkles className="size-4" />
+                  </span>
                   Setup completes when this works
                 </CardTitle>
                 <CardDescription>
                   No fake green check. Voicetypr is ready only after the first recording succeeds.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-col gap-3">
+              <CardContent className="flex flex-col gap-2.5">
                 {[
                   ["1", "Pick local or remote transcription"],
                   ["2", "Prepare the selected source"],
                   ["3", "Record one sample and see the transcript"],
                 ].map(([number, text]) => (
-                  <div key={number} className="flex items-center gap-3 rounded-xl bg-muted/70 px-3 py-2">
-                    <span className="flex size-7 items-center justify-center rounded-md bg-background text-sm font-medium ring-1 ring-border">
+                  <div key={number} className="flex items-center gap-3 rounded-xl border border-border/60 bg-muted/40 px-3 py-2.5">
+                    <span className="flex size-7 items-center justify-center rounded-full bg-sage-bg text-sm font-semibold text-sage">
                       {number}
                     </span>
                     <span className="text-sm text-muted-foreground">{text}</span>
@@ -864,7 +858,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
         {currentStep === "source" && (
           <OnboardingPanel
-            eyebrow="Step 1"
             title="Where should transcription run?"
             description="Choose local transcription on this device or remote transcription from another Voicetypr device."
             footer={
@@ -887,8 +880,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
                     aria-checked={selected}
                     tabIndex={0}
                     className={cn(
-                      "cursor-pointer border-border/70 bg-card/80 transition hover:-translate-y-0.5 hover:shadow-lg",
-                      selected && "border-primary/60 bg-primary/5 ring-2 ring-primary/20",
+                      "cursor-pointer rounded-2xl border border-border bg-card shadow-sm transition-colors hover:border-sage/40 hover:bg-muted/30",
+                      selected && "border-sage/50 bg-sage-bg/40 ring-1 ring-sage/30 hover:bg-sage-bg/40",
                     )}
                     onClick={() => {
                       confirmSource(option.id);
@@ -903,23 +896,24 @@ export const OnboardingDesktop = function OnboardingDesktop({
                     <CardHeader>
                       <CardAction>
                         {selected ? (
-                          <CircleCheck className="size-5 text-primary" />
+                          <CircleCheck className="size-5 text-sage" />
                         ) : null}
                       </CardAction>
-                      <div className="mb-2 flex size-11 items-center justify-center rounded-xl bg-muted text-primary">
+                      <div
+                        className={cn(
+                          "mb-2 flex size-11 items-center justify-center rounded-xl bg-sage-bg text-sage",
+                        )}
+                      >
                         <Icon className="size-5" />
                       </div>
                       <CardTitle className="text-xl">{option.title}</CardTitle>
                       <CardDescription>{option.description}</CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <Badge variant="secondary" className="mb-4 rounded-md">
-                        {option.eyebrow}
-                      </Badge>
                       <div className="flex flex-col gap-2">
                         {option.bullets.map((bullet) => (
                           <div key={bullet} className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <CheckCircle2 className="size-4 text-primary" />
+                            <CheckCircle2 className="size-4 text-sage" />
                             {bullet}
                           </div>
                         ))}
@@ -934,7 +928,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
         {currentStep === "permissions" && (
           <OnboardingPanel
-            eyebrow="Step 2"
             title="Grant the permissions Voicetypr actually needs"
             description="Microphone starts recording. Accessibility lets the global hotkey work while you are in other apps."
             footer={
@@ -963,14 +956,13 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   ...permissions.accessibility,
                 },
               ].map((perm) => (
-                <Card key={perm.type} className="border-border/70 bg-card/80">
+                <Card key={perm.type} className="rounded-2xl border border-border bg-card shadow-sm">
                   <CardHeader>
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex gap-3">
                         <div
                           className={cn(
-                            "flex size-10 items-center justify-center rounded-xl bg-muted text-primary",
-                            perm.status === "granted" && "bg-primary/10",
+                            "flex size-10 items-center justify-center rounded-xl bg-sage-bg text-sage",
                             perm.status === "error" && "bg-destructive/10 text-destructive",
                           )}
                         >
@@ -982,7 +974,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
                         </div>
                       </div>
                       {perm.status === "granted" ? (
-                        <Badge variant="secondary" className="border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-400">
+                        <Badge variant="secondary" className="gap-1 bg-sage-bg text-sage">
+                          <CircleCheck className="size-3" />
                           Granted
                         </Badge>
                       ) : null}
@@ -1015,7 +1008,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
         {currentStep === "readiness" && (
           <OnboardingPanel
-            eyebrow="Step 3"
             title={sourceType === "local" ? "Prepare this device" : "Connect a remote Voicetypr"}
             description={
               sourceType === "local"
@@ -1034,7 +1026,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
             {sourceType === "local" ? (
               <div className="flex flex-col gap-4">
                 <ModelLegend />
-                <Card className="border-border/70 bg-card/80 py-0">
+                <Card className="rounded-2xl border border-border bg-card py-0 shadow-sm">
                   <ScrollArea className="h-[320px]">
                     <div className="flex flex-col gap-3 p-4">
                       {modelOrder.map((name: string) => {
@@ -1077,7 +1069,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   </ScrollArea>
                 </Card>
                 {isWindows && (
-                  <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-card/80 px-4 py-3">
+                  <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-sm">
                     <div>
                       <p className="text-sm font-medium">Use GPU acceleration</p>
                       <p className="text-xs text-muted-foreground">Recommended — uses your graphics card for faster transcription.</p>
@@ -1113,7 +1105,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   </div>
                 </div>
 
-                <Card className="border-border/70 bg-card/80 py-0">
+                <Card className="rounded-2xl border border-border bg-card py-0 shadow-sm">
                   <ScrollArea className="h-[320px]">
                     <div className="flex flex-col gap-3 p-4">
                       {isLoadingRemoteServers && remoteServers.length === 0 ? (
@@ -1134,7 +1126,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                         <Card
                           key={`${server.machine_id}:${server.host}:${server.port}`}
                           size="sm"
-                          className="border-border/70 bg-background/60"
+                          className="rounded-xl border border-border bg-muted/30"
                         >
                           <CardHeader>
                             <CardAction>
@@ -1143,7 +1135,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                               </Badge>
                             </CardAction>
                             <div className="flex items-start gap-3">
-                              <div className="flex size-10 items-center justify-center rounded-xl bg-muted text-primary">
+                              <div className="flex size-10 items-center justify-center rounded-xl bg-sage-bg text-sage">
                                 <Wifi className="size-5" />
                               </div>
                               <div>
@@ -1169,18 +1161,18 @@ export const OnboardingDesktop = function OnboardingDesktop({
                             key={server.id}
                             size="sm"
                             className={cn(
-                              "border-border/70 bg-background/60",
-                              selected && "border-primary/60 bg-primary/5 ring-2 ring-primary/20",
+                              "rounded-xl border border-border bg-muted/30",
+                              selected && "border-sage/50 bg-sage-bg/40 ring-1 ring-sage/30",
                             )}
                           >
                             <CardHeader>
                               <CardAction>
-                                <Badge variant={online ? "secondary" : "outline"}>
+                                <Badge variant={online ? "secondary" : "outline"} className={cn(online && "bg-sage-bg text-sage")}>
                                   {online ? "Online" : server.status || "Unknown"}
                                 </Badge>
                               </CardAction>
                               <div className="flex items-start gap-3">
-                                <div className="flex size-10 items-center justify-center rounded-xl bg-muted text-primary">
+                                <div className="flex size-10 items-center justify-center rounded-xl bg-sage-bg text-sage">
                                   {online ? <Wifi className="size-5" /> : <WifiOff className="size-5" />}
                                 </div>
                                 <div>
@@ -1235,7 +1227,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
         {currentStep === "hotkey" && (
           <OnboardingPanel
-            eyebrow="Step 4"
             title="Pick your hotkey and recording mode"
             description="This is the system-wide shortcut for triggering Voicetypr. You can change both later in Settings."
             footer={
@@ -1247,10 +1238,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
               />
             }
           >
-            <Card className="mx-auto w-full max-w-xl border-border/70 bg-card/80">
+            <Card className="mx-auto w-full max-w-xl rounded-2xl border border-border bg-card shadow-sm">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Keyboard className="size-5 text-primary" />
+                <CardTitle className="flex items-center gap-2.5">
+                  <span className="flex size-8 items-center justify-center rounded-lg bg-sage-bg text-sage">
+                    <Keyboard className="size-4" />
+                  </span>
                   Recording hotkey
                 </CardTitle>
                 <CardDescription>
@@ -1316,7 +1309,6 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
         {currentStep === "first_transcription" && (
           <OnboardingPanel
-            eyebrow="Final check"
             title="Do your first transcription"
             description="Say one short sentence. Onboarding only finishes after Voicetypr returns real text."
             footer={
@@ -1330,13 +1322,15 @@ export const OnboardingDesktop = function OnboardingDesktop({
               />
             }
           >
-            <Card className="mx-auto w-full max-w-2xl border-border/70 bg-card/80">
+            <Card className="mx-auto w-full max-w-2xl rounded-2xl border border-border bg-card shadow-sm">
               <CardHeader>
                 <CardAction>
                   <Badge variant="outline">{sourceLabel(sourceType, true)}</Badge>
                 </CardAction>
-                <CardTitle className="flex items-center gap-2 text-xl">
-                  <Mic className="size-5 text-primary" />
+                <CardTitle className="flex items-center gap-2.5 text-xl">
+                  <span className="flex size-8 items-center justify-center rounded-lg bg-sage-bg text-sage">
+                    <Mic className="size-4" />
+                  </span>
                   Sample recording
                 </CardTitle>
                 <CardDescription>
@@ -1362,7 +1356,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   </Button>
                 </div>
 
-                <div className="rounded-2xl border bg-muted/40 p-4 text-sm">
+                <div className="rounded-xl border border-border bg-muted/40 p-4 text-sm">
                   <p className="mb-1 font-medium text-muted-foreground">Read this aloud:</p>
                   <p className="text-foreground">{SAMPLE_SENTENCE}</p>
                 </div>
@@ -1398,11 +1392,11 @@ export const OnboardingDesktop = function OnboardingDesktop({
 
         {currentStep === "success" && (
           <section className="mx-auto flex w-full max-w-xl flex-col items-center gap-6 text-center">
-            <div className="flex size-16 items-center justify-center rounded-3xl bg-primary text-primary-foreground shadow-xl shadow-primary/20">
+            <div className="flex size-16 items-center justify-center rounded-3xl bg-sage text-sage-foreground shadow-sm">
               <ShieldCheck className="size-8" />
             </div>
             <div className="flex flex-col gap-3">
-              <Badge variant="secondary" className="mx-auto rounded-md uppercase tracking-[0.16em]">
+              <Badge variant="secondary" className="mx-auto rounded-md bg-sage-bg uppercase tracking-[0.16em] text-sage">
                 Ready
               </Badge>
               <h1 className="text-4xl font-semibold tracking-[-0.04em]">
@@ -1418,7 +1412,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                     : <>Press {formatHotkey(hotkey)} anywhere to start recording.</>}
               </p>
             </div>
-            <div className="w-full rounded-lg border border-border/50 bg-card/50 p-3 text-sm text-muted-foreground">
+            <div className="w-full rounded-2xl border border-border bg-card p-4 text-sm text-muted-foreground shadow-sm">
               <p>
                 Power tip: Voicetypr ships a{" "}
                 <span className="font-mono text-foreground">voicetypr</span> command-line tool so AI
@@ -1427,12 +1421,12 @@ export const OnboardingDesktop = function OnboardingDesktop({
                 <span className="font-mono text-foreground">voicetypr --help</span>.
               </p>
             </div>
-            <label className="flex w-full items-start gap-3 rounded-lg border border-border/50 bg-card/50 p-3 text-left text-sm">
+            <label className="flex w-full items-start gap-3 rounded-2xl border border-border bg-card p-4 text-left text-sm shadow-sm">
               <input
                 type="checkbox"
                 checked={telemetryOptIn}
                 onChange={(event) => setTelemetryOptIn(event.target.checked)}
-                className="mt-0.5 size-4 shrink-0 accent-primary"
+                className="mt-0.5 size-4 shrink-0 accent-[var(--sage)]"
               />
               <span className="text-muted-foreground">
                 Send anonymous error reports to help make Voicetypr better. Never
@@ -1451,26 +1445,47 @@ export const OnboardingDesktop = function OnboardingDesktop({
   );
 };
 
+function StepDots({ currentIndex, total }: { currentIndex: number; total: number }) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex items-center gap-1.5">
+        {Array.from({ length: total }).map((_, index) => (
+          <span
+            key={index}
+            aria-hidden
+            className={cn(
+              "h-1.5 rounded-full transition-all",
+              index < currentIndex
+                ? "w-1.5 bg-sage/60"
+                : index === currentIndex
+                  ? "w-5 bg-sage"
+                  : "w-1.5 bg-border",
+            )}
+          />
+        ))}
+      </div>
+      <p className="text-xs tabular-nums text-muted-foreground">
+        Step {currentIndex + 1} of {total}
+      </p>
+    </div>
+  );
+}
+
 function OnboardingPanel({
-  eyebrow,
   title,
   description,
   children,
   footer,
 }: {
-  eyebrow: string;
   title: string;
   description: string;
   children: React.ReactNode;
   footer: React.ReactNode;
 }) {
   return (
-    <section className="flex w-full flex-col gap-6 animate-fade-in">
-      <div className="mx-auto flex max-w-3xl flex-col items-center gap-3 text-center">
-        <Badge variant="secondary" className="rounded-md uppercase tracking-[0.16em]">
-          {eyebrow}
-        </Badge>
-        <h2 className="text-4xl font-semibold tracking-[-0.04em] text-balance">
+    <section className="flex w-full flex-col gap-7 animate-fade-in">
+      <div className="mx-auto flex max-w-3xl flex-col items-center gap-2.5 text-center">
+        <h2 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
           {title}
         </h2>
         <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
@@ -1524,19 +1539,19 @@ function ModelLegend() {
   return (
     <div className="flex flex-wrap items-center justify-center gap-4 text-xs text-muted-foreground">
       <span className="flex items-center gap-1.5">
-        <Zap className="size-3.5 text-primary" />
+        <Zap className="size-3.5 text-sage" />
         Speed
       </span>
       <span className="flex items-center gap-1.5">
-        <CheckCircle2 className="size-3.5 text-primary" />
+        <CheckCircle2 className="size-3.5 text-sage" />
         Accuracy
       </span>
       <span className="flex items-center gap-1.5">
-        <HardDrive className="size-3.5 text-primary" />
+        <HardDrive className="size-3.5 text-sage" />
         Size
       </span>
       <span className="flex items-center gap-1.5">
-        <Star className="size-3.5 fill-primary text-primary" />
+        <Star className="size-3.5 fill-sage text-sage" />
         Recommended
       </span>
     </div>
