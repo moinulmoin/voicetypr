@@ -393,7 +393,7 @@ jobs:
         env:
           RUSTFLAGS: -C target-feature=+crt-static
         run: |
-          cargo build --manifest-path sidecar/whisper-vulkan/Cargo.toml --release --target x86_64-pc-windows-msvc
+          cargo build --manifest-path sidecar/whisper-vulkan/Cargo.toml --release
           if ($LASTEXITCODE -ne 0) {
             throw "Whisper Vulkan sidecar build failed with exit code $LASTEXITCODE"
           }
@@ -402,7 +402,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($targetDir)) {
             $targetDir = "sidecar/whisper-vulkan/target"
           }
-          $sidecarExe = Join-Path $targetDir "x86_64-pc-windows-msvc/release/whisper-vulkan-sidecar.exe"
+          $sidecarExe = Join-Path $targetDir "release/whisper-vulkan-sidecar.exe"
           if (-not (Test-Path $sidecarExe)) {
             throw "Whisper Vulkan sidecar binary not found: $sidecarExe"
           }
