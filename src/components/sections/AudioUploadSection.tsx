@@ -333,7 +333,7 @@ export function AudioUploadSection() {
         <div className={cn(
           "mt-4 rounded-lg border-2 overflow-hidden transition-all",
           isDragging
-            ? "border-primary bg-primary/5 scale-[1.02]"
+            ? "border-sage bg-sage-bg/40 scale-[1.02]"
             : "border-transparent"
         )}>
           <div className="space-y-4">
@@ -362,13 +362,13 @@ export function AudioUploadSection() {
                         <div className={cn(
                           "relative rounded-lg border-2 border-dashed p-6 text-center transition-all",
                           isDragging
-                            ? "border-primary bg-primary/5"
+                            ? "border-sage bg-sage-bg/40"
                             : "border-border/50 hover:border-border"
                         )}>
                           {isDragging ? (
                             <div className="space-y-1">
-                              <Upload className="h-7 w-7 mx-auto text-primary animate-bounce" />
-                              <p className="text-sm font-medium text-primary">
+                              <Upload className="h-7 w-7 mx-auto text-sage animate-pulse" />
+                              <p className="text-sm font-medium text-sage">
                                 Drop your audio or video file here
                               </p>
                               <p className="text-xs text-muted-foreground">
@@ -455,7 +455,7 @@ export function AudioUploadSection() {
                       </div>
 
                       {speakerSegments.length > 0 && (
-                        <div className="rounded-lg border border-border/50 bg-card/60 p-4">
+                        <div className="rounded-lg border border-border bg-card p-4">
                           <div className="mb-3 flex items-center justify-between gap-3">
                             <h3 className="text-sm font-medium">Speaker timeline</h3>
                             <Badge variant="secondary">

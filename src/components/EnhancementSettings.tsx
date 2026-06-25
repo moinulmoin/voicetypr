@@ -153,7 +153,7 @@ function AppFormattingRulesEditor({
             return (
               <div
                 key={`app-rule-${index}`}
-                className="rounded-lg border border-border/60 bg-card/60 p-3"
+                className="rounded-lg border border-border bg-card p-3"
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <InputGroup className="min-w-[10rem] flex-1">

@@ -794,7 +794,7 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
                   <div
                     key={provider.id}
                     className={`rounded-xl border border-border/60 bg-background p-4 transition-all ${
-                      isActive ? "border-primary/50 bg-primary/5" : ""
+                      isActive ? "border-sage/50 bg-sage-bg/40" : ""
                     }`}
                   >
                     <div className="flex items-start justify-between gap-4">
@@ -813,7 +813,7 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
                             <Badge variant="secondary">Reasoning</Badge>
                           )}
                           {isActive && (
-                            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                            <span className="rounded-full bg-sage-bg px-2 py-0.5 text-xs text-sage">
                               Active
                             </span>
                           )}
@@ -973,7 +973,7 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
                                         </Badge>
                                       )}
                                       {selectedModel === model.id && (
-                                        <Check className="h-3.5 w-3.5 text-primary" />
+                                        <Check className="h-3.5 w-3.5 text-sage" />
                                       )}
                                     </span>
                                   </Button>

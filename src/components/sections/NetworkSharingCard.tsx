@@ -499,8 +499,8 @@ export function NetworkSharingCard() {
       <div className="px-4 py-3 border-b border-border/50">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="p-1.5 rounded-md bg-primary/10">
-              <Network className="h-4 w-4 text-primary" />
+            <div className="p-1.5 rounded-md bg-sage-bg">
+              <Network className="h-4 w-4 text-sage" />
             </div>
             <div>
               <h3 className="font-medium">Remote Transcription</h3>
@@ -554,13 +554,13 @@ export function NetworkSharingCard() {
       {/* Warning if using remote server */}
       {activeRemoteServer && !status.enabled && (
         <div className="px-4 py-3">
-          <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
-            <Network className="h-4 w-4 text-blue-500 mt-0.5 flex-shrink-0" />
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-sage-bg/60 border border-sage/20">
+            <Network className="h-4 w-4 text-sage mt-0.5 flex-shrink-0" />
             <div>
-              <p className="text-sm font-medium text-blue-700 dark:text-blue-400">
+              <p className="text-sm font-medium text-foreground">
                 Using remote Voicetypr
               </p>
-              <p className="text-xs text-blue-600 dark:text-blue-500">
+              <p className="text-xs text-muted-foreground">
                 Remote transcription is unavailable while using another Voicetypr device as your model source.
               </p>
             </div>
