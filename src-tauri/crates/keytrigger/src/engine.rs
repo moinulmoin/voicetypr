@@ -9,11 +9,12 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 
 use crate::backend::platform_source;
 use crate::matcher::Matcher;
-use crate::types::{EngineError, RawKeyEvent, Trigger, TriggerEvent, TriggerId};
+use crate::types::{EngineError, KeySpec, ModSet, RawKeyEvent, Trigger, TriggerEvent, TriggerId};
 
 /// Messages flowing to the dispatcher thread. Raw events and control messages
 /// share one channel so they are processed in order.
@@ -50,12 +51,56 @@ impl ReadySignal {
     }
 }
 
+/// The set of key/modifier combinations the engine currently CONSUMES
+/// (swallows) at the OS level, shared lock-free with the event source via an
+/// [`ArcSwap`]. Derived from the active [`Trigger::ComboExact`] and
+/// [`Trigger::SingleKey`] bindings so consume membership always mirrors the
+/// matcher's binding set. The pure [`ConsumeSet::consumes`] predicate runs on
+/// the hot OS-callback path with no lock.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConsumeSet {
+    /// `(mods, key)` combos consumed on an exact-modifier key-down.
+    pub combos: Vec<(ModSet, KeySpec)>,
+    /// Bare keys consumed only when NO modifiers are held.
+    pub singles: Vec<KeySpec>,
+}
+
+impl ConsumeSet {
+    /// Build the consume set from a binding list (ignores non-consuming triggers).
+    pub fn from_bindings(bindings: &[(TriggerId, Trigger)]) -> Self {
+        let mut combos = Vec::new();
+        let mut singles = Vec::new();
+        for (_, trig) in bindings {
+            match trig {
+                Trigger::ComboExact { mods, key } => combos.push((*mods, *key)),
+                Trigger::SingleKey { key } => singles.push(*key),
+                _ => {}
+            }
+        }
+        Self { combos, singles }
+    }
+
+    /// Pure consume predicate (no I/O): consume iff an exact `(mods, key)` combo
+    /// matches, or a single key matches with zero modifiers held. Superset
+    /// modifiers, modifier-qualified single keys, and everything else pass
+    /// through unconsumed.
+    pub fn consumes(&self, key: KeySpec, mods: ModSet) -> bool {
+        if self.combos.iter().any(|(m, k)| *k == key && *m == mods) {
+            return true;
+        }
+        mods.is_empty() && self.singles.contains(&key)
+    }
+}
+
 /// A source of raw key events (an OS backend, or a test mock).
 pub trait KeyEventSource: Send + Sync {
     /// Run the event loop until [`KeyEventSource::request_stop`]; send events on
     /// `tx` and call `ready.ok()` (or `ready.err(..)`) when the loop is live or
-    /// has failed to start.
-    fn run(&self, tx: Sender<Msg>, ready: ReadySignal);
+    /// has failed to start. `consume` is the lock-free consume set mirroring the
+    /// matcher's binding set: the source consumes (swallows) any OS event whose
+    /// `(key, mods)` the predicate accepts, so combo/single-key triggers never
+    /// reach the focused application; everything else passes through untouched.
+    fn run(&self, tx: Sender<Msg>, ready: ReadySignal, consume: Arc<ArcSwap<ConsumeSet>>);
     /// Ask the running loop to terminate (from another thread).
     fn request_stop(&self);
 }
@@ -77,7 +122,7 @@ impl MockSource {
 }
 
 impl KeyEventSource for MockSource {
-    fn run(&self, tx: Sender<Msg>, ready: ReadySignal) {
+    fn run(&self, tx: Sender<Msg>, ready: ReadySignal, _consume: Arc<ArcSwap<ConsumeSet>>) {
         ready.ok();
         let script = self.script.lock().take().unwrap_or_default();
         for (msg, delay) in script {
@@ -113,6 +158,7 @@ pub struct TriggerEngine {
     inner: Mutex<Option<Inner>>,
     pending: Mutex<Vec<(TriggerId, Trigger)>>,
     running: AtomicBool,
+    consume: Arc<ArcSwap<ConsumeSet>>,
 }
 
 impl Default for TriggerEngine {
@@ -127,6 +173,7 @@ impl TriggerEngine {
             inner: Mutex::new(None),
             pending: Mutex::new(Vec::new()),
             running: AtomicBool::new(false),
+            consume: Arc::new(ArcSwap::from_pointee(ConsumeSet::default())),
         }
     }
 
@@ -165,6 +212,8 @@ impl TriggerEngine {
         let (tx, rx) = mpsc::channel::<Msg>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let initial = self.pending.lock().clone();
+        let consume_for_dispatch = Arc::clone(&self.consume);
+        let consume_for_source = Arc::clone(&self.consume);
 
         let dispatcher = std::thread::Builder::new()
             .name("keytrigger-dispatch".into())
@@ -173,11 +222,15 @@ impl TriggerEngine {
                 let mut emit = |te: TriggerEvent| {
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| on_event(te)));
                 };
+                consume_for_dispatch.store(Arc::new(ConsumeSet::from_bindings(&initial)));
                 matcher.set_bindings(initial, &mut emit);
                 while let Ok(msg) = rx.recv() {
                     match msg {
                         Msg::Raw(ev) => matcher.handle(ev, Instant::now(), &mut emit),
-                        Msg::Control(Control::SetBindings(b)) => matcher.set_bindings(b, &mut emit),
+                        Msg::Control(Control::SetBindings(b)) => {
+                            consume_for_dispatch.store(Arc::new(ConsumeSet::from_bindings(&b)));
+                            matcher.set_bindings(b, &mut emit);
+                        }
                         Msg::Control(Control::ReEnable) => matcher.reset(&mut emit),
                         Msg::Control(Control::Stop) => {
                             matcher.reset(&mut emit);
@@ -194,7 +247,7 @@ impl TriggerEngine {
         let source_thread = match std::thread::Builder::new()
             .name("keytrigger-source".into())
             .spawn(move || {
-                src_for_thread.run(tx_for_source, ready);
+                src_for_thread.run(tx_for_source, ready, consume_for_source);
             }) {
             Ok(h) => h,
             Err(e) => {
@@ -323,5 +376,71 @@ mod tests {
             ]
         );
         assert!(!engine.is_running());
+    }
+    fn j() -> KeySpec {
+        KeySpec::Named(NamedKey::J)
+    }
+
+    #[test]
+    fn consume_set_exact_combo_consumes() {
+        let set = ConsumeSet::from_bindings(&[(
+            "ce".into(),
+            Trigger::ComboExact {
+                mods: ModSet::empty().with(Modifier::Meta).with(Modifier::Shift),
+                key: j(),
+            },
+        )]);
+        // exact mods + matching key → consume
+        assert!(set.consumes(
+            j(),
+            ModSet::empty().with(Modifier::Meta).with(Modifier::Shift),
+        ));
+    }
+
+    #[test]
+    fn consume_set_superset_and_subset_combo_do_not_consume() {
+        let set = ConsumeSet::from_bindings(&[(
+            "ce".into(),
+            Trigger::ComboExact {
+                mods: ModSet::empty().with(Modifier::Meta),
+                key: j(),
+            },
+        )]);
+        // SUPERSET (Cmd+Shift) → must NOT consume (exact match only)
+        assert!(!set.consumes(
+            j(),
+            ModSet::empty().with(Modifier::Meta).with(Modifier::Shift),
+        ));
+        // subset (no mods) → must NOT consume
+        assert!(!set.consumes(j(), ModSet::empty()));
+        // wrong key → must NOT consume
+        assert!(!set.consumes(
+            KeySpec::Named(NamedKey::K),
+            ModSet::empty().with(Modifier::Meta),
+        ));
+    }
+
+    #[test]
+    fn consume_set_single_key_consumes_only_with_zero_mods() {
+        let set = ConsumeSet::from_bindings(&[(
+            "s".into(),
+            Trigger::SingleKey {
+                key: KeySpec::Named(NamedKey::Escape),
+            },
+        )]);
+        // zero mods → consume
+        assert!(set.consumes(KeySpec::Named(NamedKey::Escape), ModSet::empty()));
+        // any modifier held → must NOT consume
+        assert!(!set.consumes(
+            KeySpec::Named(NamedKey::Escape),
+            ModSet::empty().with(Modifier::Shift),
+        ));
+    }
+
+    #[test]
+    fn consume_set_empty_never_consumes() {
+        let set = ConsumeSet::default();
+        assert!(!set.consumes(j(), ModSet::empty()));
+        assert!(!set.consumes(j(), ModSet::empty().with(Modifier::Meta)));
     }
 }

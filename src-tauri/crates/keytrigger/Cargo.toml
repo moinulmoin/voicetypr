@@ -6,6 +6,7 @@ license = "MIT"
 description = "Cross-platform global key-trigger engine: modifier-only holds, double-taps, chords, single keys. Observation-only."
 
 [dependencies]
+arc-swap = "1.7"
 log = "0.4"
 parking_lot = "0.12"
 thiserror = "1.0"

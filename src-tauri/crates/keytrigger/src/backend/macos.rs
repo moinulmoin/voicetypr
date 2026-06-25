@@ -13,6 +13,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
 
 use core_foundation::base::TCFType;
 use core_foundation::mach_port::CFMachPortRef;
@@ -23,8 +26,8 @@ use core_graphics::event::{
 };
 use parking_lot::Mutex;
 
-use crate::engine::{Control, KeyEventSource, Msg, ReadySignal};
-use crate::types::{KeySpec, NamedKey, RawKeyEvent, Side};
+use crate::engine::{ConsumeSet, Control, KeyEventSource, Msg, ReadySignal};
+use crate::types::{KeySpec, ModSet, Modifier, NamedKey, RawKeyEvent, Side};
 
 extern "C" {
     /// Enable/disable an event tap. Declared here because `core-graphics` keeps
@@ -47,18 +50,19 @@ impl MacEventTap {
 }
 
 impl KeyEventSource for MacEventTap {
-    fn run(&self, tx: Sender<Msg>, ready: ReadySignal) {
+    fn run(&self, tx: Sender<Msg>, ready: ReadySignal, consume: Arc<ArcSwap<ConsumeSet>>) {
         // Shared with the callback (same thread, populated after creation): the
         // tap's mach port, for re-enabling the tap from within its own callback.
         let port_cell: Rc<RefCell<Option<CFMachPortRef>>> = Rc::new(RefCell::new(None));
         let port_cb = Rc::clone(&port_cell);
         let tx_cb = tx.clone();
         let own_pid = std::process::id() as i64;
+        let consume_cb = Arc::clone(&consume);
 
         let tap = CGEventTap::new(
             CGEventTapLocation::HID,
             CGEventTapPlacement::HeadInsertEventTap,
-            CGEventTapOptions::ListenOnly,
+            CGEventTapOptions::Default,
             vec![
                 CGEventType::KeyDown,
                 CGEventType::KeyUp,
@@ -85,7 +89,9 @@ impl KeyEventSource for MacEventTap {
                     && event.get_integer_value_field(EventField::EVENT_SOURCE_UNIX_PROCESS_ID)
                         == own_pid
                 {
-                    return None;
+                    // Pass-through: deliver our own paste to the app; we only
+                    // skip feeding the matcher (above). Do NOT consume it.
+                    return Some(event.clone());
                 }
                 match etype {
                     CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
@@ -94,6 +100,10 @@ impl KeyEventSource for MacEventTap {
                         }
                         // Events were dropped while disabled: reset matcher state.
                         let _ = tx_cb.send(Msg::Control(Control::ReEnable));
+                        // Out-of-band lifecycle callback — no key event is behind
+                        // it, so the return value is a harmless no-op; returning
+                        // None is the historic choice.
+                        return None;
                     }
                     CGEventType::KeyDown | CGEventType::KeyUp => {
                         let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)
@@ -102,12 +112,30 @@ impl KeyEventSource for MacEventTap {
                             .get_integer_value_field(EventField::KEYBOARD_EVENT_AUTOREPEAT)
                             != 0;
                         let (key, side) = map_keycode(code);
+                        let down = matches!(etype, CGEventType::KeyDown);
+                        // Always feed the matcher: it fires/releases triggers on
+                        // the event whether or not we also consume it for the app.
                         let _ = tx_cb.send(Msg::Raw(RawKeyEvent {
                             key,
                             side,
-                            down: matches!(etype, CGEventType::KeyDown),
+                            down,
                             is_repeat,
                         }));
+                        // Consume ONLY a non-repeat key-down (never a modifier,
+                        // never a key-up, never an auto-repeat) whose exact
+                        // (mods, key) is a registered combo/single: swallow it so
+                        // it never reaches the focused application. Key-ups,
+                        // repeats, and unbound keys fall through to pass-through.
+                        if down
+                            && !is_repeat
+                            && side.is_none()
+                            && consume_cb
+                                .load()
+                                .consumes(key, flags_to_modset(event.get_flags()))
+                        {
+                            // Consumed: do NOT forward the event to apps.
+                            return None;
+                        }
                     }
                     CGEventType::FlagsChanged => {
                         let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)
@@ -130,10 +158,13 @@ impl KeyEventSource for MacEventTap {
                                 is_repeat: false,
                             }));
                         }
+                        // Modifiers are NEVER consumed: pass through unchanged.
                     }
                     _ => {}
                 }
-                None
+                // Default pass-through for every non-consumed event (key-ups,
+                // modifiers, auto-repeats, and unbound keys).
+                Some(event.clone())
             },
         );
 
@@ -292,11 +323,23 @@ fn map_keycode(code: CGKeyCode) -> (KeySpec, Option<Side>) {
         0x5B => Some(NamedKey::Numpad8),
         0x5C => Some(NamedKey::Numpad9),
         0x4C => Some(NamedKey::NumpadEnter),
-        0x45 => Some(NamedKey::NumpadPlus),
-        0x4E => Some(NamedKey::NumpadMinus),
+        0x45 => Some(NamedKey::NumpadAdd),
+        0x4E => Some(NamedKey::NumpadSubtract),
         0x43 => Some(NamedKey::NumpadMultiply),
         0x4B => Some(NamedKey::NumpadDivide),
         0x41 => Some(NamedKey::NumpadDecimal),
+        // Punctuation / OEM keys (US ANSI virtual keycodes).
+        0x32 => Some(NamedKey::Backquote),
+        0x1B => Some(NamedKey::Minus),
+        0x18 => Some(NamedKey::Equal),
+        0x21 => Some(NamedKey::BracketLeft),
+        0x1E => Some(NamedKey::BracketRight),
+        0x2A => Some(NamedKey::Backslash),
+        0x2B => Some(NamedKey::Comma),
+        0x2C => Some(NamedKey::Slash),
+        0x2F => Some(NamedKey::Period),
+        0x29 => Some(NamedKey::Semicolon),
+        0x27 => Some(NamedKey::Quote),
         _ => None,
     };
 
@@ -319,6 +362,26 @@ fn modifier_flag(code: CGKeyCode) -> Option<CGEventFlags> {
         KeyCode::CONTROL | KeyCode::RIGHT_CONTROL => Some(CGEventFlags::CGEventFlagControl),
         _ => None,
     }
+}
+
+/// Translate a `CGEvent`'s aggregate modifier flags into a side-agnostic
+/// [`ModSet`] for the consume predicate. Only the four logical modifiers map;
+/// Caps Lock / Fn and other flags are ignored (they never count toward a combo).
+fn flags_to_modset(flags: CGEventFlags) -> ModSet {
+    let mut s = ModSet::empty();
+    if flags.contains(CGEventFlags::CGEventFlagCommand) {
+        s.insert(Modifier::Meta);
+    }
+    if flags.contains(CGEventFlags::CGEventFlagControl) {
+        s.insert(Modifier::Control);
+    }
+    if flags.contains(CGEventFlags::CGEventFlagAlternate) {
+        s.insert(Modifier::Alt);
+    }
+    if flags.contains(CGEventFlags::CGEventFlagShift) {
+        s.insert(Modifier::Shift);
+    }
+    s
 }
 
 #[cfg(test)]
