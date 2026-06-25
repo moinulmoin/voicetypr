@@ -1293,7 +1293,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   placeholder={capturedBareModifier
                     ? holdToTalk
                       ? `Hold ${formatBareModifierLabel(capturedBareModifier)} · push-to-talk`
-                      : `Tap ${formatBareModifierLabel(capturedBareModifier)} · tap to toggle`
+                      : `Tap ${formatBareModifierLabel(capturedBareModifier)} · toggle on/off`
                     : undefined}
                 />
                 {capturedBareModifier ? (
@@ -1308,7 +1308,7 @@ export const OnboardingDesktop = function OnboardingDesktop({
                   ) : (
                     <Alert>
                       <Info className="size-4" />
-                      <AlertTitle>Tap to toggle</AlertTitle>
+                      <AlertTitle>Tap to toggle on/off</AlertTitle>
                       <AlertDescription>
                         Tap {formatBareModifierLabel(capturedBareModifier)} to start recording, tap again to stop.
                       </AlertDescription>
