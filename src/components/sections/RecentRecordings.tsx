@@ -764,17 +764,17 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                           {isInProgress && (
                             <p className="mb-1 text-xs font-medium text-sage">
                               {isPersistedInProgress && !reTranscribingIds.has(item.id)
-                                ? `Re-transcribing with ${getModelDisplayName(item.model) ?? item.model}…`
-                                : `Re-transcribing with ${reTranscribingModels.get(item.id)}…`}
+                                ? `Re-transcription in progress with ${getModelDisplayName(item.model) ?? item.model}...`
+                                : `Re-transcribing with ${reTranscribingModels.get(item.id)}...`}
                             </p>
                           )}
                           {isFailed && !isInProgress && (
                             <div className="mb-1 flex flex-wrap items-center gap-2">
                               <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
                                 {verifiedRecordings.has(item.id)
-                                  ? 'Transcription failed — recording preserved'
+                                  ? 'Transcription failed - recording preserved'
                                   : checkedRecordings.has(item.id)
-                                    ? 'Transcription failed — recording unavailable for retry'
+                                    ? 'Transcription failed - recording unavailable for retry'
                                     : 'Transcription failed'}
                               </span>
                               {verifiedRecordings.has(item.id) && (
@@ -790,8 +790,8 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                           {item.writing?.translation_failed && !isFailed && !isInProgress && (
                             <p className="mb-1 text-xs font-medium text-amber-600 dark:text-amber-400">
                               {item.writing.target_language
-                                ? `Translation to ${item.writing.target_language} failed — saved untranslated`
-                                : 'Translation failed — saved untranslated'}
+                                ? `Translation to ${item.writing.target_language} failed - saved untranslated`
+                                : 'Translation failed - saved untranslated'}
                             </p>
                           )}
 

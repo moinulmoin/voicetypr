@@ -18,7 +18,6 @@ import {
   FieldTitle,
 } from "@/components/ui/field";
 import { Kbd } from "@/components/ui/kbd";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
@@ -364,42 +363,42 @@ export function GeneralSettings() {
   };
 
   return (
-    <div className="h-full min-h-0 flex flex-col">
-      <div className="shrink-0 border-b border-border/40 px-6 py-4">
-        <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-semibold">Settings</h1>
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button type="button" variant="secondary" size="icon" aria-label="Settings guide" className="rounded-full">
-                <HelpCircle className="h-4.5 w-4.5" />
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Settings guide</DialogTitle>
-                <DialogDescription>
-                  Settings covers recording controls, insertion behavior, transcript cleanup, and startup defaults.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-                <p><strong className="text-foreground">Recording</strong> controls the global shortcut, microphone, and floating indicator.</p>
-                <p><strong className="text-foreground">Transcript handling</strong> controls paste behavior, clipboard preservation, and history cleanup.</p>
-                <p><strong className="text-foreground">Startup</strong> controls launch-at-login and background update checks.</p>
-              </div>
-            </DialogContent>
-          </Dialog>
+    <div className="h-full min-h-0 overflow-auto">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3.5 px-6 py-7 md:px-8">
+        <div className="mb-1 flex flex-wrap items-start gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button type="button" variant="ghost" size="icon-sm" aria-label="Settings guide" className="size-7 rounded-full text-muted-foreground">
+                    <HelpCircle className="h-4 w-4" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Settings guide</DialogTitle>
+                    <DialogDescription>
+                      Settings covers recording controls, insertion behavior, transcript cleanup, and startup defaults.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 text-sm leading-6 text-muted-foreground">
+                    <p><strong className="text-foreground">Recording</strong> controls the global shortcut, microphone, and floating indicator.</p>
+                    <p><strong className="text-foreground">Transcript handling</strong> controls paste behavior, clipboard preservation, and history cleanup.</p>
+                    <p><strong className="text-foreground">Startup</strong> controls launch-at-login and background update checks.</p>
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Configure capture controls, transcript behavior, and startup defaults.
+            </p>
+          </div>
         </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Configure capture controls, transcript behavior, and startup defaults.
-        </p>
-      </div>
-
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="space-y-5 p-6">
-          <div className="rounded-xl border border-border/60 bg-card p-4">
+          <div className="rounded-2xl border border-border bg-card p-4">
             <div className="mb-4 flex items-center gap-2">
-              <div className="rounded-md bg-primary/10 p-1.5">
-                <Rocket className="h-4 w-4 text-primary" />
+              <div className="rounded-md bg-sage-bg p-1.5">
+                <Rocket className="h-4 w-4 text-sage" />
               </div>
               <div>
                 <h3 className="font-medium">App behavior</h3>
@@ -455,11 +454,11 @@ export function GeneralSettings() {
             </FieldGroup>
           </div>
 
-          <div className="rounded-xl border border-border/60 bg-card">
+          <div className="rounded-2xl border border-border bg-card">
             <div className="border-b border-border/60 px-4 py-3">
               <div className="flex items-center gap-2">
-                <div className="rounded-md bg-primary/10 p-1.5">
-                  <Mic className="h-4 w-4 text-primary" />
+                <div className="rounded-md bg-sage-bg p-1.5">
+                  <Mic className="h-4 w-4 text-sage" />
                 </div>
                 <div>
                   <h3 className="font-medium">Recording</h3>
@@ -989,7 +988,6 @@ export function GeneralSettings() {
             </div>
           </div>
         </div>
-      </ScrollArea>
     </div>
   );
 }

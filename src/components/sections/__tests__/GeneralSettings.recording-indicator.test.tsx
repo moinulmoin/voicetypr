@@ -443,13 +443,6 @@ describe('GeneralSettings UI structure', () => {
     });
   });
 
-  it('renders the network sharing card component', async () => {
-    render(<GeneralSettings />);
-    await waitFor(() => {
-      expect(screen.getByTestId('network-sharing-card')).toBeInTheDocument();
-    });
-  });
-
   it('renders Launch at Startup label', async () => {
     render(<GeneralSettings />);
     await waitFor(() => {

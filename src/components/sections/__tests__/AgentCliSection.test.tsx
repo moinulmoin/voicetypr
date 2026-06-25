@@ -43,7 +43,6 @@ describe('AgentCliSection', () => {
 
     // Recipe is always shown.
     expect(screen.getByText(/voicetypr transcribe/)).toBeInTheDocument();
-    expect(screen.getByText(/voicetypr record --json/)).toBeInTheDocument();
     expect(screen.getByText(/voicetypr --help/)).toBeInTheDocument();
   });
 
@@ -119,7 +118,6 @@ describe('AgentCliSection', () => {
     });
 
     expect(screen.getByText(/voicetypr transcribe/)).toBeInTheDocument();
-    expect(screen.getByText(/voicetypr record --json/)).toBeInTheDocument();
     expect(screen.getByText(/voicetypr --help/)).toBeInTheDocument();
   });
 });

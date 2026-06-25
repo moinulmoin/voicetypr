@@ -816,20 +816,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let menu = tauri::async_runtime::block_on(build_tray_menu(app.app_handle()))?;
 
 
-            // Use default window icon for tray
-            let tray_icon = match app.default_window_icon() {
-                Some(icon) => icon.clone(),
-                None => {
-                    log::error!("Default window icon not found, cannot create tray");
-                    return Err(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "Default window icon not available"
-                    )));
-                }
-            };
+            // Bare-mark template icon for the menubar (no background; adapts to light/dark).
+            let tray_icon = tauri::include_image!("icons/tray.png");
 
             let _tray = TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
+                .icon_as_template(true)
                 .tooltip("Voicetypr")
                 .menu(&menu)
                 .on_menu_event(move |app, event| {

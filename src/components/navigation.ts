@@ -86,9 +86,9 @@ export const primaryScreens: ScreenDefinition[] = [
   },
   {
     id: "text-rules",
-    label: "Pre-AI Formatting",
+    label: "Default Formatting",
     icon: Type,
-    description: "Always-on text fixes that run before AI — corrections, Words & Names, shortcuts, voice commands.",
+    description: "Always-on text rules — corrections, Words & Names, and shortcuts. Work with or without AI, even better with AI Formatting on.",
   },
   {
     id: "general",

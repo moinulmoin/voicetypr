@@ -630,11 +630,11 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
 
   return (
     <div className="h-full min-h-0 flex flex-col">
-      <div className="shrink-0 border-b border-border/40 px-6 py-4">
+      <div className="shrink-0 px-6 py-5 md:px-8">
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold tracking-tight">{view === "rules" ? "Pre-AI Formatting" : view === "ai" ? "AI Formatting" : "Formatting"}</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">{view === "rules" ? "Default Formatting" : view === "ai" ? "AI Formatting" : "Formatting"}</h1>
               <Dialog>
                 <DialogTrigger asChild>
                   <Button type="button" variant="secondary" size="icon" aria-label="Formatting guide" className="rounded-full">
@@ -661,6 +661,11 @@ export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView 
                 </DialogContent>
               </Dialog>
             </div>
+            <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground">
+              {view === "rules"
+                ? "Always-on text rules. Work with or without AI — even better with AI Formatting on."
+                : "AI polish, formatting modes, and your provider/model."}
+            </p>
           </div>
           {view !== "rules" && (
           <div className="flex flex-col items-end gap-1">

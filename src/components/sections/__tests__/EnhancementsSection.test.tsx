@@ -244,7 +244,6 @@ describe('EnhancementsSection', () => {
       expect(screen.getByText('Corrections')).toBeInTheDocument()
       expect(screen.getByText('Words & Names')).toBeInTheDocument()
       expect(screen.getByText('Text Shortcuts')).toBeInTheDocument()
-      expect(screen.getByText('Voice Commands')).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Personal Dictation' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /Code \(requires AI formatting\)/i })).toBeInTheDocument()
       expect(screen.getByText('OpenAI')).toBeInTheDocument()
@@ -591,7 +590,6 @@ describe('EnhancementsSection', () => {
 
     await waitFor(() => expect(screen.getByText('Corrections')).toBeInTheDocument())
     expect(screen.getByText('Words & Names')).toBeInTheDocument()
-    expect(screen.getByText('Voice Commands')).toBeInTheDocument()
     expect(screen.getByText('Text Shortcuts')).toBeInTheDocument()
   })
 
@@ -789,7 +787,7 @@ describe('EnhancementsSection', () => {
     })
   })
 
-  it('adds a voice command row and persists writing settings', async () => {
+  it.skip('adds a voice command row and persists writing settings (Voice Commands removed from UI)', async () => {
     const user = userEvent.setup()
     // Built-in voice commands now ship in `defaultWritingSettings` (mirroring
     // the Rust serde default). This test exercises add-row/persist from an
