@@ -164,6 +164,13 @@ impl KeyEventSource for MacEventTap {
         current.add_source(&source, mode);
         tap.enable();
 
+        // Ordering invariant (mirrors windows.rs): the run loop handle MUST be
+        // published to `self.runloop` BEFORE `ready.ok()` signals readiness, so
+        // `request_stop` (which reads `self.runloop` and calls `rl.stop()`) is
+        // never a no-op once readiness has been signaled. An early
+        // `CFRunLoopStop` posted between here and `run_current()` is safe: it is
+        // queued on the run loop and processed at startup, causing
+        // `run_current()` to return immediately rather than block.
         *self.runloop.lock() = Some(current);
         ready.ok();
 

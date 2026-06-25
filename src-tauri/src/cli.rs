@@ -10,7 +10,7 @@ use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 
 use crate::audio::recorder::AudioRecorder;
-use crate::commands::ai::{cache_ai_api_key, CacheApiKeyArgs};
+use crate::commands::ai::{ai_provider_key_names, cache_ai_api_key, CacheApiKeyArgs};
 use crate::commands::audio::transcribe_audio_file_for_cli;
 use crate::commands::keyring::keyring_get;
 use crate::commands::license::check_license_status;
@@ -303,13 +303,17 @@ async fn build_cli_app(
 }
 
 async fn warm_ai_key_cache(app: &tauri::AppHandle) -> Result<(), Box<dyn Error>> {
-    for provider in ["openai", "anthropic", "gemini", "custom"] {
-        let key = format!("ai_api_key_{}", provider);
-        if let Some(api_key) = keyring_get(app.clone(), key)? {
+    for key_name in ai_provider_key_names() {
+        if let Some(api_key) = keyring_get(app.clone(), key_name.clone())? {
+            // key_name is "ai_api_key_{provider}"; recover the provider id.
+            let provider = key_name
+                .strip_prefix("ai_api_key_")
+                .map(str::to_string)
+                .unwrap_or(key_name.clone());
             cache_ai_api_key(
                 app.clone(),
                 CacheApiKeyArgs {
-                    provider: provider.to_string(),
+                    provider,
                     api_key,
                 },
             )
@@ -831,5 +835,26 @@ mod tests {
         assert!(cli.command.unwrap().wants_json());
         let cli = Cli::try_parse_from(["voicetypr", "status"]).unwrap();
         assert!(!cli.command.unwrap().wants_json());
+    }
+
+    #[test]
+    fn warm_ai_key_cache_uses_catalog_provider_list() {
+        // warm_ai_key_cache now iterates ai_provider_key_names() instead of a
+        // hardcoded array. The dynamic list must still cover every provider the
+        // hardcoded list did, and yield exact ai_api_key_<provider> keys.
+        let names = ai_provider_key_names();
+        for legacy in ["openai", "anthropic", "gemini", "custom"] {
+            let key = format!("ai_api_key_{}", legacy);
+            assert!(names.contains(&key), "dynamic key list missing {}", key);
+        }
+        // Every key is a proper ai_api_key_<provider>; stripping recovers a
+        // valid provider id (what CacheApiKeyArgs re-prefixes).
+        for key_name in &names {
+            assert!(
+                key_name.starts_with("ai_api_key_"),
+                "unexpected key shape: {}",
+                key_name
+            );
+        }
     }
 }

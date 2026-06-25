@@ -31,7 +31,7 @@ const CUSTOM_NO_AUTH_KEY: &str = "ai_custom_no_auth";
 const LEGACY_OPENAI_BASE_URL_KEY: &str = "ai_openai_base_url";
 const LEGACY_OPENAI_NO_AUTH_KEY: &str = "ai_openai_no_auth";
 
-fn ai_provider_key_names() -> Vec<String> {
+pub(crate) fn ai_provider_key_names() -> Vec<String> {
     launch_providers()
         .into_iter()
         .filter(|provider| provider.requires_api_key || provider.id == PROVIDER_CUSTOM)
@@ -119,6 +119,38 @@ fn check_has_api_key<R: tauri::Runtime>(
 fn normalize_chat_completions_url(base: &str) -> String {
     let b = base.trim_end_matches('/');
     format!("{}/chat/completions", b)
+}
+/// Validate a custom OpenAI-compatible base URL.
+///
+/// This is a minimal link-local DENYLIST, not an allowlist: localhost,
+/// RFC-1918 private ranges, the 100.64.0.0/10 CGNAT range used by Tailscale,
+/// hostnames, and public https URLs are all permitted. Only link-local IPv4
+/// (169.254.0.0/16, including the cloud-metadata endpoint 169.254.169.254),
+/// link-local IPv6 (fe80::/10, plus IPv4-mapped link-local), and non-http(s)
+/// schemes are rejected.
+fn validate_custom_base_url(raw: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(raw).map_err(|_| "Invalid endpoint URL".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("Endpoint must be an http(s) URL".to_string());
+    }
+    if let Some(host) = url.host_str() {
+        // IPv6 literals are bracketed in the URL serialization (e.g. [fe80::1]).
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
+            if ip.is_link_local() {
+                return Err("Endpoint host is not allowed".to_string());
+            }
+        } else if let Ok(ip) = host.parse::<std::net::Ipv6Addr>() {
+            // fe80::/10 unicast link-local, plus any IPv4-mapped/compatible form
+            // of an IPv4 link-local address (e.g. ::ffff:169.254.169.254) that
+            // routes to the same cloud-metadata target.
+            let mapped_link_local = ip.to_ipv4().is_some_and(|v4| v4.is_link_local());
+            if (0xfe80..=0xfebf).contains(&ip.segments()[0]) || mapped_link_local {
+                return Err("Endpoint host is not allowed".to_string());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn load_models_by_provider<R: tauri::Runtime>(
@@ -384,6 +416,56 @@ pub struct ValidateAiApiKeyArgs {
     #[serde(alias = "noAuth", alias = "no_auth")]
     pub no_auth: Option<bool>,
 }
+/// Read the user's previously-configured custom model from settings.
+///
+/// The custom provider has no catalog models; its model is whatever the user
+/// picked. It is persisted in the per-provider map (`ai_models_by_provider`),
+/// or — for the currently-active provider — in the single `ai_model` value.
+fn configured_custom_model(app: &tauri::AppHandle) -> Option<String> {
+    app.store("settings").ok().and_then(|store| {
+        let from_map = store
+            .get("ai_models_by_provider")
+            .and_then(|v| serde_json::from_value::<HashMap<String, String>>(v.clone()).ok())
+            .and_then(|map| {
+                map.get(PROVIDER_CUSTOM)
+                    .cloned()
+                    .filter(|m| !m.trim().is_empty())
+            });
+        if from_map.is_some() {
+            return from_map;
+        }
+        let active_provider = store
+            .get("ai_provider")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+        if active_provider == PROVIDER_CUSTOM {
+            store
+                .get("ai_model")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .filter(|m| !m.trim().is_empty())
+        } else {
+            None
+        }
+    })
+}
+
+/// Decide which model id to use when validating the custom provider.
+///
+/// Prefer the explicit `model` arg, else the user's previously-configured
+/// custom model. The custom provider has no catalog models, so this NEVER
+/// falls back to `gpt-5-nano` (which would 404 against a local endpoint).
+fn resolve_custom_validation_model(
+    explicit: Option<&str>,
+    configured: Option<&str>,
+) -> Result<String, String> {
+    if let Some(model) = explicit.map(str::trim).filter(|m| !m.is_empty()) {
+        return Ok(model.to_string());
+    }
+    if let Some(model) = configured.map(str::trim).filter(|m| !m.is_empty()) {
+        return Ok(model.to_string());
+    }
+    Err("Select a model for your custom provider before validating.".to_string())
+}
 
 #[tauri::command]
 pub async fn validate_ai_api_key(
@@ -413,15 +495,23 @@ pub async fn validate_ai_api_key(
         return Err(user_facing_message(&AiProviderError::MissingApiKey).to_string());
     }
 
-    let validation_model = model
-        .filter(|candidate| !candidate.trim().is_empty())
-        .or_else(|| {
-            catalog::recommended_models(&provider)
-                .into_iter()
-                .find(|candidate| candidate.recommended)
-                .map(|candidate| candidate.model_id)
-        })
-        .unwrap_or_else(|| "gpt-5-nano".to_string());
+    let validation_model = if provider == PROVIDER_CUSTOM {
+        // The custom provider has no catalog models, so a model must be
+        // supplied explicitly or already configured in settings. Never fall
+        // back to gpt-5-nano — that would 404 against a local endpoint.
+        let configured = configured_custom_model(&app);
+        resolve_custom_validation_model(model.as_deref(), configured.as_deref())?
+    } else {
+        model
+            .filter(|candidate| !candidate.trim().is_empty())
+            .or_else(|| {
+                catalog::recommended_models(&provider)
+                    .into_iter()
+                    .find(|candidate| candidate.recommended)
+                    .map(|candidate| candidate.model_id)
+            })
+            .unwrap_or_else(|| "gpt-5-nano".to_string())
+    };
     let custom_base_url = if provider == PROVIDER_CUSTOM {
         base_url
             .filter(|candidate| !candidate.trim().is_empty())
@@ -430,6 +520,9 @@ pub async fn validate_ai_api_key(
     } else {
         DEFAULT_OPENAI_BASE_URL.to_string()
     };
+    if provider == PROVIDER_CUSTOM {
+        validate_custom_base_url(&custom_base_url)?;
+    }
 
     let validation_provider = provider.clone();
     let validation_key = provided_key.trim().to_string();
@@ -474,6 +567,7 @@ pub async fn test_openai_endpoint(
     api_key: Option<String>,
     no_auth: Option<bool>,
 ) -> Result<(), String> {
+    validate_custom_base_url(&base_url)?;
     let no_auth = no_auth.unwrap_or(false)
         || api_key
             .as_deref()
@@ -858,6 +952,16 @@ fn executor_for_provider(
             keys,
         )
     };
+    if runtime_provider == PROVIDER_CUSTOM {
+        if let Err(reason) = validate_custom_base_url(&custom_base_url) {
+            log::error!(
+                "Refusing to use disallowed custom endpoint ({}): {}",
+                custom_base_url,
+                reason
+            );
+            return Err(AiProviderError::BadResponse);
+        }
+    }
 
     if runtime_provider == PROVIDER_CUSTOM && !custom_no_auth && !keys.contains_key(PROVIDER_CUSTOM)
     {
@@ -1102,6 +1206,7 @@ pub async fn set_openai_config(
     app: tauri::AppHandle,
     args: SetOpenAIConfigArgs,
 ) -> Result<(), String> {
+    validate_custom_base_url(&args.base_url)?;
     let store = app.store("settings").map_err(|e| e.to_string())?;
     store.set(
         CUSTOM_BASE_URL_KEY,
@@ -1430,5 +1535,44 @@ mod tests {
         let client = reqwest::Client::new();
         let result = run_openai_chat_probe(&client, &server.uri(), "test-model", None).await;
         assert!(result.is_err(), "expected Err for non-JSON response");
+    }
+
+    #[test]
+    fn validate_custom_base_url_accepts_local_private_tailscale_and_public() {
+        assert!(validate_custom_base_url("http://localhost:11434").is_ok());
+        assert!(validate_custom_base_url("http://192.168.1.50:1234").is_ok());
+        assert!(validate_custom_base_url("http://100.100.100.100:11434").is_ok());
+        assert!(validate_custom_base_url("https://api.example.com").is_ok());
+    }
+
+    #[test]
+    fn validate_custom_base_url_rejects_link_local_and_non_http_schemes() {
+        assert!(validate_custom_base_url("http://169.254.169.254/latest/meta-data/").is_err());
+        assert!(validate_custom_base_url("http://[fe80::1]/").is_err());
+        assert!(validate_custom_base_url("ftp://x").is_err());
+        assert!(validate_custom_base_url("not a url").is_err());
+        // IPv4-mapped link-local must not bypass the IPv6 branch.
+        assert!(validate_custom_base_url("http://[::ffff:169.254.169.254]/").is_err());
+    }
+
+    #[test]
+    fn custom_validation_model_resolution_never_yields_gpt5_nano() {
+        // No explicit model and no configured model -> clear error, never a probe.
+        let err = resolve_custom_validation_model(None, None).unwrap_err();
+        assert!(err.contains("Select a model"), "got: {}", err);
+        assert!(!err.to_lowercase().contains("gpt-5-nano"));
+
+        // Explicit model wins.
+        assert_eq!(
+            resolve_custom_validation_model(Some("llama3.2"), None).unwrap(),
+            "llama3.2"
+        );
+        // Configured model used when no explicit arg.
+        assert_eq!(
+            resolve_custom_validation_model(None, Some("qwen2.5")).unwrap(),
+            "qwen2.5"
+        );
+        // Whitespace-only values are treated as absent (must error).
+        assert!(resolve_custom_validation_model(Some("   "), Some("  ")).is_err());
     }
 }

@@ -623,7 +623,6 @@ struct ParakeetSidecar {
 
         let models = try await CtcModels.load(from: directory, variant: .ctc110m)
         cachedCtcModels = models
-        cachedCtcSpotter = CtcKeywordSpotter(models: models, blankId: models.vocabulary.count)
         return models
     }
 

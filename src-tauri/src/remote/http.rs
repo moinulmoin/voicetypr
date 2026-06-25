@@ -1007,6 +1007,94 @@ mod tests {
         }
     }
 
+    /// Mock context that PARKS `transcribe` on a blocking gate until the test
+    /// releases it, and signals entry via `started`. Used to prove
+    /// DETERMINISTICALLY (no wall-clock threshold) that GET /status is not
+    /// serialized behind an in-flight transcription: the transcribe task blocks
+    /// while the route holds only a shared READ guard on the context, and the
+    /// test asserts /status still succeeds with the gate still closed. A
+    /// serialized /status would instead hang and hit the watchdog.
+    struct GatedMockContext {
+        /// Set true as soon as `transcribe` is entered, before it parks. Held
+        /// as `Arc` so the test can poll it without locking the context.
+        started: Arc<AtomicBool>,
+        /// Blocking release gate: `transcribe` parks on `recv()`. The test
+        /// holds the matching `Sender` and drops it to open the gate. Wrapped
+        /// in a `Mutex` because `mpsc::Receiver` is `Send` but not `Sync`;
+        /// only the single transcribe consumer ever locks it (no contention).
+        release: Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>,
+    }
+
+    impl GatedMockContext {
+        /// Returns the context plus the `started` flag (to await entry) and the
+        /// release `Sender` (drop to unblock transcription).
+        fn new() -> (Self, Arc<AtomicBool>, std::sync::mpsc::Sender<()>) {
+            let started = Arc::new(AtomicBool::new(false));
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let ctx = Self {
+                started: started.clone(),
+                release: Arc::new(std::sync::Mutex::new(release_rx)),
+            };
+            (ctx, started, release_tx)
+        }
+    }
+
+    impl ServerContext for GatedMockContext {
+        fn get_model_name(&self) -> String {
+            "gated-mock-model".to_string()
+        }
+        fn get_server_name(&self) -> String {
+            "gated-mock-server".to_string()
+        }
+        fn get_password(&self) -> Option<String> {
+            None
+        }
+        fn transcribe(
+            &self,
+            audio_data: &[u8],
+            _spoken_language: Option<&str>,
+            _transcription_task: Option<&str>,
+        ) -> Result<TranscriptionResult, String> {
+            // Signal entry, then park on the release gate. This runs inside the
+            // blocking transcription task WHILE the route holds a shared READ
+            // guard on the context RwLock. /status also takes only a READ guard
+            // and tokio's RwLock admits concurrent readers, so this parked
+            // transcribe never blocks /status — exactly the property under
+            // test. Holding the read guard here is also what keeps the test
+            // meaningful: a write-lock regression would make /status hang.
+            self.started.store(true, Ordering::SeqCst);
+            let _ = self
+                .release
+                .lock()
+                .expect("release gate mutex poisoned")
+                .recv();
+            let job = crate::transcription::TranscriptionJob::from_legacy_settings(
+                crate::transcription::TranscriptionSource::RemoteServer,
+                "remote",
+                "gated-mock-model",
+                None,
+                false,
+            );
+            Ok(crate::transcription::TranscriptionResult::new(
+                &job,
+                format!("gated-transcription-len-{}", audio_data.len()),
+            ))
+        }
+        fn get_model_control_snapshot(&self) -> Result<RemoteModelControlSnapshot, String> {
+            Ok(mock_model_control_snapshot("gated-mock-model"))
+        }
+        fn update_shared_model(
+            &self,
+            model_id: &str,
+            engine: &str,
+        ) -> Result<RemoteModelControlSnapshot, String> {
+            if engine != "whisper" && engine != "parakeet" {
+                return Err(format!("Unsupported sharing engine '{engine}'"));
+            }
+            Ok(mock_model_control_snapshot(model_id))
+        }
+    }
+
     /// Mock context that fails on specific request numbers
     struct FailingMockContext {
         fail_on_requests: Vec<u32>,
@@ -1602,7 +1690,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_status_requests_are_not_blocked_by_transcription() {
-        let context = Arc::new(RwLock::new(DelayedMockContext::new(200)));
+        // Deterministic latch/gate proof (no wall-clock threshold): the mock
+        // transcription parks on a blocking gate, and we assert /status
+        // succeeds WHILE that gate is still closed. If /status were serialized
+        // behind transcription it would hang and hit the 5s watchdog.
+        let (mock_ctx, started, release_tx) = GatedMockContext::new();
+        let context = Arc::new(RwLock::new(mock_ctx));
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
@@ -1631,6 +1724,8 @@ mod tests {
         let transcribe_url = format!("http://{}/api/v1/transcribe", addr);
         let status_url = format!("http://{}/api/v1/status", addr);
 
+        // Fire transcription: it enters `transcribe`, signals `started`, then
+        // parks on the gate (held closed by `release_tx`).
         let transcribe_handle = tokio::spawn({
             let client = client.clone();
             let url = transcribe_url.clone();
@@ -1645,28 +1740,43 @@ mod tests {
             }
         });
 
-        sleep(Duration::from_millis(50)).await;
+        // Deterministic latch: wait until transcription has provably entered its
+        // blocking path and parked on the gate — no fixed sleep.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("transcription never entered its blocking path within 5s");
 
-        let status_start = std::time::Instant::now();
-        let status_response = client
-            .get(&status_url)
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await
-            .expect("Status request failed");
-        let status_elapsed = status_start.elapsed();
-
-        assert!(status_response.status().is_success());
+        // THE PROOF: with the gate still closed (transcription provably parked),
+        // /status MUST succeed. A serialized /status would block here and trip
+        // the 5s watchdog. No latency is asserted — only completion ordering.
+        let status_response = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.get(&status_url).timeout(Duration::from_secs(5)).send(),
+        )
+        .await
+        .expect("status request hung — it was serialized behind transcription")
+        .expect("status request failed");
         assert!(
-            status_elapsed < Duration::from_millis(100),
-            "Status request should not wait for transcription; took {:?}",
-            status_elapsed
+            status_response.status().is_success(),
+            "status failed: {}",
+            status_response.status()
         );
 
-        let transcribe_response = transcribe_handle
-            .await
-            .expect("Transcribe task panicked")
-            .expect("Transcribe request failed");
+        // Release the gate so transcription can finish.
+        drop(release_tx);
+
+        let transcribe_response = tokio::time::timeout(
+            Duration::from_secs(5),
+            transcribe_handle,
+        )
+        .await
+        .expect("transcription did not finish within 5s of gate release")
+        .expect("transcribe task panicked")
+        .expect("transcribe request failed");
         assert!(transcribe_response.status().is_success());
 
         let _ = shutdown_tx.send(());
