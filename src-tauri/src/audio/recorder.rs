@@ -74,6 +74,26 @@ fn u16_to_i16(sample: u16) -> i16 {
     (sample as i32 - 32768) as i16
 }
 
+/// Upper bound on a *plausible* per-callback frame count. CPAL's WASAPI backend
+/// reports `SupportedBufferSize::Range { max: u32::MAX }` for the normal software
+/// audio stack (its `GetBufferSizeLimits` only succeeds for hardware-offloaded
+/// audio). Trusting that value made the chunk-pool preallocation below request
+/// terabytes of RAM and ABORT the process on Windows (silent crash, no panic).
+/// Real input callbacks deliver at most a few thousand frames, so any reported
+/// max above this ceiling is treated as "unknown" and falls back to a safe default.
+const MAX_REASONABLE_CALLBACK_FRAMES: usize = 1 << 16; // 65536 frames (~1.3s @ 48kHz)
+
+/// Sanitizes a device-reported max buffer size (in frames) into a trustworthy
+/// bound, rejecting bogus/unbounded values (0, or above
+/// [`MAX_REASONABLE_CALLBACK_FRAMES`]) so the chunk pool never preallocates from a
+/// garbage size. Returns `None` (→ caller falls back) for rejected values.
+fn sane_max_frames(reported_max: u32) -> Option<usize> {
+    let frames = reported_max as usize;
+    (1..=MAX_REASONABLE_CALLBACK_FRAMES)
+        .contains(&frames)
+        .then_some(frames)
+}
+
 /// Largest callback payload (in i16 samples) a CPAL input stream built from
 /// `config` could ever deliver on the real-time thread.
 ///
@@ -92,7 +112,7 @@ fn max_callback_samples(device: &cpal::Device, config: &cpal::SupportedStreamCon
         .flatten()
         .filter(|c| c.channels() == config.channels() && c.sample_format() == format)
         .filter_map(|c| match c.buffer_size() {
-            cpal::SupportedBufferSize::Range { max, .. } => Some(*max as usize),
+            cpal::SupportedBufferSize::Range { max, .. } => sane_max_frames(*max),
             cpal::SupportedBufferSize::Unknown => None,
         })
         .max()
@@ -835,6 +855,26 @@ mod tests {
         // violated this for any callback larger than 4096 samples.
         assert!(chunk_capacity_for(64, 1) >= CHUNK_CAPACITY_MIN);
         assert!(chunk_capacity_for(64, 1) > 4096);
+    }
+
+    #[test]
+    fn sane_max_frames_rejects_bogus_wasapi_max() {
+        // The v2.0.0 Windows crash: cpal's WASAPI software stack reports
+        // `SupportedBufferSize::Range { max: u32::MAX }`. Trusting it made the
+        // chunk pool preallocate terabytes and abort the process. The sanitizer
+        // must reject u32::MAX (and 0) so callers fall back to a safe default.
+        assert_eq!(sane_max_frames(u32::MAX), None);
+        assert_eq!(sane_max_frames(0), None);
+        assert_eq!(sane_max_frames(480), Some(480));
+        assert_eq!(
+            sane_max_frames(MAX_REASONABLE_CALLBACK_FRAMES as u32),
+            Some(MAX_REASONABLE_CALLBACK_FRAMES)
+        );
+        assert_eq!(sane_max_frames(MAX_REASONABLE_CALLBACK_FRAMES as u32 + 1), None);
+
+        // Fallback path stays tiny: a rejected/unknown max yields a bounded
+        // per-chunk capacity (no giant preallocation).
+        assert!(chunk_capacity_for(CHUNK_FALLBACK_FRAMES, 2) <= CHUNK_FALLBACK_FRAMES * 2);
     }
 
     #[test]
