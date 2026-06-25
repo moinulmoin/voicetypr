@@ -61,9 +61,9 @@ import { createLogger } from "@/lib/logger";
 
 const log = createLogger("onboarding");
 
-// TODO(onboarding): set real values before release
-const UPGRADE_URL = "https://voicetypr.com/pricing"; // [Upgrade to Pro] opens this externally
-const CONTACT_WEBHOOK_URL = ""; // Discord webhook; empty string = skip the POST entirely
+const UPGRADE_URL = "https://voicetypr.com/#pricing"; // [Upgrade to Pro] opens this externally
+const CONTACT_WEBHOOK_URL =
+  "https://discord.com/api/webhooks/1519563693501710376/kR6Cylv3kkZpLeMESRyn_t7lCWiGvichiCTn9LyYRUs2sXvZvYbVN5_5sXGm7A--2v_E"; // Discord webhook for onboarding contact; empty string = skip the POST
 
 interface OnboardingDesktopProps {
   onCompletionStart?: () => void;
@@ -733,7 +733,8 @@ export const OnboardingDesktop = function OnboardingDesktop({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            content: `New VoiceTypr user — name: ${name || "(none)"}, email: ${email || "(none)"}`,
+            username: "Onboarding · New Users",
+            content: `**New user onboarded**\nName: ${name || "—"}\nEmail: ${email || "—"}`,
           }),
         });
       } catch (contactError) {
