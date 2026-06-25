@@ -216,7 +216,6 @@ fn key_token(token: &str) -> Option<NamedKey> {
         "NumpadDecimal" => NamedKey::NumpadDecimal,
         "NumpadEnter" => NamedKey::NumpadEnter,
         "NumpadEqual" => NamedKey::NumpadEqual,
-        "CapsLock" => NamedKey::CapsLock,
         _ if token.starts_with("Numpad") => return numpad_named(token),
         _ if token.starts_with('F') => return fkey_named(token),
         _ => return None,
@@ -520,14 +519,11 @@ mod tests {
                 key: KeySpec::Named(NamedKey::F8),
             })
         );
-        // CapsLock + NumpadEqual are picker-emittable and must parse (parity, not stranded).
-        assert!(matches!(
-            parse_combo("Alt+CapsLock"),
-            Ok(Trigger::ComboExact {
-                key: KeySpec::Named(NamedKey::CapsLock),
-                ..
-            })
-        ));
+        // NumpadEqual is picker-emittable AND fires on both backends, so it must parse.
+        // CapsLock is NOT engine-representable on macOS (it arrives as flagsChanged with
+        // no key-down), so it must error clearly at save instead of becoming a dead hotkey.
+        assert!(parse_combo("Alt+CapsLock").is_err());
+        assert!(parse_combo("CapsLock").is_err());
         assert!(matches!(
             parse_combo("Control+NumpadEqual"),
             Ok(Trigger::ComboExact {

@@ -54,6 +54,49 @@ const LINUX_CONFLICTS: ConflictInfo[] = [
 ];
 
 /**
+ * Known modifier tokens used across the platform conflict tables and the
+ * HotkeyInput emit path. Used to canonicalize hotkey strings so that modifier
+ * ORDER does not affect conflict comparison: on macOS the engine emits
+ * `CommandOrControl+Control+Q` while the reserved-shortcut table lists the
+ * same lock-screen combo as `Control+CommandOrControl+Q`.
+ */
+const MODIFIER_TOKENS = new Set([
+  'commandorcontrol',
+  'control',
+  'ctrl',
+  'alt',
+  'option',
+  'shift',
+  'win',
+  'super',
+  'meta',
+]);
+
+/**
+ * Return a canonical form of a hotkey: modifier tokens sorted alphabetically
+ * (case-insensitive), non-modifier (key) tokens kept in their original order
+ * afterwards, all lower-cased and joined by `+`. Two hotkeys that differ only
+ * in modifier order canonicalize identically, while modifier *identity* is
+ * preserved (so `Cmd+Q` never collides with `Cmd+Ctrl+Q`).
+ */
+function canonicalizeHotkey(hotkey: string): string {
+  const tokens = hotkey
+    .split('+')
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+  const modifiers: string[] = [];
+  const keys: string[] = [];
+  for (const token of tokens) {
+    if (MODIFIER_TOKENS.has(token)) {
+      modifiers.push(token);
+    } else {
+      keys.push(token);
+    }
+  }
+  modifiers.sort();
+  return [...modifiers, ...keys].join('+');
+}
+/**
  * Check if a hotkey conflicts with known system shortcuts
  * @param hotkey The normalized hotkey string to check
  * @param platform Optional platform override (defaults to current platform)
@@ -95,10 +138,13 @@ export function checkForSystemConflict(
       break;
   }
 
-  // Check for exact match (case-insensitive)
-  const normalizedHotkey = hotkey.toLowerCase();
-  const conflict = conflicts.find(c =>
-    c.hotkey.toLowerCase() === normalizedHotkey
+  // Match ORDER-INSENSITIVELY for modifiers: both the captured hotkey and
+  // each table entry are canonicalized (modifiers sorted, key last) before
+  // comparing, so `CommandOrControl+Control+Q` matches a table entry written
+  // as `Control+CommandOrControl+Q`. Modifier identity is not affected.
+  const normalizedHotkey = canonicalizeHotkey(hotkey);
+  const conflict = conflicts.find(
+    (c) => canonicalizeHotkey(c.hotkey) === normalizedHotkey
   );
 
   return conflict || null;

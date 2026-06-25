@@ -315,6 +315,7 @@ fn map_vk(vk: u32) -> (KeySpec, Option<Side>) {
         0x6D => Some(NamedKey::NumpadSubtract),
         0x6E => Some(NamedKey::NumpadDecimal),
         0x6F => Some(NamedKey::NumpadDivide),
+        0x92 => Some(NamedKey::NumpadEqual), // VK_OEM_NEC_EQUAL ('=' on numpad)
         // Punctuation / OEM keys (US ANSI layout).
         0xBA => Some(NamedKey::Semicolon),
         0xBB => Some(NamedKey::Equal),

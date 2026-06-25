@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HotkeyInput } from './HotkeyInput';
+import { checkForSystemConflict } from '@/lib/hotkey-conflicts';
 
 // Mock the platform detection
 vi.mock('@/lib/platform', () => ({
@@ -220,5 +221,108 @@ describe('HotkeyInput', () => {
     });
     
     expect(mockOnChange).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Regression: reserved Cmd+Ctrl combos must be flagged regardless of
+//     modifier order. The engine emits `CommandOrControl+Control+<key>` while
+//     the macOS reserved-shortcut table lists `Control+CommandOrControl+<key>`;
+//     the conflict check canonicalizes modifier order before comparing.
+describe('checkForSystemConflict — modifier-order independent (macOS)', () => {
+  it('flags Cmd+Ctrl+Q (lock screen) in both emit and table modifier order', () => {
+    const emitted = checkForSystemConflict('CommandOrControl+Control+Q', 'macos');
+    const tableOrder = checkForSystemConflict('Control+CommandOrControl+Q', 'macos');
+
+    expect(emitted).not.toBeNull();
+    expect(tableOrder).not.toBeNull();
+    expect(emitted).toEqual(tableOrder);
+    expect(emitted?.description).toBe('macOS Lock Screen');
+    expect(emitted?.severity).toBe('error');
+  });
+
+  it('flags Cmd+Ctrl+Space (emoji picker) in both emit and table modifier order', () => {
+    const emitted = checkForSystemConflict('CommandOrControl+Control+Space', 'macos');
+    const tableOrder = checkForSystemConflict('Control+CommandOrControl+Space', 'macos');
+
+    expect(emitted).not.toBeNull();
+    expect(tableOrder).not.toBeNull();
+    expect(emitted).toEqual(tableOrder);
+    expect(emitted?.description).toBe('macOS Emoji Picker');
+    expect(emitted?.severity).toBe('warning');
+  });
+
+  it('does not over-broaden: modifier identity still matters', () => {
+    // Plain Cmd+Q is a distinct (warning) conflict and must not collide with
+    // the Cmd+Ctrl+Q lock-screen combo.
+    expect(checkForSystemConflict('CommandOrControl+Q', 'macos')?.description).toBe('macOS Quit Application');
+    // Cmd+Ctrl+K is not reserved at all.
+    expect(checkForSystemConflict('CommandOrControl+Control+K', 'macos')).toBeNull();
+    // Spotlight (Cmd+Space) still detected, unchanged.
+    expect(checkForSystemConflict('CommandOrControl+Space', 'macos')?.description).toBe('macOS Spotlight Search');
+  });
+});
+
+describe('HotkeyInput — flags reserved Cmd+Ctrl combos on capture (macOS)', () => {
+  const onChange = vi.fn();
+  let originalUA: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // checkForSystemConflict detects the platform from navigator.userAgent;
+    // force macOS so the reserved-shortcut table is the macOS one.
+    originalUA = window.navigator.userAgent;
+    Object.defineProperty(window.navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15',
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window.navigator, 'userAgent', {
+      value: originalUA,
+      configurable: true,
+    });
+  });
+
+  it('blocks Cmd+Ctrl+Q as a reserved system hotkey (lock screen)', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <HotkeyInput
+        value=""
+        onChange={onChange}
+        placeholder="Click to set hotkey"
+      />
+    );
+
+    await user.click(screen.getByTitle('Change hotkey'));
+    await user.keyboard('{Meta>}{Control>}q{/Control}{/Meta}');
+
+    // The reserved (error) conflict must surface and disable Save.
+    await waitFor(() => {
+      expect(screen.getByText(/reserved by the system: macOS Lock Screen/)).toBeInTheDocument();
+    });
+    expect(screen.getByTitle('Save hotkey')).toBeDisabled();
+  });
+
+  it('warns on Cmd+Ctrl+Space as a conflicting system hotkey (emoji picker)', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <HotkeyInput
+        value=""
+        onChange={onChange}
+        placeholder="Click to set hotkey"
+      />
+    );
+
+    await user.click(screen.getByTitle('Change hotkey'));
+    // `[Space]` selects the key by CODE ("Space"); `{Space}` would match by the
+    // `key` value (a literal " ") and dispatch an unmapped key.
+    await user.keyboard('{Meta>}{Control>}[Space]{/Control}{/Meta}');
+
+    await waitFor(() => {
+      expect(screen.getByText(/may conflict: macOS Emoji Picker/)).toBeInTheDocument();
+    });
   });
 });

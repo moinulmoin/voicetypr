@@ -718,6 +718,9 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
     }
 
     if let Err(error) = store.save() {
+        // Discard uncommitted in-memory mutations so a later
+        // rebuild_engine_bindings cannot read values that failed to persist.
+        let _ = store.reload();
         return Err(error.to_string());
     }
 
@@ -978,9 +981,12 @@ pub async fn set_global_shortcut(app: AppHandle, shortcut: String) -> Result<(),
     )?;
 
     store.set("hotkey", json!(shortcut));
-    store
-        .save()
-        .map_err(|e| format!("Failed to save settings: {}", e))?;
+    if let Err(error) = store.save() {
+        // Discard the uncommitted hotkey so rebuild_engine_bindings cannot
+        // apply a change the user's save failed to persist.
+        let _ = store.reload();
+        return Err(format!("Failed to save settings: {}", error));
+    }
 
     crate::trigger::engine_host::rebuild_engine_bindings(&app);
     log::info!("Successfully updated global shortcut");
