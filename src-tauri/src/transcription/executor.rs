@@ -355,6 +355,13 @@ async fn run_with_policy(
                 )
             });
 
+            // Run the local engine. The helper returns the RAW result for any
+            // decode that completed within the hard deadline — it never consults
+            // the watchdog flag on that path — so we deliberately do NOT remap
+            // here. Reading `timed_out` while the watchdog is still live races a
+            // decode that completed near the cooperative deadline (the watchdog
+            // could set the flag in the gap between engine completion and the
+            // read) and would convert a genuine success into a Timeout.
             let result = if matches!(active, ActiveEngineSelection::Whisper { .. }) {
                 run_local_engine_with_hard_timeout(
                     run_whisper_with_retry(app, active, job, attempt_path, request),
@@ -366,15 +373,28 @@ async fn run_with_policy(
                 )
                 .await
             } else {
-                let result = route_once(app, active, job, attempt_path, request).await;
-                remap_timed_out(result, timed_out.load(Ordering::SeqCst), source)
+                route_once(app, active, job, attempt_path, request).await
             };
 
+            // Abort the cooperative watchdog BEFORE consulting `timed_out`. Once
+            // aborted it can no longer set the flag, closing the completion-window
+            // race for a decode that beat the cooperative deadline.
             if let Some(handle) = watchdog {
                 handle.abort();
             }
 
-            result
+            // The helper's hard-timeout branch already returned a Timeout; don't
+            // rebuild it. Remap only non-timeout results when the watchdog fired
+            // — its firing makes every outcome untrusted (cancellation requested,
+            // and on Windows the GPU sidecar may have been aborted mid-decode).
+            if matches!(
+                &result,
+                Err(error) if error.code == TranscriptionErrorCode::Timeout
+            ) {
+                return result;
+            }
+
+            remap_timed_out(result, timed_out.load(Ordering::SeqCst), source)
         }
     }
 }
@@ -515,13 +535,20 @@ where
     Fut: std::future::Future<Output = Result<TranscriptionResult, TranscriptionError>>,
 {
     let Some(deadline) = budget else {
-        let result = run.await;
-        return remap_timed_out(result, timed_out.load(Ordering::SeqCst), source);
+        // No hard bound: run to completion. The cooperative watchdog (if any) is
+        // consulted by the caller AFTER it aborts the watchdog, so return the raw
+        // result here rather than remapping against a still-live flag.
+        return run.await;
     };
 
     let hard_deadline = deadline.saturating_add(grace);
     match tokio::time::timeout(hard_deadline, run).await {
-        Ok(result) => remap_timed_out(result, timed_out.load(Ordering::SeqCst), source),
+        // The engine completed within the hard deadline. Return the raw result;
+        // the caller remaps against the (by-then aborted) watchdog flag. Reading
+        // `timed_out` here would race the still-live cooperative watchdog and
+        // could convert a genuine success that landed near the cooperative
+        // deadline into a Timeout.
+        Ok(result) => result,
         Err(_) => {
             timed_out.store(true, Ordering::SeqCst);
             cancellation.cancel();
@@ -736,6 +763,40 @@ mod tests {
         assert!(cancellation.is_cancelled());
         assert!(timed_out.load(Ordering::SeqCst));
         assert_eq!(result.unwrap_err().code, TranscriptionErrorCode::Timeout);
+    }
+
+    #[tokio::test]
+    async fn local_engine_success_within_grace_is_not_remapped_to_timeout() {
+        // The cooperative watchdog has fired right around the decode's completion
+        // — exactly the completion window the old in-helper Ok-path remap read
+        // inside of. Simulate that by pre-setting the shared flag.
+        let cancellation = CancellationToken::new();
+        let timed_out = Arc::new(AtomicBool::new(true));
+
+        // The decode completes successfully well within the hard deadline
+        // (budget + grace), i.e. inside the grace window around the cooperative
+        // deadline.
+        let result = run_local_engine_with_hard_timeout(
+            async { Ok(TranscriptionResult::new(&sample_job(), "decoded")) },
+            Some(Duration::from_millis(50)),
+            Duration::from_secs(2),
+            cancellation.clone(),
+            timed_out.clone(),
+            TranscriptionSource::DesktopRecording,
+        )
+        .await;
+
+        // A genuine successful decode must be returned as-is — the helper no
+        // longer consults the watchdog flag for a completed result; the caller
+        // remaps only after aborting the watchdog.
+        let ok = result.expect("successful decode must not be remapped to Timeout");
+        assert_eq!(ok.raw_text, "decoded");
+        // The helper must not cancel on the Ok path — only its own hard-timeout
+        // branch cancels.
+        assert!(
+            !cancellation.is_cancelled(),
+            "helper must not cancel on a completed result"
+        );
     }
 
     #[test]
