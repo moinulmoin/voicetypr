@@ -18,7 +18,7 @@ interface ConsentResult {
 }
 
 /**
- * Privacy-first opt-in diagnostics. Off by default; when enabled it sends only
+ * Privacy-first diagnostics, on by default (opt-out). When enabled it sends only
  * anonymous crash/error reports. Disabling takes effect immediately, while
  * enabling needs an app restart to actually begin reporting. The backend's
  * `available` flag is false in dev builds and true in official releases.
@@ -73,18 +73,18 @@ export function TelemetrySection() {
               Help improve Voicetypr with anonymous diagnostics
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Optional and off by default. When on, Voicetypr sends anonymous
-              crash and error reports to Voicetypr-owned diagnostics. It never
-              sends your audio, transcripts, prompts, API keys, file paths, the
-              names of apps you dictate into, or memory dumps. Turning this on
-              takes effect after a restart; turning it off stops reporting
-              immediately.
+              On by default — you can opt out anytime. When on, Voicetypr sends
+              anonymous crash and error reports to Voicetypr-owned diagnostics.
+              It never sends your audio, transcripts, prompts, API keys, file
+              paths, the names of apps you dictate into, or memory dumps.
+              Turning it off stops reporting immediately; turning it back on
+              takes effect after a restart.
             </p>
           </div>
 
           <Switch
             className="shrink-0"
-            checked={status?.enabled ?? false}
+            checked={status?.enabled ?? true}
             disabled={pending || status === null || (!status.available && !status.enabled)}
             onCheckedChange={onCheckedChange}
             aria-label="Enable anonymous diagnostics"

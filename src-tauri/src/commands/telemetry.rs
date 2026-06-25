@@ -1,8 +1,8 @@
-//! Tauri commands backing the Diagnostics (opt-in error reporting) consent
+//! Tauri commands backing the Diagnostics (opt-out error reporting) consent
 //! toggle and the frontend error-capture bridge.
 //!
 //! Consent is stored as dedicated keys in the `settings` store (read at startup
-//! by a raw, fail-closed reader in `crate::telemetry`) and is owned exclusively
+//! by a raw, opt-out-default reader in `crate::telemetry`) and is owned exclusively
 //! by these commands — never by the generic `save_settings` flow.
 
 use crate::telemetry;
@@ -15,7 +15,7 @@ const SETTINGS_STORE_FILE: &str = "settings";
 
 #[derive(Serialize)]
 pub struct TelemetryStatus {
-    /// Whether the user has opted in.
+    /// Whether reporting is enabled (on by default unless opted out).
     pub enabled: bool,
     /// Whether this build can report at all (a DSN was compiled in).
     pub available: bool,
@@ -36,7 +36,7 @@ pub async fn get_telemetry_status(app: AppHandle) -> Result<TelemetryStatus, Str
     let enabled = store
         .get(telemetry::KEY_TELEMETRY_ENABLED)
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(telemetry::TELEMETRY_DEFAULT_ENABLED);
     Ok(TelemetryStatus {
         enabled,
         available: telemetry::is_available(),
@@ -60,7 +60,7 @@ pub async fn set_telemetry_consent(
     let was_enabled = store
         .get(telemetry::KEY_TELEMETRY_ENABLED)
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(telemetry::TELEMETRY_DEFAULT_ENABLED);
 
     store.set(telemetry::KEY_TELEMETRY_ENABLED, json!(enabled));
     if enabled {

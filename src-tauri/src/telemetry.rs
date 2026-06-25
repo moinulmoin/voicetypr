@@ -1,9 +1,9 @@
-//! Opt-in, anonymous error reporting (Sentry SDK -> self-hosted Bugsink).
+//! Opt-out, anonymous error reporting (Sentry SDK -> self-hosted Bugsink).
 //!
 //! Privacy posture (non-negotiable):
-//! - Disabled by default. Only active when the user has opted in AND it is a
-//!   release build: the DSN is compiled in for release only, so dev/debug builds
-//!   have no DSN and the client is never created (fully inert).
+//! - On by default (opt-out). Active unless the user has explicitly opted out,
+//!   AND only in release builds: the DSN is compiled in for release only, so
+//!   dev/debug builds have no DSN and the client is never created (fully inert).
 //! - No native minidumps: we use the `sentry` crate directly — no
 //!   `tauri-plugin-sentry`, no browser-SDK injection, and no envelope/breadcrumb
 //!   IPC — so the only capture path is the Rust SDK and `before_send` is the
@@ -40,10 +40,17 @@ const SENTRY_DSN: Option<&str> =
 const SETTINGS_STORE_FILE: &str = "settings";
 pub const KEY_TELEMETRY_ENABLED: &str = "telemetry_enabled";
 pub const KEY_TELEMETRY_INSTALL_ID: &str = "telemetry_install_id";
+/// Default consent when no explicit choice is stored (fresh installs, upgraders
+/// who completed onboarding before diagnostics existed). Opt-out: reporting is
+/// on unless the user explicitly disabled it. An explicit `telemetry_enabled:
+/// false` always wins.
+pub const TELEMETRY_DEFAULT_ENABLED: bool = true;
 
 /// In-process consent gate, read on every `before_send` and before every manual
 /// capture. Revoking consent stops egress immediately within the session; a full
 /// re-enable still needs a restart because the client is only wired at startup.
+/// The `false` initializer only covers the tiny pre-init window; `init()`
+/// overwrites it from stored consent at startup.
 static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// True when this build is capable of reporting at all (a DSN was compiled in).
@@ -167,15 +174,16 @@ fn scrub_frame(frame: Frame) -> Frame {
     }
 }
 
-// --- Consent (early, fail-closed) --------------------------------------------
+// --- Consent (early, opt-out default) ----------------------------------------
 
-/// Reads telemetry consent + install id for the given app identifier. Fail-closed:
-/// any error / missing / malformed value yields `(false, None)` so telemetry never
-/// activates by accident.
+/// Reads telemetry consent + install id for the given app identifier. Opt-out
+/// default: any missing / malformed / unreadable value yields
+/// `(TELEMETRY_DEFAULT_ENABLED, None)`, so telemetry is on unless the user has
+/// explicitly opted out. An explicit `telemetry_enabled: false` is always honored.
 pub fn read_consent(identifier: &str) -> (bool, Option<String>) {
     match settings_store_path(identifier) {
         Some(path) => read_consent_from_path(&path),
-        None => (false, None),
+        None => (TELEMETRY_DEFAULT_ENABLED, None),
     }
 }
 
@@ -188,16 +196,16 @@ fn settings_store_path(identifier: &str) -> Option<PathBuf> {
 pub fn read_consent_from_path(path: &Path) -> (bool, Option<String>) {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
-        Err(_) => return (false, None),
+        Err(_) => return (TELEMETRY_DEFAULT_ENABLED, None),
     };
     let value: serde_json::Value = match serde_json::from_slice(&bytes) {
         Ok(value) => value,
-        Err(_) => return (false, None),
+        Err(_) => return (TELEMETRY_DEFAULT_ENABLED, None),
     };
     let enabled = value
         .get(KEY_TELEMETRY_ENABLED)
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(TELEMETRY_DEFAULT_ENABLED);
     let install_id = value
         .get(KEY_TELEMETRY_INSTALL_ID)
         .and_then(|v| v.as_str())
@@ -207,8 +215,8 @@ pub fn read_consent_from_path(path: &Path) -> (bool, Option<String>) {
 
 // --- Init + capture ----------------------------------------------------------
 
-/// Initializes Sentry when (and only when) the user has opted in and a DSN was
-/// compiled in. Returns the guard, which the caller MUST keep alive for the
+/// Initializes Sentry when reporting is enabled (on by default unless the user
+/// opted out) and a DSN was compiled in. Returns the guard, which the caller MUST keep alive for the
 /// program's lifetime; returns `None` (no client created) otherwise. We do NOT
 /// register `tauri-plugin-sentry` (no JS injection / no envelope IPC) — JS errors
 /// are captured explicitly via `capture_frontend_error`, so `before_send` is the
@@ -250,7 +258,7 @@ pub fn init(enabled: bool, install_id: Option<String>) -> Option<ClientInitGuard
 /// (`scrub_exception` -> `scrub_text`) redacts *structured* secret runs
 /// (paths/URLs/IPs/emails/tokens) from the value before it leaves the process,
 /// and the message is length-capped here to bound payload size. Telemetry is
-/// opt-in and off by default.
+/// on by default (opt-out).
 pub fn capture_frontend_error(name: Option<&str>, message: &str) {
     if !is_enabled() {
         return;
@@ -365,15 +373,15 @@ mod tests {
     }
 
     #[test]
-    fn read_consent_is_fail_closed() {
+    fn read_consent_defaults_on_unless_opted_out() {
         let dir = tempfile::tempdir().unwrap();
 
         let missing = dir.path().join("settings");
-        assert_eq!(read_consent_from_path(&missing), (false, None));
+        assert_eq!(read_consent_from_path(&missing), (true, None));
 
         let bad = dir.path().join("bad");
         std::fs::write(&bad, b"not json").unwrap();
-        assert_eq!(read_consent_from_path(&bad), (false, None));
+        assert_eq!(read_consent_from_path(&bad), (true, None));
 
         let good = dir.path().join("good");
         std::fs::write(
@@ -386,6 +394,7 @@ mod tests {
             (true, Some("abc".to_string()))
         );
 
+        // Explicit opt-out must always be honored even under the opt-out default.
         let off = dir.path().join("off");
         std::fs::write(&off, br#"{"telemetry_enabled": false}"#).unwrap();
         assert_eq!(read_consent_from_path(&off), (false, None));
