@@ -1,6 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ModelsTab } from './ModelsTab';
+const mockDeleteModel = vi.fn();
+const mockUpdateSettings = vi.fn();
+let capturedOnDelete: (name: string) => Promise<void> = () => Promise.resolve();
+
 
 // Mock sonner
 vi.mock('sonner', () => ({
@@ -18,7 +22,8 @@ vi.mock('@/contexts/SettingsContext', () => ({
     settings: {
       current_model: 'base.en',
       current_model_engine: 'whisper'
-    }
+    },
+    updateSettings: mockUpdateSettings
   })
 }));
 
@@ -65,7 +70,7 @@ vi.mock('@/contexts/ModelManagementContext', () => ({
     isLoading: true,
     sortedModels: Object.entries(mockModels),
     downloadModel: vi.fn(),
-    deleteModel: vi.fn(),
+    deleteModel: mockDeleteModel,
     cancelDownload: vi.fn(),
     retryDownload: vi.fn(),
     refreshModels: vi.fn(),
@@ -87,14 +92,17 @@ vi.mock('@/hooks/useEventCoordinator', () => ({
 
 // Mock ModelsSection component
 vi.mock('@/components/sections/ModelsSection', () => ({
-  ModelsSection: ({ models, currentModel, downloadErrors, isLoading }: any) => (
-    <div data-testid="models-section">
-      <div>Current Model: {currentModel}</div>
-      <div>Models Count: {models.length}</div>
-      <div>Small Error: {downloadErrors['small.en']}</div>
-      <div>Loading: {String(isLoading)}</div>
-    </div>
-  )
+  ModelsSection: ({ models, currentModel, downloadErrors, isLoading, onDelete }: any) => {
+    capturedOnDelete = onDelete;
+    return (
+      <div data-testid="models-section">
+        <div>Current Model: {currentModel}</div>
+        <div>Models Count: {models.length}</div>
+        <div>Small Error: {downloadErrors['small.en']}</div>
+        <div>Loading: {String(isLoading)}</div>
+      </div>
+    );
+  }
 }));
 
 describe('ModelsTab', () => {
@@ -114,5 +122,20 @@ describe('ModelsTab', () => {
 
     expect(screen.getByText('Small Error: Network error')).toBeInTheDocument();
     expect(screen.getByText('Loading: true')).toBeInTheDocument();
+  });
+
+  it('swallows a deleteModel rejection without clearing the model selection', async () => {
+    mockDeleteModel.mockRejectedValueOnce(new Error('delete failed'));
+
+    render(<ModelsTab />);
+    // mock ModelsSection mounted and captured the handler
+    expect(screen.getByTestId('models-section')).toBeInTheDocument();
+
+    // ModelCard calls onDelete(name) fire-and-forget; a failing delete_model
+    // must not escape as an unhandled rejection, and selection stays unchanged.
+    await expect(capturedOnDelete('base.en')).resolves.toBeUndefined();
+
+    expect(mockDeleteModel).toHaveBeenCalledWith('base.en');
+    expect(mockUpdateSettings).not.toHaveBeenCalled();
   });
 });

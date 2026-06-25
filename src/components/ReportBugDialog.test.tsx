@@ -241,4 +241,14 @@ describe('ReportBugDialog', () => {
       logStatusNote: 'No log file found.',
     }));
   });
+
+  it('caps the report textarea height so a long message cannot push the dialog off-screen', () => {
+    render(<ReportBugDialog isOpen onClose={vi.fn()} />);
+
+    const message = screen.getByLabelText(/message/i);
+    // field-sizing-content grows with content; a bounded max-height + scroll
+    // keeps long (up to 5000-char) descriptions inside the viewport.
+    expect(message).toHaveClass('max-h-[40vh]');
+    expect(message).toHaveClass('overflow-y-auto');
+  });
 });

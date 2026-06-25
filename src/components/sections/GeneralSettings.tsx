@@ -27,6 +27,7 @@ import { useCanAutoInsert } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { updateService } from "@/services/updateService";
 import { isMacOS, isWindows } from "@/lib/platform";
+import { findActivePrimaryBinding, formatPrimaryHotkeyLabel } from "@/lib/shortcut-display";
 import { PillIndicatorMode, PillIndicatorPosition, TranscriptionAcceleration } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import type { ShortcutBinding, ShortcutSettings } from "@/types/shortcuts";
@@ -35,36 +36,9 @@ import { AlertCircle, Check, Edit2, FolderOpen, HelpCircle, Mic, RefreshCw, Rock
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { MicrophoneSelection } from "../MicrophoneSelection";
-import { NetworkSharingCard } from "./NetworkSharingCard";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("settings");
-
-const BARE_MOD_ICONS: Record<string, string> = {
-  alt: "⌥", meta: "⌘", control: "⌃", shift: "⇧",
-};
-
-function formatModifierLabel(mod: { modifier: string; side: string }): string {
-  const sideLabel = mod.side === "right" ? "Right " : mod.side === "left" ? "Left " : "";
-  const modLabel = isMacOS
-    ? (BARE_MOD_ICONS[mod.modifier] ?? mod.modifier)
-    : mod.modifier.charAt(0).toUpperCase() + mod.modifier.slice(1);
-  return `${sideLabel}${modLabel}`;
-}
-
-function formatPrimaryHotkeyLabel(
-  binding: ShortcutBinding | null,
-  hotkey: string | undefined,
-): string {
-  if (binding?.modifier) {
-    const mod = formatModifierLabel(binding.modifier);
-    if (binding.trigger_kind === "isolated_tap") return `Tap ${mod} to toggle`;
-    if (binding.trigger_kind === "modifier_hold") return `Hold ${mod} to talk`;
-    return mod;
-  }
-  if (hotkey) return hotkey;
-  return "Not set";
-}
 
 function isAccelerationStatus(value: unknown): value is AccelerationStatus {
   if (!value || typeof value !== "object") {
@@ -203,17 +177,7 @@ export function GeneralSettings() {
     invoke<ShortcutSettings>("get_shortcut_settings")
       .then((result) => {
         if (cancelled) return;
-        const bs = result.bindings;
-        const found =
-          bs.find((b) => b.id === "onboarding-primary-hold") ??
-          bs.find(
-            (b) =>
-              b.enabled &&
-              (b.action === "hold_to_record" || b.action === "toggle_recording") &&
-              (b.trigger_kind === "modifier_hold" || b.trigger_kind === "double_tap" || b.trigger_kind === "isolated_tap"),
-          ) ??
-          null;
-        setNativeBinding(found);
+        setNativeBinding(findActivePrimaryBinding(result.bindings));
       })
       .catch(() => {
         if (!cancelled) setNativeBinding(null);
@@ -304,6 +268,19 @@ export function GeneralSettings() {
     } else if (pendingHotkey) {
       try {
         await invoke("set_global_shortcut", { shortcut: pendingHotkey });
+        // Replacing a bare-modifier primary with a combo: disable the existing
+        // native primary binding so only the combo fires. Otherwise both the
+        // native trigger and the new combo global shortcut stay active at once.
+        const existing = await invoke<ShortcutSettings>("get_shortcut_settings");
+        const primary = findActivePrimaryBinding(existing.bindings);
+        if (primary) {
+          const updatedBindings = existing.bindings.map((b) =>
+            b.id === primary.id ? { ...b, enabled: false } : b,
+          );
+          await invoke("update_shortcut_settings", {
+            settings: { bindings: updatedBindings },
+          });
+        }
         await updateSettings({ hotkey: pendingHotkey });
         setNativeBinding(null);
         setIsEditingHotkey(false);
@@ -1011,8 +988,6 @@ export function GeneralSettings() {
               </FieldGroup>
             </div>
           </div>
-
-          <NetworkSharingCard />
         </div>
       </ScrollArea>
     </div>

@@ -8,13 +8,26 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { formatHotkey } from "@/lib/hotkey-utils";
 import { TranscriptionHistory } from "@/types";
 import { useCanAutoInsert, useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { invoke } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, AlertTriangle, Mic, Trash2, Search, Copy, Calendar, Download, RotateCcw, Loader2, FolderOpen, HelpCircle } from "lucide-react";
+import { ask, save } from "@tauri-apps/plugin-dialog";
+import { AlertCircle, AlertTriangle, Mic, Trash2, Search, Copy, Monitor, Globe, FileAudio, Terminal, Download, RotateCcw, Loader2, FolderOpen, HelpCircle, ShieldCheck } from "lucide-react";
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -56,11 +69,12 @@ interface RecentRecordingsProps {
 /** Map raw source values to user-facing labels. */
 export function sourceLabel(source: string | undefined): string {
   switch (source) {
-    case 'desktop_recording': return 'Dictation';
     case 'audio_file':
     case 'audio_bytes': return 'Upload';
     case 'remote_server': return 'Remote';
-    default: return '';
+    case 'cli': return 'CLI';
+    case 'desktop_recording':
+    default: return 'This device';
   }
 }
 
@@ -70,6 +84,43 @@ export function formatDurationMs(ms: number): string {
   const min = Math.floor(totalSec / 60);
   const sec = totalSec % 60;
   return `${min}:${sec.toString().padStart(2, '0')}`;
+}
+
+/** Lucide icon for where a transcript came from (its source). */
+function sourceIcon(source: string | undefined) {
+  switch (source) {
+    case 'audio_file':
+    case 'audio_bytes':
+      return FileAudio;
+    case 'remote_server':
+      return Globe;
+    case 'cli':
+      return Terminal;
+    default:
+      return Monitor;
+  }
+}
+
+/** Build a plain-text export of transcript history. */
+function buildPlainHistory(items: TranscriptionHistory[]): string {
+  return items
+    .map((item) => {
+      const when = new Date(item.timestamp).toLocaleString();
+      const model = getModelDisplayName(item.model) ?? item.model ?? "";
+      return `[${when}]${model ? ` ${model}` : ""}\n${item.text}\n`;
+    })
+    .join("\n");
+}
+
+/** Build a Markdown export of transcript history. */
+function buildMarkdownHistory(items: TranscriptionHistory[]): string {
+  const lines: string[] = ["# Voicetypr transcript history", ""];
+  for (const item of items) {
+    const when = new Date(item.timestamp).toLocaleString();
+    const model = getModelDisplayName(item.model) ?? item.model ?? "";
+    lines.push(`## ${when}${model ? ` · ${model}` : ""}`, "", item.text, "");
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -97,6 +148,7 @@ export function applyHistoryFilters(
       if (sourceFilter === 'desktop_recording' && src !== 'desktop_recording') return false;
       if (sourceFilter === 'audio_file' && src !== 'audio_file' && src !== 'audio_bytes') return false;
       if (sourceFilter === 'remote_server' && src !== 'remote_server') return false;
+      if (sourceFilter === 'cli' && src !== 'cli') return false;
     }
 
     // App filter
@@ -124,6 +176,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
   const [appFilter, setAppFilter] = useState("all");
   const [dateFilter, setDateFilter] = useState("all");
   const [showOriginalIds, setShowOriginalIds] = useState<Set<string>>(new Set());
+  const [visibleCount, setVisibleCount] = useState(60);
   const { settings } = useSettings();
   const readiness = useReadiness();
   const canRecord = readiness.canRecord;
@@ -184,6 +237,11 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       historyModelName: displayName,
     };
   }, [settings?.current_model, settings?.current_model_engine]);
+
+  // Reset the visible page whenever the result set changes via search/filter.
+  useEffect(() => {
+    setVisibleCount(60);
+  }, [searchQuery, sourceFilter, dateFilter, appFilter]);
 
   // Verify which recordings exist on filesystem
   useEffect(() => {
@@ -380,7 +438,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
 
-    filteredHistory.forEach(item => {
+    filteredHistory.slice(0, visibleCount).forEach(item => {
       const itemDate = new Date(item.timestamp);
       itemDate.setHours(0, 0, 0, 0);
 
@@ -405,7 +463,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     });
 
     return groups;
-  }, [filteredHistory]);
+  }, [filteredHistory, visibleCount]);
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -466,6 +524,25 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
     }
   };
 
+  const handleExportText = async (format: "txt" | "md") => {
+    if (history.length === 0) return;
+    try {
+      const path = await save({
+        defaultPath: `voicetypr-history.${format}`,
+        filters: [{ name: format === "md" ? "Markdown" : "Text", extensions: [format] }],
+      });
+      if (!path) return;
+      const content = format === "md" ? buildMarkdownHistory(history) : buildPlainHistory(history);
+      await invoke("save_transcript_file", { path, content });
+      toast.success(`Exported ${history.length} transcript${history.length === 1 ? "" : "s"}`, {
+        description: format === "md" ? "Saved as Markdown" : "Saved as plain text",
+      });
+    } catch (error) {
+      log.error("Failed to export transcripts:", error);
+      toast.error("Failed to export transcripts");
+    }
+  };
+
   const handleExport = async () => {
     if (history.length === 0) return;
 
@@ -496,15 +573,15 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-border/40">
-        <div className="flex items-center justify-between gap-4">
+      <div className="px-6 py-5 md:px-8">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold">History</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">History</h1>
               <Dialog>
                 <DialogTrigger asChild>
-                  <Button type="button" variant="secondary" size="icon" aria-label="History guide" className="rounded-full">
-                    <HelpCircle className="h-4.5 w-4.5" />
+                  <Button type="button" variant="ghost" size="icon-sm" aria-label="History guide" className="size-7 rounded-full text-muted-foreground">
+                    <HelpCircle className="h-4 w-4" />
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-lg">
@@ -522,21 +599,27 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                 </DialogContent>
               </Dialog>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Search, copy, export, delete, and re-transcribe saved audio takes.
-              {history.length > 0 ? ` ${history.length} total.` : ""}
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              {history.length > 0
+                ? `${history.length} transcript${history.length === 1 ? "" : "s"} · stored on this ${isMacOS ? "Mac" : "PC"}`
+                : "Your transcripts stay on this device — nothing syncs to a cloud."}
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             {history.length > 0 && (
-              <Button
-                onClick={handleExport}
-                size="sm"
-                title="Export transcriptions to JSON"
-              >
-                <Download className="h-3.5 w-3.5" />
-                Export
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="secondary" size="sm" title="Export transcripts">
+                    <Download className="h-3.5 w-3.5" />
+                    Export
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={handleExport}>JSON (.json)</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleExportText("txt")}>Plain text (.txt)</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleExportText("md")}>Markdown (.md)</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
             {history.length > 5 && (
               <Button
@@ -547,7 +630,7 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                 title="Clear all transcriptions"
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                Clear All
+                Clear all
               </Button>
             )}
           </div>
@@ -556,15 +639,15 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
 
       {/* Search + Filters */}
       {history.length > 0 && (
-        <div className="px-6 py-3 space-y-2">
+        <div className="px-6 md:px-8 py-3 space-y-2.5">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <input
               type="text"
-              placeholder="Search transcriptions..."
+              placeholder="Search transcripts…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 text-sm bg-background border border-border/50 rounded-lg focus:outline-none focus:border-primary/50 transition-colors"
+              className="h-10 w-full rounded-xl border border-border bg-card pl-10 pr-4 text-sm transition-colors focus:border-sage/50 focus:outline-none focus:ring-2 focus:ring-sage/25"
             />
             {searchQuery && (
               <button
@@ -577,36 +660,40 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
           </div>
           {/* Filter row */}
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={sourceFilter}
-              onChange={(e) => setSourceFilter(e.target.value)}
-              className="text-xs bg-background border border-border/50 rounded-md px-2 py-1 text-muted-foreground focus:outline-none focus:border-primary/50 transition-colors"
-            >
-              <option value="all">All sources</option>
-              <option value="desktop_recording">Dictation</option>
-              <option value="audio_file">Upload</option>
-              <option value="remote_server">Remote</option>
-            </select>
-            <select
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value)}
-              className="text-xs bg-background border border-border/50 rounded-md px-2 py-1 text-muted-foreground focus:outline-none focus:border-primary/50 transition-colors"
-            >
-              <option value="all">All time</option>
-              <option value="today">Today</option>
-              <option value="last7">Last 7 days</option>
-            </select>
+            <Select value={sourceFilter} onValueChange={setSourceFilter}>
+              <SelectTrigger className="h-9 w-auto gap-1.5 rounded-lg border-border bg-card text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All sources</SelectItem>
+                <SelectItem value="desktop_recording">This device</SelectItem>
+                <SelectItem value="audio_file">Upload</SelectItem>
+                <SelectItem value="remote_server">Remote</SelectItem>
+                <SelectItem value="cli">CLI</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={dateFilter} onValueChange={setDateFilter}>
+              <SelectTrigger className="h-9 w-auto gap-1.5 rounded-lg border-border bg-card text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All time</SelectItem>
+                <SelectItem value="today">Today</SelectItem>
+                <SelectItem value="last7">Last 7 days</SelectItem>
+              </SelectContent>
+            </Select>
             {distinctAppNames.length > 0 && (
-              <select
-                value={appFilter}
-                onChange={(e) => setAppFilter(e.target.value)}
-                className="text-xs bg-background border border-border/50 rounded-md px-2 py-1 text-muted-foreground focus:outline-none focus:border-primary/50 transition-colors"
-              >
-                <option value="all">All apps</option>
-                {distinctAppNames.map((name) => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-              </select>
+              <Select value={appFilter} onValueChange={setAppFilter}>
+                <SelectTrigger className="h-9 w-auto gap-1.5 rounded-lg border-border bg-card text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All apps</SelectItem>
+                  {distinctAppNames.map((name) => (
+                    <SelectItem key={name} value={name}>{name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
             {(sourceFilter !== 'all' || appFilter !== 'all' || dateFilter !== 'all' || searchQuery) && (
               <button
@@ -628,15 +715,13 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
       {history.length > 0 ? (
         filteredHistory.length > 0 ? (
           <ScrollArea className="h-full">
-            <div className="px-6 py-4 space-y-6">
+            <div className="px-6 md:px-8 py-4 space-y-6">
               {Object.entries(groupedHistory).map(([date, items]) => (
-                <div key={date} className="space-y-3">
-                  <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                    <Calendar className="h-3 w-3" />
-                    {date}
-                    <span className="text-muted-foreground/50">({items.length})</span>
-                  </div>
-                  <div className="space-y-2">
+                <div key={date} className="space-y-2.5">
+                  <p className="px-1 text-xs font-medium text-muted-foreground">
+                    {date} <span className="text-muted-foreground/50">· {items.length}</span>
+                  </p>
+                  <div className="overflow-hidden rounded-2xl border border-border bg-card">
                     {items.map((item) => {
                       const isFailed = item.status === 'failed';
                       // Persisted in_progress rows should already have been backend-reconciled before render.
@@ -645,194 +730,185 @@ export function RecentRecordings({ history, hotkey = "Cmd+Shift+Space", onHistor
                       const hasOriginal = Boolean(item.writing?.ai_applied && item.writing?.original_text && item.writing.original_text !== item.text);
                       const showOriginal = hasOriginal && showOriginalIds.has(item.id);
                       const displayText = showOriginal ? item.writing!.original_text! : item.text;
+                      const wordCount = displayText.trim() ? displayText.trim().split(/\s+/).length : 0;
+                      const SourceIcon = sourceIcon(item.writing?.source);
                       return (
                       <div
                         key={item.id}
                         className={cn(
-                          "group relative rounded-lg cursor-pointer",
-                          "bg-card border",
-                          isInProgress
-                            ? "border-primary/50"
-                            : isFailed
-                            ? "border-amber-500/50 bg-amber-500/5"
-                            : "border-border/50 hover:bg-accent/30 hover:border-border",
-                          "transition-all duration-200"
+                          "group relative flex cursor-pointer gap-3.5 border-t border-border px-5 py-4 transition-colors first:border-t-0",
+                          isFailed ? "bg-amber-500/[0.04]" : "hover:bg-muted/40",
                         )}
                         onClick={() => !isFailed && !isInProgress && handleCopy(displayText)}
                       >
-                        {/* Re-transcribing status bar */}
-                        {isInProgress && (
-                          <div className="flex items-center gap-2 px-4 py-2 bg-primary/10 border-b border-primary/20 rounded-t-lg">
-                            <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
-                            <span className="text-xs text-primary font-medium">
+                        <div
+                          className={cn(
+                            "mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl border",
+                            isInProgress
+                              ? "border-sage/30 bg-sage-bg text-sage"
+                              : isFailed
+                              ? "border-amber-500/30 bg-amber-500/10 text-amber-500"
+                              : "border-border bg-muted text-muted-foreground",
+                          )}
+                          title={sourceLabel(item.writing?.source)}
+                        >
+                          {isInProgress ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : isFailed ? (
+                            <AlertTriangle className="h-4 w-4" />
+                          ) : (
+                            <SourceIcon className="h-4 w-4" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          {isInProgress && (
+                            <p className="mb-1 text-xs font-medium text-sage">
                               {isPersistedInProgress && !reTranscribingIds.has(item.id)
-                                ? `Re-transcription in progress with ${getModelDisplayName(item.model) ?? item.model}...`
-                                : `Re-transcribing with ${reTranscribingModels.get(item.id)}...`}
-                            </span>
-                          </div>
-                        )}
-                        {/* Failed status bar */}
-                        {isFailed && !isInProgress && (
-                          <div className="flex items-center justify-between gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 rounded-t-lg">
-                            <div className="flex items-center gap-2">
-                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-                              <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                                ? `Re-transcribing with ${getModelDisplayName(item.model) ?? item.model}…`
+                                : `Re-transcribing with ${reTranscribingModels.get(item.id)}…`}
+                            </p>
+                          )}
+                          {isFailed && !isInProgress && (
+                            <div className="mb-1 flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
                                 {verifiedRecordings.has(item.id)
-                                  ? 'Transcription failed - recording preserved'
+                                  ? 'Transcription failed — recording preserved'
                                   : checkedRecordings.has(item.id)
-                                    ? 'Transcription failed - recording unavailable for retry'
+                                    ? 'Transcription failed — recording unavailable for retry'
                                     : 'Transcription failed'}
                               </span>
-                            </div>
-                            {verifiedRecordings.has(item.id) && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void handleReTranscribe(item);
-                                }}
-                                className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-400 bg-amber-500/20 rounded hover:bg-amber-500/30 transition-colors"
-                              >
-                                <RotateCcw className="w-3 h-3" />
-                                Re-transcribe
-                              </button>
-                            )}
-                          </div>
-                        )}
-                        {/* Translation-failed status bar: saved text is the raw, untranslated transcript */}
-                        {item.writing?.translation_failed && !isFailed && !isInProgress && (
-                          <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 rounded-t-lg">
-                            <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-                            <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
-                              {item.writing.target_language
-                                ? `Translation to ${item.writing.target_language} failed - saved untranslated`
-                                : 'Translation failed - saved untranslated'}
-                            </span>
-                          </div>
-                        )}
-                        <div className="p-4">
-                          {/* Text content */}
-                          <p className={cn(
-                            "text-sm leading-relaxed line-clamp-5",
-                            isFailed ? "text-muted-foreground italic" : "text-foreground"
-                          )}>
-                            {displayText}
-                          </p>
-                          {/* Bottom row: model name, time + action buttons */}
-                          <div className="flex items-center justify-between mt-2">
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                              {item.model && (
-                                <span>{getModelDisplayName(item.model) ?? item.model}</span>
-                              )}
-                              {item.model && <span className="text-muted-foreground/50">•</span>}
-                              <span>
-                                {new Date(item.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}{' '}
-                                {new Date(item.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-1 transition-opacity">
-                              {!isInProgress && (
-                                <>
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleCopy(displayText);
-                                    }}
-                                    className="p-1.5 rounded hover:bg-accent transition-colors"
-                                    title="Copy"
-                                  >
-                                    <Copy className="w-4 h-4 text-muted-foreground" />
-                                  </button>
-                                  {verifiedRecordings.has(item.id) && (
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleShowInFolder(item);
-                                      }}
-                                      className="p-1.5 rounded hover:bg-accent transition-colors"
-                                      title="Show recording in folder"
-                                    >
-                                      <FolderOpen className="w-4 h-4 text-muted-foreground" />
-                                    </button>
-                                  )}
-                                </>
-                              )}
-                              {hasOriginal && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setShowOriginalIds(prev => {
-                                      const next = new Set(prev);
-                                      if (next.has(item.id)) { next.delete(item.id); } else { next.add(item.id); }
-                                      return next;
-                                    });
-                                  }}
-                                  className="px-1.5 py-0.5 text-xs rounded hover:bg-accent transition-colors text-muted-foreground"
-                                  title={showOriginal ? "Show AI-formatted text" : "Show original text before AI formatting"}
-                                >
-                                  {showOriginal ? "Show formatted" : "Show original"}
-                                </button>
-                              )}
-                              {/* Re-transcribe button - only show if recording file exists and verified */}
                               {verifiedRecordings.has(item.id) && (
                                 <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    void handleReTranscribe(item);
-                                  }}
-                                  className={cn(
-                                    "p-1.5 rounded hover:bg-accent transition-colors",
-                                    isInProgress && "pointer-events-none"
-                                  )}
-                                  title="Re-transcribe with current source"
-                                  disabled={isInProgress}
+                                  onClick={(e) => { e.stopPropagation(); void handleReTranscribe(item); }}
+                                  className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600 transition-colors hover:bg-amber-500/25 dark:text-amber-400"
                                 >
-                                  {isInProgress ? (
-                                    <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
-                                  ) : (
-                                    <RotateCcw className="w-4 h-4 text-muted-foreground" />
-                                  )}
+                                  <RotateCcw className="h-3 w-3" /> Re-transcribe
                                 </button>
-                              )}
-                              <button
-                                onClick={(e) => handleDelete(e, item.id)}
-                                className="p-1.5 rounded hover:bg-destructive/10 transition-colors"
-                                title="Delete"
-                              >
-                                <Trash2 className="w-4 h-4 text-destructive" />
-                              </button>
-                            </div>
-                          </div>
-                          {/* Metadata badges: source, duration, diarized, app */}
-                          {item.writing && (sourceLabel(item.writing.source) || item.writing.audio_duration_ms != null || item.writing.diarized || item.writing.context_hint?.app_name) && (
-                            <div className="flex flex-wrap items-center gap-1 mt-1.5">
-                              {sourceLabel(item.writing.source) && (
-                                <span className="px-1.5 py-0.5 text-xs rounded bg-muted text-muted-foreground">
-                                  {sourceLabel(item.writing.source)}
-                                </span>
-                              )}
-                              {item.writing.audio_duration_ms != null && (
-                                <span className="px-1.5 py-0.5 text-xs rounded bg-muted text-muted-foreground">
-                                  {formatDurationMs(item.writing.audio_duration_ms)}
-                                </span>
-                              )}
-                              {item.writing.diarized && (
-                                <span className="px-1.5 py-0.5 text-xs rounded bg-muted text-muted-foreground">
-                                  Speakers
-                                </span>
-                              )}
-                              {item.writing.context_hint?.app_name && (
-                                <span className="px-1.5 py-0.5 text-xs rounded bg-muted/60 text-muted-foreground">
-                                  {item.writing.context_hint.app_name}
-                                </span>
                               )}
                             </div>
                           )}
+                          {item.writing?.translation_failed && !isFailed && !isInProgress && (
+                            <p className="mb-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+                              {item.writing.target_language
+                                ? `Translation to ${item.writing.target_language} failed — saved untranslated`
+                                : 'Translation failed — saved untranslated'}
+                            </p>
+                          )}
+
+                          <p className={cn(
+                            "text-sm leading-relaxed line-clamp-3",
+                            isFailed ? "italic text-muted-foreground" : "text-foreground",
+                          )}>
+                            {displayText}
+                          </p>
+
+                          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                            <span className="font-medium text-foreground/80">{sourceLabel(item.writing?.source)}</span>
+                            {item.model && (
+                              <>
+                                <span className="text-muted-foreground/40">·</span>
+                                <span>{getModelDisplayName(item.model) ?? item.model}</span>
+                              </>
+                            )}
+                            <span className="text-muted-foreground/40">·</span>
+                            <span>
+                              {new Date(item.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                            </span>
+                            {wordCount > 0 && (
+                              <>
+                                <span className="text-muted-foreground/40">·</span>
+                                <span>{wordCount} words</span>
+                              </>
+                            )}
+                            {item.writing?.audio_duration_ms != null && (
+                              <>
+                                <span className="text-muted-foreground/40">·</span>
+                                <span>{formatDurationMs(item.writing.audio_duration_ms)}</span>
+                              </>
+                            )}
+                            {item.writing?.diarized && (
+                              <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium">Speakers</span>
+                            )}
+                            {item.writing?.context_hint?.app_name && (
+                              <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium">
+                                {item.writing.context_hint.app_name}
+                              </span>
+                            )}
+                            {hasOriginal && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShowOriginalIds(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(item.id)) { next.delete(item.id); } else { next.add(item.id); }
+                                    return next;
+                                  });
+                                }}
+                                className="text-[11px] font-medium text-sage hover:underline"
+                                title={showOriginal ? "Show AI-formatted text" : "Show original text before AI formatting"}
+                              >
+                                {showOriginal ? "Show formatted" : "Show original"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 items-start gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                          {!isInProgress && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleCopy(displayText); }}
+                              className="grid size-7 place-items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
+                              title="Copy"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                          {verifiedRecordings.has(item.id) && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleShowInFolder(item); }}
+                              className="grid size-7 place-items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
+                              title="Show recording in folder"
+                            >
+                              <FolderOpen className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                          {verifiedRecordings.has(item.id) && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); void handleReTranscribe(item); }}
+                              disabled={isInProgress}
+                              className={cn(
+                                "grid size-7 place-items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground",
+                                isInProgress && "pointer-events-none",
+                              )}
+                              title="Re-transcribe with current source"
+                            >
+                              {isInProgress ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                            </button>
+                          )}
+                          <button
+                            onClick={(e) => handleDelete(e, item.id)}
+                            className="grid size-7 place-items-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                            title="Delete"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
                         </div>
                       </div>
                     )})}
                   </div>
                 </div>
               ))}
+              {filteredHistory.length > visibleCount && (
+                <div className="flex justify-center pt-1">
+                  <Button variant="secondary" size="sm" onClick={() => setVisibleCount((c) => c + 60)}>
+                    Load more · showing {visibleCount} of {filteredHistory.length}
+                  </Button>
+                </div>
+              )}
+              <p className="flex items-center gap-2 pt-1 text-xs text-muted-foreground">
+                <ShieldCheck className="h-3.5 w-3.5 text-sage" />
+                Every transcript stays on this {isMacOS ? "Mac" : "PC"}. Nothing syncs to a cloud.
+              </p>
             </div>
           </ScrollArea>
         ) : (

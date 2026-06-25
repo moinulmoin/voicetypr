@@ -81,7 +81,12 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
       const licenseStatus = await withTimeout(invokePromise, 10_000);
 
       if (checkId !== latestCheckStatusId.current) return;
-      log.debug('License status received:', licenseStatus);
+      log.debug('License status received:', {
+        status: licenseStatus.status,
+        trial_days_left: licenseStatus.trial_days_left,
+        license_type: licenseStatus.license_type,
+        expires_at: licenseStatus.expires_at,
+      });
       setStatus(licenseStatus);
     } catch (error) {
       if (checkId !== latestCheckStatusId.current) return;

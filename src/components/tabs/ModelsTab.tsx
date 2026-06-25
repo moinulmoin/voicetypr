@@ -42,7 +42,16 @@ export function ModelsTab() {
   // Handle deleting a model with settings update
   const handleDeleteModel = useCallback(
     async (modelName: string) => {
-      const deleted = await deleteModel(modelName);
+      // delete_model failures are surfaced to the user by the hook; swallow the
+      // rethrow here so ModelCard's fire-and-forget onDelete(name) does not
+      // become an unhandled rejection. Selection stays unchanged on failure.
+      let deleted = false;
+      try {
+        deleted = await deleteModel(modelName);
+      } catch (error) {
+        log.error("Model deletion failed:", error);
+        return;
+      }
 
       // If deleted model was the current one, clear selection in settings
       if (deleted && settings?.current_model === modelName) {

@@ -552,7 +552,7 @@ describe("OnboardingDesktop", () => {
     expect(screen.queryByText(/use gpu acceleration/i)).not.toBeInTheDocument();
   });
 
-  it("saves isolated_tap binding when bare modifier captured with Hold to talk OFF", async () => {
+  it("saves double_tap binding when bare modifier captured with Hold to talk OFF", async () => {
     const user = userEvent.setup();
     renderOnboarding();
 
@@ -580,13 +580,13 @@ describe("OnboardingDesktop", () => {
 
     await screen.findByRole("button", { name: /review result/i });
 
-    // isolated_tap / toggle_recording / pressed
+    // double_tap / toggle_recording / pressed
     expect(invokeMock).toHaveBeenCalledWith("update_shortcut_settings", {
       settings: {
         bindings: [
           expect.objectContaining({
             id: "onboarding-primary-hold",
-            trigger_kind: "isolated_tap",
+            trigger_kind: "double_tap",
             action: "toggle_recording",
             trigger: "pressed",
             modifier: { modifier: "alt", side: "right" },
@@ -647,6 +647,65 @@ describe("OnboardingDesktop", () => {
     });
     expect(updateSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({ recording_mode: "push_to_talk" }),
+    );
+  });
+
+  it("opts out of telemetry by default and persists consent=false on completion", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    // Navigate to the success step (welcome→source→permissions→readiness→hotkey→transcription).
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    const reviewButton = await screen.findByRole("button", { name: /review result/i });
+    emit("transcription-added", {
+      text: "Privacy first.",
+      model: "base.en",
+      timestamp: "2026-05-18T00:00:00Z",
+    });
+    await waitFor(() => expect(reviewButton).toBeEnabled());
+    await user.click(reviewButton);
+
+    // Telemetry is opt-in, default-OFF: the checkbox is unchecked on first run.
+    const telemetryCheckbox = screen.getByRole("checkbox", { name: /send anonymous error reports/i });
+    expect(telemetryCheckbox).not.toBeChecked();
+
+    // Accepting the final screen without opting in must NOT enable diagnostics.
+    await user.click(screen.getByRole("button", { name: /go to dashboard/i }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: false }),
+    );
+  });
+
+  it("persists telemetry opt-in only when the success-step checkbox is checked", async () => {
+    const user = userEvent.setup();
+    renderOnboarding();
+
+    await user.click(screen.getByRole("button", { name: /start setup/i }));
+    await user.click(screen.getByText("Use this device"));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.click(screen.getByRole("button", { name: /save hotkey/i }));
+
+    const reviewButton = await screen.findByRole("button", { name: /review result/i });
+    emit("transcription-added", {
+      text: "Privacy first.",
+      model: "base.en",
+      timestamp: "2026-05-18T00:00:00Z",
+    });
+    await waitFor(() => expect(reviewButton).toBeEnabled());
+    await user.click(reviewButton);
+
+    await user.click(screen.getByRole("checkbox", { name: /send anonymous error reports/i }));
+    await user.click(screen.getByRole("button", { name: /go to dashboard/i }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("set_telemetry_consent", { enabled: true }),
     );
   });
 });

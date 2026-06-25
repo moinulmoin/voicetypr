@@ -1,7 +1,8 @@
 import { ReportBugDialog } from "@/components/ReportBugDialog";
+import { Brandmark } from "@/components/Brandmark";
 import {
-  primaryScreens,
-  secondaryScreens,
+  navGroups,
+  footerScreens,
   sidebarActions,
   type ScreenDefinition,
   type ScreenId,
@@ -109,7 +110,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
             className="flex w-full items-center justify-between gap-3 rounded-lg border border-sidebar-border/60 bg-background/60 px-3 py-2 text-left transition-colors hover:bg-sidebar-accent"
           >
             <div className="flex min-w-0 items-center gap-2.5">
-              <img src="/AppIcon.png" alt="" className="size-6 rounded-md" />
+              <Brandmark className="size-6 shrink-0 text-sage" />
               <span className="truncate text-sm font-semibold tracking-tight">Voicetypr</span>
             </div>
             {!isLoading && status ? (
@@ -126,16 +127,19 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
         </SidebarHeader>
 
         <SidebarContent className="flex flex-col px-2">
-          <SidebarNavGroup
-            label={null}
-            items={primaryScreens}
-            activeSection={activeSection}
-            onSectionChange={onSectionChange}
-          />
+          {navGroups.map((group) => (
+            <SidebarNavGroup
+              key={group.label}
+              label={group.label}
+              items={group.screens}
+              activeSection={activeSection}
+              onSectionChange={onSectionChange}
+            />
+          ))}
           <div className="mt-auto space-y-0 pb-2">
             <SidebarNavGroup
               label={null}
-              items={secondaryScreens}
+              items={footerScreens}
               activeSection={activeSection}
               onSectionChange={onSectionChange}
             />
@@ -211,8 +215,10 @@ function SidebarNavItem({
         isActive={isActive}
         onClick={() => onSelect(item.id)}
         className={cn(
-          "rounded-xl text-sm transition-colors",
-          isActive && "bg-sidebar-accent text-sidebar-accent-foreground shadow-xs",
+          "rounded-xl text-sm font-medium transition-colors [&>svg]:text-muted-foreground",
+          isActive
+            ? "!bg-card font-semibold text-foreground shadow-sm ring-1 ring-border hover:!bg-card [&>svg]:!text-sage"
+            : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
         )}
       >
         <Icon />

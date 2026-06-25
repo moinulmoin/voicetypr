@@ -885,6 +885,28 @@ describe("NetworkSharingCard", () => {
         expect(screen.getByTitle("Save and restart server")).toBeInTheDocument();
       });
     });
+
+    it("advertises the active (saved) port in connect addresses, not an unsaved port edit", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<NetworkSharingCard />);
+
+      // Card is live on port 47842.
+      await waitFor(() => {
+        expect(screen.getByText(/192\.168\.1\.100:47842/)).toBeInTheDocument();
+      });
+
+      // Edit the port field without applying it; the server still listens on 47842.
+      const portInput = screen.getByLabelText("Port");
+      await user.clear(portInput);
+      await user.type(portInput, "8080");
+
+      // The advertised connect address must keep showing the listening port...
+      expect(screen.getByText(/192\.168\.1\.100:47842/)).toBeInTheDocument();
+      expect(screen.queryByText(/192\.168\.1\.100:8080/)).not.toBeInTheDocument();
+      // ...and the copy button must advertise the listening port too (matches clipboard).
+      expect(screen.getByRole("button", { name: "Copy address 192.168.1.100:47842" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Copy address 192.168.1.100:8080" })).not.toBeInTheDocument();
+    });
   });
 
   describe("password configuration", () => {
@@ -1091,6 +1113,67 @@ describe("NetworkSharingCard", () => {
           preservePassword: false,
           serverName: null,
         }));
+      });
+    });
+
+    it("clears the password input after a successful save and surfaces Remove via the configured flag", async () => {
+      let sharingStarted = false;
+      mockInvoke.mockImplementation((command: string) => {
+        switch (command) {
+          case "get_settings":
+            return Promise.resolve({
+              current_model: "large-v3-turbo",
+              auto_insert: true,
+              launch_at_startup: false,
+              sharing_port: 47842,
+            });
+          case "get_sharing_status":
+            return Promise.resolve({
+              enabled: true,
+              port: 47842,
+              model_name: "large-v3-turbo",
+              server_name: "My-PC",
+              active_connections: 0,
+              password_configured: sharingStarted,
+              binding_results: [],
+              allow_model_control: false,
+            });
+          case "get_local_ips":
+            return Promise.resolve(["192.168.1.100 (eth0)"]);
+          case "get_model_status":
+            return Promise.resolve({ models: [shareableModel()] });
+          case "get_active_remote_server":
+            return Promise.resolve(null);
+          case "get_firewall_status":
+            return Promise.resolve({ firewall_enabled: false, app_allowed: true, may_be_blocked: false });
+          case "stop_sharing":
+            return Promise.resolve();
+          case "start_sharing":
+            sharingStarted = true;
+            return Promise.resolve();
+          default:
+            return Promise.reject(new Error(`Unknown command: ${command}`));
+        }
+      });
+
+      const user = userEvent.setup();
+      renderWithProviders(<NetworkSharingCard />);
+
+      const passwordInput = await screen.findByLabelText("Password (Optional)");
+      // No password configured yet -> no Remove control.
+      expect(screen.queryByTitle("Remove saved password")).not.toBeInTheDocument();
+
+      await user.type(passwordInput, "s3cret!");
+      await user.click(screen.getByTitle("Save password"));
+
+      // After a successful save the just-typed secret is gone from the input
+      // (no longer revealable via the eye toggle) and the Remove control returns.
+      await waitFor(() => {
+        expect(passwordInput).toHaveValue("");
+      });
+      expect(passwordInput).toHaveAttribute("placeholder", "Password saved");
+      await waitFor(() => {
+        expect(screen.getByTitle("Remove saved password")).toBeInTheDocument();
       });
     });
   });

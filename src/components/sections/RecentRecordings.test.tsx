@@ -78,8 +78,8 @@ const history = [desktopWithApp, uploadEntry, remoteEntry, oldEntry];
 // ---------------------------------------------------------------------------
 
 describe("sourceLabel", () => {
-  it("maps desktop_recording to Dictation", () => {
-    expect(sourceLabel("desktop_recording")).toBe("Dictation");
+  it("maps desktop_recording to This device", () => {
+    expect(sourceLabel("desktop_recording")).toBe("This device");
   });
   it("maps audio_file to Upload", () => {
     expect(sourceLabel("audio_file")).toBe("Upload");
@@ -90,9 +90,9 @@ describe("sourceLabel", () => {
   it("maps remote_server to Remote", () => {
     expect(sourceLabel("remote_server")).toBe("Remote");
   });
-  it("returns empty string for unknown/undefined source", () => {
-    expect(sourceLabel(undefined)).toBe("");
-    expect(sourceLabel("something_else")).toBe("");
+  it("defaults unknown/undefined source to This device", () => {
+    expect(sourceLabel(undefined)).toBe("This device");
+    expect(sourceLabel("something_else")).toBe("This device");
   });
 });
 

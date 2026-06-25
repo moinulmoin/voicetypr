@@ -15,7 +15,6 @@ interface CliToolStatus {
 
 const RECIPES = [
   "voicetypr transcribe <file> --json",
-  "voicetypr record --json",
   "voicetypr --help",
 ] as const;
 

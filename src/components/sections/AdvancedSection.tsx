@@ -1,5 +1,4 @@
 import { PermissionErrorBoundary } from "@/components/PermissionErrorBoundary";
-import { AgentCliSection } from "./AgentCliSection";
 import { TelemetrySection } from "./TelemetrySection";
 import { Button } from "@/components/ui/button";
 import {
@@ -240,7 +239,6 @@ export function AdvancedSection() {
               </div>
             )}
 
-            <AgentCliSection />
             <TelemetrySection />
 
             {/* Reset Options Section */}

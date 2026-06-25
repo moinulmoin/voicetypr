@@ -33,5 +33,5 @@ export function EnhancementsTab() {
     init();
   }, [registerEvent]);
 
-  return <EnhancementsSection />;
+  return <EnhancementsSection view="ai" />;
 }

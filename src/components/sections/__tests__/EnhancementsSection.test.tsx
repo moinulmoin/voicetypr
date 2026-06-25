@@ -321,7 +321,7 @@ describe('EnhancementsSection', () => {
         return Promise.resolve({ preset: 'PersonalDictation' })
       }
       if (cmd === 'get_writing_settings') {
-        return Promise.resolve(defaultWritingSettings)
+        return Promise.resolve({ ...defaultWritingSettings, voice_commands: [] })
       }
       if (cmd === 'get_ai_settings') {
         return Promise.resolve(baseAISettings)
@@ -791,6 +791,39 @@ describe('EnhancementsSection', () => {
 
   it('adds a voice command row and persists writing settings', async () => {
     const user = userEvent.setup()
+    // Built-in voice commands now ship in `defaultWritingSettings` (mirroring
+    // the Rust serde default). This test exercises add-row/persist from an
+    // empty list, so load writing settings without the built-ins.
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
+      (cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === 'list_ai_providers') {
+          return Promise.resolve(providerListResponse)
+        }
+        if (cmd === 'get_settings') {
+          return Promise.resolve(baseAppSettings)
+        }
+        if (cmd === 'get_enhancement_options') {
+          return Promise.resolve({ preset: 'PersonalDictation' })
+        }
+        if (cmd === 'get_writing_settings') {
+          return Promise.resolve({ ...defaultWritingSettings, voice_commands: [] })
+        }
+        if (cmd === 'update_writing_settings') {
+          return Promise.resolve(undefined)
+        }
+        if (cmd === 'get_ai_settings') {
+          return Promise.resolve(aiSettingsResponse)
+        }
+        if (cmd === 'get_ai_settings_for_provider') {
+          const provider = (args as { provider?: string })?.provider || ''
+          return Promise.resolve({ ...aiSettingsResponse, provider })
+        }
+        if (cmd === 'get_openai_config') {
+          return Promise.resolve({ baseUrl: 'https://api.openai.com/v1' })
+        }
+        return Promise.resolve(undefined)
+      },
+    )
     renderWithProviders()
 
     const voiceCommandsHeading = await screen.findByText('Voice Commands')

@@ -74,7 +74,9 @@ const formatModelCost = (model: AIProviderModel) => {
 const modelMatchesQuery = (model: AIProviderModel, query: string) =>
   model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query);
 
-export function EnhancementsSection() {
+type EnhancementsView = "ai" | "rules" | "all";
+
+export function EnhancementsSection({ view = "all" }: { view?: EnhancementsView } = {}) {
   const readiness = useReadinessState();
   const { settings, updateSettings } = useSettings();
   const { fetchModels, getModels, isLoading: isModelsLoading, getError, clearModels } =
@@ -632,7 +634,7 @@ export function EnhancementsSection() {
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold">Formatting</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">{view === "rules" ? "Pre-AI Formatting" : view === "ai" ? "AI Formatting" : "Formatting"}</h1>
               <Dialog>
                 <DialogTrigger asChild>
                   <Button type="button" variant="secondary" size="icon" aria-label="Formatting guide" className="rounded-full">
@@ -660,6 +662,7 @@ export function EnhancementsSection() {
               </Dialog>
             </div>
           </div>
+          {view !== "rules" && (
           <div className="flex flex-col items-end gap-1">
             <Field orientation="horizontal" className="w-auto items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-1.5">
               <FieldTitle className="text-sm">AI formatting</FieldTitle>
@@ -677,11 +680,14 @@ export function EnhancementsSection() {
               </p>
             )}
           </div>
+          )}
         </div>
       </div>
 
       <ScrollArea className="flex-1 min-h-0">
         <div className="space-y-5 p-6">
+          {view !== "rules" && (
+          <>
           <header>
             <h2 className="text-base font-semibold">AI polish (optional)</h2>
             <p className="mt-1 text-sm text-muted-foreground">
@@ -978,8 +984,11 @@ export function EnhancementsSection() {
               })}
             </FieldGroup>
           </FieldSet>
+          </>
+          )}
 
           <EnhancementSettings
+            view={view}
             preset={enhancementOptions.preset}
             finalTextLanguage={effectiveFinalTextLanguage}
             writingSettings={writingSettings}

@@ -443,7 +443,8 @@ export function NetworkSharingCard() {
       if (disabledModelControl) {
         setStatus((current) => ({ ...current, allow_model_control: false }));
       }
-      setSavedPassword(password);
+      setPassword("");
+      setSavedPassword("");
       await fetchStatus();
       toast.success(password ? "Password updated" : "Password removed");
     } catch (error) {
@@ -691,7 +692,7 @@ export function NetworkSharingCard() {
                         <div key={`success-${index}`} className="flex items-center gap-2">
                           <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
                           <div className="flex-1 px-3 py-2 rounded-md bg-background/60 border border-border/60 font-mono text-sm">
-                            <span className="font-semibold">{result.ip}:{port}</span>
+                            <span className="font-semibold">{result.ip}:{savedPort}</span>
                             {result.interface_name && (
                               <span className="ml-2 text-xs text-muted-foreground">
                                 ({result.interface_name})
@@ -702,7 +703,7 @@ export function NetworkSharingCard() {
                             onClick={() => copyAddress(result.ip)}
                             className="p-2 rounded-md border border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground hover:border-border/50 active:bg-accent/80 active:scale-95 transition-all duration-150"
                             title="Copy address"
-                            aria-label={`Copy address ${result.ip}:${port}`}
+                            aria-label={`Copy address ${result.ip}:${savedPort}`}
                           >
                             <Copy className="h-4 w-4" />
                           </button>
@@ -719,7 +720,7 @@ export function NetworkSharingCard() {
                         >
                           <XCircle className="h-4 w-4 text-red-400 flex-shrink-0" />
                           <div className="flex-1 px-3 py-2 rounded-md bg-muted/30 border border-border/30 font-mono text-sm text-muted-foreground">
-                            <span>{result.ip}:{port}</span>
+                            <span>{result.ip}:{savedPort}</span>
                             {result.interface_name && (
                               <span className="ml-2 text-xs text-muted-foreground">
                                 ({result.interface_name})

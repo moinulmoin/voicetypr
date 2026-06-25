@@ -32,14 +32,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { invoke } from "@tauri-apps/api/core";
 import { presetDisplayLabel, presetRequiresAiFormatting, type EnhancementPreset } from "@/types/ai";
 import type {
   AppFormattingRule,
   CustomWord,
   Snippet,
   TextReplacementRule,
-  VoiceCommandRule,
   WritingSettings,
 } from "@/types/writing";
 import {
@@ -50,13 +48,10 @@ import {
   Lock,
   MessageSquare,
   PenLine,
-  Loader2,
   Plus,
   StickyNote,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
-import { toast } from "sonner";
 
 interface EnhancementSettingsProps {
   preset: EnhancementPreset;
@@ -68,6 +63,8 @@ interface EnhancementSettingsProps {
   onWritingSettingsChange: (settings: WritingSettings) => void;
   disabled?: boolean;
   writingSettingsDisabled?: boolean;
+  /** "ai" = modes/language/app-rules only · "rules" = always-on text rules only · "all" = both. */
+  view?: "ai" | "rules" | "all";
 }
 
 function updateItem<T>(items: T[], index: number, next: T): T[] {
@@ -77,10 +74,6 @@ function updateItem<T>(items: T[], index: number, next: T): T[] {
 function removeItem<T>(items: T[], index: number): T[] {
   return items.filter((_, itemIndex) => itemIndex !== index);
 }
-type ParakeetVocabularyStatus = {
-  supported: boolean;
-  ready: boolean;
-};
 const FORMATTING_MODES = [
   { id: "PersonalDictation", icon: AudioLines },
   { id: "CleanDictation", icon: FileText },
@@ -92,18 +85,6 @@ const FORMATTING_MODES = [
   id: EnhancementPreset;
   icon: typeof AudioLines;
 }>;
-
-const VOICE_COMMAND_OUTPUT_OPTIONS = [
-  { value: "comma", label: "Comma ," },
-  { value: "period", label: "Period ." },
-  { value: "question_mark", label: "Question mark ?" },
-  { value: "exclamation_mark", label: "Exclamation mark !" },
-  { value: "colon", label: "Colon :" },
-  { value: "semicolon", label: "Semicolon ;" },
-  { value: "dash", label: "Dash —" },
-  { value: "new_line", label: "New line" },
-  { value: "paragraph", label: "New paragraph" },
-] as const;
 
 const formattingModeLabel = (preset: EnhancementPreset) => presetDisplayLabel(preset);
 
@@ -406,250 +387,6 @@ function ReplacementEditor({
   );
 }
 
-function VoiceCommandEditor({
-  voiceCommands,
-  onChange,
-  disabled,
-}: {
-  voiceCommands: VoiceCommandRule[];
-  onChange: (voiceCommands: VoiceCommandRule[]) => void;
-  disabled: boolean;
-}) {
-  return (
-    <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <FieldLegend className="mb-1">Voice Commands</FieldLegend>
-          <FieldDescription>
-            Spoken phrases that insert punctuation or breaks. Not AI. Example:{" "}
-            <span className="font-mono">new paragraph</span> starts a new paragraph.
-          </FieldDescription>
-        </div>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={disabled}
-          onClick={() =>
-            onChange([
-              ...voiceCommands,
-              { phrase: "", output: "period", language: null, enabled: true },
-            ])
-          }
-        >
-          <Plus className="mr-2 h-4 w-4" />
-          Add command
-        </Button>
-      </div>
-
-      {voiceCommands.length === 0 ? (
-        <Empty className="mt-3 border-border/60 bg-muted/20 p-6">
-          <EmptyHeader className="max-w-none gap-1">
-            <EmptyTitle className="text-sm">No voice commands yet</EmptyTitle>
-            <EmptyDescription className="text-xs">
-              Example: <span className="font-mono">new paragraph</span> inserts a paragraph break.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      ) : (
-        <FieldGroup className="mt-3 gap-3">
-          {voiceCommands.map((rule, index) => {
-            const selectedOutput = VOICE_COMMAND_OUTPUT_OPTIONS.find(
-              (option) => option.value === rule.output,
-            );
-
-            return (
-              <FieldSet
-                key={`voice-command-${index}`}
-                className="rounded-lg border border-border/60 bg-background/60 p-3"
-              >
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <FieldTitle>Command {index + 1}</FieldTitle>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">Enabled</span>
-                    <Switch
-                      aria-label={`Enable voice command ${index + 1}`}
-                      checked={rule.enabled}
-                      disabled={disabled}
-                      onCheckedChange={(checked) =>
-                        onChange(updateItem(voiceCommands, index, { ...rule, enabled: checked }))
-                      }
-                    />
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      aria-label={`Delete voice command ${index + 1}`}
-                      disabled={disabled}
-                      onClick={() => onChange(removeItem(voiceCommands, index))}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-
-                <FieldGroup className="gap-3">
-                  <Field>
-                    <InputGroup>
-                      <InputGroupAddon>
-                        <InputGroupText>When I say…</InputGroupText>
-                      </InputGroupAddon>
-                      <InputGroupInput
-                        aria-label={`Voice command phrase ${index + 1}`}
-                        placeholder="Spoken phrase"
-                        value={rule.phrase}
-                        disabled={disabled}
-                        onChange={(event) =>
-                          onChange(
-                            updateItem(voiceCommands, index, {
-                              ...rule,
-                              phrase: event.target.value,
-                            }),
-                          )
-                        }
-                      />
-                    </InputGroup>
-                  </Field>
-
-                  <Field>
-                    <Select
-                      value={rule.output}
-                      disabled={disabled}
-                      onValueChange={(value) =>
-                        onChange(
-                          updateItem(voiceCommands, index, {
-                            ...rule,
-                            output: value,
-                          }),
-                        )
-                      }
-                    >
-                      <SelectTrigger
-                        size="sm"
-                        className="w-full"
-                        aria-label={`Voice command output ${index + 1}`}
-                      >
-                        <SelectValue placeholder="Output">
-                          {selectedOutput ? selectedOutput.label : rule.output}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {VOICE_COMMAND_OUTPUT_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
-
-                  <Field>
-                    <InputGroup>
-                      <InputGroupAddon>
-                        <Globe className="h-4 w-4" />
-                      </InputGroupAddon>
-                      <InputGroupInput
-                        aria-label={`Voice command language ${index + 1}`}
-                        placeholder="Language code (optional, e.g. en)"
-                        value={rule.language ?? ""}
-                        disabled={disabled}
-                        onChange={(event) =>
-                          onChange(
-                            updateItem(voiceCommands, index, {
-                              ...rule,
-                              language: event.target.value || null,
-                            }),
-                          )
-                        }
-                      />
-                    </InputGroup>
-                  </Field>
-                </FieldGroup>
-              </FieldSet>
-            );
-          })}
-        </FieldGroup>
-      )}
-    </FieldSet>
-  );
-}
-
-function ParakeetVocabularyBoostRow({ disabled }: { disabled: boolean }) {
-  const [status, setStatus] = useState<ParakeetVocabularyStatus | null>(null);
-  const [isDownloading, setIsDownloading] = useState(false);
-
-  const refreshStatus = useCallback(async () => {
-    try {
-      const nextStatus = await invoke<ParakeetVocabularyStatus>(
-        "get_parakeet_vocabulary_status",
-      );
-      setStatus(nextStatus.supported ? nextStatus : null);
-    } catch {
-      setStatus(null);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshStatus();
-  }, [refreshStatus]);
-
-  const handleDownload = async () => {
-    setIsDownloading(true);
-    try {
-      await invoke("download_parakeet_vocabulary_model");
-      await refreshStatus();
-    } catch {
-      toast.error("Failed to download Parakeet vocabulary model");
-    } finally {
-      setIsDownloading(false);
-    }
-  };
-
-  if (!status) {
-    return null;
-  }
-
-  if (status.ready) {
-    return (
-      <div className="mt-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-        Vocabulary boost installed. Parakeet can use your Words & Names on-device after
-        transcription to help with names and domain terms.
-      </div>
-    );
-  }
-
-  return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-      <div>
-        <div className="font-medium text-foreground">
-          Parakeet vocabulary boost (optional, ~70–100MB)
-        </div>
-        <div>
-          Runs on-device after transcription to help Parakeet recognize your Words & Names,
-          including names and domain terms.
-        </div>
-      </div>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={disabled || isDownloading}
-        onClick={handleDownload}
-        aria-label="Download Parakeet vocabulary boost model"
-      >
-        {isDownloading ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Downloading…
-          </>
-        ) : (
-          "Download"
-        )}
-      </Button>
-    </div>
-  );
-}
-
 function CustomWordEditor({
   customWords,
   onChange,
@@ -684,8 +421,6 @@ function CustomWordEditor({
           Add word
         </Button>
       </div>
-
-      <ParakeetVocabularyBoostRow disabled={disabled} />
 
       {customWords.length === 0 ? (
         <Empty className="mt-3 border-border/60 bg-muted/20 p-6">
@@ -980,6 +715,7 @@ export function EnhancementSettings({
   onWritingSettingsChange,
   disabled = false,
   writingSettingsDisabled = disabled,
+  view = "all",
 }: EnhancementSettingsProps) {
   const allowsSpecificFinalLanguage = preset !== "PersonalDictation";
   const usingSpecificLanguage =
@@ -987,6 +723,8 @@ export function EnhancementSettings({
   const selectedRequiresAi = presetRequiresAiFormatting(preset);
   return (
     <div className={`space-y-4 ${disabled ? "opacity-60" : ""}`}>
+      {view !== "rules" && (
+      <>
       <FieldSet className="rounded-xl border border-border/60 bg-card p-4">
         <FieldLegend className="mb-1">Formatting mode</FieldLegend>
         <FieldDescription className="mb-3">Pick how the final text is shaped.</FieldDescription>
@@ -1094,7 +832,11 @@ export function EnhancementSettings({
           onWritingSettingsChange({ ...writingSettings, app_formatting_rules })
         }
       />
+      </>
+      )}
 
+      {view !== "ai" && (
+      <>
       <header className="pt-2">
         <h2 className="text-base font-semibold">Your text rules (always on)</h2>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -1117,14 +859,6 @@ export function EnhancementSettings({
         }
       />
 
-      <VoiceCommandEditor
-        voiceCommands={writingSettings.voice_commands}
-        disabled={writingSettingsDisabled}
-        onChange={(voice_commands) =>
-          onWritingSettingsChange({ ...writingSettings, voice_commands })
-        }
-      />
-
       <SnippetEditor
         snippets={writingSettings.snippets}
         disabled={writingSettingsDisabled}
@@ -1132,6 +866,8 @@ export function EnhancementSettings({
           onWritingSettingsChange({ ...writingSettings, snippets })
         }
       />
+      </>
+      )}
     </div>
   );
 }

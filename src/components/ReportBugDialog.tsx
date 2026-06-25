@@ -270,7 +270,7 @@ export function ReportBugDialog({ isOpen, onClose }: ReportBugDialogProps) {
               aria-required="true"
               aria-invalid={Boolean(messageError)}
               aria-describedby={messageError ? 'report-message-error' : undefined}
-              className={messageError ? 'border-destructive' : ''}
+              className={`max-h-[40vh] overflow-y-auto ${messageError ? 'border-destructive' : ''}`}
             />
             {messageError && (
               <p id="report-message-error" role="alert" className="text-xs text-destructive">

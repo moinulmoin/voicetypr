@@ -10,7 +10,10 @@ import {
   Key,
   Layers,
   Settings2,
+  Share2,
   Sparkles,
+  Terminal,
+  Type,
 } from "lucide-react";
 
 export type ScreenId =
@@ -20,8 +23,11 @@ export type ScreenId =
   | "general"
   | "shortcuts"
   | "models"
+  | "network"
   | "formatting"
+  | "text-rules"
   | "license"
+  | "agent"
   | "advanced"
   | "help";
 
@@ -67,10 +73,22 @@ export const primaryScreens: ScreenDefinition[] = [
     description: "Local models, cloud transcription, and remote Voicetypr servers.",
   },
   {
+    id: "network",
+    label: "Network sharing",
+    icon: Share2,
+    description: "Share this device's transcription engine over your network, or connect to one.",
+  },
+  {
     id: "formatting",
-    label: "Formatting",
+    label: "AI Formatting",
     icon: Sparkles,
-    description: "AI cleanup, replacements, dictionary, and snippets.",
+    description: "AI polish, formatting modes, and provider/model setup.",
+  },
+  {
+    id: "text-rules",
+    label: "Pre-AI Formatting",
+    icon: Type,
+    description: "Always-on text fixes that run before AI — corrections, Words & Names, shortcuts, voice commands.",
   },
   {
     id: "general",
@@ -89,6 +107,12 @@ export const primaryScreens: ScreenDefinition[] = [
     label: "Licensing",
     icon: Key,
     description: "Trial and license activation.",
+  },
+  {
+    id: "agent",
+    label: "Agent & CLI",
+    icon: Terminal,
+    description: "Drive Voicetypr from scripts and agents via the CLI and local API.",
   },
 ];
 
@@ -120,3 +144,37 @@ export const screens = [...primaryScreens, ...secondaryScreens] as const;
 
 export const isScreenId = (value: string): value is ScreenId =>
   screens.some((screen) => screen.id === value);
+
+export interface NavGroup {
+  label: string;
+  screens: ScreenDefinition[];
+}
+
+const screenById = (id: ScreenId): ScreenDefinition =>
+  screens.find((screen) => screen.id === id) as ScreenDefinition;
+
+// Grouped sidebar layout (Claude dashboard design): Workspace / Configure / Account.
+export const navGroups: NavGroup[] = [
+  {
+    label: "Workspace",
+    screens: [screenById("overview"), screenById("recordings"), screenById("audio")],
+  },
+  {
+    label: "Configure",
+    screens: [
+      screenById("general"),
+      screenById("shortcuts"),
+      screenById("models"),
+      screenById("network"),
+      screenById("formatting"),
+      screenById("text-rules"),
+      screenById("agent"),
+    ],
+  },
+  {
+    label: "Account",
+    screens: [screenById("license"), screenById("advanced")],
+  },
+];
+
+export const footerScreens: ScreenDefinition[] = [screenById("help")];

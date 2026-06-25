@@ -1,33 +1,20 @@
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { useCanAutoInsert, useReadiness } from "@/contexts/ReadinessContext";
 import { useSettings } from "@/contexts/SettingsContext";
 import { cn } from "@/lib/utils";
 import { useTranscriptionHistory } from "@/hooks/useTranscriptionHistory";
+import { useActiveTrigger } from "@/hooks/useActiveTrigger";
 import { isMacOS } from "@/lib/platform";
 import { getModelDisplayName } from "@/lib/model-display";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  BarChart3,
-  CheckCircle2,
   Clock3,
   FileText,
-  Flame,
   Loader2,
-  Mic,
   Share2,
-  Sparkles,
   TrendingUp,
-  Zap,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("overview-tab");
@@ -50,7 +37,7 @@ export function OverviewTab() {
   const canRecord = readiness.canRecord;
   const canAutoInsert = useCanAutoInsert();
   const { settings } = useSettings();
-  const hotkey = settings?.hotkey || "Cmd+Shift+Space";
+  const { label: triggerLabel } = useActiveTrigger(settings?.hotkey);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(null);
   const selectedSourceLabel = readiness.remoteSelected
@@ -98,6 +85,7 @@ export function OverviewTab() {
       cancelled = true;
     };
   }, [readiness.remoteSelected]);
+
   const { history, totalCount } = useTranscriptionHistory({
     limit: 500,
     includeTotalCount: true,
@@ -133,10 +121,24 @@ export function OverviewTab() {
     const avgTypingSpeed = 40;
     const timeSavedMinutes = Math.round(totalWords / avgTypingSpeed);
     const timeSavedHours = Math.floor(timeSavedMinutes / 60);
-    const timeSavedDisplay =
-      timeSavedHours > 0
-        ? `${timeSavedHours}h ${timeSavedMinutes % 60}m`
-        : `${timeSavedMinutes}m`;
+
+    // Per-day counts for the last 7 days (weekly rhythm sparkline).
+    const weekDays = Array.from({ length: 7 }, (_, index) => {
+      const dayStart = new Date(startOfToday);
+      dayStart.setDate(dayStart.getDate() - (6 - index));
+      const dayEnd = new Date(dayStart);
+      dayEnd.setDate(dayEnd.getDate() + 1);
+      const count = history.filter((item) => {
+        const t = new Date(item.timestamp);
+        return t >= dayStart && t < dayEnd;
+      }).length;
+      return {
+        key: dayStart.getTime(),
+        label: dayStart.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 3),
+        count,
+      };
+    });
+    const weekMax = Math.max(1, ...weekDays.map((day) => day.count));
 
     let currentStreak = 0;
     let longestStreak = 0;
@@ -197,181 +199,181 @@ export function OverviewTab() {
       monthCount,
       totalWords,
       avgLength,
-      timeSavedDisplay,
+      timeSavedHours,
+      timeSavedRemMinutes: timeSavedMinutes % 60,
+      timeSavedMinutes,
       productivityScore,
       totalTranscriptions: totalCount,
       currentStreak,
       longestStreak,
+      weekDays,
+      weekMax,
     };
   }, [history, totalCount]);
 
-  const kpis = [
-    {
-      label: "Transcriptions",
-      value: stats.totalTranscriptions.toLocaleString(),
-      caption: `${stats.todayCount} today`,
-      icon: FileText,
-    },
-    {
-      label: "Words captured",
-      value: stats.totalWords.toLocaleString(),
-      caption: `${stats.avgLength} average words`,
-      icon: BarChart3,
-    },
-    {
-      label: "Time saved",
-      value: stats.timeSavedDisplay,
-      caption: "vs. manual typing",
-      icon: Clock3,
-    },
-    {
-      label: "Weekly rhythm",
-      value: `${stats.productivityScore}%`,
-      caption: `${stats.weekCount} in the last 7 days`,
-      icon: Zap,
-    },
-  ] as const;
+  const todayLabel = useMemo(
+    () => new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }),
+    [],
+  );
+
+  const hotkeyHint =
+    triggerLabel === "Not set"
+      ? "Set a recording trigger in Settings, then speak in any app — the text lands at your cursor."
+      : `Press ${triggerLabel} in any app — speak, release, and the text lands at your cursor.`;
 
   return (
     <div className="h-full min-h-0 overflow-auto">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-6">
-        <Card className="overflow-hidden border-border/70 bg-card/95 shadow-sm">
-          <CardHeader className="gap-4">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="space-y-3">
-                <div className="space-y-2">
-                  <CardTitle className="text-3xl tracking-[-0.04em] sm:text-4xl">
-                    {stats.currentStreak > 0
-                      ? `${stats.currentStreak}-day dictation streak`
-                      : "Ready for the next recording"}
-                  </CardTitle>
-                  <CardDescription className="max-w-2xl text-sm leading-6">
-                    {canRecord
-                      ? "Voice notes in, clean text out. Check readiness, recent output, and what to do next."
-                      : setupMessage}
-                  </CardDescription>
-                </div>
-              </div>
-              <Button size="sm" onClick={() => setShareModalOpen(true)} className="gap-2 self-start">
-                <Share2 className="h-4 w-4" />
-                Share stats
-              </Button>
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-3.5 px-6 py-7 md:px-8">
+        {/* ===== Head ===== */}
+        <div className="mb-1 flex flex-wrap items-start gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">Overview</h1>
+            <p className="mt-0.5 text-sm text-muted-foreground">{todayLabel}</p>
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-2.5">
+            <StatusChip>
+              <span
+                className={cn(
+                  "size-1.5 rounded-full",
+                  canRecord ? "bg-sage" : "bg-amber-500",
+                )}
+              />
+              {selectedSourceLabel}
+            </StatusChip>
+            <StatusChip>{canAutoInsert ? "Auto-insert on" : "Manual paste"}</StatusChip>
+            <Button size="sm" onClick={() => setShareModalOpen(true)} className="gap-2">
+              <Share2 className="h-4 w-4" />
+              Share stats
+            </Button>
+          </div>
+        </div>
+
+        {/* ===== Ready hero ===== */}
+        <div className="relative overflow-hidden rounded-3xl border border-border bg-gradient-to-br from-sage-bg/70 via-card to-card p-7 shadow-sm md:p-8">
+          <div className="flex items-center gap-6">
+            <div className="min-w-0">
+              <h2 className="text-[2rem] font-semibold leading-[1.1] tracking-tight text-foreground md:text-[2.25rem]">
+                {stats.currentStreak > 1
+                  ? `${stats.currentStreak}-day dictation streak`
+                  : "Ready for the next recording"}
+              </h2>
+              <p className="mt-2.5 max-w-md text-sm leading-relaxed text-muted-foreground">
+                {canRecord ? hotkeyHint : setupMessage}
+              </p>
             </div>
-          </CardHeader>
-          <CardContent className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              {kpis.map((item) => {
-                const Icon = item.icon;
+            <Waveform active={canRecord} className="ml-auto hidden shrink-0 sm:flex" />
+          </div>
+        </div>
+
+        {/* ===== Stat cards ===== */}
+        <div className="grid gap-3.5 sm:grid-cols-3">
+          <StatCard
+            icon={FileText}
+            kicker="Transcriptions"
+            value={stats.totalTranscriptions.toLocaleString()}
+            foot={
+              <>
+                <b className="font-semibold text-sage">+{stats.todayCount} today</b> · all time
+              </>
+            }
+          />
+          <StatCard
+            icon={TrendingUp}
+            kicker="Words captured"
+            value={stats.totalWords.toLocaleString()}
+            foot={
+              <>
+                avg <b className="font-semibold text-foreground">{stats.avgLength} words</b> per take
+              </>
+            }
+          />
+          <StatCard
+            icon={Clock3}
+            kicker="Time saved"
+            value={
+              stats.timeSavedHours > 0 ? (
+                <>
+                  {stats.timeSavedHours}
+                  <small className="text-[0.5em] text-muted-foreground">h </small>
+                  {stats.timeSavedRemMinutes}
+                  <small className="text-[0.5em] text-muted-foreground">m</small>
+                </>
+              ) : (
+                <>
+                  {stats.timeSavedMinutes}
+                  <small className="text-[0.5em] text-muted-foreground">m</small>
+                </>
+              )
+            }
+            foot="vs. typing at 40 wpm"
+          />
+        </div>
+
+        {/* ===== Glance row ===== */}
+        <div className="grid gap-3.5 lg:grid-cols-[1.7fr_1fr]">
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+            <p className="text-sm font-semibold text-foreground">Weekly rhythm</p>
+            <div className="mt-4 flex h-24 items-end gap-2">
+              {stats.weekDays.map((day) => {
+                const isHot = day.count > 0 && day.count === stats.weekMax;
+                const heightPct = Math.max(6, Math.round((day.count / stats.weekMax) * 100));
                 return (
-                  <Card key={item.label} size="sm" className="border-border/70 bg-background/75 shadow-sm">
-                    <CardHeader className="gap-3">
-                      <div className="flex size-10 items-center justify-center rounded-xl bg-muted text-primary">
-                        <Icon className="h-5 w-5" />
-                      </div>
-                      <div>
-                        <CardDescription className="text-[11px] uppercase tracking-[0.16em]">
-                          {item.label}
-                        </CardDescription>
-                        <CardTitle className="mt-2 text-2xl tracking-[-0.03em]">
-                          {item.value}
-                        </CardTitle>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="text-xs text-muted-foreground">{item.caption}</p>
-                    </CardContent>
-                  </Card>
+                  <div
+                    key={day.key}
+                    className={cn(
+                      "flex-1 rounded-md transition-colors",
+                      isHot ? "bg-sage" : "bg-sage/25",
+                    )}
+                    style={{ height: `${heightPct}%` }}
+                    title={`${day.count} on ${day.label}`}
+                  />
                 );
               })}
             </div>
+            <div className="mt-2 flex gap-2">
+              {stats.weekDays.map((day) => (
+                <span
+                  key={day.key}
+                  className="flex-1 text-center text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+                >
+                  {day.label}
+                </span>
+              ))}
+            </div>
+          </div>
 
-            <Card size="sm" className="border-border/70 bg-background/75 shadow-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <TrendingUp className="h-5 w-5 text-primary" />
-                  At a glance
-                </CardTitle>
-                <CardDescription>
-                  A simple read on current usage without pretending to be more precise than the actual data.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <MetricRow label="Today" value={`${stats.todayCount} transcriptions`} />
-                <MetricRow label="Last 7 days" value={`${stats.weekCount} transcriptions`} />
-                <MetricRow label="Last 30 days" value={`${stats.monthCount} transcriptions`} />
-                <MetricRow
-                  label="Best streak"
-                  value={
-                    stats.longestStreak > 0 ? `${stats.longestStreak} days` : "No streak yet"
-                  }
-                />
-              </CardContent>
-            </Card>
-          </CardContent>
-        </Card>
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+            <p className="text-sm font-semibold text-foreground">At a glance</p>
+            <div className="mt-4 grid gap-2">
+              <GlanceItem label="Today" value={`${stats.todayCount} transcriptions`} />
+              <GlanceItem label="Last 7 days" value={`${stats.weekCount}`} />
+              <GlanceItem
+                label="Best streak"
+                value={stats.longestStreak > 0 ? `${stats.longestStreak} days` : "—"}
+              />
+            </div>
+          </div>
+        </div>
 
-        <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-          <Card className="border-border/70 bg-card/90 shadow-sm">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-xl">
-                <Sparkles className="h-5 w-5 text-primary" />
-                How it works
-              </CardTitle>
-              <CardDescription>
-                Keep the loop obvious: trigger, speak, release, keep moving.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <WorkflowStep
-                title="Start recording"
-                body={`Press ${hotkey} anywhere.`}
-                ready={canRecord}
-              />
-              <WorkflowStep
-                title="Speak naturally"
-                body="Voicetypr transcribes first, then applies deterministic cleanup and optional AI formatting."
-                ready={canRecord}
-              />
-              <WorkflowStep
-                title="Keep the transcript flowing"
-                body={
-                  canAutoInsert
-                    ? "Transcribed text can auto-insert at your cursor as soon as processing finishes."
-                    : "Grant Accessibility to enable auto-insert across apps. Manual copy still works without it."
-                }
-                ready={canAutoInsert}
-              />
-            </CardContent>
-          </Card>
-
-          <Card className="border-border/70 bg-card/90 shadow-sm">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-xl">
-                <Flame className="h-5 w-5 text-primary" />
-                Ready right now
-              </CardTitle>
-              <CardDescription>
-                The app should tell you plainly whether the next recording will work.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <StatusRow
-                label="Recording"
-                value={canRecord ? "Ready to record" : "Needs setup"}
-                tone={canRecord ? "ready" : "warning"}
-              />
-              <StatusRow
-                label="Auto-insert"
-                value={canAutoInsert ? "Enabled" : "Accessibility permission missing"}
-                tone={canAutoInsert ? "ready" : "warning"}
-              />
-              <StatusRow
-                label="Transcription source"
-                value={selectedSourceLabel}
-                tone={readiness.remoteSelected || settings?.current_model ? "neutral" : "warning"}
-              />
-            </CardContent>
-          </Card>
+        {/* ===== How it works ===== */}
+        <div className="grid grid-cols-1 overflow-hidden rounded-2xl border border-border bg-card shadow-sm sm:grid-cols-3">
+          <LoopStep
+            n={1}
+            title="Trigger"
+            body={triggerLabel === "Not set" ? "Set a hotkey in Settings to start." : `Press ${triggerLabel} — or tap to toggle.`}
+          />
+          <LoopStep
+            n={2}
+            title="Speak"
+            body="Talk naturally. Transcription runs on this device."
+            divider
+          />
+          <LoopStep
+            n={3}
+            title="Release"
+            body={canAutoInsert ? "Text lands at your cursor. Keep moving." : "Copy the transcript, or enable auto-insert."}
+            divider
+          />
         </div>
 
         <Suspense
@@ -392,7 +394,10 @@ export function OverviewTab() {
               todayCount: stats.todayCount,
               totalWords: stats.totalWords,
               avgLength: stats.avgLength,
-              timeSavedDisplay: stats.timeSavedDisplay,
+              timeSavedDisplay:
+                stats.timeSavedHours > 0
+                  ? `${stats.timeSavedHours}h ${stats.timeSavedRemMinutes}m`
+                  : `${stats.timeSavedMinutes}m`,
               productivityScore: stats.productivityScore,
               currentStreak: stats.currentStreak,
               longestStreak: stats.longestStreak,
@@ -404,65 +409,98 @@ export function OverviewTab() {
   );
 }
 
-function MetricRow({ label, value }: { label: string; value: string }) {
+function StatusChip({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-xl bg-muted/45 px-3 py-2">
-      <span className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
+    <span className="inline-flex items-center gap-2 whitespace-nowrap rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground">
+      {children}
+    </span>
+  );
+}
+
+function StatCard({
+  icon: Icon,
+  kicker,
+  value,
+  foot,
+}: {
+  icon: typeof FileText;
+  kicker: string;
+  value: ReactNode;
+  foot: ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+      <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        <Icon className="h-3.5 w-3.5 text-sage" />
+        {kicker}
+      </p>
+      <p className="mt-3 text-[2.6rem] font-semibold leading-none tracking-tight text-foreground tabular-nums">
+        {value}
+      </p>
+      <p className="mt-2.5 text-xs text-muted-foreground">{foot}</p>
+    </div>
+  );
+}
+
+function GlanceItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between rounded-xl bg-muted px-3.5 py-2.5">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
         {label}
       </span>
-      <span className="text-sm font-medium text-foreground">{value}</span>
+      <span className="text-sm font-semibold text-foreground">{value}</span>
     </div>
   );
 }
 
-function WorkflowStep({
+function LoopStep({
+  n,
   title,
   body,
-  ready,
+  divider,
 }: {
+  n: number;
   title: string;
   body: string;
-  ready: boolean;
+  divider?: boolean;
 }) {
   return (
-    <div className="flex gap-3 rounded-2xl border border-border/60 bg-background/75 p-4 shadow-xs">
-      <div
-        className={cn(
-          "mt-0.5 flex size-8 items-center justify-center rounded-lg",
-          ready ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground",
-        )}
-      >
-        {ready ? <CheckCircle2 className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-      </div>
-      <div className="space-y-1">
-        <p className="text-sm font-medium">{title}</p>
-        <p className="text-sm leading-6 text-muted-foreground">{body}</p>
+    <div className={cn("flex items-start gap-3.5 p-5", divider && "border-t border-border sm:border-l sm:border-t-0")}>
+      <span className="grid size-7 shrink-0 place-items-center rounded-full border border-sage/20 bg-sage-bg text-sm font-semibold text-sage">
+        {n}
+      </span>
+      <div>
+        <b className="block text-sm font-semibold text-foreground">{title}</b>
+        <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{body}</p>
       </div>
     </div>
   );
 }
 
-function StatusRow({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: "ready" | "warning" | "neutral";
-}) {
+const WAVE_BARS = [14, 22, 34, 26, 44, 30, 52, 38, 48, 28, 40, 20, 30, 16];
+
+function Waveform({ active, className }: { active: boolean; className?: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-xl bg-muted/45 px-3 py-2">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <Badge
-        variant="secondary"
-        className={cn(
-          tone === "ready" && "text-primary",
-          tone === "warning" && "text-amber-700 dark:text-amber-400",
-        )}
-      >
-        {value}
-      </Badge>
+    <div className={cn("h-[54px] items-center gap-[3px]", className)} aria-hidden>
+      {WAVE_BARS.map((h, i) => (
+        <span
+          key={i}
+          className={cn(
+            "w-[3.5px] rounded-full",
+            active ? "bg-sage/70 animate-pill-wave" : "bg-sage/30",
+          )}
+          style={{
+            height: `${h}px`,
+            ...(active
+              ? {
+                  animationDelay: `${i * 70}ms`,
+                  ["--wave-min" as string]: "0.4",
+                  ["--wave-max" as string]: "1",
+                }
+              : {}),
+          }}
+        />
+      ))}
     </div>
   );
 }
