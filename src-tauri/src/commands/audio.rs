@@ -1373,7 +1373,7 @@ pub(crate) async fn transcribe_whisper_with_acceleration<F>(
     should_cancel: F,
 ) -> Result<WhisperTranscriptionOutput, String>
 where
-    F: Fn() -> bool + Clone + 'static,
+    F: Fn() -> bool + Clone + Send + 'static,
 {
     #[cfg(target_os = "windows")]
     let mode = transcription_acceleration_mode(app).await;
@@ -1437,13 +1437,21 @@ where
         cache.get_or_create(model_path)?
     };
 
-    let result = transcriber.transcribe_with_metadata_with_prompt(
-        audio_path,
-        language,
-        translate,
-        initial_prompt,
-        should_cancel,
-    );
+    let audio_path = audio_path.to_path_buf();
+    let language = language.map(str::to_owned);
+    let initial_prompt = initial_prompt.map(str::to_owned);
+    let should_cancel_for_decode = should_cancel.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        transcriber.transcribe_with_metadata_with_prompt(
+            &audio_path,
+            language.as_deref(),
+            translate,
+            initial_prompt.as_deref(),
+            should_cancel_for_decode,
+        )
+    })
+    .await
+    .map_err(|error| format!("Whisper transcription worker failed: {error}"))?;
 
     #[cfg(target_os = "windows")]
     {

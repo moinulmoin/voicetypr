@@ -24,6 +24,8 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tempfile::NamedTempFile;
 
+const LOCAL_ENGINE_TIMEOUT_GRACE: Duration = Duration::from_secs(2);
+
 use crate::commands::audio::{
     compile_parakeet_custom_vocabulary_for_transcription,
     parakeet_segments_to_transcription_segments, resolve_engine_for_model,
@@ -354,16 +356,25 @@ async fn run_with_policy(
             });
 
             let result = if matches!(active, ActiveEngineSelection::Whisper { .. }) {
-                run_whisper_with_retry(app, active, job, attempt_path, request).await
+                run_local_engine_with_hard_timeout(
+                    run_whisper_with_retry(app, active, job, attempt_path, request),
+                    budget,
+                    LOCAL_ENGINE_TIMEOUT_GRACE,
+                    request.cancellation.clone(),
+                    timed_out.clone(),
+                    source,
+                )
+                .await
             } else {
-                route_once(app, active, job, attempt_path, request).await
+                let result = route_once(app, active, job, attempt_path, request).await;
+                remap_timed_out(result, timed_out.load(Ordering::SeqCst), source)
             };
 
             if let Some(handle) = watchdog {
                 handle.abort();
             }
 
-            remap_timed_out(result, timed_out.load(Ordering::SeqCst), source)
+            result
         }
     }
 }
@@ -492,6 +503,37 @@ fn spawn_cancel_watchdog(
     })
 }
 
+async fn run_local_engine_with_hard_timeout<Fut>(
+    run: Fut,
+    budget: Option<Duration>,
+    grace: Duration,
+    cancellation: CancellationToken,
+    timed_out: Arc<AtomicBool>,
+    source: TranscriptionSource,
+) -> Result<TranscriptionResult, TranscriptionError>
+where
+    Fut: std::future::Future<Output = Result<TranscriptionResult, TranscriptionError>>,
+{
+    let Some(deadline) = budget else {
+        let result = run.await;
+        return remap_timed_out(result, timed_out.load(Ordering::SeqCst), source);
+    };
+
+    let hard_deadline = deadline.saturating_add(grace);
+    match tokio::time::timeout(hard_deadline, run).await {
+        Ok(result) => remap_timed_out(result, timed_out.load(Ordering::SeqCst), source),
+        Err(_) => {
+            timed_out.store(true, Ordering::SeqCst);
+            cancellation.cancel();
+            log::warn!(
+                "Transcription hard timeout elapsed after {} seconds",
+                hard_deadline.as_secs()
+            );
+            Err(timed_out_error(source))
+        }
+    }
+}
+
 /// Whisper desktop parity: retry the engine up to 3 times (500 ms apart),
 /// breaking immediately on cancellation. Normalization is NOT repeated — the
 /// attempt path is prepared once by the caller.
@@ -578,17 +620,21 @@ mod tests {
     use super::should_delete_input;
     use super::{
         deferred_executor_route_error, effective_parakeet_audio_duration_ms,
-        ensure_cloud_task_supported, is_normalized_wav, remap_timed_out, watchdog_budget_for,
-        wav_duration_ms,
+        ensure_cloud_task_supported, is_normalized_wav, remap_timed_out,
+        run_local_engine_with_hard_timeout, watchdog_budget_for, wav_duration_ms,
     };
     use crate::provider_capabilities::ProviderEngine;
     use crate::transcription::error::{TranscriptionError, TranscriptionErrorCode};
-    use crate::transcription::request::{CleanupPolicy, EngineSelection, TimeoutPolicy};
+    use crate::transcription::request::{
+        CancellationToken, CleanupPolicy, EngineSelection, TimeoutPolicy,
+    };
     use crate::transcription::{
         TranscriptionJob, TranscriptionResult, TranscriptionSource, TranscriptionTask,
     };
     use hound::{SampleFormat, WavSpec, WavWriter};
     use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
     use tempfile::NamedTempFile;
 
@@ -663,6 +709,33 @@ mod tests {
             }
         }
         writer.finalize().unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_hard_timeout_returns_timeout_and_cancels_without_waiting_for_engine() {
+        let cancellation = CancellationToken::new();
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(AtomicBool::new(false));
+        let started_in_engine = started.clone();
+
+        let result = run_local_engine_with_hard_timeout(
+            async move {
+                started_in_engine.store(true, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                Ok(TranscriptionResult::new(&sample_job(), "late"))
+            },
+            Some(Duration::from_millis(5)),
+            Duration::from_millis(5),
+            cancellation.clone(),
+            timed_out.clone(),
+            TranscriptionSource::DesktopRecording,
+        )
+        .await;
+
+        assert!(started.load(Ordering::SeqCst));
+        assert!(cancellation.is_cancelled());
+        assert!(timed_out.load(Ordering::SeqCst));
+        assert_eq!(result.unwrap_err().code, TranscriptionErrorCode::Timeout);
     }
 
     #[test]
