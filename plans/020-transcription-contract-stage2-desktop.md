@@ -5,7 +5,7 @@
 > board row + commit per `plans/README.md` concurrency protocol.
 >
 > **Executor instructions**: This is **Stage 2** of the migration map
-> (`docs/plans/2026-06-10-shared-transcription-contract-design.md`). Stage 2
+> for the shared transcription contract. Stage 2
 > makes the **desktop recording hot path** the first real consumer of
 > `transcribe_with_app` — but **only for local + cloud engines**. The active
 > **remote** desktop path stays on the existing inline branch until **Stage 5**

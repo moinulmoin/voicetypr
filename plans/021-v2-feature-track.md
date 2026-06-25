@@ -90,7 +90,7 @@
 > 15-item mega-bundle.
 
 ### B1. Shared transcription contract — Stages 3–6 (architecture debt)
-Design: `docs/plans/2026-06-10-shared-transcription-contract-design.md:290-301`. Stages 1–2 DONE (014/020).
+Stages 1–2 DONE (014/020); Stages 3–6 design doc removed post-2.0.0.
 - **Stage 3** — port upload + CLI-local onto `transcribe_with_app` (= Wave 7 unification half). PENDING.
 - **Stage 4** — remote server inbound + multipart + `HostDefault`; defines the stable `PublicTranscriptionError` taxonomy. PENDING (`executor.rs:133-137` deferred).
 - **Stage 5** — remote client/send-to-peer + CLI-remote onto the executor; retires the inline remote desktop path. PENDING (`executor.rs:256-260` deferred).
