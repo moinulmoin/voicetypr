@@ -215,6 +215,8 @@ fn key_token(token: &str) -> Option<NamedKey> {
         "NumpadDivide" => NamedKey::NumpadDivide,
         "NumpadDecimal" => NamedKey::NumpadDecimal,
         "NumpadEnter" => NamedKey::NumpadEnter,
+        "NumpadEqual" => NamedKey::NumpadEqual,
+        "CapsLock" => NamedKey::CapsLock,
         _ if token.starts_with("Numpad") => return numpad_named(token),
         _ if token.starts_with('F') => return fkey_named(token),
         _ => return None,
@@ -320,12 +322,12 @@ fn numpad_named(token: &str) -> Option<NamedKey> {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_recording_engine_binding, is_engine_kind, to_trigger, validate};
+    use super::{has_recording_engine_binding, is_engine_kind, parse_combo, to_trigger, validate};
     use crate::commands::shortcuts::{
         ModifierKind, ModifierSpec, ShortcutAction, ShortcutBinding, ShortcutTrigger, SideKind,
         TriggerKind,
     };
-    use keytrigger::{Modifier, Side, Trigger};
+    use keytrigger::{KeySpec, ModSet, Modifier, NamedKey, Side, Trigger};
 
     fn hold_binding() -> ShortcutBinding {
         ShortcutBinding {
@@ -492,5 +494,50 @@ mod tests {
         b.modifier = None;
         assert!(validate(&b).is_err());
         assert!(to_trigger(&b).is_none());
+    }
+
+    #[test]
+    fn parse_combo_maps_combos_single_keys_and_special_keys() {
+        // Combo with >=1 modifier -> ComboExact with EXACT mods (per-OS CommandOrControl).
+        let expected_mods = if cfg!(target_os = "macos") {
+            ModSet::empty().with(Modifier::Meta).with(Modifier::Shift)
+        } else {
+            ModSet::empty()
+                .with(Modifier::Control)
+                .with(Modifier::Shift)
+        };
+        assert_eq!(
+            parse_combo("CommandOrControl+Shift+Space"),
+            Ok(Trigger::ComboExact {
+                mods: expected_mods,
+                key: KeySpec::Named(NamedKey::Space),
+            })
+        );
+        // Lone non-modifier key -> SingleKey.
+        assert_eq!(
+            parse_combo("F8"),
+            Ok(Trigger::SingleKey {
+                key: KeySpec::Named(NamedKey::F8),
+            })
+        );
+        // CapsLock + NumpadEqual are picker-emittable and must parse (parity, not stranded).
+        assert!(matches!(
+            parse_combo("Alt+CapsLock"),
+            Ok(Trigger::ComboExact {
+                key: KeySpec::Named(NamedKey::CapsLock),
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse_combo("Control+NumpadEqual"),
+            Ok(Trigger::ComboExact {
+                key: KeySpec::Named(NamedKey::NumpadEqual),
+                ..
+            })
+        ));
+        // Untappable / unknown keys fail clearly (not silently): a modifier-only
+        // string has no key, and media keys are not engine-representable.
+        assert!(parse_combo("Shift").is_err());
+        assert!(parse_combo("Alt+AudioVolumeUp").is_err());
     }
 }

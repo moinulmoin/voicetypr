@@ -119,6 +119,7 @@ pub enum NamedKey {
     NumpadMultiply,
     NumpadDivide,
     NumpadDecimal,
+    NumpadEqual,
     // Punctuation / OEM keys (US ANSI layout names).
     Comma,
     Period,

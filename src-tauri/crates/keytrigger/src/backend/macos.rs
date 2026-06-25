@@ -328,6 +328,7 @@ fn map_keycode(code: CGKeyCode) -> (KeySpec, Option<Side>) {
         0x43 => Some(NamedKey::NumpadMultiply),
         0x4B => Some(NamedKey::NumpadDivide),
         0x41 => Some(NamedKey::NumpadDecimal),
+        0x51 => Some(NamedKey::NumpadEqual),
         // Punctuation / OEM keys (US ANSI virtual keycodes).
         0x32 => Some(NamedKey::Backquote),
         0x1B => Some(NamedKey::Minus),
