@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
 
 pub const VOICE_RMS_THRESHOLD: f32 = 0.005;
-pub const NO_SPEECH_WARNING_AFTER: Duration = Duration::from_secs(5);
-pub const LONG_SILENCE_WARNING_AFTER: Duration = Duration::from_secs(10);
-pub const SILENCE_TIMEOUT_AFTER: Duration = Duration::from_secs(60);
+pub const NO_SPEECH_WARNING_AFTER: Duration = Duration::from_secs(10);
+pub const LONG_SILENCE_WARNING_AFTER: Duration = Duration::from_secs(60);
+pub const SILENCE_TIMEOUT_AFTER: Duration = Duration::from_secs(300);
 /// Minimum continuous above-threshold duration that counts as real voice.
 /// Brief ambient blips must not flip a silent recording into the speech path.
 pub const MIN_VOICE_DURATION: Duration = Duration::from_millis(300);
@@ -144,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn dead_mic_warns_once_after_five_seconds_without_speech() {
+    fn dead_mic_warns_once_after_no_speech_threshold() {
         let start = t0();
         let mut detector = SilenceDetector::new_at(start);
 
@@ -153,7 +153,7 @@ mod tests {
             Some(SilenceDetectorEvent::DeadMicWarn)
         );
         assert_eq!(
-            detector.update_at(SILENT, start + Duration::from_secs(6)),
+            detector.update_at(SILENT, start + Duration::from_secs(15)),
             None
         );
         assert_eq!(
@@ -242,17 +242,17 @@ mod tests {
             Some(SilenceDetectorEvent::DeadMicWarn)
         );
         assert_eq!(
-            detector.update_at(SPEECH, start + Duration::from_secs(6)),
+            detector.update_at(SPEECH, start + Duration::from_secs(12)),
             None
         );
         assert_eq!(
-            detector.update_at(SPEECH, start + Duration::from_secs(6) + MIN_VOICE_DURATION),
+            detector.update_at(SPEECH, start + Duration::from_secs(12) + MIN_VOICE_DURATION),
             Some(SilenceDetectorEvent::Clear)
         );
     }
 
     #[test]
-    fn post_speech_long_silence_warns_once_after_ten_seconds() {
+    fn post_speech_long_silence_warns_once_after_threshold() {
         let start = t0();
         let mut detector = SilenceDetector::new_at(start);
         let voiced = confirm_speech(&mut detector, start + Duration::from_secs(1));
@@ -266,7 +266,7 @@ mod tests {
             Some(SilenceDetectorEvent::LongSilenceWarn)
         );
         assert_eq!(
-            detector.update_at(SILENT, voiced + Duration::from_secs(15)),
+            detector.update_at(SILENT, voiced + Duration::from_secs(90)),
             None
         );
     }
@@ -282,20 +282,20 @@ mod tests {
             Some(SilenceDetectorEvent::LongSilenceWarn)
         );
         assert_eq!(
-            detector.update_at(SPEECH, voiced + Duration::from_secs(12)),
+            detector.update_at(SPEECH, voiced + Duration::from_secs(70)),
             None
         );
         assert_eq!(
             detector.update_at(
                 SPEECH,
-                voiced + Duration::from_secs(12) + MIN_VOICE_DURATION
+                voiced + Duration::from_secs(70) + MIN_VOICE_DURATION
             ),
             Some(SilenceDetectorEvent::Clear)
         );
     }
 
     #[test]
-    fn post_speech_timeout_emits_timeout_with_speech_once_after_sixty_seconds() {
+    fn post_speech_timeout_emits_timeout_with_speech_once_after_timeout() {
         let start = t0();
         let mut detector = SilenceDetector::new_at(start);
         let voiced = confirm_speech(&mut detector, start + Duration::from_secs(1));
@@ -305,13 +305,13 @@ mod tests {
             Some(SilenceDetectorEvent::TimeoutWithSpeech)
         );
         assert_eq!(
-            detector.update_at(SILENT, voiced + Duration::from_secs(61)),
+            detector.update_at(SILENT, voiced + SILENCE_TIMEOUT_AFTER + Duration::from_secs(1)),
             None
         );
     }
 
     #[test]
-    fn no_speech_timeout_emits_timeout_no_speech_once_after_sixty_seconds() {
+    fn no_speech_timeout_emits_timeout_no_speech_once_after_timeout() {
         let start = t0();
         let mut detector = SilenceDetector::new_at(start);
 
@@ -320,7 +320,7 @@ mod tests {
             Some(SilenceDetectorEvent::TimeoutNoSpeech)
         );
         assert_eq!(
-            detector.update_at(SILENT, start + Duration::from_secs(61)),
+            detector.update_at(SILENT, start + SILENCE_TIMEOUT_AFTER + Duration::from_secs(1)),
             None
         );
     }

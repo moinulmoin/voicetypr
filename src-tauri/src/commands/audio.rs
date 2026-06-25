@@ -317,10 +317,31 @@ fn emit_pill_toast(
             });
         }
     } else {
+        // The toast window may not be registered yet during early startup. Retry the
+        // show once after a short delay so the message is not silently dropped; the
+        // `toast` event is emitted below regardless, so a late-mounting frontend still
+        // renders it.
         log::warn!(
-            "pill_toast: toast window not found, message not shown: {}",
+            "pill_toast: toast window not found, retrying show shortly: {}",
             message
         );
+        let app_clone = app.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            if let Some(toast_window) = app_clone.get_webview_window("toast") {
+                let _ = toast_window.show();
+                if !persistent {
+                    tokio::time::sleep(std::time::Duration::from_millis(duration_ms)).await;
+                    if TOAST_ID_COUNTER.load(AtomicOrdering::SeqCst) == id {
+                        if let Some(tw) = app_clone.get_webview_window("toast") {
+                            let _ = tw.hide();
+                        }
+                    }
+                }
+            } else {
+                log::warn!("pill_toast: toast window still missing after retry");
+            }
+        });
     }
 
     let payload = PillToastEventPayload {

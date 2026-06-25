@@ -9,7 +9,7 @@ export function RecordingPill() {
   }
 
   return (
-    <PillShell isActive={isActive} state={pillState}>
+    <PillShell isActive={isActive}>
       <PillStatus audioLevel={audioLevel} state={pillState} />
     </PillShell>
   );

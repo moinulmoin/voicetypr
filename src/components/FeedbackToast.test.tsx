@@ -28,7 +28,7 @@ describe("FeedbackToast", () => {
 
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("Upload failed");
-    expect(status).toHaveClass("before:bg-rose-500/80");
+    expect(status).toHaveClass("bg-amber-950");
   });
 
   it("does not auto-clear a persistent warning toast", () => {
@@ -109,7 +109,7 @@ describe("FeedbackToast", () => {
     });
 
     expect(screen.getByRole("status")).toHaveTextContent("Copied transcript");
-    expect(screen.getByRole("status")).toHaveClass("before:bg-emerald-500/75");
+    expect(screen.getByRole("status")).toHaveClass("bg-black");
   });
 
   it("renders the warning treatment for warning variant payloads", () => {
@@ -128,7 +128,7 @@ describe("FeedbackToast", () => {
 
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("Check your microphone");
-    expect(status).toHaveClass("before:bg-amber-500/80");
+    expect(status).toHaveClass("bg-amber-950");
   });
 
   it("renders suggestion as a second line when present", () => {
@@ -161,8 +161,8 @@ describe("FeedbackToast", () => {
 
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("Recording failed");
-    // Only one text span — no suggestion line rendered
+    // No suggestion line: only the separator span and the message span render.
     const spans = status.querySelectorAll("span");
-    expect(spans).toHaveLength(1);
+    expect(spans).toHaveLength(2);
   });
 });

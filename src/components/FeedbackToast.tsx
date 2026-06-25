@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { Info, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type PillToastAction = "show" | "clear";
@@ -22,13 +23,6 @@ interface ActiveToast {
   severity: ToastSeverity;
   suggestion?: string;
 }
-
-const SEVERITY_TREATMENT: Record<ToastSeverity, string> = {
-  error: "before:bg-rose-500/80",
-  info: "before:bg-sky-500/65",
-  success: "before:bg-emerald-500/75",
-  warning: "before:bg-amber-500/80",
-};
 
 function inferSeverity(message: string): ToastSeverity {
   const normalized = message.toLowerCase();
@@ -126,21 +120,39 @@ export function FeedbackToast() {
     return null;
   }
 
+  const isAlert = toast.severity === "warning" || toast.severity === "error";
+
   return (
-    <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center px-4">
+    <div className="pointer-events-none fixed inset-0 flex items-center justify-center">
       <div
-        aria-live="polite"
-        className={`relative max-w-[min(420px,calc(100vw-2rem))] rounded-2xl border border-white/55 bg-white/90 px-3.5 py-2.5 pl-4 text-[13px] leading-snug text-neutral-800 shadow-[0_16px_45px_rgba(15,23,42,0.14)] ring-1 ring-neutral-950/10 backdrop-blur-xl before:absolute before:left-2 before:top-1/2 before:h-1.5 before:w-1.5 before:-translate-y-1/2 before:rounded-full dark:border-white/10 dark:bg-neutral-900/80 dark:text-neutral-100 dark:shadow-black/35 dark:ring-white/10 ${SEVERITY_TREATMENT[toast.severity]}`}
         role="status"
+        aria-live="polite"
+        className={`flex min-w-[200px] max-w-[400px] items-start gap-2 rounded-lg px-4 py-2 text-sm shadow-lg ring-1 ${
+          isAlert ? "bg-amber-950 text-amber-50 ring-amber-400/40" : "bg-black text-white ring-white/30"
+        }`}
       >
-        <span className="block overflow-hidden break-words [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
-          {toast.message}
-        </span>
-        {toast.suggestion && (
-          <span className="mt-0.5 block text-xs opacity-70 overflow-hidden break-words [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] text-neutral-500 dark:text-neutral-400">
-            {toast.suggestion}
-          </span>
+        {isAlert ? (
+          <TriangleAlert className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-300" aria-hidden />
+        ) : (
+          <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-white/80" aria-hidden />
         )}
+        <span aria-hidden className={`flex-shrink-0 ${isAlert ? "text-amber-400/50" : "text-white/30"}`}>
+          |
+        </span>
+        <div className="flex min-w-0 flex-col">
+          <span className="overflow-hidden break-words whitespace-pre-wrap [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
+            {toast.message}
+          </span>
+          {toast.suggestion && (
+            <span
+              className={`mt-0.5 overflow-hidden break-words text-xs [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] ${
+                isAlert ? "text-amber-200/70" : "text-white/60"
+              }`}
+            >
+              {toast.suggestion}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
