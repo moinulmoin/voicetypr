@@ -106,4 +106,22 @@ mod tests {
         state.force_set(RecordingState::Recording).unwrap();
         assert_eq!(state.current(), RecordingState::Recording);
     }
+
+    /// Regression guard for the 2.0.0 panic
+    /// `state() called before manage() for ...::window_manager::WindowManager`,
+    /// surfaced once error reporting defaulted on. `WindowManager` lives inside
+    /// `AppState` (`Arc<Mutex<Option<WindowManager>>>`) and must be read via
+    /// `AppState::get_window_manager()` (`None` when uninitialized); it is never
+    /// registered with Tauri's `manage()`, so `app.state::<WindowManager>()`
+    /// panics. Keep that call out of settings.rs.
+    #[test]
+    fn settings_reads_window_manager_via_app_state_not_tauri_state() {
+        let src = include_str!("../commands/settings.rs");
+        assert!(
+            !src.contains("state::<crate::WindowManager>")
+                && !src.contains("state::<WindowManager>"),
+            "settings.rs must read WindowManager via AppState::get_window_manager(), \
+             never app.state::<WindowManager>() (panics: 'state() called before manage()')"
+        );
+    }
 }

@@ -928,14 +928,16 @@ pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<(), Str
         );
 
         // Reposition the pill window if it's currently visible
-        let window_manager = app.state::<crate::WindowManager>();
-        if window_manager.has_pill_window() {
-            window_manager
-                .reposition_floating_windows_with_position(&settings.pill_indicator_position);
-            log::info!(
-                "Repositioned pill window with new offset: {}",
-                settings.pill_indicator_offset
-            );
+        let app_state = app.state::<crate::AppState>();
+        if let Some(window_manager) = app_state.get_window_manager() {
+            if window_manager.has_pill_window() {
+                window_manager
+                    .reposition_floating_windows_with_position(&settings.pill_indicator_position);
+                log::info!(
+                    "Repositioned pill window with new offset: {}",
+                    settings.pill_indicator_offset
+                );
+            }
         }
     }
 
