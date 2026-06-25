@@ -13,10 +13,10 @@
       {
         "title": "Voicetypr",
         "label": "main",
-        "width": 1120,
-        "height": 760,
+        "width": 1100,
+        "height": 950,
         "minWidth": 1040,
-        "minHeight": 700,
+        "minHeight": 880,
         "resizable": true,
         "center": true,
         "visible": false,
@@ -41,11 +41,7 @@
   "bundle": {
     "publisher": "Ideaplexa LLC",
     "active": true,
-    "targets": [
-      "nsis",
-      "app",
-      "dmg"
-    ],
+    "targets": ["nsis", "app", "dmg"],
     "externalBin": [
       "../sidecar/ffmpeg/dist/ffmpeg",
       "../sidecar/ffmpeg/dist/ffprobe"
