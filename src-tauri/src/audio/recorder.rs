@@ -52,9 +52,59 @@ const CHUNK_POOL_SLACK: usize = 4;
 // makes `try_send` on the real-time thread always succeed without blocking.
 const RECYCLE_CHANNEL_CAPACITY: usize = WRITER_QUEUE_CAPACITY + CHUNK_POOL_SLACK;
 
+/// Hard deadline the recording thread gives the WAV writer worker to drain its
+/// bounded queue and finalize during stop. With the block-write fast path the
+/// writer finishes in microseconds; this is pure defense against a writer
+/// stalled on a pathological filesystem. Must stay small enough that
+/// [`STOP_JOIN_TIMEOUT`] comfortably covers it plus the drain + platform
+/// stream-drop budgets.
+const WRITER_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Outer budget [`AudioRecorder::stop_recording`] gives the whole recording
+/// thread to tear down during stop. It must cover every internal sub-budget —
+/// drain window (~200ms) + platform stream drop (≤3s on Windows) + writer
+/// finalize ([`WRITER_JOIN_TIMEOUT`]) — plus a finalize margin. It is
+/// intentionally larger than their sum so the outer join never preempts the
+/// worker while it is still finalizing the WAV; the old independent 5s poll
+/// raced the (then-unbounded) writer join and timed out mid-finalize, leaving
+/// an unfinalized WAV that the command layer then deleted.
+const STOP_JOIN_TIMEOUT: Duration = Duration::from_secs(8);
+
 enum WriterMsg {
     Chunk(Vec<i16>),
     Finalize,
+}
+
+/// One writer-loop step, factored out so the disconnect-independent finalize
+/// path is unit-testable.
+#[derive(Debug)]
+enum WriterAction {
+    Write(Vec<i16>),
+    Stop,
+    Idle,
+}
+
+/// Maps a `recv_timeout` outcome + the finalize flag to the writer's next step.
+/// The `Timeout + finalize_requested => Stop` arm is the disconnect-independent
+/// finalize: it fires even when a callback `writer_tx` clone keeps the channel
+/// alive (Windows stream-drop timeout) so a `Full` `Finalize` never arrives and
+/// the channel never disconnects.
+fn next_writer_action(
+    recv: Result<WriterMsg, mpsc::RecvTimeoutError>,
+    finalize_requested: bool,
+) -> WriterAction {
+    match recv {
+        Ok(WriterMsg::Chunk(samples)) => WriterAction::Write(samples),
+        Ok(WriterMsg::Finalize) => WriterAction::Stop,
+        Err(mpsc::RecvTimeoutError::Disconnected) => WriterAction::Stop,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            if finalize_requested {
+                WriterAction::Stop
+            } else {
+                WriterAction::Idle
+            }
+        }
+    }
 }
 
 fn f32_to_i16(sample: f32) -> i16 {
@@ -303,16 +353,46 @@ impl AudioRecorder {
             let writer_bytes = bytes_written.clone();
             let writer_dropped = dropped_chunks.clone();
             let stop_tx_for_size = stop_tx_clone.clone();
+            // Disconnect-independent finalize signal. The RT callback holds a
+            // `writer_tx` clone that can outlive stop on the Windows
+            // stream-drop-timeout path, so neither a `Full` `Finalize` send nor
+            // a channel disconnect is guaranteed. This flag makes the writer
+            // worker always exit and finalize the WAV.
+            let finalize_flag = Arc::new(AtomicBool::new(false));
+            let writer_finalize_flag = finalize_flag.clone();
             let writer_handle = thread::spawn(move || -> Result<(), String> {
                 let mut writer = writer;
                 let mut write_error = None::<String>;
 
-                while let Ok(WriterMsg::Chunk(mut samples)) = writer_rx.recv() {
+                loop {
+                    let mut samples = match next_writer_action(
+                        writer_rx.recv_timeout(Duration::from_millis(100)),
+                        writer_finalize_flag.load(Ordering::SeqCst),
+                    ) {
+                        WriterAction::Write(samples) => samples,
+                        WriterAction::Stop => break,
+                        WriterAction::Idle => continue,
+                    };
                     let sample_bytes = (samples.len() * 2) as u64;
-                    for &sample in &samples {
-                        if let Err(e) = writer.write_sample(sample) {
-                            write_error = Some(format!("Failed to write audio sample: {}", e));
-                            break;
+                    // Block write: hound's monomorphized i16 sample writer
+                    // buffers the whole chunk in a recycled internal buffer and
+                    // flushes it with a single `write_all`, instead of calling
+                    // `WavWriter::write_sample` (per-sample format dispatch +
+                    // BufWriter interaction) once per sample. This is hound's
+                    // documented fast path and keeps the writer from
+                    // backlogging under stop — that backlog was the root cause
+                    // of the old "failed to stop within timeout" →
+                    // unfinalized-WAV → deleted-recording chain.
+                    // `SampleWriter16::flush` panics only if fewer than
+                    // `samples.len()` samples were written; we write exactly
+                    // that many, so it cannot panic here.
+                    {
+                        let mut sample_writer = writer.get_i16_writer(samples.len() as u32);
+                        for &sample in &samples {
+                            sample_writer.write_sample(sample);
+                        }
+                        if let Err(e) = sample_writer.flush() {
+                            write_error = Some(format!("Failed to write audio samples: {}", e));
                         }
                     }
 
@@ -599,12 +679,28 @@ impl AudioRecorder {
                 log::info!("Audio stream stopped and cleaned up");
             }
 
-            let _ = writer_tx.send(WriterMsg::Finalize);
+            // Signal the writer to finalize, NON-blockingly. A blocking
+            // `send(Finalize)` could stall teardown if the queue were full or
+            // the writer were blocked on a slow/hung filesystem. `try_send`
+            // cannot block; if the message does not fit, the following
+            // `drop(writer_tx)` disconnects the channel and the writer's recv
+            // loop exits anyway, so finalize still runs either way. (The stream
+            // was already dropped above, so no new Chunks can arrive and this
+            // is the last sender.)
+            // Signal finalize via the flag BEFORE the best-effort message, so a
+            // full queue or a still-alive callback sender (Windows stream-drop
+            // timeout) cannot prevent the writer from finalizing.
+            finalize_flag.store(true, Ordering::SeqCst);
+            let _ = writer_tx.try_send(WriterMsg::Finalize);
             drop(writer_tx);
-            let writer_result = match writer_handle.join() {
-                Ok(result) => result,
-                Err(_) => Err("Writer thread panicked".to_string()),
-            };
+
+            // Bound the writer join so a slow/hung writer cannot block teardown
+            // indefinitely. On timeout the worker is detached — hound's
+            // `WavWriter::drop` finalizes the header when it eventually exits —
+            // so a normally-terminating worker never leaves the file
+            // unfinalized-but-alive. See [`WRITER_JOIN_TIMEOUT`] and
+            // [`join_writer_bounded`].
+            let writer_result = join_writer_bounded(writer_handle, WRITER_JOIN_TIMEOUT);
 
             writer_result?;
 
@@ -665,9 +761,13 @@ impl AudioRecorder {
             // Send stop signal
             handle.stop_tx.send(RecorderCommand::Stop).ok();
 
-            // Wait for thread to finish with timeout
+            // Wait for the recording thread to finish, bounded by a SINGLE
+            // teardown deadline that covers every internal sub-budget (drain
+            // window + platform stream drop + writer finalize). See
+            // [`STOP_JOIN_TIMEOUT`]. Replaces the old independent 5s poll that
+            // raced the previously-unbounded writer join.
             let thread_handle = handle.thread_handle;
-            let timeout = Duration::from_secs(5); // Reasonable timeout for normal operation
+            let timeout = STOP_JOIN_TIMEOUT;
             let start = std::time::Instant::now();
 
             // Try to join thread with timeout by checking if it's finished
@@ -751,6 +851,44 @@ impl AudioRecorder {
     }
 }
 
+/// Joins the WAV writer worker with a hard deadline.
+///
+/// `std::thread::JoinHandle` exposes no native timed join, so we poll
+/// `is_finished()` at a short cadence. With the block-write fast path the
+/// writer drains its bounded queue in microseconds, so this completes on the
+/// first check in practice; the deadline is pure defense against a writer
+/// stalled on a pathological filesystem.
+///
+/// On timeout the handle is dropped (the worker is detached) and we return an
+/// error that [`stop_error_is_unfinalized`] classifies as "do not transcribe".
+/// hound's `WavWriter::drop` updates the WAV header when the detached worker
+/// eventually exits, so the file is never left unfinalized-but-alive by a
+/// normally-terminating worker — only a worker that is *hung forever* (e.g. an
+/// unresponsive network filesystem) can leave the header stale, and in that
+/// case the command layer refuses to transcribe AND refuses to delete the file
+/// (see the `stop_unfinalized` branch in the `stop_recording` command), so no
+/// half-written file is ever fed to the model or torn out from under the worker.
+fn join_writer_bounded(
+    handle: thread::JoinHandle<Result<(), String>>,
+    deadline: Duration,
+) -> Result<(), String> {
+    let start = Instant::now();
+    while start.elapsed() < deadline {
+        if handle.is_finished() {
+            return match handle.join() {
+                Ok(result) => result,
+                Err(_) => Err("Writer thread panicked".to_string()),
+            };
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    log::error!(
+        "Writer did not finalize within {}ms; detaching worker (hound Drop will finalize on exit)",
+        deadline.as_millis()
+    );
+    Err("Writer thread failed to finalize within timeout".to_string())
+}
+
 /// Classifies an error returned by [`AudioRecorder::stop_recording`]. Returns true when the
 /// recording worker did NOT finish, or the WAV writer could not finalize the file, so the
 /// capture must not be transcribed. A worker that finishes with an error (e.g. a CPAL device
@@ -758,6 +896,7 @@ impl AudioRecorder {
 /// recovered.
 pub(crate) fn stop_error_is_unfinalized(error: &str) -> bool {
     error.contains("failed to stop within timeout")
+        || error.contains("failed to finalize within timeout")
         || error.contains("panicked")
         || error.contains("WAV finalize failed:")
 }
@@ -771,6 +910,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn next_writer_action_writes_chunk() {
+        assert!(matches!(
+            next_writer_action(Ok(WriterMsg::Chunk(vec![1, 2, 3])), false),
+            WriterAction::Write(s) if s == vec![1, 2, 3]
+        ));
+    }
+
+    #[test]
+    fn next_writer_action_stops_on_finalize_message() {
+        assert!(matches!(
+            next_writer_action(Ok(WriterMsg::Finalize), false),
+            WriterAction::Stop
+        ));
+    }
+
+    #[test]
+    fn next_writer_action_stops_on_disconnect() {
+        assert!(matches!(
+            next_writer_action(Err(std::sync::mpsc::RecvTimeoutError::Disconnected), false),
+            WriterAction::Stop
+        ));
+    }
+
+    #[test]
+    fn next_writer_action_idles_on_timeout_without_flag() {
+        assert!(matches!(
+            next_writer_action(Err(std::sync::mpsc::RecvTimeoutError::Timeout), false),
+            WriterAction::Idle
+        ));
+    }
+
+    #[test]
+    fn next_writer_action_finalizes_on_timeout_with_flag() {
+        // P1 fix: even when the channel never disconnects (a callback sender
+        // clone is still alive) and no Finalize message arrives, the finalize
+        // flag makes the writer stop and finalize the WAV.
+        assert!(matches!(
+            next_writer_action(Err(std::sync::mpsc::RecvTimeoutError::Timeout), true),
+            WriterAction::Stop
+        ));
+    }
+
+    #[test]
     fn stop_error_is_unfinalized_distinguishes_finalized_from_unfinalized() {
         // Worker did not finish -> WAV not finalized -> must not transcribe.
         assert!(stop_error_is_unfinalized(
@@ -780,6 +962,9 @@ mod tests {
         assert!(stop_error_is_unfinalized("Writer thread panicked"));
         assert!(stop_error_is_unfinalized(
             "WAV finalize failed: failed to seek"
+        ));
+        assert!(stop_error_is_unfinalized(
+            "Writer thread failed to finalize within timeout"
         ));
         // Worker finished with an error -> WAV finalized -> recoverable, transcribe.
         assert!(!stop_error_is_unfinalized(

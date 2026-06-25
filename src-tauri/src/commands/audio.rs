@@ -4539,7 +4539,18 @@ pub async fn stop_recording(
     }
 
     if stop_unfinalized {
-        take_and_remove_current_recording_path(&app_state, "unfinalized");
+        // The recording worker may STILL hold the WAV open: `stop_recording`'s
+        // bounded join detached it when it missed the finalize deadline. hound
+        // finalizes the file via its `WavWriter::drop` on the worker's
+        // eventual exit, so we must NOT delete the file here — deleting
+        // mid-write would race the detached worker and could remove a file
+        // another thread still has open. Just drop our reference to the path;
+        // the eventually-finalized file is orphaned for the OS temp-dir
+        // cleanup. (The file-deleting helper is still used by the integrity
+        // branch above, where the worker has already fully joined + finalized.)
+        if let Ok(mut path_guard) = app_state.current_recording_path.lock() {
+            path_guard.take();
+        }
         pill_toast(&app, "Recording error", 1500);
         if should_hide_pill(&app).await {
             if let Err(e) = crate::commands::window::hide_pill_widget(app.clone()).await {
