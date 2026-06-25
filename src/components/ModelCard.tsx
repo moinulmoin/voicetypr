@@ -152,10 +152,16 @@ export const ModelCard = function ModelCard({
             </Badge>
           ) : downloadProgress !== undefined ? (
             <>
-              {model.engine === 'parakeet' && downloadProgress === 0 ? (
+              {model.engine === 'parakeet' ? (
+                // FluidAudio reports progress only at coarse file/phase
+                // boundaries — it jumps 0→25→50→100 and sits between, so a
+                // determinate bar looks frozen mid-file. Show an always-animated
+                // spinner with the coarse % as a hint: honest "still working".
                 <Badge variant="outline" className="gap-1.5 bg-sage-bg text-sage">
                   <Spinner className="size-3.5" />
-                  {downloadLabel}
+                  {downloadProgress > 0
+                    ? `${downloadLabel} ${Math.round(downloadProgress)}%`
+                    : downloadLabel}
                 </Badge>
               ) : (
                 <div className="flex items-center gap-2.5">
